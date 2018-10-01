@@ -100,6 +100,7 @@ void xsk_map_try_sock_delete(struct xsk_map *map, struct xdp_sock *xs,
 			     struct xdp_sock **map_entry);
 int xsk_map_inc(struct xsk_map *map);
 void xsk_map_put(struct xsk_map *map);
+struct xdp_umem *xdp_get_umem_from_qid(struct net_device *dev, u16 queue_id);
 
 static inline char *xdp_umem_get_data(struct xdp_umem *umem, u64 addr)
 {
@@ -156,6 +157,12 @@ static inline bool xsk_umem_consume_tx(struct xdp_umem *umem, struct xdp_desc *d
 
 static inline void xsk_umem_consume_tx_done(struct xdp_umem *umem)
 {
+}
+
+static inline struct xdp_umem *xdp_get_umem_from_qid(struct net_device *dev,
+						     u16 queue_id)
+{
+	return NULL;
 }
 
 static inline char *xdp_umem_get_data(struct xdp_umem *umem, u64 addr)
