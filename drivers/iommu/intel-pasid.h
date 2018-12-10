@@ -11,7 +11,22 @@
 #define __INTEL_PASID_H
 
 #define PASID_MIN			0x1
-#define PASID_MAX			0x20000
+#define PASID_MAX			0x100000
+#define PASID_PTE_MASK			0x3F
+#define PASID_PTE_PRESENT		1
+#define PDE_PFN_MASK			PAGE_MASK
+#define PASID_PDE_SHIFT			6
+#define MAX_NR_PASID_BITS		20
+
+/*
+ * Domain ID reserved for pasid entries programmed for first-level
+ * only and pass-through transfer modes.
+ */
+#define FLPT_DEFAULT_DID		1
+
+struct pasid_dir_entry {
+	u64 val;
+};
 
 struct pasid_entry {
 	u64 val;
