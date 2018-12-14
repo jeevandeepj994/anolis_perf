@@ -1231,6 +1231,7 @@ unsigned int nfsd_net_id;
 static __net_init int nfsd_init_net(struct net *net)
 {
 	int retval;
+	struct vfsmount *mnt;
 	struct nfsd_net *nn = net_generic(net, nfsd_net_id);
 
 	retval = nfsd_export_init(net);
@@ -1247,8 +1248,16 @@ static __net_init int nfsd_init_net(struct net *net)
 
 	atomic_set(&nn->ntf_refcnt, 0);
 	init_waitqueue_head(&nn->ntf_wq);
+	mnt =  vfs_kern_mount(&nfsd_fs_type, SB_KERNMOUNT, "nfsd", NULL);
+	if (IS_ERR(mnt)) {
+		retval = PTR_ERR(mnt);
+		goto out_mount_err;
+	}
+	nn->nfsd_mnt = mnt;
 	return 0;
 
+out_mount_err:
+	nfsd_reply_cache_shutdown();
 out_idmap_error:
 	nfsd_export_shutdown(net);
 out_export_error:
@@ -1257,6 +1266,10 @@ out_export_error:
 
 static __net_exit void nfsd_exit_net(struct net *net)
 {
+	struct nfsd_net *nn = net_generic(net, nfsd_net_id);
+
+	mntput(nn->nfsd_mnt);
+	nfsd_reply_cache_shutdown();
 	nfsd_idmap_shutdown(net);
 	nfsd_export_shutdown(net);
 }
