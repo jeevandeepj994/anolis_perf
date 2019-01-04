@@ -94,6 +94,7 @@ struct nvme_dev;
 struct nvme_queue;
 
 static void nvme_dev_disable(struct nvme_dev *dev, bool shutdown);
+static bool __nvme_disable_io_queues(struct nvme_dev *dev, u8 opcode);
 
 /*
  * Represents an NVM Express device.  Each nvme_dev is a PCI function.
@@ -1428,6 +1429,14 @@ static int nvme_suspend_queue(struct nvme_queue *nvmeq)
 	return 0;
 }
 
+static void nvme_suspend_io_queues(struct nvme_dev *dev)
+{
+	int i;
+
+	for (i = dev->ctrl.queue_count - 1; i > 0; i--)
+		nvme_suspend_queue(&dev->queues[i]);
+}
+
 static void nvme_disable_admin_queue(struct nvme_dev *dev, bool shutdown)
 {
 	struct nvme_queue *nvmeq = &dev->queues[0];
@@ -1443,6 +1452,12 @@ static void nvme_disable_admin_queue(struct nvme_dev *dev, bool shutdown)
 	spin_unlock_irq(&nvmeq->cq_lock);
 
 	nvme_complete_cqes(nvmeq, start, end);
+}
+
+static void nvme_disable_io_queues(struct nvme_dev *dev)
+{
+	if (__nvme_disable_io_queues(dev, nvme_admin_delete_sq))
+		__nvme_disable_io_queues(dev, nvme_admin_delete_cq);
 }
 
 static int nvme_cmb_qdepth(struct nvme_dev *dev, int nr_io_queues,
@@ -2195,6 +2210,7 @@ static int nvme_setup_io_queues(struct nvme_dev *dev)
 	} while (1);
 	adminq->q_db = dev->dbs;
 
+retry:
 	/* Deregister the admin queue's interrupt */
 	pci_free_irq(pdev, 0, adminq);
 
@@ -2212,11 +2228,6 @@ static int nvme_setup_io_queues(struct nvme_dev *dev)
 	result = max(result - 1, 1);
 	dev->max_qid = result + dev->io_queues[HCTX_TYPE_POLL];
 
-	dev_info(dev->ctrl.device, "%d/%d/%d default/read/poll queues\n",
-					dev->io_queues[HCTX_TYPE_DEFAULT],
-					dev->io_queues[HCTX_TYPE_READ],
-					dev->io_queues[HCTX_TYPE_POLL]);
-
 	/*
 	 * Should investigate if there's a performance win from allocating
 	 * more queues than interrupt vectors; it might allow the submission
@@ -2229,7 +2240,25 @@ static int nvme_setup_io_queues(struct nvme_dev *dev)
 		adminq->cq_vector = -1;
 		return result;
 	}
-	return nvme_create_io_queues(dev);
+	result = nvme_create_io_queues(dev);
+        dev_info(dev->ctrl.device, "%d/%d default/online queues\n",
+                                        dev->io_queues[HCTX_TYPE_DEFAULT],
+                                        dev->online_queues);
+	if (result || dev->online_queues < 2)
+		return result;
+
+	if (dev->online_queues - 1 < dev->max_qid) {
+		nr_io_queues = dev->online_queues - 1;
+		nvme_disable_io_queues(dev);
+		nvme_suspend_io_queues(dev);
+		goto retry;
+	}
+	dev_info(dev->ctrl.device, "%d/%d/%d/%d default/read/poll/online queues\n",
+					dev->io_queues[HCTX_TYPE_DEFAULT],
+					dev->io_queues[HCTX_TYPE_READ],
+					dev->io_queues[HCTX_TYPE_POLL],
+                                        dev->online_queues);
+	return 0;
 }
 
 static void nvme_del_queue_end(struct request *req, blk_status_t error)
@@ -2281,7 +2310,7 @@ static int nvme_delete_queue(struct nvme_queue *nvmeq, u8 opcode)
 	return 0;
 }
 
-static bool nvme_disable_io_queues(struct nvme_dev *dev, u8 opcode)
+static bool __nvme_disable_io_queues(struct nvme_dev *dev, u8 opcode)
 {
 	int nr_queues = dev->online_queues - 1, sent = 0;
 	unsigned long timeout;
@@ -2432,7 +2461,6 @@ static void nvme_pci_disable(struct nvme_dev *dev)
 
 static void nvme_dev_disable(struct nvme_dev *dev, bool shutdown)
 {
-	int i;
 	bool dead = true;
 	struct pci_dev *pdev = to_pci_dev(dev->dev);
 
@@ -2459,13 +2487,12 @@ static void nvme_dev_disable(struct nvme_dev *dev, bool shutdown)
 	nvme_stop_queues(&dev->ctrl);
 
 	if (!dead && dev->ctrl.queue_count > 0) {
-		if (nvme_disable_io_queues(dev, nvme_admin_delete_sq))
-			nvme_disable_io_queues(dev, nvme_admin_delete_cq);
+                nvme_disable_io_queues(dev);
 		nvme_disable_admin_queue(dev, shutdown);
 	}
-	for (i = dev->ctrl.queue_count - 1; i >= 0; i--)
-		nvme_suspend_queue(&dev->queues[i]);
 
+	nvme_suspend_io_queues(dev);
+	nvme_suspend_queue(&dev->queues[0]);
 	nvme_pci_disable(dev);
 
 	blk_mq_tagset_busy_iter(&dev->tagset, nvme_cancel_request, &dev->ctrl);
