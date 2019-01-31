@@ -31,6 +31,7 @@
 #include <linux/bpf_perf_event.h>
 #include <linux/bpf.h>
 #include <linux/if_ether.h>
+#include <linux/btf.h>
 
 #include <bpf/bpf.h>
 #include <bpf/libbpf.h>
@@ -49,7 +50,7 @@
 
 #define MAX_INSNS	BPF_MAXINSNS
 #define MAX_FIXUPS	8
-#define MAX_NR_MAPS	13
+#define MAX_NR_MAPS	14
 #define MAX_TEST_RUNS	8
 #define POINTER_VALUE	0xcafe4all
 #define TEST_DATA_LEN	64
@@ -77,6 +78,7 @@ struct bpf_test {
 	int fixup_map_in_map[MAX_FIXUPS];
 	int fixup_cgroup_storage[MAX_FIXUPS];
 	int fixup_percpu_cgroup_storage[MAX_FIXUPS];
+	int fixup_map_spin_lock[MAX_FIXUPS];
 	const char *errstr;
 	const char *errstr_unpriv;
 	uint32_t retval, retval_unpriv, insn_processed;
@@ -15080,6 +15082,337 @@ static struct bpf_test tests[] = {
 		.result = ACCEPT,
 		.retval = 2,
 	},
+	{
+		"spin_lock: test1 success",
+		.insns = {
+		BPF_ST_MEM(BPF_W, BPF_REG_10, -4, 0),
+		BPF_MOV64_REG(BPF_REG_2, BPF_REG_10),
+		BPF_ALU64_IMM(BPF_ADD, BPF_REG_2, -4),
+		BPF_LD_MAP_FD(BPF_REG_1,
+				0),
+		BPF_RAW_INSN(BPF_JMP | BPF_CALL, 0, 0, 0, BPF_FUNC_map_lookup_elem),
+		BPF_JMP_IMM(BPF_JNE, BPF_REG_0, 0, 1),
+		BPF_EXIT_INSN(),
+		BPF_MOV64_REG(BPF_REG_6, BPF_REG_0),
+		BPF_MOV64_REG(BPF_REG_1, BPF_REG_0),
+		BPF_ALU64_IMM(BPF_ADD, BPF_REG_1, 4),
+		BPF_RAW_INSN(BPF_JMP | BPF_CALL, 0, 0, 0, BPF_FUNC_spin_lock),
+		BPF_MOV64_REG(BPF_REG_1, BPF_REG_6),
+		BPF_ALU64_IMM(BPF_ADD, BPF_REG_1, 4),
+		BPF_LDX_MEM(BPF_W, BPF_REG_0, BPF_REG_6, 0),
+		BPF_RAW_INSN(BPF_JMP | BPF_CALL, 0, 0, 0, BPF_FUNC_spin_unlock),
+		BPF_MOV64_IMM(BPF_REG_0, 0),
+		BPF_EXIT_INSN(),
+		},
+		.fixup_map_spin_lock = { 3 },
+		.result = ACCEPT,
+		.result_unpriv = REJECT,
+		.errstr_unpriv = "",
+		.prog_type = BPF_PROG_TYPE_CGROUP_SKB,
+	},
+	{
+		"spin_lock: test2 direct ld/st",
+		.insns = {
+		BPF_ST_MEM(BPF_W, BPF_REG_10, -4, 0),
+		BPF_MOV64_REG(BPF_REG_2, BPF_REG_10),
+		BPF_ALU64_IMM(BPF_ADD, BPF_REG_2, -4),
+		BPF_LD_MAP_FD(BPF_REG_1,
+				0),
+		BPF_RAW_INSN(BPF_JMP | BPF_CALL, 0, 0, 0, BPF_FUNC_map_lookup_elem),
+		BPF_JMP_IMM(BPF_JNE, BPF_REG_0, 0, 1),
+		BPF_EXIT_INSN(),
+		BPF_MOV64_REG(BPF_REG_6, BPF_REG_0),
+		BPF_MOV64_REG(BPF_REG_1, BPF_REG_0),
+		BPF_ALU64_IMM(BPF_ADD, BPF_REG_1, 4),
+		BPF_RAW_INSN(BPF_JMP | BPF_CALL, 0, 0, 0, BPF_FUNC_spin_lock),
+		BPF_MOV64_REG(BPF_REG_1, BPF_REG_6),
+		BPF_ALU64_IMM(BPF_ADD, BPF_REG_1, 4),
+		BPF_LDX_MEM(BPF_W, BPF_REG_0, BPF_REG_1, 0),
+		BPF_RAW_INSN(BPF_JMP | BPF_CALL, 0, 0, 0, BPF_FUNC_spin_unlock),
+		BPF_MOV64_IMM(BPF_REG_0, 0),
+		BPF_EXIT_INSN(),
+		},
+		.fixup_map_spin_lock = { 3 },
+		.result = REJECT,
+		.errstr = "cannot be accessed directly",
+		.result_unpriv = REJECT,
+		.errstr_unpriv = "",
+		.prog_type = BPF_PROG_TYPE_CGROUP_SKB,
+	},
+	{
+		"spin_lock: test3 direct ld/st",
+		.insns = {
+		BPF_ST_MEM(BPF_W, BPF_REG_10, -4, 0),
+		BPF_MOV64_REG(BPF_REG_2, BPF_REG_10),
+		BPF_ALU64_IMM(BPF_ADD, BPF_REG_2, -4),
+		BPF_LD_MAP_FD(BPF_REG_1,
+				0),
+		BPF_RAW_INSN(BPF_JMP | BPF_CALL, 0, 0, 0, BPF_FUNC_map_lookup_elem),
+		BPF_JMP_IMM(BPF_JNE, BPF_REG_0, 0, 1),
+		BPF_EXIT_INSN(),
+		BPF_MOV64_REG(BPF_REG_6, BPF_REG_0),
+		BPF_MOV64_REG(BPF_REG_1, BPF_REG_0),
+		BPF_ALU64_IMM(BPF_ADD, BPF_REG_1, 4),
+		BPF_RAW_INSN(BPF_JMP | BPF_CALL, 0, 0, 0, BPF_FUNC_spin_lock),
+		BPF_MOV64_REG(BPF_REG_1, BPF_REG_6),
+		BPF_ALU64_IMM(BPF_ADD, BPF_REG_1, 4),
+		BPF_LDX_MEM(BPF_W, BPF_REG_0, BPF_REG_6, 1),
+		BPF_RAW_INSN(BPF_JMP | BPF_CALL, 0, 0, 0, BPF_FUNC_spin_unlock),
+		BPF_MOV64_IMM(BPF_REG_0, 0),
+		BPF_EXIT_INSN(),
+		},
+		.fixup_map_spin_lock = { 3 },
+		.result = REJECT,
+		.errstr = "cannot be accessed directly",
+		.result_unpriv = REJECT,
+		.errstr_unpriv = "",
+		.prog_type = BPF_PROG_TYPE_CGROUP_SKB,
+	},
+	{
+		"spin_lock: test4 direct ld/st",
+		.insns = {
+		BPF_ST_MEM(BPF_W, BPF_REG_10, -4, 0),
+		BPF_MOV64_REG(BPF_REG_2, BPF_REG_10),
+		BPF_ALU64_IMM(BPF_ADD, BPF_REG_2, -4),
+		BPF_LD_MAP_FD(BPF_REG_1,
+				0),
+		BPF_RAW_INSN(BPF_JMP | BPF_CALL, 0, 0, 0, BPF_FUNC_map_lookup_elem),
+		BPF_JMP_IMM(BPF_JNE, BPF_REG_0, 0, 1),
+		BPF_EXIT_INSN(),
+		BPF_MOV64_REG(BPF_REG_6, BPF_REG_0),
+		BPF_MOV64_REG(BPF_REG_1, BPF_REG_0),
+		BPF_ALU64_IMM(BPF_ADD, BPF_REG_1, 4),
+		BPF_RAW_INSN(BPF_JMP | BPF_CALL, 0, 0, 0, BPF_FUNC_spin_lock),
+		BPF_MOV64_REG(BPF_REG_1, BPF_REG_6),
+		BPF_ALU64_IMM(BPF_ADD, BPF_REG_1, 4),
+		BPF_LDX_MEM(BPF_H, BPF_REG_0, BPF_REG_6, 3),
+		BPF_RAW_INSN(BPF_JMP | BPF_CALL, 0, 0, 0, BPF_FUNC_spin_unlock),
+		BPF_MOV64_IMM(BPF_REG_0, 0),
+		BPF_EXIT_INSN(),
+		},
+		.fixup_map_spin_lock = { 3 },
+		.result = REJECT,
+		.errstr = "cannot be accessed directly",
+		.result_unpriv = REJECT,
+		.errstr_unpriv = "",
+		.prog_type = BPF_PROG_TYPE_CGROUP_SKB,
+	},
+	{
+		"spin_lock: test5 call within a locked region",
+		.insns = {
+		BPF_ST_MEM(BPF_W, BPF_REG_10, -4, 0),
+		BPF_MOV64_REG(BPF_REG_2, BPF_REG_10),
+		BPF_ALU64_IMM(BPF_ADD, BPF_REG_2, -4),
+		BPF_LD_MAP_FD(BPF_REG_1,
+				0),
+		BPF_RAW_INSN(BPF_JMP | BPF_CALL, 0, 0, 0, BPF_FUNC_map_lookup_elem),
+		BPF_JMP_IMM(BPF_JNE, BPF_REG_0, 0, 1),
+		BPF_EXIT_INSN(),
+		BPF_MOV64_REG(BPF_REG_6, BPF_REG_0),
+		BPF_MOV64_REG(BPF_REG_1, BPF_REG_0),
+		BPF_ALU64_IMM(BPF_ADD, BPF_REG_1, 4),
+		BPF_RAW_INSN(BPF_JMP | BPF_CALL, 0, 0, 0, BPF_FUNC_spin_lock),
+		BPF_RAW_INSN(BPF_JMP | BPF_CALL, 0, 0, 0, BPF_FUNC_get_prandom_u32),
+		BPF_MOV64_REG(BPF_REG_1, BPF_REG_6),
+		BPF_ALU64_IMM(BPF_ADD, BPF_REG_1, 4),
+		BPF_RAW_INSN(BPF_JMP | BPF_CALL, 0, 0, 0, BPF_FUNC_spin_unlock),
+		BPF_MOV64_IMM(BPF_REG_0, 0),
+		BPF_EXIT_INSN(),
+		},
+		.fixup_map_spin_lock = { 3 },
+		.result = REJECT,
+		.errstr = "calls are not allowed",
+		.result_unpriv = REJECT,
+		.errstr_unpriv = "",
+		.prog_type = BPF_PROG_TYPE_CGROUP_SKB,
+	},
+	{
+		"spin_lock: test6 missing unlock",
+		.insns = {
+		BPF_ST_MEM(BPF_W, BPF_REG_10, -4, 0),
+		BPF_MOV64_REG(BPF_REG_2, BPF_REG_10),
+		BPF_ALU64_IMM(BPF_ADD, BPF_REG_2, -4),
+		BPF_LD_MAP_FD(BPF_REG_1,
+				0),
+		BPF_RAW_INSN(BPF_JMP | BPF_CALL, 0, 0, 0, BPF_FUNC_map_lookup_elem),
+		BPF_JMP_IMM(BPF_JNE, BPF_REG_0, 0, 1),
+		BPF_EXIT_INSN(),
+		BPF_MOV64_REG(BPF_REG_6, BPF_REG_0),
+		BPF_MOV64_REG(BPF_REG_1, BPF_REG_0),
+		BPF_ALU64_IMM(BPF_ADD, BPF_REG_1, 4),
+		BPF_RAW_INSN(BPF_JMP | BPF_CALL, 0, 0, 0, BPF_FUNC_spin_lock),
+		BPF_MOV64_REG(BPF_REG_1, BPF_REG_6),
+		BPF_ALU64_IMM(BPF_ADD, BPF_REG_1, 4),
+		BPF_LDX_MEM(BPF_W, BPF_REG_0, BPF_REG_6, 0),
+		BPF_JMP_IMM(BPF_JNE, BPF_REG_0, 0, 1),
+		BPF_RAW_INSN(BPF_JMP | BPF_CALL, 0, 0, 0, BPF_FUNC_spin_unlock),
+		BPF_MOV64_IMM(BPF_REG_0, 0),
+		BPF_EXIT_INSN(),
+		},
+		.fixup_map_spin_lock = { 3 },
+		.result = REJECT,
+		.errstr = "unlock is missing",
+		.result_unpriv = REJECT,
+		.errstr_unpriv = "",
+		.prog_type = BPF_PROG_TYPE_CGROUP_SKB,
+	},
+	{
+		"spin_lock: test7 unlock without lock",
+		.insns = {
+		BPF_ST_MEM(BPF_W, BPF_REG_10, -4, 0),
+		BPF_MOV64_REG(BPF_REG_2, BPF_REG_10),
+		BPF_ALU64_IMM(BPF_ADD, BPF_REG_2, -4),
+		BPF_LD_MAP_FD(BPF_REG_1,
+				0),
+		BPF_RAW_INSN(BPF_JMP | BPF_CALL, 0, 0, 0, BPF_FUNC_map_lookup_elem),
+		BPF_JMP_IMM(BPF_JNE, BPF_REG_0, 0, 1),
+		BPF_EXIT_INSN(),
+		BPF_MOV64_REG(BPF_REG_6, BPF_REG_0),
+		BPF_MOV64_REG(BPF_REG_1, BPF_REG_0),
+		BPF_ALU64_IMM(BPF_ADD, BPF_REG_1, 4),
+		BPF_JMP_IMM(BPF_JNE, BPF_REG_1, 0, 1),
+		BPF_RAW_INSN(BPF_JMP | BPF_CALL, 0, 0, 0, BPF_FUNC_spin_lock),
+		BPF_MOV64_REG(BPF_REG_1, BPF_REG_6),
+		BPF_ALU64_IMM(BPF_ADD, BPF_REG_1, 4),
+		BPF_LDX_MEM(BPF_W, BPF_REG_0, BPF_REG_6, 0),
+		BPF_RAW_INSN(BPF_JMP | BPF_CALL, 0, 0, 0, BPF_FUNC_spin_unlock),
+		BPF_MOV64_IMM(BPF_REG_0, 0),
+		BPF_EXIT_INSN(),
+		},
+		.fixup_map_spin_lock = { 3 },
+		.result = REJECT,
+		.errstr = "without taking a lock",
+		.result_unpriv = REJECT,
+		.errstr_unpriv = "",
+		.prog_type = BPF_PROG_TYPE_CGROUP_SKB,
+	},
+	{
+		"spin_lock: test8 double lock",
+		.insns = {
+		BPF_ST_MEM(BPF_W, BPF_REG_10, -4, 0),
+		BPF_MOV64_REG(BPF_REG_2, BPF_REG_10),
+		BPF_ALU64_IMM(BPF_ADD, BPF_REG_2, -4),
+		BPF_LD_MAP_FD(BPF_REG_1,
+				0),
+		BPF_RAW_INSN(BPF_JMP | BPF_CALL, 0, 0, 0, BPF_FUNC_map_lookup_elem),
+		BPF_JMP_IMM(BPF_JNE, BPF_REG_0, 0, 1),
+		BPF_EXIT_INSN(),
+		BPF_MOV64_REG(BPF_REG_6, BPF_REG_0),
+		BPF_MOV64_REG(BPF_REG_1, BPF_REG_0),
+		BPF_ALU64_IMM(BPF_ADD, BPF_REG_1, 4),
+		BPF_RAW_INSN(BPF_JMP | BPF_CALL, 0, 0, 0, BPF_FUNC_spin_lock),
+		BPF_MOV64_REG(BPF_REG_1, BPF_REG_6),
+		BPF_ALU64_IMM(BPF_ADD, BPF_REG_1, 4),
+		BPF_RAW_INSN(BPF_JMP | BPF_CALL, 0, 0, 0, BPF_FUNC_spin_lock),
+		BPF_MOV64_REG(BPF_REG_1, BPF_REG_6),
+		BPF_ALU64_IMM(BPF_ADD, BPF_REG_1, 4),
+		BPF_LDX_MEM(BPF_W, BPF_REG_0, BPF_REG_6, 0),
+		BPF_RAW_INSN(BPF_JMP | BPF_CALL, 0, 0, 0, BPF_FUNC_spin_unlock),
+		BPF_MOV64_IMM(BPF_REG_0, 0),
+		BPF_EXIT_INSN(),
+		},
+		.fixup_map_spin_lock = { 3 },
+		.result = REJECT,
+		.errstr = "calls are not allowed",
+		.result_unpriv = REJECT,
+		.errstr_unpriv = "",
+		.prog_type = BPF_PROG_TYPE_CGROUP_SKB,
+	},
+	{
+		"spin_lock: test9 different lock",
+		.insns = {
+		BPF_ST_MEM(BPF_W, BPF_REG_10, -4, 0),
+		BPF_MOV64_REG(BPF_REG_2, BPF_REG_10),
+		BPF_ALU64_IMM(BPF_ADD, BPF_REG_2, -4),
+		BPF_LD_MAP_FD(BPF_REG_1,
+				0),
+		BPF_RAW_INSN(BPF_JMP | BPF_CALL, 0, 0, 0, BPF_FUNC_map_lookup_elem),
+		BPF_JMP_IMM(BPF_JNE, BPF_REG_0, 0, 1),
+		BPF_EXIT_INSN(),
+		BPF_MOV64_REG(BPF_REG_6, BPF_REG_0),
+		BPF_MOV64_REG(BPF_REG_2, BPF_REG_10),
+		BPF_ALU64_IMM(BPF_ADD, BPF_REG_2, -4),
+		BPF_LD_MAP_FD(BPF_REG_1,
+				0),
+		BPF_RAW_INSN(BPF_JMP | BPF_CALL, 0, 0, 0, BPF_FUNC_map_lookup_elem),
+		BPF_JMP_IMM(BPF_JNE, BPF_REG_0, 0, 1),
+		BPF_EXIT_INSN(),
+		BPF_MOV64_REG(BPF_REG_7, BPF_REG_0),
+		BPF_MOV64_REG(BPF_REG_1, BPF_REG_6),
+		BPF_ALU64_IMM(BPF_ADD, BPF_REG_1, 4),
+		BPF_RAW_INSN(BPF_JMP | BPF_CALL, 0, 0, 0, BPF_FUNC_spin_lock),
+		BPF_MOV64_REG(BPF_REG_1, BPF_REG_7),
+		BPF_ALU64_IMM(BPF_ADD, BPF_REG_1, 4),
+		BPF_RAW_INSN(BPF_JMP | BPF_CALL, 0, 0, 0, BPF_FUNC_spin_unlock),
+		BPF_MOV64_IMM(BPF_REG_0, 0),
+		BPF_EXIT_INSN(),
+		},
+		.fixup_map_spin_lock = { 3, 11 },
+		.result = REJECT,
+		.errstr = "unlock of different lock",
+		.result_unpriv = REJECT,
+		.errstr_unpriv = "",
+		.prog_type = BPF_PROG_TYPE_CGROUP_SKB,
+	},
+	{
+		"spin_lock: test10 lock in subprog without unlock",
+		.insns = {
+		BPF_ST_MEM(BPF_W, BPF_REG_10, -4, 0),
+		BPF_MOV64_REG(BPF_REG_2, BPF_REG_10),
+		BPF_ALU64_IMM(BPF_ADD, BPF_REG_2, -4),
+		BPF_LD_MAP_FD(BPF_REG_1,
+				0),
+		BPF_RAW_INSN(BPF_JMP | BPF_CALL, 0, 0, 0, BPF_FUNC_map_lookup_elem),
+		BPF_JMP_IMM(BPF_JNE, BPF_REG_0, 0, 1),
+		BPF_EXIT_INSN(),
+		BPF_MOV64_REG(BPF_REG_6, BPF_REG_0),
+		BPF_MOV64_REG(BPF_REG_1, BPF_REG_0),
+		BPF_ALU64_IMM(BPF_ADD, BPF_REG_1, 4),
+		BPF_RAW_INSN(BPF_JMP | BPF_CALL, 0, 1, 0, 5),
+		BPF_MOV64_REG(BPF_REG_1, BPF_REG_6),
+		BPF_ALU64_IMM(BPF_ADD, BPF_REG_1, 4),
+		BPF_RAW_INSN(BPF_JMP | BPF_CALL, 0, 0, 0, BPF_FUNC_spin_unlock),
+		BPF_MOV64_IMM(BPF_REG_0, 1),
+		BPF_EXIT_INSN(),
+		BPF_RAW_INSN(BPF_JMP | BPF_CALL, 0, 0, 0, BPF_FUNC_spin_lock),
+		BPF_MOV64_IMM(BPF_REG_0, 0),
+		BPF_EXIT_INSN(),
+		},
+		.fixup_map_spin_lock = { 3 },
+		.result = REJECT,
+		.errstr = "unlock is missing",
+		.result_unpriv = REJECT,
+		.errstr_unpriv = "",
+		.prog_type = BPF_PROG_TYPE_CGROUP_SKB,
+	},
+	{
+		"spin_lock: test11 ld_abs under lock",
+		.insns = {
+		BPF_MOV64_REG(BPF_REG_6, BPF_REG_1),
+		BPF_ST_MEM(BPF_W, BPF_REG_10, -4, 0),
+		BPF_MOV64_REG(BPF_REG_2, BPF_REG_10),
+		BPF_ALU64_IMM(BPF_ADD, BPF_REG_2, -4),
+		BPF_LD_MAP_FD(BPF_REG_1,
+				0),
+		BPF_RAW_INSN(BPF_JMP | BPF_CALL, 0, 0, 0, BPF_FUNC_map_lookup_elem),
+		BPF_JMP_IMM(BPF_JNE, BPF_REG_0, 0, 1),
+		BPF_EXIT_INSN(),
+		BPF_MOV64_REG(BPF_REG_7, BPF_REG_0),
+		BPF_MOV64_REG(BPF_REG_1, BPF_REG_0),
+		BPF_ALU64_IMM(BPF_ADD, BPF_REG_1, 4),
+		BPF_RAW_INSN(BPF_JMP | BPF_CALL, 0, 0, 0, BPF_FUNC_spin_lock),
+		BPF_LD_ABS(BPF_B, 0),
+		BPF_MOV64_REG(BPF_REG_1, BPF_REG_7),
+		BPF_ALU64_IMM(BPF_ADD, BPF_REG_1, 4),
+		BPF_RAW_INSN(BPF_JMP | BPF_CALL, 0, 0, 0, BPF_FUNC_spin_unlock),
+		BPF_MOV64_IMM(BPF_REG_0, 0),
+		BPF_EXIT_INSN(),
+		},
+		.fixup_map_spin_lock = { 4 },
+		.result = REJECT,
+		.errstr = "inside bpf_spin_lock",
+		.prog_type = BPF_PROG_TYPE_SCHED_CLS,
+	},
 };
 
 static int probe_filter_length(const struct bpf_insn *fp)
@@ -15223,6 +15556,98 @@ static int create_cgroup_storage(bool percpu)
 	return fd;
 }
 
+#define BTF_INFO_ENC(kind, kind_flag, vlen) \
+	((!!(kind_flag) << 31) | ((kind) << 24) | ((vlen) & BTF_MAX_VLEN))
+#define BTF_TYPE_ENC(name, info, size_or_type) \
+	(name), (info), (size_or_type)
+#define BTF_INT_ENC(encoding, bits_offset, nr_bits) \
+	((encoding) << 24 | (bits_offset) << 16 | (nr_bits))
+#define BTF_TYPE_INT_ENC(name, encoding, bits_offset, bits, sz) \
+	BTF_TYPE_ENC(name, BTF_INFO_ENC(BTF_KIND_INT, 0, 0), sz), \
+	BTF_INT_ENC(encoding, bits_offset, bits)
+#define BTF_MEMBER_ENC(name, type, bits_offset) \
+	(name), (type), (bits_offset)
+
+struct btf_raw_data {
+	__u32 raw_types[64];
+	const char *str_sec;
+	__u32 str_sec_size;
+};
+
+/* struct bpf_spin_lock {
+ *   int val;
+ * };
+ * struct val {
+ *   int cnt;
+ *   struct bpf_spin_lock l;
+ * };
+ */
+static const char btf_str_sec[] = "\0bpf_spin_lock\0val\0cnt\0l";
+static __u32 btf_raw_types[] = {
+	/* int */
+	BTF_TYPE_INT_ENC(0, BTF_INT_SIGNED, 0, 32, 4),  /* [1] */
+	/* struct bpf_spin_lock */                      /* [2] */
+	BTF_TYPE_ENC(1, BTF_INFO_ENC(BTF_KIND_STRUCT, 0, 1), 4),
+	BTF_MEMBER_ENC(15, 1, 0), /* int val; */
+	/* struct val */                                /* [3] */
+	BTF_TYPE_ENC(15, BTF_INFO_ENC(BTF_KIND_STRUCT, 0, 2), 8),
+	BTF_MEMBER_ENC(19, 1, 0), /* int cnt; */
+	BTF_MEMBER_ENC(23, 2, 32),/* struct bpf_spin_lock l; */
+};
+
+static int load_btf(void)
+{
+	struct btf_header hdr = {
+		.magic = BTF_MAGIC,
+		.version = BTF_VERSION,
+		.hdr_len = sizeof(struct btf_header),
+		.type_len = sizeof(btf_raw_types),
+		.str_off = sizeof(btf_raw_types),
+		.str_len = sizeof(btf_str_sec),
+	};
+	void *ptr, *raw_btf;
+	int btf_fd;
+
+	ptr = raw_btf = malloc(sizeof(hdr) + sizeof(btf_raw_types) +
+			       sizeof(btf_str_sec));
+
+	memcpy(ptr, &hdr, sizeof(hdr));
+	ptr += sizeof(hdr);
+	memcpy(ptr, btf_raw_types, hdr.type_len);
+	ptr += hdr.type_len;
+	memcpy(ptr, btf_str_sec, hdr.str_len);
+	ptr += hdr.str_len;
+
+	btf_fd = bpf_load_btf(raw_btf, ptr - raw_btf, 0, 0, 0);
+	free(raw_btf);
+	if (btf_fd < 0)
+		return -1;
+	return btf_fd;
+}
+
+static int create_map_spin_lock(void)
+{
+	struct bpf_create_map_attr attr = {
+		.name = "test_map",
+		.map_type = BPF_MAP_TYPE_ARRAY,
+		.key_size = 4,
+		.value_size = 8,
+		.max_entries = 1,
+		.btf_key_type_id = 1,
+		.btf_value_type_id = 3,
+	};
+	int fd, btf_fd;
+
+	btf_fd = load_btf();
+	if (btf_fd < 0)
+		return -1;
+	attr.btf_fd = btf_fd;
+	fd = bpf_create_map_xattr(&attr);
+	if (fd < 0)
+		printf("Failed to create map with spin_lock\n");
+	return fd;
+}
+
 static char bpf_vlog[UINT_MAX >> 8];
 
 static void do_test_fixup(struct bpf_test *test, enum bpf_map_type prog_type,
@@ -15241,6 +15666,7 @@ static void do_test_fixup(struct bpf_test *test, enum bpf_map_type prog_type,
 	int *fixup_map_in_map = test->fixup_map_in_map;
 	int *fixup_cgroup_storage = test->fixup_cgroup_storage;
 	int *fixup_percpu_cgroup_storage = test->fixup_percpu_cgroup_storage;
+	int *fixup_map_spin_lock = test->fixup_map_spin_lock;
 
 	if (test->fill_helper)
 		test->fill_helper(test);
@@ -15355,6 +15781,13 @@ static void do_test_fixup(struct bpf_test *test, enum bpf_map_type prog_type,
 			prog[*fixup_map_stacktrace].imm = map_fds[12];
 			fixup_map_stacktrace++;
 		} while (*fixup_map_stacktrace);
+	}
+	if (*fixup_map_spin_lock) {
+		map_fds[13] = create_map_spin_lock();
+		do {
+			prog[*fixup_map_spin_lock].imm = map_fds[13];
+			fixup_map_spin_lock++;
+		} while (*fixup_map_spin_lock);
 	}
 }
 
