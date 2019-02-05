@@ -66,7 +66,7 @@ LIBBPF_API int btf__resolve_type(const struct btf *btf, __u32 type_id);
 LIBBPF_API int btf__fd(const struct btf *btf);
 LIBBPF_API const char *btf__name_by_offset(const struct btf *btf, __u32 offset);
 LIBBPF_API int btf__get_from_id(__u32 id, struct btf **btf);
-LIBBPF_API int btf__get_map_kv_tids(const struct btf *btf, char *map_name,
+LIBBPF_API int btf__get_map_kv_tids(const struct btf *btf, const char *map_name,
 				    __u32 expected_key_size,
 				    __u32 expected_value_size,
 				    __u32 *key_type_id, __u32 *value_type_id);
