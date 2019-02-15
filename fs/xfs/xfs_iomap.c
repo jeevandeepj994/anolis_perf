@@ -545,7 +545,7 @@ xfs_file_iomap_begin_delay(
 				goto out_unlock;
 		}
 
-		trace_xfs_iomap_found(ip, offset, count, 0, &got);
+		trace_xfs_iomap_found(ip, offset, count, XFS_DATA_FORK, &got);
 		goto done;
 	}
 
@@ -619,7 +619,7 @@ retry:
 	 * them out if the write happens to fail.
 	 */
 	iomap->flags |= IOMAP_F_NEW;
-	trace_xfs_iomap_alloc(ip, offset, count, 0, &got);
+	trace_xfs_iomap_alloc(ip, offset, count, XFS_DATA_FORK, &got);
 done:
 	if (isnullstartblock(got.br_startblock))
 		got.br_startblock = DELAYSTARTBLOCK;
@@ -1065,7 +1065,7 @@ xfs_file_iomap_begin(
 		return error;
 
 	iomap->flags |= IOMAP_F_NEW;
-	trace_xfs_iomap_alloc(ip, offset, length, 0, &imap);
+	trace_xfs_iomap_alloc(ip, offset, length, XFS_DATA_FORK, &imap);
 
 out_finish:
 	if (xfs_ipincount(ip) && (ip->i_itemp->ili_fsync_fields
@@ -1081,7 +1081,7 @@ out_finish:
 out_found:
 	ASSERT(nimaps);
 	xfs_iunlock(ip, lockmode);
-	trace_xfs_iomap_found(ip, offset, length, 0, &imap);
+	trace_xfs_iomap_found(ip, offset, length, XFS_DATA_FORK, &imap);
 	goto out_finish;
 
 out_unlock:
