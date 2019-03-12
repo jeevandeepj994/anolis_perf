@@ -2346,6 +2346,21 @@ union bpf_attr {
  *	Return
  *		A **struct bpf_tcp_sock** pointer on success, or NULL in
  *		case of failure.
+ *
+ * int bpf_skb_ecn_set_ce(struct sk_buf *skb)
+ *     Description
+ *             Sets ECN of IP header to ce (congestion encountered) if
+ *             current value is ect (ECN capable). Works with IPv6 and IPv4.
+ *     Return
+ *             1 if set, 0 if not set.
+ *
+ * struct bpf_sock *bpf_get_listener_sock(struct bpf_sock *sk)
+ *	Description
+ *		Return a **struct bpf_sock** pointer in TCP_LISTEN state.
+ *		bpf_sk_release() is unnecessary and not allowed.
+ *	Return
+ *		A **struct bpf_sock** pointer on success, or NULL in
+ *		case of failure.
  */
 #define __BPF_FUNC_MAPPER(FN)		\
 	FN(unspec),			\
@@ -2444,7 +2459,9 @@ union bpf_attr {
 	FN(spin_lock),			\
 	FN(spin_unlock),		\
 	FN(sk_fullsock),		\
-	FN(tcp_sock),
+	FN(tcp_sock),			\
+	FN(skb_ecn_set_ce),		\
+	FN(get_listener_sock),
 
 /* integer value in 'imm' field of BPF_CALL instruction selects which helper
  * function eBPF program intends to call
