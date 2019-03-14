@@ -1212,7 +1212,7 @@ struct dentry *nfsd_client_mkdir(struct nfsd_net *nn, struct nfsdfs_client *ncl,
 {
 	char name[11];
 
-	sprintf(name, "%d", id++);
+	sprintf(name, "%u", id);
 
 	return nfsd_mkdir(nn->nfsd_client_dir, ncl, name);
 }
@@ -1346,6 +1346,8 @@ static __net_init int nfsd_init_net(struct net *net)
 	nn->somebody_reclaimed = false;
 	nn->clverifier_counter = prandom_u32();
 	nn->clientid_counter = prandom_u32();
+	nn->clientid_base = prandom_u32();
+	nn->clientid_counter = nn->clientid_base + 1;
 
 	atomic_set(&nn->ntf_refcnt, 0);
 	init_waitqueue_head(&nn->ntf_wq);
