@@ -62,7 +62,7 @@ enum mpam_enable_type {
 };
 
 /* check whether all CPUs have MPAM support */
-static inline bool mpam_cpus_have_feature(void)
+static __always_inline bool mpam_cpus_have_feature(void)
 {
 	if (IS_ENABLED(CONFIG_ARM64_MPAM))
 		return cpus_have_const_cap(ARM64_MPAM);
@@ -70,7 +70,7 @@ static inline bool mpam_cpus_have_feature(void)
 }
 
 /* check whether all CPUs have MPAM virtualisation support */
-static inline bool mpam_cpus_have_mpam_hcr(void)
+static __always_inline bool mpam_cpus_have_mpam_hcr(void)
 {
 	if (IS_ENABLED(CONFIG_ARM64_MPAM))
 		return static_branch_unlikely(&arm64_mpam_has_hcr);
