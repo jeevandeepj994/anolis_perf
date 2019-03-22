@@ -13465,6 +13465,17 @@ static struct bpf_test tests[] = {
 		.result = REJECT,
 	},
 	{
+		"reference tracking: leak potential reference to sock_common",
+		.insns = {
+		BPF_SK_LOOKUP(skc_lookup_tcp),
+		BPF_MOV64_REG(BPF_REG_6, BPF_REG_0), /* leak reference */
+		BPF_EXIT_INSN(),
+		},
+		.prog_type = BPF_PROG_TYPE_SCHED_CLS,
+		.errstr = "Unreleased reference",
+		.result = REJECT,
+	},
+	{
 		"reference tracking: leak potential reference on stack",
 		.insns = {
 			BPF_SK_LOOKUP(sk_lookup_tcp),
@@ -13505,6 +13516,17 @@ static struct bpf_test tests[] = {
 		.result = REJECT,
 	},
 	{
+		"reference tracking: zero potential reference to sock_common",
+		.insns = {
+		BPF_SK_LOOKUP(skc_lookup_tcp),
+		BPF_MOV64_IMM(BPF_REG_0, 0), /* leak reference */
+		BPF_EXIT_INSN(),
+		},
+		.prog_type = BPF_PROG_TYPE_SCHED_CLS,
+		.errstr = "Unreleased reference",
+		.result = REJECT,
+	},
+	{
 		"reference tracking: copy and zero potential references",
 		.insns = {
 			BPF_SK_LOOKUP(sk_lookup_tcp),
@@ -13532,6 +13554,20 @@ static struct bpf_test tests[] = {
 		.result = REJECT,
 	},
 	{
+		"reference tracking: release reference to sock_common without check",
+		.insns = {
+		BPF_SK_LOOKUP(skc_lookup_tcp),
+		/* reference in r0 may be NULL */
+		BPF_MOV64_REG(BPF_REG_1, BPF_REG_0),
+		BPF_MOV64_IMM(BPF_REG_2, 0),
+		BPF_EMIT_CALL(BPF_FUNC_sk_release),
+		BPF_EXIT_INSN(),
+		},
+		.prog_type = BPF_PROG_TYPE_SCHED_CLS,
+		.errstr = "type=sock_common_or_null expected=sock",
+		.result = REJECT,
+	},
+	{
 		"reference tracking: release reference",
 		.insns = {
 			BPF_SK_LOOKUP(sk_lookup_tcp),
@@ -13539,6 +13575,18 @@ static struct bpf_test tests[] = {
 			BPF_JMP_IMM(BPF_JEQ, BPF_REG_0, 0, 1),
 			BPF_EMIT_CALL(BPF_FUNC_sk_release),
 			BPF_EXIT_INSN(),
+		},
+		.prog_type = BPF_PROG_TYPE_SCHED_CLS,
+		.result = ACCEPT,
+	},
+	{
+		"reference tracking: release reference to sock_common",
+		.insns = {
+		BPF_SK_LOOKUP(skc_lookup_tcp),
+		BPF_MOV64_REG(BPF_REG_1, BPF_REG_0),
+		BPF_JMP_IMM(BPF_JEQ, BPF_REG_0, 0, 1),
+		BPF_EMIT_CALL(BPF_FUNC_sk_release),
+		BPF_EXIT_INSN(),
 		},
 		.prog_type = BPF_PROG_TYPE_SCHED_CLS,
 		.result = ACCEPT,
