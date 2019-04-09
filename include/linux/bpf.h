@@ -80,7 +80,8 @@ struct bpf_map {
 	struct btf *btf;
 	struct bpf_map_memory memory;
 	bool unpriv_array;
-	/* 47 bytes hole */
+	bool frozen; /* write-once */
+	/* 38 bytes hole */
 
 	/* The 3rd and 4th cacheline with misc members to avoid false sharing
 	 * particularly with refcounting.

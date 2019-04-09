@@ -103,6 +103,7 @@ enum bpf_cmd {
 	BPF_BTF_LOAD,
 	BPF_BTF_GET_FD_BY_ID,
 	BPF_TASK_FD_QUERY,
+	BPF_MAP_FREEZE = 22,
 };
 
 enum bpf_map_type {
