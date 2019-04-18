@@ -2070,7 +2070,7 @@ struct test tests[] = {
 static void test_flow_dissector(void)
 {
 	struct bpf_object *obj;
-	int err, prog_fd;
+	int i, err, prog_fd;
 
 	err = bpf_flow_load(&obj, "./bpf_flow.o", "flow_dissector",
 			    "jmp_table", &prog_fd);
@@ -2079,7 +2079,7 @@ static void test_flow_dissector(void)
 		return;
 	}
 
-	for (int i = 0; i < ARRAY_SIZE(tests); i++) {
+	for (i = 0; i < ARRAY_SIZE(tests); i++) {
 		struct bpf_flow_keys flow_keys;
 		struct bpf_prog_test_run_attr tattr = {
 			.prog_fd = prog_fd,
