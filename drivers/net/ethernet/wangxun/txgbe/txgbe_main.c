@@ -913,7 +913,7 @@ static void txgbe_pull_tail(struct sk_buff *skb)
 	/* we need the header to contain the greater of either ETH_HLEN or
 	 * 60 bytes if the skb->len is less than 60 for skb_pad.
 	 */
-	pull_len = eth_get_headlen(va, TXGBE_RX_HDR_SIZE);
+	pull_len = eth_get_headlen(skb->dev, va, TXGBE_RX_HDR_SIZE);
 
 	/* align pull length to size of long to optimize memcpy performance */
 	skb_copy_to_linear_data(skb, va, ALIGN(pull_len, sizeof(long)));
