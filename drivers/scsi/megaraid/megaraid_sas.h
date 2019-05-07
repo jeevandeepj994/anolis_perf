@@ -2570,4 +2570,7 @@ void megasas_free_fusion_context(struct megasas_instance *instance);
 void megasas_set_dma_settings(struct megasas_instance *instance,
 			      struct megasas_dcmd_frame *dcmd,
 			      dma_addr_t dma_addr, u32 dma_len);
+int megasas_adp_reset_wait_for_ready(struct megasas_instance *instance,
+				     bool do_adp_reset,
+				     int ocr_context);
 #endif				/*LSI_MEGARAID_SAS_H */
