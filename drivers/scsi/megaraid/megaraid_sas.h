@@ -2211,6 +2211,7 @@ struct megasas_instance {
 	u32 secure_jbod_support;
 	u32 support_morethan256jbod; /* FW support for more than 256 PD/JBOD */
 	bool use_seqnum_jbod_fp;   /* Added for PD sequence */
+	bool smp_affinity_enable;
 	spinlock_t crashdump_lock;
 
 	struct megasas_register_set __iomem *reg_set;
@@ -2228,6 +2229,7 @@ struct megasas_instance {
 	u16 ldio_threshold;
 	u16 cur_can_queue;
 	u32 max_sectors_per_req;
+	bool msix_load_balance;
 	struct megasas_aen_event *ev;
 
 	struct megasas_cmd **cmd_list;
@@ -2260,6 +2262,7 @@ struct megasas_instance {
 	atomic_t fw_outstanding;
 	atomic_t ldio_outstanding;
 	atomic_t fw_reset_no_pci_access;
+	atomic64_t total_io_count;
 
 	struct megasas_instance_template *instancet;
 	struct tasklet_struct isr_tasklet;
