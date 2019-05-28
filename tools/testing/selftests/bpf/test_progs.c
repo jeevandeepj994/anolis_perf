@@ -32,6 +32,7 @@ typedef __u16 __sum16;
 #include <sys/wait.h>
 #include <sys/types.h>
 #include <sys/time.h>
+#include <sys/uio.h>
 #include <fcntl.h>
 #include <pthread.h>
 #include <linux/bpf.h>
