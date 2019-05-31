@@ -920,11 +920,6 @@ proto_again:
 		__skb_flow_dissect_ipv4(skb, flow_dissector,
 					target_container, data, iph);
 
-		if (flags & FLOW_DISSECTOR_F_STOP_AT_L3) {
-			fdret = FLOW_DISSECT_RET_OUT_GOOD;
-			break;
-		}
-
 		break;
 	}
 	case htons(ETH_P_IPV6): {
@@ -972,9 +967,6 @@ proto_again:
 
 		__skb_flow_dissect_ipv6(skb, flow_dissector,
 					target_container, data, iph);
-
-		if (flags & FLOW_DISSECTOR_F_STOP_AT_L3)
-			fdret = FLOW_DISSECT_RET_OUT_GOOD;
 
 		break;
 	}
