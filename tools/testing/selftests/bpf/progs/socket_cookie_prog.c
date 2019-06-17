@@ -7,10 +7,14 @@
 #include "bpf_helpers.h"
 #include "bpf_endian.h"
 
-struct bpf_map_def SEC("maps") socket_cookies = {
+struct {
+	__u32 type;
+	__u32 map_flags;
+	int *key;
+	struct socket_cookie *value;
+	__u32 max_entries;
+} socket_cookies SEC(".maps") = {
 	.type = BPF_MAP_TYPE_HASH,
-	.key_size = sizeof(__u64),
-	.value_size = sizeof(__u32),
 	.max_entries = 1 << 8,
 };
 
