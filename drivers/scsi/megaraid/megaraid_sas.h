@@ -2326,8 +2326,10 @@ struct megasas_instance {
 	bool support_nvme_passthru;
 	u8 task_abort_tmo;
 	u8 max_reset_tmo;
+	bool support_seqnum_jbod_fp;
 	bool atomic_desc_support;
 };
+
 struct MR_LD_VF_MAP {
 	u32 size;
 	union MR_LD_REF ref;
