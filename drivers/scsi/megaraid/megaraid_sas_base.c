@@ -4806,8 +4806,10 @@ megasas_get_ctrl_info(struct megasas_instance *instance)
 		switch (dcmd_timeout_ocr_possible(instance)) {
 		case INITIATE_OCR:
 			cmd->flags |= DRV_DCMD_SKIP_REFIRE;
+			mutex_unlock(&instance->reset_mutex);
 			megasas_reset_fusion(instance->host,
 				MFI_IO_TIMEOUT_OCR);
+			mutex_lock(&instance->reset_mutex);
 			break;
 		case KILL_ADAPTER:
 			megaraid_sas_kill_hba(instance);
@@ -6022,8 +6024,10 @@ megasas_get_target_prop(struct megasas_instance *instance,
 		switch (dcmd_timeout_ocr_possible(instance)) {
 		case INITIATE_OCR:
 			cmd->flags |= DRV_DCMD_SKIP_REFIRE;
+			mutex_unlock(&instance->reset_mutex);
 			megasas_reset_fusion(instance->host,
 					     MFI_IO_TIMEOUT_OCR);
+			mutex_lock(&instance->reset_mutex);
 			break;
 		case KILL_ADAPTER:
 			megaraid_sas_kill_hba(instance);
@@ -7360,10 +7364,13 @@ megasas_mgmt_fw_ioctl(struct megasas_instance *instance,
 		opcode = le32_to_cpu(cmd->frame->dcmd.opcode);
 
 	if (opcode == MR_DCMD_CTRL_SHUTDOWN) {
+		mutex_lock(&instance->reset_mutex);
 		if (megasas_get_ctrl_info(instance) != DCMD_SUCCESS) {
 			megasas_return_cmd(instance, cmd);
+			mutex_unlock(&instance->reset_mutex);
 			return -1;
 		}
+		mutex_unlock(&instance->reset_mutex);
 	}
 
 	if (opcode == MR_DRIVER_SET_APP_CRASHDUMP_MODE) {
