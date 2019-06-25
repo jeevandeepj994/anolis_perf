@@ -1547,6 +1547,8 @@ enum FW_BOOT_CONTEXT {
 
 #define MR_CAN_HANDLE_SYNC_CACHE_OFFSET		0X01000000
 
+#define MR_ATOMIC_DESCRIPTOR_SUPPORT_OFFSET	(1 << 24)
+
 #define MR_CAN_HANDLE_64_BIT_DMA_OFFSET		(1 << 25)
 
 #define MEGASAS_WATCHDOG_THREAD_INTERVAL	1000
@@ -2325,6 +2327,7 @@ struct megasas_instance {
 	bool support_nvme_passthru;
 	u8 task_abort_tmo;
 	u8 max_reset_tmo;
+	bool atomic_desc_support;
 };
 struct MR_LD_VF_MAP {
 	u32 size;
