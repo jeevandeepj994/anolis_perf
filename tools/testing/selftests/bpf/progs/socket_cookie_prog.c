@@ -8,15 +8,11 @@
 #include "bpf_endian.h"
 
 struct {
-	__u32 type;
-	__u32 map_flags;
-	int *key;
-	struct socket_cookie *value;
-	__u32 max_entries;
-} socket_cookies SEC(".maps") = {
-	.type = BPF_MAP_TYPE_HASH,
-	.max_entries = 1 << 8,
-};
+	__uint(type, BPF_MAP_TYPE_HASH);
+	__uint(max_entries, (1 << 8));
+	__uint(key_size, sizeof(__u64));
+	__uint(value_size, sizeof(__u32));
+} socket_cookies SEC(".maps");
 
 SEC("cgroup/connect6")
 int set_cookie(struct bpf_sock_addr *ctx)
