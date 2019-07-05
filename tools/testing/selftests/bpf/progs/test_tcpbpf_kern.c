@@ -13,12 +13,12 @@
 #include "bpf_endian.h"
 #include "test_tcpbpf.h"
 
-struct bpf_map_def SEC("maps") global_map = {
-	.type = BPF_MAP_TYPE_ARRAY,
-	.key_size = sizeof(__u32),
-	.value_size = sizeof(struct tcpbpf_globals),
-	.max_entries = 2,
-};
+struct {
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(max_entries, 4);
+	__type(key, __u32);
+	__type(value, struct tcpbpf_globals);
+} global_map SEC(".maps");
 
 static inline void update_event_map(int event)
 {
