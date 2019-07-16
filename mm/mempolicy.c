@@ -2388,7 +2388,8 @@ static void sp_free(struct sp_node *n)
  * Policy determination "mimics" alloc_page_vma().
  * Called from fault path where we know the vma and faulting address.
  */
-int mpol_misplaced(struct page *page, struct vm_area_struct *vma, unsigned long addr)
+int mpol_misplaced(struct page *page, struct vm_area_struct *vma, unsigned long addr,
+		   int flags)
 {
 	struct mempolicy *pol;
 	struct zoneref *z;
@@ -2442,7 +2443,8 @@ int mpol_misplaced(struct page *page, struct vm_area_struct *vma, unsigned long 
 	if (pol->flags & MPOL_F_MORON) {
 		polnid = thisnid;
 
-		if (!should_numa_migrate_memory(current, page, curnid, thiscpu))
+		if (!should_numa_migrate_memory(current, page, curnid, thiscpu,
+						flags))
 			goto out;
 	}
 

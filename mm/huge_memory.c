@@ -1853,7 +1853,7 @@ vm_fault_t do_huge_pmd_numa_page(struct vm_fault *vmf, pmd_t pmd)
 	 * page_table_lock if at all possible
 	 */
 	page_locked = trylock_page(page);
-	target_nid = mpol_misplaced(page, vma, haddr);
+	target_nid = mpol_misplaced(page, vma, haddr, flags);
 	if (target_nid == -1) {
 		/* If the page was locked, there are no parallel migrations */
 		if (page_locked)

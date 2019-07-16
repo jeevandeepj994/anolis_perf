@@ -50,6 +50,7 @@
 #include <linux/memory.h>
 #include <linux/random.h>
 #include <linux/sched/sysctl.h>
+#include <linux/sched/numa_balancing.h>
 
 #include <asm/tlbflush.h>
 
@@ -1194,7 +1195,7 @@ bool promote_file_page(struct page *page, int flags)
 	    node_is_toptier(nid))
 		return false;
 
-	nid = mpol_misplaced(page, NULL, 0);
+	nid = mpol_misplaced(page, NULL, 0, (flags & PFP_WRITE) ? TNF_WRITE : 0);
 	if (nid == NUMA_NO_NODE)
 		return false;
 
