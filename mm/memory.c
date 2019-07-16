@@ -4053,7 +4053,7 @@ static int numa_migrate_prep(struct page *page, struct vm_area_struct *vma,
 		*flags |= TNF_FAULT_LOCAL;
 	}
 
-	return mpol_misplaced(page, vma, addr);
+	return mpol_misplaced(page, vma, addr, *flags);
 }
 
 static vm_fault_t do_numa_page(struct vm_fault *vmf)
@@ -4091,6 +4091,9 @@ static vm_fault_t do_numa_page(struct vm_fault *vmf)
 		pte = pte_mkwrite(pte);
 	ptep_modify_prot_commit(vma->vm_mm, vmf->address, vmf->pte, pte);
 	update_mmu_cache(vma, vmf->address, vmf->pte);
+
+	if (vmf->flags & FAULT_FLAG_WRITE)
+		flags |= TNF_WRITE;
 
 	page = vm_normal_page(vma, vmf->address, pte);
 	if (!page) {
