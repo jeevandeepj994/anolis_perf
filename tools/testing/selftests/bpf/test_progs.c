@@ -64,6 +64,10 @@ bool verifier_stats = false;
 #define SYS_KPROBE_NAME "sys_nanosleep"
 #endif
 
+#ifndef IP_MF
+#define IP_MF 0x2000
+#endif
+
 /* ipv4 test vector */
 static struct {
 	struct ethhdr eth;
@@ -1986,6 +1990,18 @@ struct ipv6_pkt {
 	struct tcphdr tcp;
 } __packed;
 
+struct ipv6_frag_pkt {
+	struct ethhdr eth;
+	struct ipv6hdr iph;
+	struct frag_hdr {
+		__u8 nexthdr;
+		__u8 reserved;
+		__be16 frag_off;
+		__be32 identification;
+	} ipf;
+	struct tcphdr tcp;
+} __packed;
+
 struct dvlan_ipv6_pkt {
 	struct ethhdr eth;
 	__u16 vlan_tci;
@@ -2002,9 +2018,11 @@ struct test {
 		struct ipv4_pkt ipv4;
 		struct svlan_ipv4_pkt svlan_ipv4;
 		struct ipv6_pkt ipv6;
+		struct ipv6_frag_pkt ipv6_frag;
 		struct dvlan_ipv6_pkt dvlan_ipv6;
 	} pkt;
 	struct bpf_flow_keys keys;
+	__u32 flags;
 };
 
 #define VLAN_HLEN	4
@@ -2096,6 +2114,102 @@ struct test tests[] = {
 			.dport = 8080,
 		},
 	},
+	{
+		.name = "ipv4-frag",
+		.pkt.ipv4 = {
+			.eth.h_proto = __bpf_constant_htons(ETH_P_IP),
+			.iph.ihl = 5,
+			.iph.protocol = IPPROTO_TCP,
+			.iph.tot_len = __bpf_constant_htons(MAGIC_BYTES),
+			.iph.frag_off = __bpf_constant_htons(IP_MF),
+			.tcp.doff = 5,
+			.tcp.source = 80,
+			.tcp.dest = 8080,
+		},
+		.keys = {
+			.flags = BPF_FLOW_DISSECTOR_F_PARSE_1ST_FRAG,
+			.nhoff = ETH_HLEN,
+			.thoff = ETH_HLEN + sizeof(struct iphdr),
+			.addr_proto = ETH_P_IP,
+			.ip_proto = IPPROTO_TCP,
+			.n_proto = __bpf_constant_htons(ETH_P_IP),
+			.is_frag = true,
+			.is_first_frag = true,
+			.sport = 80,
+			.dport = 8080,
+		},
+		.flags = BPF_FLOW_DISSECTOR_F_PARSE_1ST_FRAG,
+	},
+	{
+		.name = "ipv4-no-frag",
+		.pkt.ipv4 = {
+			.eth.h_proto = __bpf_constant_htons(ETH_P_IP),
+			.iph.ihl = 5,
+			.iph.protocol = IPPROTO_TCP,
+			.iph.tot_len = __bpf_constant_htons(MAGIC_BYTES),
+			.iph.frag_off = __bpf_constant_htons(IP_MF),
+			.tcp.doff = 5,
+			.tcp.source = 80,
+			.tcp.dest = 8080,
+		},
+		.keys = {
+			.nhoff = ETH_HLEN,
+			.thoff = ETH_HLEN + sizeof(struct iphdr),
+			.addr_proto = ETH_P_IP,
+			.ip_proto = IPPROTO_TCP,
+			.n_proto = __bpf_constant_htons(ETH_P_IP),
+			.is_frag = true,
+			.is_first_frag = true,
+		},
+	},
+	{
+		.name = "ipv6-frag",
+		.pkt.ipv6_frag = {
+			.eth.h_proto = __bpf_constant_htons(ETH_P_IPV6),
+			.iph.nexthdr = IPPROTO_FRAGMENT,
+			.iph.payload_len = __bpf_constant_htons(MAGIC_BYTES),
+			.ipf.nexthdr = IPPROTO_TCP,
+			.tcp.doff = 5,
+			.tcp.source = 80,
+			.tcp.dest = 8080,
+		},
+		.keys = {
+			.flags = BPF_FLOW_DISSECTOR_F_PARSE_1ST_FRAG,
+			.nhoff = ETH_HLEN,
+			.thoff = ETH_HLEN + sizeof(struct ipv6hdr) +
+				sizeof(struct frag_hdr),
+			.addr_proto = ETH_P_IPV6,
+			.ip_proto = IPPROTO_TCP,
+			.n_proto = __bpf_constant_htons(ETH_P_IPV6),
+			.is_frag = true,
+			.is_first_frag = true,
+			.sport = 80,
+			.dport = 8080,
+		},
+		.flags = BPF_FLOW_DISSECTOR_F_PARSE_1ST_FRAG,
+	},
+	{
+		.name = "ipv6-no-frag",
+		.pkt.ipv6_frag = {
+			.eth.h_proto = __bpf_constant_htons(ETH_P_IPV6),
+			.iph.nexthdr = IPPROTO_FRAGMENT,
+			.iph.payload_len = __bpf_constant_htons(MAGIC_BYTES),
+			.ipf.nexthdr = IPPROTO_TCP,
+			.tcp.doff = 5,
+			.tcp.source = 80,
+			.tcp.dest = 8080,
+		},
+		.keys = {
+			.nhoff = ETH_HLEN,
+			.thoff = ETH_HLEN + sizeof(struct ipv6hdr) +
+				sizeof(struct frag_hdr),
+			.addr_proto = ETH_P_IPV6,
+			.ip_proto = IPPROTO_TCP,
+			.n_proto = __bpf_constant_htons(ETH_P_IPV6),
+			.is_frag = true,
+			.is_first_frag = true,
+		},
+	},
 };
 
 static int create_tap(const char *ifname)
@@ -2178,6 +2292,13 @@ static void test_flow_dissector(void)
 			.data_size_in = sizeof(tests[i].pkt),
 			.data_out = &flow_keys,
 		};
+		static struct bpf_flow_keys ctx = {};
+
+		if (tests[i].flags) {
+			tattr.ctx_in = &ctx;
+			tattr.ctx_size_in = sizeof(ctx);
+			ctx.flags = tests[i].flags;
+		}
 
 		err = bpf_prog_test_run_xattr(&tattr);
 		CHECK_ATTR(tattr.data_size_out != sizeof(flow_keys) ||
@@ -2204,10 +2325,20 @@ static void test_flow_dissector(void)
 	CHECK(err, "ifup", "err %d errno %d\n", err, errno);
 
 	for (i = 0; i < ARRAY_SIZE(tests); i++) {
-		struct bpf_flow_keys flow_keys = {};
+		/* Keep in sync with 'flags' from eth_get_headlen. */
+		__u32 eth_get_headlen_flags =
+			BPF_FLOW_DISSECTOR_F_PARSE_1ST_FRAG;
 		struct bpf_prog_test_run_attr tattr = {};
+		struct bpf_flow_keys flow_keys = {};
 		__u32 key = (__u32)(tests[i].keys.sport) << 16 |
 			    tests[i].keys.dport;
+
+		/* For skb-less case we can't pass input flags; run
+		 * only the tests that have a matching set of flags.
+		 */
+
+		if (tests[i].flags != eth_get_headlen_flags)
+			continue;
 
 		err = tx_tap(tap_fd, &tests[i].pkt, sizeof(tests[i].pkt));
 		CHECK(err < 0, "tx_tap", "err %d errno %d\n", err, errno);
