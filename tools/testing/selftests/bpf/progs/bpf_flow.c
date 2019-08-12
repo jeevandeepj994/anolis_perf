@@ -65,21 +65,20 @@ struct bpf_map_def SEC("maps") jmp_table = {
 };
 
 struct bpf_map_def SEC("maps") last_dissection = {
-	.type = BPF_MAP_TYPE_ARRAY,
+	.type = BPF_MAP_TYPE_HASH,
 	.key_size = sizeof(__u32),
 	.value_size = sizeof(struct bpf_flow_keys),
-	.max_entries = 1,
+	.max_entries = 1024,
 };
 
 static __always_inline int export_flow_keys(struct bpf_flow_keys *keys,
 					    int ret)
 {
-	struct bpf_flow_keys *val;
-	__u32 key = 0;
+	__u32 key = (__u32)(keys->sport) << 16 | keys->dport;
+	struct bpf_flow_keys val;
 
-	val = bpf_map_lookup_elem(&last_dissection, &key);
-	if (val)
-		memcpy(val, keys, sizeof(*val));
+	memcpy(&val, keys, sizeof(val));
+	bpf_map_update_elem(&last_dissection, &key, &val, BPF_ANY);
 	return ret;
 }
 
