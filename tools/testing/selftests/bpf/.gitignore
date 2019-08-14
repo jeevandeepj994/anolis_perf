@@ -37,6 +37,8 @@ test_tcpnotify_user
 test_libbpf
 test_tcp_check_syncookie_user
 test_sysctl
+test_sockopt_inherit
+test_tcp_rtt
 alu32
 libbpf.pc
 libbpf.so.*
