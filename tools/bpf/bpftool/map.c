@@ -452,9 +452,11 @@ static int parse_elem(char **argv, struct bpf_map_info *info,
 
 static int show_map_close_json(int fd, struct bpf_map_info *info)
 {
-	char *memlock;
+	char *memlock, *frozen_str;
+	int frozen = 0;
 
 	memlock = get_fdinfo(fd, "memlock");
+	frozen_str = get_fdinfo(fd, "frozen");
 
 	jsonw_start_object(json_wtr);
 
@@ -504,6 +506,12 @@ static int show_map_close_json(int fd, struct bpf_map_info *info)
 	}
 	close(fd);
 
+	if (frozen_str) {
+		frozen = atoi(frozen_str);
+		free(frozen_str);
+	}
+	jsonw_int_field(json_wtr, "frozen", frozen);
+
 	if (info->btf_id)
 		jsonw_int_field(json_wtr, "btf_id", info->btf_id);
 
@@ -526,9 +534,11 @@ static int show_map_close_json(int fd, struct bpf_map_info *info)
 
 static int show_map_close_plain(int fd, struct bpf_map_info *info)
 {
-	char *memlock;
+	char *memlock, *frozen_str;
+	int frozen = 0;
 
 	memlock = get_fdinfo(fd, "memlock");
+	frozen_str = get_fdinfo(fd, "frozen");
 
 	printf("%u: ", info->id);
 	if (info->type < ARRAY_SIZE(map_type_name))
@@ -581,9 +591,23 @@ static int show_map_close_plain(int fd, struct bpf_map_info *info)
 				printf("\n\tpinned %s", obj->path);
 		}
 	}
+	printf("\n");
+
+	if (frozen_str) {
+		frozen = atoi(frozen_str);
+		free(frozen_str);
+	}
+
+	if (!info->btf_id && !frozen)
+		return 0;
+
+	printf("\t");
 
 	if (info->btf_id)
-		printf("\n\tbtf_id %d", info->btf_id);
+		printf("btf_id %d", info->btf_id);
+
+	if (frozen)
+		printf("%sfrozen", info->btf_id ? "  " : "");
 
 	printf("\n");
 	return 0;
