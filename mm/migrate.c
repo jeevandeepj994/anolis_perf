@@ -457,6 +457,9 @@ int migrate_page_move_mapping(struct address_space *mapping,
 	expected_count += is_device_private_page(page);
 	expected_count += is_device_public_page(page);
 
+	if (page_count(page) != expected_count)
+		count_vm_events(PGMIGRATE_REFCOUNT_FAIL, hpage_nr_pages(page));
+
 	if (!mapping) {
 		/* Anonymous page without mapping */
 		if (page_count(page) != expected_count)
@@ -1508,6 +1511,9 @@ retry:
 					}
 				}
 				nr_failed++;
+
+				count_vm_events(PGMIGRATE_NOMEM_FAIL,
+						hpage_nr_pages(page));
 				goto out;
 			case -EAGAIN:
 				retry++;
@@ -1996,6 +2002,9 @@ static int numamigrate_isolate_page(pg_data_t *pgdat, struct page *page)
 	if (!migrate_balanced_pgdat(pgdat, order)) {
 		int z;
 
+		count_vm_events(PGMIGRATE_DST_NODE_FULL_FAIL,
+				hpage_nr_pages(page));
+
 		if (!(sysctl_numa_balancing_mode & NUMA_BALANCING_MEMORY_TIERING) ||
 		    !numa_demotion_enabled)
 			return 0;
@@ -2066,8 +2075,11 @@ int migrate_misplaced_page(struct page *page, struct vm_area_struct *vma,
 		goto out;
 
 	isolated = numamigrate_isolate_page(pgdat, page);
-	if (!isolated)
+	if (!isolated) {
+		count_vm_events(PGMIGRATE_NUMA_ISOLATE_FAIL,
+				hpage_nr_pages(page));
 		goto out;
+	}
 
 	list_add(&page->lru, &migratepages);
 	nr_remaining = migrate_pages(&migratepages, alloc_misplaced_dst_page,
@@ -2118,14 +2130,18 @@ int migrate_misplaced_transhuge_page(struct mm_struct *mm,
 	unsigned long mmun_end = mmun_start + HPAGE_PMD_SIZE;
 
 	isolated = numamigrate_isolate_page(pgdat, page);
-	if (!isolated)
+	if (!isolated) {
+		count_vm_events(PGMIGRATE_NUMA_ISOLATE_FAIL, HPAGE_PMD_NR);
 		goto out_fail;
+	}
 
 	new_page = alloc_pages_node(node,
 		(GFP_TRANSHUGE_LIGHT | __GFP_THISNODE),
 		HPAGE_PMD_ORDER);
-	if (!new_page)
+	if (!new_page) {
+		count_vm_events(PGMIGRATE_NOMEM_FAIL, HPAGE_PMD_NR);
 		goto out_fail;
+	}
 	prep_transhuge_page(new_page);
 
 	/* Prepare a page as a migration target */
