@@ -107,6 +107,7 @@ enum nfp_nsp_cmd {
 	SPCODE_NSP_WRITE_FLASH	= 11, /* Load and flash image from buffer */
 	SPCODE_NSP_SENSORS	= 12, /* Read NSP sensor(s) */
 	SPCODE_NSP_IDENTIFY	= 13, /* Read NSP version */
+	SPCODE_FW_LOADED	= 19, /* Is application firmware loaded */
 };
 
 struct nfp_nsp_dma_buf {
@@ -820,4 +821,13 @@ int nfp_nsp_read_sensors(struct nfp_nsp *state, unsigned int sensor_mask,
 	};
 
 	return nfp_nsp_command_buf(state, &sensors);
+}
+
+int nfp_nsp_fw_loaded(struct nfp_nsp *state)
+{
+	const struct nfp_nsp_command_arg arg = {
+		.code		= SPCODE_FW_LOADED,
+	};
+
+	return __nfp_nsp_command(state, &arg);
 }
