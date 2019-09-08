@@ -50,10 +50,16 @@ int nfp_nsp_device_soft_reset(struct nfp_nsp *state);
 int nfp_nsp_load_fw(struct nfp_nsp *state, const struct firmware *fw);
 int nfp_nsp_write_flash(struct nfp_nsp *state, const struct firmware *fw);
 int nfp_nsp_mac_reinit(struct nfp_nsp *state);
+int nfp_nsp_fw_loaded(struct nfp_nsp *state);
 
 static inline bool nfp_nsp_has_mac_reinit(struct nfp_nsp *state)
 {
 	return nfp_nsp_get_abi_ver_minor(state) > 20;
+}
+
+static inline bool nfp_nsp_has_fw_loaded(struct nfp_nsp *state)
+{
+	return nfp_nsp_get_abi_ver_minor(state) > 25;
 }
 
 enum nfp_eth_interface {
