@@ -1307,6 +1307,7 @@ int iommu_unregister_device_fault_handler(struct device *dev)
 {
 	struct dev_iommu *param = dev->iommu;
 	int ret = 0;
+	struct iommu_fault_event *evt, *next;
 	struct iommu_fault_handler_data *hdata, *tmp;
 
 	if (!param)
@@ -1319,9 +1320,25 @@ int iommu_unregister_device_fault_handler(struct device *dev)
 
 	/* we cannot unregister handler if there are pending faults */
 	if (!list_empty(&param->fault_param->faults)) {
+		/*
+		 * REVISIT: We should not run into pending faults if we do unbind first.
+		 * the proper termination flow will ensure no pending faults as follows:
+		 * 1. pasid disable and tlb flush
+		 * 2. unbind, free, flush and drain
+		 * 3. unregister fault handler.
+		 */
+		mutex_lock(&param->fault_param->lock);
+		list_for_each_entry_safe(evt, next, &param->fault_param->faults, list) {
+			dev_dbg(dev, "%s, free fault event: 0x%lx\n", __func__,
+				(unsigned long) evt);
+			list_del(&evt->list);
+			kfree(evt);
+		}
+		mutex_unlock(&param->fault_param->lock);
+/*
 		ret = -EBUSY;
 		goto unlock;
-
+*/
 	}
 	/* TODO: Free handler data if any */
 	list_for_each_entry_safe(hdata, tmp, &param->fault_param->data, list) {
@@ -2459,6 +2476,7 @@ EXPORT_SYMBOL_GPL(iommu_uapi_sva_bind_gpasid);
 int iommu_sva_unbind_gpasid(struct iommu_domain *domain, struct device *dev,
 			     ioasid_t pasid)
 {
+	pr_warn("%s: FIXME need to clear all pending faults!\n", __func__);
 	if (unlikely(!domain->ops->sva_unbind_gpasid))
 		return -ENODEV;
 
