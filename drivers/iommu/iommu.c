@@ -1280,7 +1280,7 @@ done_unlock:
 EXPORT_SYMBOL_GPL(iommu_report_device_fault);
 
 static int iommu_page_response_prepare_msg(void __user *udata,
-					   struct iommu_page_response *msg)
+				struct iommu_page_response *msg)
 {
 	unsigned long minsz, maxsz;
 
@@ -1314,7 +1314,8 @@ static int iommu_page_response_prepare_msg(void __user *udata,
 	return 0;
 }
 
-int iommu_page_response(struct device *dev,
+int iommu_page_response(struct iommu_domain *domain,
+			struct device *dev,
 			void __user *uinfo)
 {
 	bool needs_pasid;
@@ -1323,7 +1324,6 @@ int iommu_page_response(struct device *dev,
 	struct iommu_fault_event *evt;
 	struct iommu_fault_page_request *prm;
 	struct dev_iommu *param = dev->iommu;
-	struct iommu_domain *domain = iommu_get_domain_for_dev(dev);
 	bool has_pasid;
 
 	if (!domain || !domain->ops->page_response)
@@ -1369,7 +1369,7 @@ int iommu_page_response(struct device *dev,
 			msg.pasid = 0;
 		}
 
-		ret = domain->ops->page_response(dev, evt, &msg);
+		ret = domain->ops->page_response(domain, dev, evt, &msg);
 		trace_dev_page_response(dev, &msg);
 		list_del(&evt->list);
 		kfree(evt);
