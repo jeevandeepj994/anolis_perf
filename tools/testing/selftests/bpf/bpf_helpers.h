@@ -418,7 +418,7 @@ static int (*bpf_skb_adjust_room)(void *ctx, __s32 len_diff, __u32 mode,
 #endif
 
 /*
- * BPF_CORE_READ abstracts away bpf_probe_read() call and captures offset
+ * bpf_core_read() abstracts away bpf_probe_read() call and captures offset
  * relocation for source address using __builtin_preserve_access_index()
  * built-in, provided by Clang.
  *
@@ -433,8 +433,8 @@ static int (*bpf_skb_adjust_room)(void *ctx, __s32 len_diff, __u32 mode,
  * actual field offset, based on target kernel BTF type that matches original
  * (local) BTF, used to record relocation.
  */
-#define BPF_CORE_READ(dst, src)						\
-	bpf_probe_read((dst), sizeof(*(src)),				\
-		       __builtin_preserve_access_index(src))
+#define bpf_core_read(dst, sz, src)					    \
+	bpf_probe_read(dst, sz,						    \
+		       (const void *)__builtin_preserve_access_index(src))
 
 #endif
