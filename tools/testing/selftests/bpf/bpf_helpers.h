@@ -220,19 +220,8 @@ static long long (*bpf_tcp_gen_syncookie)(struct bpf_sock *sk, void *ip,
 					  int ip_len, void *tcp, int tcp_len) =
 	(void *) BPF_FUNC_tcp_gen_syncookie;
 
-/* llvm builtin functions that eBPF C program may use to
- * emit BPF_LD_ABS and BPF_LD_IND instructions
- */
-struct sk_buff;
-unsigned long long load_byte(void *skb,
-			     unsigned long long off) asm("llvm.bpf.load.byte");
-unsigned long long load_half(void *skb,
-			     unsigned long long off) asm("llvm.bpf.load.half");
-unsigned long long load_word(void *skb,
-			     unsigned long long off) asm("llvm.bpf.load.word");
-
 /* a helper structure used by eBPF C program
- * to describe map attributes to elf_bpf loader
+ * to describe BPF map attributes to libbpf loader
  */
 struct bpf_map_def {
 	unsigned int type;
@@ -240,18 +229,7 @@ struct bpf_map_def {
 	unsigned int value_size;
 	unsigned int max_entries;
 	unsigned int map_flags;
-	unsigned int inner_map_idx;
-	unsigned int numa_node;
 };
-
-#define BPF_ANNOTATE_KV_PAIR(name, type_key, type_val)		\
-	struct ____btf_map_##name {				\
-		type_key key;					\
-		type_val value;					\
-	};							\
-	struct ____btf_map_##name				\
-	__attribute__ ((section(".maps." #name), used))		\
-		____btf_map_##name = { }
 
 static int (*bpf_skb_load_bytes)(void *ctx, int off, void *to, int len) =
 	(void *) BPF_FUNC_skb_load_bytes;
