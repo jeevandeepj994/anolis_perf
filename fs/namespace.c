@@ -2301,7 +2301,7 @@ static struct file *open_detached_copy(struct path *path, bool recursive)
 	return file;
 }
 
-SYSCALL_DEFINE3(open_tree, int, dfd, const char *, filename, unsigned, flags)
+SYSCALL_DEFINE3(open_tree, int, dfd, const char __user *, filename, unsigned, flags)
 {
 	struct file *file;
 	struct path path;
@@ -3207,8 +3207,8 @@ SYSCALL_DEFINE5(mount, char __user *, dev_name, char __user *, dir_name,
  * Note the flags value is a combination of MOVE_MOUNT_* flags.
  */
 SYSCALL_DEFINE5(move_mount,
-		int, from_dfd, const char *, from_pathname,
-		int, to_dfd, const char *, to_pathname,
+		int, from_dfd, const char __user *, from_pathname,
+		int, to_dfd, const char __user *, to_pathname,
 		unsigned int, flags)
 {
 	struct path from_path, to_path;
