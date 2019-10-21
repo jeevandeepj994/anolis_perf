@@ -48,8 +48,9 @@ __asm__(".arch_extension	virt");
 #endif
 
 DECLARE_KVM_HYP_PER_CPU(unsigned long, kvm_hyp_vector);
-
+#if !defined(CONFIG_KVM_ARM_HOST_VHE_ONLY)
 static DEFINE_PER_CPU(unsigned long, kvm_arm_hyp_stack_page);
+#endif
 unsigned long kvm_arm_hyp_percpu_base[NR_CPUS];
 
 /* The VMID used in the VTTBR */
@@ -1332,6 +1333,7 @@ long kvm_arch_vm_ioctl(struct file *filp,
 	}
 }
 
+#if !defined(CONFIG_KVM_ARM_HOST_VHE_ONLY)
 static unsigned long nvhe_percpu_size(void)
 {
 	return (unsigned long)CHOOSE_NVHE_SYM(__per_cpu_end) -
@@ -1379,9 +1381,11 @@ static int kvm_map_vectors(void)
 
 	return 0;
 }
+#endif
 
 static void cpu_init_hyp_mode(void)
 {
+#if !defined(CONFIG_KVM_ARM_HOST_VHE_ONLY)
 	phys_addr_t pgd_ptr;
 	unsigned long hyp_stack_ptr;
 	unsigned long vector_ptr;
@@ -1423,12 +1427,15 @@ static void cpu_init_hyp_mode(void)
 	    arm64_get_spectre_v4_state() == SPECTRE_VULNERABLE) {
 		kvm_call_hyp_nvhe(__kvm_enable_ssbs);
 	}
+#endif
 }
 
 static void cpu_hyp_reset(void)
 {
+#if !defined(CONFIG_KVM_ARM_HOST_VHE_ONLY)
 	if (!is_kernel_in_hyp_mode())
 		__hyp_reset_vectors();
+#endif
 }
 
 static void cpu_hyp_reinit(void)
@@ -1575,6 +1582,7 @@ static int init_subsystems(void)
 	if (err)
 		goto out;
 
+	register_kvm_pmu_events_handler(kvm_set_pmu_events, kvm_clr_pmu_events);
 	kvm_perf_init();
 	kvm_coproc_table_init();
 
@@ -1584,6 +1592,7 @@ out:
 	return err;
 }
 
+#if !defined(CONFIG_KVM_ARM_HOST_VHE_ONLY)
 static void teardown_hyp_mode(void)
 {
 	int cpu;
@@ -1709,6 +1718,7 @@ out_err:
 	kvm_err("error initializing Hyp mode: %d\n", err);
 	return err;
 }
+#endif
 
 static void check_kvm_target_cpu(void *ret)
 {
@@ -1810,11 +1820,13 @@ int kvm_arch_init(void *opaque)
 	if (err)
 		return err;
 
+#if !defined(CONFIG_KVM_ARM_HOST_VHE_ONLY)
 	if (!in_hyp_mode) {
 		err = init_hyp_mode();
 		if (err)
 			goto out_err;
 	}
+#endif
 
 	err = init_subsystems();
 	if (err)
@@ -1829,15 +1841,18 @@ int kvm_arch_init(void *opaque)
 
 out_hyp:
 	hyp_cpu_pm_exit();
+#if !defined(CONFIG_KVM_ARM_HOST_VHE_ONLY)
 	if (!in_hyp_mode)
 		teardown_hyp_mode();
 out_err:
+#endif
 	return err;
 }
 
 /* NOP: Compiling as a module not supported */
 void kvm_arch_exit(void)
 {
+	unregister_kvm_pmu_events_handler();
 	kvm_perf_teardown();
 	kvm_timer_hyp_uninit();
 	kvm_vgic_hyp_uninit();
@@ -1846,8 +1861,25 @@ void kvm_arch_exit(void)
 
 static int arm_init(void)
 {
-	int rc = kvm_init(NULL, sizeof(struct kvm_vcpu), 0, THIS_MODULE);
+	int rc;
+
+	if (IS_MODULE(CONFIG_KVM) && !is_kernel_in_hyp_mode()) {
+		kvm_err("kvm arm kernel module only supports for VHE system\n");
+		return -ENODEV;
+	}
+
+	rc = kvm_init(NULL, sizeof(struct kvm_vcpu), 0, THIS_MODULE);
+	if (!rc)
+		kvm_info("init kvm-arm successfully\n");
 	return rc;
 }
 
 module_init(arm_init);
+
+static void arm_exit(void)
+{
+	kvm_exit();
+	kvm_info("exit kvm-arm successfully\n");
+}
+
+module_exit(arm_exit);

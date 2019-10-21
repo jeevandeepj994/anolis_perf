@@ -141,8 +141,8 @@ int its_prop_update_vlpi(int irq, u8 config, bool inv);
 int its_prop_update_vsgi(int irq, u8 priority, bool group);
 
 struct irq_domain_ops;
-int its_init_v4(struct irq_domain *domain,
-		const struct irq_domain_ops *vpe_ops,
-		const struct irq_domain_ops *sgi_ops);
+extern struct irq_domain *gic_domain;
+extern const struct irq_domain_ops *vpe_domain_ops;
+extern const struct irq_domain_ops *sgi_domain_ops;
 
 #endif

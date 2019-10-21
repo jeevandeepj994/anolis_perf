@@ -1484,6 +1484,7 @@ out_free_desc:
 	irq_free_descs(virq, nr_irqs);
 	return ret;
 }
+EXPORT_SYMBOL(__irq_domain_alloc_irqs);
 
 /* The irq_data was moved, fix the revmap to refer to the new location */
 static void irq_domain_fix_revmap(struct irq_data *d)
@@ -1678,6 +1679,7 @@ void irq_domain_free_irqs(unsigned int virq, unsigned int nr_irqs)
 	irq_domain_free_irq_data(virq, nr_irqs);
 	irq_free_descs(virq, nr_irqs);
 }
+EXPORT_SYMBOL(irq_domain_free_irqs);
 
 /**
  * irq_domain_alloc_irqs_parent - Allocate interrupts from parent domain
@@ -1769,6 +1771,7 @@ int irq_domain_activate_irq(struct irq_data *irq_data, bool reserve)
 		irqd_set_activated(irq_data);
 	return ret;
 }
+EXPORT_SYMBOL(irq_domain_activate_irq);
 
 /**
  * irq_domain_deactivate_irq - Call domain_ops->deactivate recursively to
@@ -1785,6 +1788,7 @@ void irq_domain_deactivate_irq(struct irq_data *irq_data)
 		irqd_clr_activated(irq_data);
 	}
 }
+EXPORT_SYMBOL(irq_domain_deactivate_irq);
 
 static void irq_domain_check_hierarchy(struct irq_domain *domain)
 {

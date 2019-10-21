@@ -59,6 +59,11 @@
 
 #define ICACHEF_ALIASING	0
 #define ICACHEF_VPIPT		1
+
+#if defined(CONFIG_KVM_ARM_HOST_VHE_ONLY)
+int icache_is_aliasing(void);
+int icache_is_vpipt(void);
+#else
 extern unsigned long __icache_flags;
 
 /*
@@ -74,6 +79,7 @@ static __always_inline int icache_is_vpipt(void)
 {
 	return test_bit(ICACHEF_VPIPT, &__icache_flags);
 }
+#endif
 
 static inline u32 cache_type_cwg(void)
 {

@@ -54,6 +54,13 @@
 static int num_standard_resources;
 static struct resource *standard_resources;
 
+/* Export below symbols for KVM usage. */
+EXPORT_SYMBOL(__boot_cpu_mode);
+extern char vectors[];
+EXPORT_SYMBOL(vectors);
+EXPORT_SYMBOL(__flush_dcache_area);
+EXPORT_SYMBOL(invalidate_icache_range);
+
 phys_addr_t __fdt_pointer __initdata;
 
 /*

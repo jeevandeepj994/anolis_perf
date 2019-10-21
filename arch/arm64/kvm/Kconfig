@@ -17,8 +17,8 @@ menuconfig VIRTUALIZATION
 
 if VIRTUALIZATION
 
-menuconfig KVM
-	bool "Kernel-based Virtual Machine (KVM) support"
+config KVM
+	tristate "Kernel-based Virtual Machine (KVM) support"
 	depends on OF
 	# for TASKSTATS/TASK_DELAY_ACCT:
 	depends on NET && MULTIUSER
@@ -41,14 +41,19 @@ menuconfig KVM
 	select HAVE_KVM_VCPU_RUN_PID_CHANGE
 	select TASKSTATS
 	select TASK_DELAY_ACCT
+	select KVM_ARM_HOST_VHE_ONLY if KVM=m
 	help
 	  Support hosting virtualized guest machines.
 
 	  If unsure, say N.
-
 if KVM
 
 source "virt/kvm/Kconfig"
+
+config KVM_ARM_HOST_VHE_ONLY
+	bool
+	depends on KVM=m
+	default n
 
 config KVM_ARM_PMU
 	bool "Virtual Performance Monitoring Unit (PMU) support"

@@ -5386,6 +5386,29 @@ static void __init its_acpi_probe(void)
 static void __init its_acpi_probe(void) { }
 #endif
 
+struct irq_domain *gic_domain;
+EXPORT_SYMBOL(gic_domain);
+const struct irq_domain_ops *vpe_domain_ops;
+EXPORT_SYMBOL(vpe_domain_ops);
+const struct irq_domain_ops *sgi_domain_ops;
+EXPORT_SYMBOL(sgi_domain_ops);
+
+static int its_init_v4(struct irq_domain *domain,
+		       const struct irq_domain_ops *ops,
+		       const struct irq_domain_ops *sgi_ops)
+{
+	if (domain) {
+		pr_info("ITS: Enabling GICv4 support\n");
+		gic_domain = domain;
+		vpe_domain_ops = ops;
+		sgi_domain_ops = sgi_ops;
+		return 0;
+	}
+
+	pr_err("ITS: No GICv4 VPE domain allocated\n");
+	return -ENODEV;
+}
+
 int __init its_init(struct fwnode_handle *handle, struct rdists *rdists,
 		    struct irq_domain *parent_domain)
 {

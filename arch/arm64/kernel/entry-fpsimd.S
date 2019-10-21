@@ -37,11 +37,13 @@ SYM_FUNC_START(sve_save_state)
 	sve_save 0, x1, 2
 	ret
 SYM_FUNC_END(sve_save_state)
+EXPORT_SYMBOL(sve_save_state)
 
 SYM_FUNC_START(sve_load_state)
 	sve_load 0, x1, x2, 3, x4
 	ret
 SYM_FUNC_END(sve_load_state)
+EXPORT_SYMBOL(sve_load_state)
 
 SYM_FUNC_START(sve_get_vl)
 	_sve_rdvl	0, 1

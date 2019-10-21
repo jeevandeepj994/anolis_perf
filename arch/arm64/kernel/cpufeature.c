@@ -109,6 +109,7 @@ bool arm64_use_ng_mappings = false;
 EXPORT_SYMBOL(arm64_use_ng_mappings);
 
 DEFINE_PER_CPU_READ_MOSTLY(const char *, this_cpu_vector) = vectors;
+EXPORT_SYMBOL(this_cpu_vector);
 
 /*
  * Flag to indicate if we have computed the system wide

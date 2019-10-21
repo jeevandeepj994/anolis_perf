@@ -1078,10 +1078,12 @@ void kvm_timer_hyp_uninit(void)
 
 	cpuhp_remove_state(CPUHP_AP_KVM_ARM_TIMER_STARTING);
 	if (info->physical_irq > 0) {
-		on_each_cpu((smp_call_func_t)disable_percpu_irq, (void *)host_ptimer_irq, 1);
+		on_each_cpu((smp_call_func_t)disable_percpu_irq,
+			    (void *)(long)host_ptimer_irq, 1);
 		free_percpu_irq(host_ptimer_irq, kvm_get_running_vcpus());
 	}
-	on_each_cpu((smp_call_func_t)disable_percpu_irq, (void *)host_vtimer_irq, 1);
+	on_each_cpu((smp_call_func_t)disable_percpu_irq,
+		    (void *)(long)host_vtimer_irq, 1);
 	free_percpu_irq(host_vtimer_irq, kvm_get_running_vcpus());
 }
 
