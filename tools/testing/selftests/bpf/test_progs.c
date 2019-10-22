@@ -3693,7 +3693,7 @@ static void test_core_reloc(void)
 	for (i = 0; i < ARRAY_SIZE(test_cases); i++) {
 		test_case = &test_cases[i];
 
-		LIBBPF_OPTS(bpf_object_open_opts, opts,
+		DECLARE_LIBBPF_OPTS(bpf_object_open_opts, opts,
 			.relaxed_core_relocs = test_case->relaxed_core_relocs,
 		);
 
