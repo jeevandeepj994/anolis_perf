@@ -109,7 +109,7 @@ force:
 $(BPFOBJ): force
 	$(MAKE) -C $(BPFDIR) OUTPUT=$(OUTPUT)/
 
-PROBE := $(shell $(LLC) -march=bpf -mcpu=probe -filetype=null /dev/null 2>&1)
+PROBE := $(shell $(LLC) -mattr=dwarfris -march=bpf -mcpu=probe -filetype=null /dev/null 2>&1)
 
 # Let newer LLVM versions transparently probe the kernel for availability
 # of full BPF instruction set.
