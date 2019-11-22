@@ -10,6 +10,7 @@
 
 /* TDX module Call Leaf IDs */
 #define TDX_GET_INFO			1
+#define TDX_GET_VEINFO			3
 
 static bool tdx_guest_detected __ro_after_init;
 
@@ -72,6 +73,66 @@ static u64 get_cc_mask(void)
 	 * Set it for shared pages and clear it for private pages.
 	 */
 	return BIT_ULL(gpa_width - 1);
+}
+
+bool tdx_get_ve_info(struct ve_info *ve)
+{
+	struct tdx_module_output out;
+
+	/*
+	 * NMIs and machine checks are suppressed. Before this point any
+	 * #VE is fatal. After this point (TDGETVEINFO call), NMIs and
+	 * additional #VEs are permitted (but it is expected not to
+	 * happen unless kernel panics).
+	 */
+	if (__tdx_module_call(TDX_GET_VEINFO, 0, 0, 0, 0, &out))
+		return false;
+
+	ve->exit_reason = out.rcx;
+	ve->exit_qual   = out.rdx;
+	ve->gla         = out.r8;
+	ve->gpa         = out.r9;
+	ve->instr_len   = lower_32_bits(out.r10);
+	ve->instr_info  = upper_32_bits(out.r10);
+
+	return true;
+}
+
+/*
+ * Handle the user initiated #VE.
+ *
+ * For example, executing the CPUID instruction from user space
+ * is a valid case and hence the resulting #VE has to be handled.
+ *
+ * For dis-allowed or invalid #VE just return failure.
+ */
+static bool tdx_virt_exception_user(struct pt_regs *regs, struct ve_info *ve)
+{
+	pr_warn("Unexpected #VE: %lld\n", ve->exit_reason);
+	return false;
+}
+
+/* Handle the kernel #VE */
+static bool tdx_virt_exception_kernel(struct pt_regs *regs, struct ve_info *ve)
+{
+	pr_warn("Unexpected #VE: %lld\n", ve->exit_reason);
+	return false;
+}
+
+bool tdx_handle_virt_exception(struct pt_regs *regs, struct ve_info *ve)
+{
+	bool ret;
+
+	if (user_mode(regs))
+		ret = tdx_virt_exception_user(regs, ve);
+	else
+		ret = tdx_virt_exception_kernel(regs, ve);
+
+	/* After successful #VE handling, move the IP */
+	if (ret)
+		regs->ip += ve->instr_len;
+
+	return ret;
 }
 
 bool is_tdx_guest(void)
