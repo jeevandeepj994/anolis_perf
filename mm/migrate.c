@@ -1970,7 +1970,7 @@ static bool migrate_balanced_pgdat(struct pglist_data *pgdat, int order)
 		/* Avoid waking kswapd by allocating pages to migrate. */
 		if (!zone_watermark_ok(zone, order,
 				       high_wmark_pages(zone),
-				       0, 0))
+				       ZONE_MOVABLE, 0))
 			continue;
 		return true;
 	}
