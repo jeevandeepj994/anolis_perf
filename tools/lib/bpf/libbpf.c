@@ -4455,7 +4455,7 @@ struct perf_buffer {
 	size_t mmap_size;
 	struct perf_cpu_buf **cpu_bufs;
 	struct epoll_event *events;
-	int cpu_cnt;
+	int cpu_cnt; /* number of allocated CPU buffers */
 	int epoll_fd; /* perf event FD */
 	int map_fd; /* BPF_MAP_TYPE_PERF_EVENT_ARRAY BPF map FD */
 };
@@ -4589,11 +4589,13 @@ perf_buffer__new_raw(int map_fd, size_t page_cnt,
 static struct perf_buffer *__perf_buffer__new(int map_fd, size_t page_cnt,
 					      struct perf_buffer_params *p)
 {
+	const char *online_cpus_file = "/sys/devices/system/cpu/online";
 	struct bpf_map_info map = {};
 	char msg[STRERR_BUFSIZE];
 	struct perf_buffer *pb;
+	bool *online = NULL;
 	__u32 map_info_len;
-	int err, i;
+	int err, i, j, n;
 
 	if (page_cnt & (page_cnt - 1)) {
 		pr_warning("page count should be power of two, but is %zu\n",
@@ -4662,12 +4664,24 @@ static struct perf_buffer *__perf_buffer__new(int map_fd, size_t page_cnt,
 		goto error;
 	}
 
-	for (i = 0; i < pb->cpu_cnt; i++) {
+	err = parse_cpu_mask_file(online_cpus_file, &online, &n);
+	if (err) {
+		pr_warning("failed to get online CPU mask: %d\n", err);
+		goto error;
+	}
+
+	for (i = 0, j = 0; i < pb->cpu_cnt; i++) {
 		struct perf_cpu_buf *cpu_buf;
 		int cpu, map_key;
 
 		cpu = p->cpu_cnt > 0 ? p->cpus[i] : i;
 		map_key = p->cpu_cnt > 0 ? p->map_keys[i] : i;
+
+		/* in case user didn't explicitly requested particular CPUs to
+		 * be attached to, skip offline/not present CPUs
+		 */
+		if (p->cpu_cnt <= 0 && (cpu >= n || !online[cpu]))
+			continue;
 
 		cpu_buf = perf_buffer__open_cpu_buf(pb, p->attr, cpu, map_key);
 		if (IS_ERR(cpu_buf)) {
@@ -4675,7 +4689,7 @@ static struct perf_buffer *__perf_buffer__new(int map_fd, size_t page_cnt,
 			goto error;
 		}
 
-		pb->cpu_bufs[i] = cpu_buf;
+		pb->cpu_bufs[j] = cpu_buf;
 
 		err = bpf_map_update_elem(pb->map_fd, &map_key,
 					  &cpu_buf->fd, 0);
@@ -4687,21 +4701,25 @@ static struct perf_buffer *__perf_buffer__new(int map_fd, size_t page_cnt,
 			goto error;
 		}
 
-		pb->events[i].events = EPOLLIN;
-		pb->events[i].data.ptr = cpu_buf;
+		pb->events[j].events = EPOLLIN;
+		pb->events[j].data.ptr = cpu_buf;
 		if (epoll_ctl(pb->epoll_fd, EPOLL_CTL_ADD, cpu_buf->fd,
-			      &pb->events[i]) < 0) {
+			      &pb->events[j]) < 0) {
 			err = -errno;
 			pr_warning("failed to epoll_ctl cpu #%d perf FD %d: %s\n",
 				   cpu, cpu_buf->fd,
 				   libbpf_strerror_r(err, msg, sizeof(msg)));
 			goto error;
 		}
+		j++;
 	}
+	pb->cpu_cnt = j;
+	free(online);
 
 	return pb;
 
 error:
+	free(online);
 	if (pb)
 		perf_buffer__free(pb);
 	return ERR_PTR(err);
@@ -5046,14 +5064,14 @@ int parse_cpu_mask_str(const char *s, bool **mask, int *mask_sz)
 		}
 		n = sscanf(s, "%d%n-%d%n", &start, &len, &end, &len);
 		if (n <= 0 || n > 2) {
-			pr_warn("Failed to get CPU range %s: %d\n", s, n);
+			pr_warning("Failed to get CPU range %s: %d\n", s, n);
 			err = -EINVAL;
 			goto cleanup;
 		} else if (n == 1) {
 			end = start;
 		}
 		if (start < 0 || start > end) {
-			pr_warn("Invalid CPU range [%d,%d] in %s\n",
+			pr_warning("Invalid CPU range [%d,%d] in %s\n",
 				start, end, s);
 			err = -EINVAL;
 			goto cleanup;
@@ -5070,7 +5088,7 @@ int parse_cpu_mask_str(const char *s, bool **mask, int *mask_sz)
 		s += len;
 	}
 	if (!*mask_sz) {
-		pr_warn("Empty CPU range\n");
+		pr_warning("Empty CPU range\n");
 		return -EINVAL;
 	}
 	return 0;
@@ -5088,18 +5106,18 @@ int parse_cpu_mask_file(const char *fcpu, bool **mask, int *mask_sz)
 	fd = open(fcpu, O_RDONLY);
 	if (fd < 0) {
 		err = -errno;
-		pr_warn("Failed to open cpu mask file %s: %d\n", fcpu, err);
+		pr_warning("Failed to open cpu mask file %s: %d\n", fcpu, err);
 		return err;
 	}
 	len = read(fd, buf, sizeof(buf));
 	close(fd);
 	if (len <= 0) {
 		err = len ? -errno : -EINVAL;
-		pr_warn("Failed to read cpu mask from %s: %d\n", fcpu, err);
+		pr_warning("Failed to read cpu mask from %s: %d\n", fcpu, err);
 		return err;
 	}
 	if (len >= sizeof(buf)) {
-		pr_warn("CPU mask is too big in file %s\n", fcpu);
+		pr_warning("CPU mask is too big in file %s\n", fcpu);
 		return -E2BIG;
 	}
 	buf[len] = '\0';
