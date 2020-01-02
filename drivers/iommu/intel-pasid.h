@@ -24,6 +24,20 @@
  */
 #define FLPT_DEFAULT_DID		1
 
+/*
+ * The SUPERVISOR_MODE flag indicates a first level translation which
+ * can be used for access to kernel addresses. It is valid only for
+ * access to the kernel's static 1:1 mapping of physical memory — not
+ * to vmalloc or even module mappings.
+ */
+#define PASID_FLAG_SUPERVISOR_MODE	BIT(0)
+
+/*
+ * The PASID_FLAG_FL5LP flag Indicates using 5-level paging for first-
+ * level translation, otherwise, 4-level paging will be used.
+ */
+#define PASID_FLAG_FL5LP		BIT(1)
+
 struct pasid_dir_entry {
 	u64 val;
 };
