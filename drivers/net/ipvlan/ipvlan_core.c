@@ -643,6 +643,15 @@ int ipvlan_queue_xmit(struct sk_buff *skb, struct net_device *dev)
 	if (unlikely(!pskb_may_pull(skb, sizeof(struct ethhdr))))
 		goto out;
 
+#ifdef CONFIG_CGROUP_NET_CLASSID
+	if (sysctl_skb_classid_forward) {
+		struct sock *sk = skb_to_full_sk(skb);
+
+		skb->cgroup_classid = sk ?
+			sock_cgroup_classid(&sk->sk_cgrp_data) : 0;
+	}
+#endif
+
 	switch(port->mode) {
 	case IPVLAN_MODE_L2:
 		return ipvlan_xmit_mode_l2(skb, dev);

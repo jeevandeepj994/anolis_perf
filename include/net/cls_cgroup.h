@@ -68,9 +68,10 @@ static inline u32 task_get_classid(const struct sk_buff *skb)
 
 		/* If there is an sock_cgroup_classid we'll use that. */
 		if (!sk || !sk_fullsock(sk))
-			return 0;
-
-		classid = sock_cgroup_classid(&sk->sk_cgrp_data);
+			classid = sysctl_skb_classid_forward ?
+				skb->cgroup_classid : 0;
+		else
+			classid = sock_cgroup_classid(&sk->sk_cgrp_data);
 	}
 
 	return classid;
