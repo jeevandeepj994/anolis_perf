@@ -305,6 +305,10 @@ struct sk_buff;
 #endif
 extern int sysctl_max_skb_frags;
 
+#ifdef CONFIG_CGROUP_NET_CLASSID
+extern int sysctl_skb_classid_forward;
+#endif
+
 /* Set skb_shinfo(skb)->gso_size to this in case you want skb_segment to
  * segment using its current segmentation instead.
  */
@@ -654,6 +658,7 @@ typedef unsigned char *sk_buff_data_t;
  *	@transport_header: Transport layer header
  *	@network_header: Network layer header
  *	@mac_header: Link layer header
+ *	@cgroup_classid: Cgroup classid
  *	@tail: Tail pointer
  *	@end: End pointer
  *	@head: Head of buffer
@@ -851,6 +856,10 @@ struct sk_buff {
 	/* private: */
 	__u32			headers_end[0];
 	/* public: */
+
+#ifdef CONFIG_CGROUP_NET_CLASSID
+	__u32                   cgroup_classid;
+#endif
 
 	CK_HOTFIX_RESERVE(1)
 	CK_HOTFIX_RESERVE(2)
