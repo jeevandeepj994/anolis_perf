@@ -82,6 +82,11 @@ static struct kmem_cache *skbuff_fclone_cache __ro_after_init;
 int sysctl_max_skb_frags __read_mostly = MAX_SKB_FRAGS;
 EXPORT_SYMBOL(sysctl_max_skb_frags);
 
+#ifdef CONFIG_CGROUP_NET_CLASSID
+int sysctl_skb_classid_forward __read_mostly = 1; /* Forward skb classid */
+EXPORT_SYMBOL(sysctl_skb_classid_forward);
+#endif
+
 /**
  *	skb_panic - private function for out-of-line support
  *	@skb:	buffer
@@ -840,7 +845,9 @@ static void __copy_skb_header(struct sk_buff *new, const struct sk_buff *old)
 #ifdef CONFIG_NET_SCHED
 	CHECK_SKB_FIELD(tc_index);
 #endif
-
+#ifdef CONFIG_CGROUP_NET_CLASSID
+	new->cgroup_classid  = old->cgroup_classid;
+#endif
 }
 
 /*

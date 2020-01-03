@@ -544,6 +544,17 @@ static struct ctl_table net_core_table[] = {
 		.extra1		= &zero,
 		.extra2		= &one,
 	},
+#ifdef CONFIG_CGROUP_NET_CLASSID
+	{
+		.procname       = "skb_classid_forward",
+		.data           = &sysctl_skb_classid_forward,
+		.maxlen         = sizeof(int),
+		.mode           = 0644,
+		.proc_handler   = proc_dointvec_minmax,
+		.extra1         = &zero,
+		.extra2         = &one,
+	},
+#endif
 	{ }
 };
 

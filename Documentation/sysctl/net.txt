@@ -291,6 +291,14 @@ user space is responsible for creating them if needed.
 
 Default : 0  (for compatibility reasons)
 
+skb_classid_forward
+-------------------
+
+This enables sock classid forwarding via veth interface.
+Values :
+       0 - disable
+       1 - enable (default value)
+
 2. /proc/sys/net/unix - Parameters for Unix domain sockets
 -------------------------------------------------------
 
