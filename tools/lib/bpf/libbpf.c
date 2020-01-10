@@ -132,6 +132,8 @@ struct bpf_capabilities {
 	__u32 btf_func:1;
 	/* BTF_KIND_VAR and BTF_KIND_DATASEC support */
 	__u32 btf_datasec:1;
+	/* BTF_FUNC_GLOBAL is supported */
+	__u32 btf_func_global:1;
 };
 
 /*
@@ -1027,6 +1029,7 @@ static bool section_have_execinstr(struct bpf_object *obj, int idx)
 
 static void bpf_object__sanitize_btf(struct bpf_object *obj)
 {
+	bool has_func_global = obj->caps.btf_func_global;
 	bool has_datasec = obj->caps.btf_datasec;
 	bool has_func = obj->caps.btf_func;
 	struct btf *btf = obj->btf;
@@ -1034,7 +1037,7 @@ static void bpf_object__sanitize_btf(struct bpf_object *obj)
 	int i, j, vlen;
 	__u16 kind;
 
-	if (!obj->btf || (has_func && has_datasec))
+	if (!obj->btf || (has_func && has_datasec && has_func_global))
 		return;
 
 	for (i = 1; i <= btf__get_nr_types(btf); i++) {
@@ -1078,6 +1081,9 @@ static void bpf_object__sanitize_btf(struct bpf_object *obj)
 		} else if (!has_func && kind == BTF_KIND_FUNC) {
 			/* replace FUNC with TYPEDEF */
 			t->info = BTF_INFO_ENC(BTF_KIND_TYPEDEF, 0, 0);
+		} else if (!has_func_global && kind == BTF_KIND_FUNC) {
+			/* replace BTF_FUNC_GLOBAL with BTF_FUNC_STATIC */
+			t->info = BTF_INFO_ENC(BTF_KIND_FUNC, 0, 0);
 		}
 	}
 }
@@ -1658,6 +1664,32 @@ static int bpf_object__probe_btf_func(struct bpf_object *obj)
 	return 0;
 }
 
+static int bpf_object__probe_btf_func_global(struct bpf_object *obj)
+{
+	static const char strs[] = "\0int\0x\0a";
+	/* static void x(int a) {} */
+	__u32 types[] = {
+		/* int */
+		BTF_TYPE_INT_ENC(1, BTF_INT_SIGNED, 0, 32, 4),  /* [1] */
+		/* FUNC_PROTO */                                /* [2] */
+		BTF_TYPE_ENC(0, BTF_INFO_ENC(BTF_KIND_FUNC_PROTO, 0, 1), 0),
+		BTF_PARAM_ENC(7, 1),
+		/* FUNC x BTF_FUNC_GLOBAL */                    /* [3] */
+		BTF_TYPE_ENC(5, BTF_INFO_ENC(BTF_KIND_FUNC, 0, BTF_FUNC_GLOBAL), 2),
+	};
+	int btf_fd;
+
+	btf_fd = libbpf__load_raw_btf((char *)types, sizeof(types),
+				      strs, sizeof(strs));
+	if (btf_fd >= 0) {
+		obj->caps.btf_func_global = 1;
+		close(btf_fd);
+		return 1;
+	}
+
+	return 0;
+}
+
 static int bpf_object__probe_btf_datasec(struct bpf_object *obj)
 {
 	const char strs[] = "\0x\0.data";
@@ -1692,6 +1724,7 @@ bpf_object__probe_caps(struct bpf_object *obj)
 		bpf_object__probe_name,
 		bpf_object__probe_global_data,
 		bpf_object__probe_btf_func,
+		bpf_object__probe_btf_func_global,
 		bpf_object__probe_btf_datasec,
 	};
 	int i, ret;
