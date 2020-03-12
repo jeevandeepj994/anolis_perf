@@ -1432,7 +1432,12 @@ static void bpf_object__sanitize_btf_ext(struct bpf_object *obj)
 	}
 }
 
-static bool bpf_object__is_btf_mandatory(const struct bpf_object *obj)
+static bool libbpf_needs_btf(const struct bpf_object *obj)
+{
+	return obj->efile.btf_maps_shndx >= 0;
+}
+
+static bool kernel_needs_btf(const struct bpf_object *obj)
 {
 	return false;
 }
@@ -1441,7 +1446,7 @@ static int bpf_object__init_btf(struct bpf_object *obj,
 				Elf_Data *btf_data,
 				Elf_Data *btf_ext_data)
 {
-	bool btf_required = bpf_object__is_btf_mandatory(obj);
+	bool btf_required = libbpf_needs_btf(obj);
 	int err = 0;
 
 	if (btf_data) {
@@ -1506,7 +1511,7 @@ static int bpf_object__sanitize_and_load_btf(struct bpf_object *obj)
 			   BTF_ELF_SEC, err);
 		btf__free(obj->btf);
 		obj->btf = NULL;
-		if (bpf_object__is_btf_mandatory(obj))
+		if (kernel_needs_btf(obj))
 			return err;
 	}
 	return 0;
