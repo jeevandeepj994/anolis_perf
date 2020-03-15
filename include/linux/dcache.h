@@ -120,8 +120,14 @@ struct dentry {
 	 	struct rcu_head d_rcu;
 	} d_u;
 
+#ifdef CONFIG_KIDLED
+#ifdef CONFIG_ARCH_HISI
+	unsigned long age;  /* workaround for hisi chip */
+#else
+	unsigned short age;
+#endif
+#endif
 	CK_HOTFIX_RESERVE(1)
-	CK_HOTFIX_RESERVE(2)
 } __randomize_layout;
 
 /*
