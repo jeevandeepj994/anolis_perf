@@ -11,6 +11,9 @@
 #include <linux/vmalloc.h>
 #include <linux/wait.h>
 #include <linux/kidled.h>
+#include <linux/slab.h>
+#include "slab.h"
+#include <linux/swap.h>
 #include <uapi/linux/sched/types.h>
 
 /*
@@ -71,7 +74,7 @@ struct kidled_scan_period kidled_scan_period;
 const int kidled_default_buckets[NUM_KIDLED_BUCKETS] = {
 	1, 2, 5, 15, 30, 60, 120, 240 };
 static DECLARE_WAIT_QUEUE_HEAD(kidled_wait);
-static unsigned long kidled_scan_rounds __read_mostly;
+unsigned long kidled_scan_rounds __read_mostly;
 
 static inline int kidled_get_bucket(int *idle_buckets, int age)
 {
@@ -92,6 +95,10 @@ static inline int kidled_get_idle_type(struct page *page)
 {
 	int idle_type = KIDLE_BASE;
 
+	if (PageSlab(page)) {
+		idle_type |= KIDLE_SLAB;
+		goto out;
+	}
 	if (PageDirty(page) || PageWriteback(page))
 		idle_type |= KIDLE_DIRTY;
 	if (page_is_file_cache(page))
@@ -105,6 +112,7 @@ static inline int kidled_get_idle_type(struct page *page)
 		idle_type |= KIDLE_UNEVICT;
 	if (PageActive(page))
 		idle_type |= KIDLE_ACTIVE;
+out:
 	return idle_type;
 }
 
@@ -146,23 +154,30 @@ EXPORT_SYMBOL_GPL(kidled_set_page_age);
 #endif /* !KIDLED_AGE_NOT_IN_PAGE_FLAGS */
 
 #ifdef CONFIG_MEMCG
-static inline void kidled_mem_cgroup_account(struct page *page,
-					     int age,
-					     unsigned long size)
+void kidled_mem_cgroup_account(struct page *page,
+			int age, unsigned long size)
 {
 	struct mem_cgroup *memcg;
 	struct idle_page_stats *stats;
 	int type, bucket;
+	bool locked = false;
 
 	if (mem_cgroup_disabled())
 		return;
 
 	type = kidled_get_idle_type(page);
-
-	memcg = lock_page_memcg(page);
-	if (unlikely(!memcg)) {
-		unlock_page_memcg(page);
-		return;
+	if (type == KIDLE_SLAB) {
+		if (!memcg_kmem_enabled())
+			memcg = root_mem_cgroup;
+		else
+			memcg = page->slab_cache->memcg_params.memcg;
+	} else {
+		memcg = lock_page_memcg(page);
+		if (unlikely(!memcg)) {
+			unlock_page_memcg(page);
+			return;
+		}
+		locked = true;
 	}
 
 	stats = mem_cgroup_get_unstable_idle_stats(memcg);
@@ -170,7 +185,8 @@ static inline void kidled_mem_cgroup_account(struct page *page,
 	if (bucket >= 0)
 		stats->count[type][bucket] += size;
 
-	unlock_page_memcg(page);
+	if (locked)
+		unlock_page_memcg(page);
 }
 
 void kidled_mem_cgroup_move_stats(struct mem_cgroup *from,
@@ -293,9 +309,8 @@ static inline void kidled_mem_cgroup_reset(void)
 	}
 }
 #else /* !CONFIG_MEMCG */
-static inline void kidled_mem_cgroup_account(struct page *page,
-					     int age,
-					     unsigned long size)
+void kidled_mem_cgroup_account(struct page *page,
+			int age, unsigned long size)
 {
 }
 static inline void kidled_mem_cgroup_scan_done(struct kidled_scan_period
@@ -492,6 +507,26 @@ void kidled_free_page_age(pg_data_t *pgdat)
 }
 #endif
 
+static inline void kidled_scan_slab_node(int nid)
+{
+	struct mem_cgroup *memcg;
+
+	memcg = mem_cgroup_iter(NULL, NULL, NULL);
+	do {
+		kidled_scan_slab(nid, memcg);
+		if (!memcg_kmem_enabled())
+			break;
+	} while ((memcg = mem_cgroup_iter(NULL, memcg, NULL)) != NULL);
+}
+
+static inline void kidled_scan_slabs(void)
+{
+	int nid;
+
+	for_each_online_node(nid)
+		kidled_scan_slab_node(nid);
+}
+
 static inline void kidled_scan_done(struct kidled_scan_period scan_period)
 {
 	kidled_mem_cgroup_scan_done(scan_period);
@@ -593,9 +628,11 @@ static int kidled(void *dummy)
 		put_online_mems();
 
 		if (scan_done) {
+			kidled_scan_slabs();
 			kidled_scan_done(scan_period);
 			restart = true;
 		} else {
+			kidled_scan_slabs();
 			restart = false;
 		}
 
