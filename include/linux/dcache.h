@@ -118,6 +118,10 @@ struct dentry {
 		struct hlist_bl_node d_in_lookup_hash;	/* only for in-lookup ones */
 	 	struct rcu_head d_rcu;
 	} d_u;
+
+#ifdef CONFIG_KIDLED
+	unsigned short age;
+#endif
 } __randomize_layout;
 
 /*
