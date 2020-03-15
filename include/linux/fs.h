@@ -726,6 +726,10 @@ struct inode {
 #endif
 
 	void			*i_private; /* fs or device private pointer */
+
+#ifdef CONFIG_KIDLED
+	unsigned short age;
+#endif
 } __randomize_layout;
 
 struct timespec64 timestamp_truncate(struct timespec64 t, struct inode *inode);
