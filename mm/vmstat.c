@@ -1191,6 +1191,7 @@ const char * const vmstat_text[] = {
 	"pgpromote_candidate",
 	"promote_threshold",
 	"pgpromote_file",
+	"pgpromote_try",
 #endif
 
 	/* enum writeback_stat_item counters */
