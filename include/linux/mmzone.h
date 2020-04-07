@@ -211,6 +211,7 @@ enum node_stat_item {
 	PGPROMOTE_CANDIDATE,	/* candidate pages to promote */
 	PROMOTE_THRESHOLD,
 	PGPROMOTE_FILE,
+	PGPROMOTE_TRY,		/* pages to try to migrate via NUMA balancing */
 #endif
 	NR_VM_NODE_STAT_ITEMS
 };
@@ -778,6 +779,7 @@ typedef struct pglist_data {
 	unsigned long numa_nr_candidate;
 	unsigned long numa_threshold_ts;
 	unsigned long numa_threshold_nr_candidate;
+	unsigned long numa_threshold_try;
 	unsigned long numa_threshold;
 #endif
 	/* Fields commonly accessed by the page reclaim scanner */
