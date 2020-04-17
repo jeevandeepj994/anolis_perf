@@ -2853,13 +2853,15 @@ static int check_ptr_to_btf_access(struct bpf_verifier_env *env,
 	if (ret < 0)
 		return ret;
 
-	if (ret == SCALAR_VALUE) {
-		mark_reg_unknown(env, regs, value_regno);
-		return 0;
+	if (value_regno >= 0) {
+		if (ret == SCALAR_VALUE) {
+			mark_reg_unknown(env, regs, value_regno);
+			return 0;
+		}
+		mark_reg_known_zero(env, regs, value_regno);
+		regs[value_regno].type = PTR_TO_BTF_ID;
+		regs[value_regno].btf_id = btf_id;
 	}
-	mark_reg_known_zero(env, regs, value_regno);
-	regs[value_regno].type = PTR_TO_BTF_ID;
-	regs[value_regno].btf_id = btf_id;
 	return 0;
 }
 
