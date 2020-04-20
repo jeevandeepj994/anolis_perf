@@ -6,6 +6,7 @@
 
 #include <linux/cpufeature.h>
 #include <asm/coco.h>
+#include <linux/swiotlb.h>
 #include <asm/tdx.h>
 #include <asm/vmx.h>
 #include <asm/insn.h>
@@ -636,6 +637,8 @@ void __init tdx_early_init(void)
 	x86_platform.guest.enc_cache_flush_required = tdx_cache_flush_required;
 	x86_platform.guest.enc_tlb_flush_required   = tdx_tlb_flush_required;
 	x86_platform.guest.enc_status_change_finish = tdx_enc_status_changed;
+
+	swiotlb_force = SWIOTLB_FORCE;
 
 	pr_info("Guest detected\n");
 }
