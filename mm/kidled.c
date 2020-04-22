@@ -139,7 +139,7 @@ EXPORT_SYMBOL_GPL(kidled_set_page_age);
 #ifdef CONFIG_MEMCG
 static inline void kidled_mem_cgroup_account(struct page *page,
 					     int age,
-					     int nr_pages)
+					     unsigned long size)
 {
 	struct mem_cgroup *memcg;
 	struct idle_page_stats *stats;
@@ -159,7 +159,7 @@ static inline void kidled_mem_cgroup_account(struct page *page,
 	stats = mem_cgroup_get_unstable_idle_stats(memcg);
 	bucket = kidled_get_bucket(stats->buckets, age);
 	if (bucket >= 0)
-		stats->count[type][bucket] += nr_pages;
+		stats->count[type][bucket] += size;
 
 	unlock_page_memcg(page);
 }
@@ -167,7 +167,7 @@ static inline void kidled_mem_cgroup_account(struct page *page,
 void kidled_mem_cgroup_move_stats(struct mem_cgroup *from,
 				  struct mem_cgroup *to,
 				  struct page *page,
-				  unsigned int nr_pages)
+				  unsigned long size)
 {
 	pg_data_t *pgdat = page_pgdat(page);
 	unsigned long pfn = page_to_pfn(page);
@@ -202,13 +202,13 @@ void kidled_mem_cgroup_move_stats(struct mem_cgroup *from,
 		return;
 
 	/* Remove from the source memory cgroup */
-	if (stats[0]->count[type][bucket] > nr_pages)
-		stats[0]->count[type][bucket] -= nr_pages;
+	if (stats[0]->count[type][bucket] > size)
+		stats[0]->count[type][bucket] -= size;
 	else
 		stats[0]->count[type][bucket] = 0;
 	if (pgdat->node_idle_scan_pfn >= pfn) {
-		if (stats[1]->count[type][bucket] > nr_pages)
-			stats[1]->count[type][bucket] -= nr_pages;
+		if (stats[1]->count[type][bucket] > size)
+			stats[1]->count[type][bucket] -= size;
 		else
 			stats[1]->count[type][bucket] = 0;
 	}
@@ -221,9 +221,9 @@ void kidled_mem_cgroup_move_stats(struct mem_cgroup *from,
 	if (bucket < 0)
 		return;
 
-	stats[2]->count[type][bucket] += nr_pages;
+	stats[2]->count[type][bucket] += size;
 	if (pgdat->node_idle_scan_pfn >= pfn)
-		stats[3]->count[type][bucket] += nr_pages;
+		stats[3]->count[type][bucket] += size;
 }
 EXPORT_SYMBOL_GPL(kidled_mem_cgroup_move_stats);
 
@@ -286,7 +286,7 @@ static inline void kidled_mem_cgroup_reset(void)
 #else /* !CONFIG_MEMCG */
 static inline void kidled_mem_cgroup_account(struct page *page,
 					     int age,
-					     int nr_pages)
+					     unsigned long size)
 {
 }
 static inline void kidled_mem_cgroup_scan_done(struct kidled_scan_period
@@ -408,7 +408,8 @@ static inline int kidled_scan_page(pg_data_t *pgdat, unsigned long pfn)
 	if (idle) {
 		age = kidled_inc_page_age(pgdat, pfn);
 		if (age > 0)
-			kidled_mem_cgroup_account(page, age, nr_pages);
+			kidled_mem_cgroup_account(page, age,
+						  nr_pages << PAGE_SHIFT);
 		else
 			age = 0;
 	} else {
