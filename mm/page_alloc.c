@@ -15,6 +15,7 @@
  *          (lots of bits borrowed from Ingo Molnar & Andrew Morton)
  */
 
+#include "linux/vm_event_item.h"
 #include <linux/stddef.h>
 #include <linux/mm.h>
 #include <linux/highmem.h>
@@ -992,8 +993,11 @@ static inline void del_page_from_free_list(struct page *page, struct zone *zone,
 					   unsigned int order)
 {
 	/* clear reported state and update reported page count */
-	if (page_reported(page))
+	if (page_reported(page)) {
 		__ClearPageReported(page);
+		zone->reported_pages -= (1 << order);
+		__count_vm_events(ALLOC_REPORTED_PAGE, 1 << order);
+	}
 
 #ifdef CONFIG_PAGE_PREZERO
 	/* clear pre-zeroed state */
