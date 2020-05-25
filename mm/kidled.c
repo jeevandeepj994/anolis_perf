@@ -53,6 +53,7 @@
  * kstaled's patch directly. Thanks!
  */
 
+bool kidled_slab_scan_enabled __read_mostly;
 struct kidled_scan_period kidled_scan_period;
 /*
  * These bucket values are copied from Michel Lespinasse's patch, they are
@@ -278,7 +279,7 @@ static inline void kidled_mem_cgroup_scan_done(struct kidled_scan_period period)
 	}
 }
 
-static inline void kidled_mem_cgroup_reset(void)
+static inline void kidled_mem_cgroup_reset(bool slab)
 {
 	struct mem_cgroup *memcg;
 	struct idle_page_stats *stable_stats, *unstable_stats;
@@ -289,14 +290,27 @@ static inline void kidled_mem_cgroup_reset(void)
 		down_write(&memcg->idle_stats_rwsem);
 		stable_stats = mem_cgroup_get_stable_idle_stats(memcg);
 		unstable_stats = mem_cgroup_get_unstable_idle_stats(memcg);
-		memset(&stable_stats->count, 0, sizeof(stable_stats->count));
+		if (slab) {
+			memset(&stable_stats->count[KIDLE_SLAB], 0,
+				sizeof(stable_stats->count[KIDLE_SLAB]));
+			memcg->scan_period.slab_scan_enabled = false;
+			up_write(&memcg->idle_stats_rwsem);
+			memset(&unstable_stats->count[KIDLE_SLAB], 0,
+				sizeof(unstable_stats->count[KIDLE_SLAB]));
 
-		memcg->idle_scans = 0;
-		kidled_reset_scan_period(&memcg->scan_period);
-		up_write(&memcg->idle_stats_rwsem);
+			if (!memcg_kmem_enabled())
+				break;
+		} else {
+			memset(&stable_stats->count, 0,
+				sizeof(stable_stats->count));
 
-		memset(&unstable_stats->count, 0,
-		       sizeof(unstable_stats->count));
+			memcg->idle_scans = 0;
+			kidled_reset_scan_period(&memcg->scan_period);
+			up_write(&memcg->idle_stats_rwsem);
+
+			memset(&unstable_stats->count, 0,
+			       sizeof(unstable_stats->count));
+		}
 	}
 }
 #else /* !CONFIG_MEMCG */
@@ -308,7 +322,7 @@ static inline void kidled_mem_cgroup_scan_done(struct kidled_scan_period
 					       scan_period)
 {
 }
-static inline void kidled_mem_cgroup_reset(void)
+static inline void kidled_mem_cgroup_reset(bool slab)
 {
 }
 #endif /* CONFIG_MEMCG */
@@ -498,24 +512,28 @@ void kidled_free_page_age(pg_data_t *pgdat)
 }
 #endif
 
-static inline void kidled_scan_slab_node(int nid)
+static inline void kidled_scan_slab_node(int nid,
+					 struct kidled_scan_period scan_period)
 {
 	struct mem_cgroup *memcg;
 
 	memcg = mem_cgroup_iter(NULL, NULL, NULL);
 	do {
-		kidled_scan_slab(nid, memcg);
+		kidled_scan_slab(nid, memcg, scan_period);
 		if (!memcg_kmem_enabled())
 			break;
 	} while ((memcg = mem_cgroup_iter(NULL, memcg, NULL)) != NULL);
 }
 
-static inline void kidled_scan_slabs(void)
+static inline void kidled_scan_slabs(struct kidled_scan_period scan_period)
 {
 	int nid;
 
+	if (!kidled_slab_scan_enabled)
+		return;
+
 	for_each_online_node(nid)
-		kidled_scan_slab_node(nid);
+		kidled_scan_slab_node(nid, scan_period);
 }
 
 static inline void kidled_scan_done(struct kidled_scan_period scan_period)
@@ -528,7 +546,7 @@ static inline void kidled_reset(bool free)
 {
 	pg_data_t *pgdat;
 
-	kidled_mem_cgroup_reset();
+	kidled_mem_cgroup_reset(false);
 
 	get_online_mems();
 
@@ -576,6 +594,12 @@ static inline bool kidled_should_run(struct kidled_scan_period *p, bool *new)
 			kidled_reset(!scan_period.duration);
 		*p = scan_period;
 		*new = true;
+	} else if (unlikely(!kidled_is_slab_scan_enabled_equal(p))) {
+		if (p->slab_scan_enabled)
+			kidled_mem_cgroup_reset(true);
+		else
+			p->slab_scan_enabled = true;
+		*new = false;
 	} else {
 		*new = false;
 	}
@@ -619,11 +643,11 @@ static int kidled(void *dummy)
 		put_online_mems();
 
 		if (scan_done) {
-			kidled_scan_slabs();
+			kidled_scan_slabs(scan_period);
 			kidled_scan_done(scan_period);
 			restart = true;
 		} else {
-			kidled_scan_slabs();
+			kidled_scan_slabs(scan_period);
 			restart = false;
 		}
 
@@ -647,7 +671,13 @@ static int kidled(void *dummy)
 		 *
 		 * We thought it's busy when elapsed >= (HZ / 2), and if keep
 		 * busy for several consecutive times, we'll scale up the
-		 * scan duration.
+		 * scan duration, But except in one case when we enable the
+		 * slab scan. It's acceptable that the cpu load is very high
+		 * for a while and we can not scale up the scan duration.
+		 * Otherwise it will takes a lot of time to scan an round.
+		 *
+		 * Because kidled is the lowest priority, and it can be
+		 * scheduled easily when other task want to run in current cpu.
 		 *
 		 * NOTE it's a simple guard, not a promise.
 		 */
@@ -700,12 +730,38 @@ static ssize_t kidled_scan_period_store(struct kobject *kobj,
 	return count;
 }
 
+static ssize_t kidled_slab_scan_enabled_show(struct kobject *kobj,
+					     struct kobj_attribute *attr,
+					     char *buf)
+{
+	return sprintf(buf, "%u\n", kidled_slab_scan_enabled);
+}
+
+static ssize_t kidled_slab_scan_enabled_store(struct kobject *kobj,
+					      struct kobj_attribute *attr,
+					      const char *buf, size_t count)
+{
+	unsigned long val;
+	int ret;
+
+	ret = kstrtoul(buf, 10, &val);
+	if (ret || val > 1)
+		return -EINVAL;
+
+	WRITE_ONCE(kidled_slab_scan_enabled, val);
+	return count;
+}
+
 static struct kobj_attribute kidled_scan_period_attr =
 	__ATTR(scan_period_in_seconds, 0644,
 	       kidled_scan_period_show, kidled_scan_period_store);
+static struct kobj_attribute kidled_slab_scan_enabled_attr =
+	__ATTR(slab_scan_enabled, 0644,
+	       kidled_slab_scan_enabled_show, kidled_slab_scan_enabled_store);
 
 static struct attribute *kidled_attrs[] = {
 	&kidled_scan_period_attr.attr,
+	&kidled_slab_scan_enabled_attr.attr,
 	NULL
 };
 static struct attribute_group kidled_attr_group = {
