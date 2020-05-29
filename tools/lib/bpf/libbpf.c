@@ -76,9 +76,9 @@ static int __base_pr(const char *format, ...)
 	return err;
 }
 
-static __printf(1, 2) libbpf_print_fn_t __pr_warning = __base_pr;
-static __printf(1, 2) libbpf_print_fn_t __pr_info = __base_pr;
-static __printf(1, 2) libbpf_print_fn_t __pr_debug;
+__printf(1, 2) libbpf_print_fn_t __pr_warning = __base_pr;
+__printf(1, 2) libbpf_print_fn_t __pr_info = __base_pr;
+__printf(1, 2) libbpf_print_fn_t __pr_debug;
 
 #define __pr(func, fmt, ...)	\
 do {				\
