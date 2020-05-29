@@ -294,6 +294,28 @@ enum bpf_perf_event_ret {
 	LIBBPF_PERF_EVENT_CONT	= -2,
 };
 
+/* Ring buffer APIs */
+struct ring_buffer;
+
+typedef int (*ring_buffer_sample_fn)(void *ctx, void *data, size_t size);
+
+struct ring_buffer_opts {
+	size_t sz; /* size of this struct, for forward/backward compatiblity */
+};
+
+#define ring_buffer_opts__last_field sz
+
+struct ring_buffer *
+ring_buffer__new(int map_fd, ring_buffer_sample_fn sample_cb, void *ctx,
+		 const struct ring_buffer_opts *opts);
+void ring_buffer__free(struct ring_buffer *rb);
+int ring_buffer__add(struct ring_buffer *rb, int map_fd,
+				ring_buffer_sample_fn sample_cb, void *ctx);
+int ring_buffer__poll(struct ring_buffer *rb, int timeout_ms);
+int ring_buffer__consume(struct ring_buffer *rb);
+
+/* Perf buffer APIs */
+
 typedef enum bpf_perf_event_ret (*bpf_perf_event_print_t)(void *event,
 							  void *priv);
 int bpf_perf_event_read_simple(void *mem, unsigned long size,
