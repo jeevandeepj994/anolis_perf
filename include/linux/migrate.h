@@ -29,6 +29,9 @@ enum migrate_reason {
 	MR_TYPES
 };
 
+/*  promote_file_page() flags */
+#define PFP_LOCKED             0x1
+
 /* In mm/debug.c; also keep sync with include/trace/events/migrate.h */
 extern char *migrate_reason_names[MR_TYPES];
 
@@ -82,7 +85,7 @@ extern int migrate_page_move_mapping(struct address_space *mapping,
 		struct page *newpage, struct page *page,
 		struct buffer_head *head, enum migrate_mode mode,
 		int extra_count);
-
+extern bool promote_file_page(struct page *page, int flags);
 extern bool numa_demotion_enabled;
 #else
 
@@ -108,6 +111,11 @@ static inline int migrate_huge_page_move_mapping(struct address_space *mapping,
 				  struct page *newpage, struct page *page)
 {
 	return -ENOSYS;
+}
+
+static inline bool promote_file_page(struct page *page, int flags)
+{
+	return false;
 }
 
 #define numa_demotion_enabled  false
