@@ -93,14 +93,6 @@ static unsigned long change_pte_range(struct vm_area_struct *vma, pmd_t *pmd,
 				    page_mapcount(page) != 1)
 					continue;
 
-				/*
-				 * While migration can move some dirty pages,
-				 * it cannot move them all from MIGRATE_ASYNC
-				 * context.
-				 */
-				if (page_is_file_cache(page) && PageDirty(page))
-					continue;
-
 				/* Avoid TLB flush if possible */
 				if (pte_protnone(oldpte))
 					continue;
