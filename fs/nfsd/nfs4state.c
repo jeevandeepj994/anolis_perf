@@ -7655,9 +7655,14 @@ nfs4_state_start_net(struct net *net)
 	struct nfsd_net *nn = net_generic(net, nfsd_net_id);
 	int ret;
 
-	ret = nfs4_state_create_net(net);
+	ret = get_nfsdfs(net);
 	if (ret)
 		return ret;
+	ret = nfs4_state_create_net(net);
+	if (ret) {
+		mntput(nn->nfsd_mnt);
+		return ret;
+	}
 	locks_start_grace(net, &nn->nfsd4_manager);
 	nfsd4_client_tracking_init(net);
 	printk(KERN_INFO "NFSD: starting %ld-second grace period (net %x)\n",
@@ -7717,6 +7722,7 @@ nfs4_state_shutdown_net(struct net *net)
 
 	nfsd4_client_tracking_exit(net);
 	nfs4_state_destroy_net(net);
+	mntput(nn->nfsd_mnt);
 }
 
 void
