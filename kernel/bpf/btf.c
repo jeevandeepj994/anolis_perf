@@ -387,6 +387,11 @@ static bool btf_type_is_int(const struct btf_type *t)
 	return BTF_INFO_KIND(t->info) == BTF_KIND_INT;
 }
 
+static inline bool btf_type_is_small_int(const struct btf_type *t)
+{
+	return btf_type_is_int(t) && t->size <= sizeof(u64);
+}
+
 static bool btf_type_is_var(const struct btf_type *t)
 {
 	return BTF_INFO_KIND(t->info) == BTF_KIND_VAR;
@@ -3517,7 +3522,7 @@ bool btf_ctx_access(int off, int size, enum bpf_access_type type,
 	/* skip modifiers */
 	while (btf_type_is_modifier(t))
 		t = btf_type_by_id(btf_vmlinux, t->type);
-	if (btf_type_is_int(t))
+	if (btf_type_is_small_int(t))
 		/* accessing a scalar */
 		return true;
 	if (!btf_type_is_ptr(t)) {
