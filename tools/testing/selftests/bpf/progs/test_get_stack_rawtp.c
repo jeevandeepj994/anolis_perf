@@ -57,8 +57,9 @@ struct bpf_map_def SEC("maps") rawdata_map = {
 SEC("tracepoint/raw_syscalls/sys_enter")
 int bpf_prog1(void *ctx)
 {
-	int max_len, max_buildid_len, usize, ksize, total_size;
+	int max_len, max_buildid_len, total_size;
 	struct stack_trace_t *data;
+	long usize, ksize;
 	void *raw_data;
 	__u32 key = 0;
 
