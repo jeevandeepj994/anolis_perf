@@ -479,10 +479,14 @@ static bool kidled_scan_node(pg_data_t *pgdat,
 			     struct kidled_scan_control scan_control,
 			     bool restart)
 {
-	unsigned long pfn, end, node_end;
+	unsigned long pfn, end;
+	unsigned long node_end = pgdat_end_pfn(pgdat);
 
 	if (kidled_is_slab_target(&scan_control))
 		return false;
+	else
+		if (!restart && pgdat->node_idle_scan_pfn >= node_end)
+			return true;
 
 #ifdef KIDLED_AGE_NOT_IN_PAGE_FLAGS
 	if (unlikely(!pgdat->node_page_age)) {
@@ -499,7 +503,6 @@ static bool kidled_scan_node(pg_data_t *pgdat,
 	}
 #endif /* KIDLED_AGE_NOT_IN_PAGE_FLAGS */
 
-	node_end = pgdat_end_pfn(pgdat);
 	pfn = pgdat->node_start_pfn;
 	if (!restart && pfn < pgdat->node_idle_scan_pfn)
 		pfn = pgdat->node_idle_scan_pfn;
@@ -605,7 +608,8 @@ static inline void kidled_reset(bool free)
 	put_online_mems();
 }
 
-static inline bool kidled_should_run(struct kidled_scan_control *p, bool *new)
+static inline bool kidled_should_run(struct kidled_scan_control *p,
+					bool *new, int *count_slab_scan)
 {
 	if (unlikely(!kidled_is_scan_period_equal(p))) {
 		struct kidled_scan_control scan_control;
@@ -621,8 +625,10 @@ static inline bool kidled_should_run(struct kidled_scan_control *p, bool *new)
 		scan_control = kidled_get_current_scan_control();
 		if (!kidled_has_page_target_equal(p))
 			kidled_mem_cgroup_reset(SCAN_TARGET_PAGE);
-		else if (!kidled_has_slab_target_equal(p))
+		else if (!kidled_has_slab_target_equal(p)) {
 			kidled_mem_cgroup_reset(SCAN_TARGET_SLAB);
+			*count_slab_scan = 0;
+		}
 		if (kidled_is_slab_target(p))
 			*new = true;
 		else
@@ -636,6 +642,20 @@ static inline bool kidled_should_run(struct kidled_scan_control *p, bool *new)
 		return true;
 
 	return false;
+}
+
+static inline bool is_kidled_scan_done(bool scan_done,
+				int count_slab_scan,
+				struct kidled_scan_control scan_control)
+{
+	u16 duration = scan_control.duration;
+
+	if (kidled_is_slab_target(&scan_control))
+		return count_slab_scan >= duration;
+	else if (kidled_is_page_target(&scan_control))
+		return scan_done;
+	else
+		return scan_done && (count_slab_scan >= duration);
 }
 
 static int kidled(void *dummy)
@@ -653,7 +673,8 @@ static int kidled(void *dummy)
 		bool new, scan_done = true;
 
 		wait_event_interruptible(kidled_wait,
-				kidled_should_run(&scan_control, &new));
+					 kidled_should_run(&scan_control,
+					 &new, &count_slab_scan));
 		if (unlikely(new)) {
 			restart = true;
 			busy_loop = 0;
@@ -672,8 +693,8 @@ static int kidled(void *dummy)
 		put_online_mems();
 
 		kidled_scan_slabs(scan_control);
-		if (scan_done || (kidled_is_slab_target(&scan_control) &&
-			count_slab_scan + 1 >= scan_control.duration)) {
+		if (is_kidled_scan_done(scan_done,
+			count_slab_scan + 1, scan_control)) {
 			kidled_scan_done(scan_control);
 			restart = true;
 			count_slab_scan = 0;
