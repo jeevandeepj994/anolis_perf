@@ -402,6 +402,7 @@ struct iommu_nesting_info {
 	__u32	format;
 #define IOMMU_NESTING_FEAT_BIND_PGTBL		(1 << 0)
 #define IOMMU_NESTING_FEAT_CACHE_INVLD		(1 << 1)
+#define IOMMU_NESTING_FEAT_PAGE_RESP		(1 << 2)
 	__u32	features;
 	__u16	addr_width;
 	__u16	pasid_bits;
