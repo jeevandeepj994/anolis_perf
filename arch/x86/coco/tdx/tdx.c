@@ -667,7 +667,7 @@ static bool handle_out(struct pt_regs *regs, int size, int port)
 static int handle_io(struct pt_regs *regs, struct ve_info *ve)
 {
 	u32 exit_qual = ve->exit_qual;
-	int size, port;
+	int size, port, mask;
 	bool in, ret;
 
 	if (VE_IS_IO_STRING(exit_qual))
@@ -676,7 +676,15 @@ static int handle_io(struct pt_regs *regs, struct ve_info *ve)
 	in   = VE_IS_IO_IN(exit_qual);
 	size = VE_GET_IO_SIZE(exit_qual);
 	port = VE_GET_PORT_NUM(exit_qual);
+	mask = GENMASK(BITS_PER_BYTE * size, 0);
 
+	if (!tdx_allowed_port(port)) {
+		if (in) {
+			regs->ax &= ~mask;
+			regs->ax |= (UINT_MAX & mask);
+		}
+		return true;
+	}
 
 	if (in)
 		ret = handle_in(regs, size, port);
