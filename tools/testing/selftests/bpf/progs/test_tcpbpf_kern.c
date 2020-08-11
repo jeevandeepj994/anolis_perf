@@ -45,11 +45,24 @@ int _version SEC("version") = 1;
 SEC("sockops")
 int bpf_testcb(struct bpf_sock_ops *skops)
 {
+	struct bpf_sock_ops *reuse = skops;
 	int rv = -1;
 	int bad_call_rv = 0;
 	int good_call_rv = 0;
 	int op;
 	int v = 0;
+
+	/* Test reading fields in bpf_sock_ops using single register */
+	asm volatile (
+		"%[reuse] = *(u32 *)(%[reuse] +96)"
+		: [reuse] "+r"(reuse)
+		:);
+
+	asm volatile (
+		"%[op] = *(u32 *)(%[skops] +96)"
+		: [op] "+r"(op)
+		: [skops] "r"(skops)
+		:);
 
 	op = (int) skops->op;
 
