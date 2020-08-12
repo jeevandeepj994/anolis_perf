@@ -1258,6 +1258,9 @@ const char * const vmstat_text[] = {
 #ifdef CONFIG_MIGRATION
 	"pgmigrate_success",
 	"pgmigrate_fail",
+	"thp_migration_success",
+	"thp_migration_fail",
+	"thp_migration_split",
 	"pgmigrate_fail_dst_node_fail",
 	"pgmigrate_fail_numa_isolate_fail",
 	"pgmigrate_fail_nomem_fail",
