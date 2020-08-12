@@ -69,7 +69,7 @@ MODULE_PARM_DESC(disable_bypass,
 	.type = disable_bypass ? S2CR_TYPE_FAULT : S2CR_TYPE_BYPASS,	\
 }
 
-static bool ft2000_iommu_hwfix;
+bool ft2000_iommu_hwfix;
 static int __init ft2000_iommu_hwfix_hwfix(char *str)
 {
 	ft2000_iommu_hwfix = true;

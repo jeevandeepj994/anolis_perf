@@ -190,6 +190,7 @@ static u16 vmovp_seq_num;
 static DEFINE_RAW_SPINLOCK(vmovp_lock);
 
 static DEFINE_IDA(its_vpeid_ida);
+extern bool ft2000_iommu_hwfix;
 
 #define gic_data_rdist()		(raw_cpu_ptr(gic_rdists->rdist))
 #define gic_data_rdist_cpu(cpu)		(per_cpu_ptr(gic_rdists->rdist, cpu))
@@ -1696,7 +1697,8 @@ static void its_irq_compose_msi_msg(struct irq_data *d, struct msi_msg *msg)
 	msg->address_hi		= upper_32_bits(addr);
 	msg->data		= its_get_event_id(d);
 
-	iommu_dma_compose_msi_msg(irq_data_get_msi_desc(d), msg);
+	if (likely(!ft2000_iommu_hwfix))
+		iommu_dma_compose_msi_msg(irq_data_get_msi_desc(d), msg);
 }
 
 static int its_irq_set_irqchip_state(struct irq_data *d,
