@@ -530,6 +530,7 @@ struct io_async_rw {
 	struct iovec			fast_iov[UIO_FASTIOV];
 	const struct iovec              *free_iovec;
 	struct iov_iter                 iter;
+	size_t				bytes_done;
 	struct wait_page_queue		wpq;
 	struct callback_head		task_work;
 };
@@ -942,7 +943,7 @@ static ssize_t io_import_iovec(int rw, struct io_kiocb *req,
 			       bool needs_lock);
 static int io_setup_async_rw(struct io_kiocb *req, const struct iovec *iovec,
 			     const struct iovec *fast_iov,
-			     struct iov_iter *iter);
+			     struct iov_iter *iter, bool force);
 
 static struct kmem_cache *req_cachep;
 
@@ -2214,7 +2215,7 @@ static bool io_resubmit_prep(struct io_kiocb *req, int error)
 		ret = io_import_iovec(rw, req, &iovec, &iter, false);
 		if (ret < 0)
 			goto end_req;
-		ret = io_setup_async_rw(req, iovec, inline_vecs, &iter);
+		ret = io_setup_async_rw(req, iovec, inline_vecs, &iter, false);
 		if (!ret)
 			return true;
 		kfree(iovec);
@@ -2495,6 +2496,14 @@ static inline void io_rw_done(struct kiocb *kiocb, ssize_t ret)
 static void kiocb_done(struct kiocb *kiocb, ssize_t ret)
 {
 	struct io_kiocb *req = container_of(kiocb, struct io_kiocb, rw.kiocb);
+
+	/* add previously done IO, if any */
+	if (req->io && req->io->rw.bytes_done > 0) {
+		if (ret < 0)
+			ret = req->io->rw.bytes_done;
+		else
+			ret += req->io->rw.bytes_done;
+	}
 
 	if (req->flags & REQ_F_CUR_POS)
 		req->file->f_pos = kiocb->ki_pos;
@@ -2841,6 +2850,7 @@ static void io_req_map_rw(struct io_kiocb *req, const struct iovec *iovec,
 
 	memcpy(&rw->iter, iter, sizeof(*iter));
 	rw->free_iovec = NULL;
+	rw->bytes_done = 0;
 	/* can only be fixed buffers, no need to do anything */
 	if (iter->type == ITER_BVEC)
 		return;
@@ -2877,9 +2887,9 @@ static int io_alloc_async_ctx(struct io_kiocb *req)
 
 static int io_setup_async_rw(struct io_kiocb *req, const struct iovec *iovec,
 			     const struct iovec *fast_iov,
-			     struct iov_iter *iter)
+			     struct iov_iter *iter, bool force)
 {
-	if (!io_op_defs[req->opcode].async_ctx)
+	if (!force && !io_op_defs[req->opcode].async_ctx)
 		return 0;
 	if (!req->io) {
 		if (__io_alloc_async_ctx(req))
@@ -3000,8 +3010,8 @@ static int io_async_buf_func(struct wait_queue_entry *wait, unsigned mode,
 	wake_up_process(tsk);
 	return 1;
 }
-static bool io_rw_should_retry(struct io_kiocb *req, struct iovec *iovec,
-			      struct iovec *fast_iov, struct iov_iter *iter)
+
+static bool io_rw_should_retry(struct io_kiocb *req)
 {
 	struct kiocb *kiocb = &req->rw.kiocb;
 	int ret;
@@ -3010,8 +3020,8 @@ static bool io_rw_should_retry(struct io_kiocb *req, struct iovec *iovec,
 	if (req->flags & REQ_F_NOWAIT)
 		return false;
 
-	/* already tried, or we're doing O_DIRECT */
-	if (kiocb->ki_flags & (IOCB_DIRECT | IOCB_WAITQ))
+	/* Only for buffered IO */
+	if (kiocb->ki_flags & IOCB_DIRECT)
 		return false;
 	/*
 	 * just use poll if we can, and don't attempt if the fs doesn't
@@ -3019,16 +3029,6 @@ static bool io_rw_should_retry(struct io_kiocb *req, struct iovec *iovec,
 	 */
 	if (file_can_poll(req->file) || !(req->file->f_mode & FMODE_BUF_RASYNC))
 		return false;
-
-	/*
-	 * If request type doesn't require req->io to defer in general,
-	 * we need to allocate it here
-	 */
-	if (!req->io) {
-		if (__io_alloc_async_ctx(req))
-			return false;
-		io_req_map_rw(req, iovec, fast_iov, iter);
-	}
 
 	ret = kiocb_wait_page_queue_init(kiocb, &req->io->rw.wpq,
 						io_async_buf_func, req);
@@ -3056,7 +3056,7 @@ static int io_read(struct io_kiocb *req, bool force_nonblock)
 	struct kiocb *kiocb = &req->rw.kiocb;
 	struct iov_iter __iter, *iter = &__iter;
 	size_t iov_count;
-	ssize_t io_size, ret;
+	ssize_t io_size, ret, ret2;
 	bool no_async;
 
 	if (req->io)
@@ -3073,6 +3073,7 @@ static int io_read(struct io_kiocb *req, bool force_nonblock)
 
 	io_size = ret;
 	req->result = io_size;
+	ret = 0;
 
 	/*
 	 * If the file doesn't support async, mark it as REQ_F_MUST_PUNT so
@@ -3083,42 +3084,73 @@ static int io_read(struct io_kiocb *req, bool force_nonblock)
 		goto copy_iov;
 
 	ret = rw_verify_area(READ, req->file, &kiocb->ki_pos, iov_count);
+	if (unlikely(ret))
+		goto out_free;
+
+	ret = io_iter_do_read(req, iter);
+
 	if (!ret) {
-		ssize_t ret2 = 0;
-
-		ret2 = io_iter_do_read(req, iter);
-
-		/* Catch -EAGAIN return for forced non-blocking submission */
-		if (!force_nonblock || (ret2 != -EAGAIN && ret2 != -EIO)) {
+		goto done;
+	} else if (ret == -EIOCBQUEUED) {
+		ret = 0;
+		goto out_free;
+	} else if (ret == -EAGAIN) {
 			/* IOPOLL retry should happen for io-wq threads */
-			if ((req->ctx->flags & IORING_SETUP_IOPOLL) && (ret2 == -EAGAIN))
-				goto copy_iov;
-			kiocb_done(kiocb, ret2);
-		} else {
-copy_iov:
-			ret = io_setup_async_rw(req, iovec, inline_vecs, iter);
-			if (ret)
-				goto out_free;
-			/* any defer here is final, must blocking retry */
-			if (!(req->flags & REQ_F_NOWAIT) &&
-			    !file_can_poll(req->file))
-				req->flags |= REQ_F_MUST_PUNT;
-			if (no_async)
-				return -EAGAIN;
-			/* if we can retry, do so with the callbacks armed */
-			if (io_rw_should_retry(req, iovec, inline_vecs, iter)) {
-				ret2 = io_iter_do_read(req, iter);
-				if (ret2 == -EIOCBQUEUED) {
-					goto out_free;
-				} else if (ret2 != -EAGAIN) {
-					kiocb_done(kiocb, ret2);
-					goto out_free;
-				}
-			}
-			kiocb->ki_flags &= ~IOCB_WAITQ;
-			return -EAGAIN;
-		}
+		if (!force_nonblock && (req->ctx->flags & IORING_SETUP_IOPOLL))
+			goto copy_iov;
+
+		ret = io_setup_async_rw(req, iovec, inline_vecs, iter, false);
+		if (ret)
+			goto out_free;
+		return -EAGAIN;
+	} else if (ret < 0) {
+		goto out_free;
 	}
+
+	if (!force_nonblock || !iov_iter_count(iter))
+		goto done;
+
+	io_size -= ret;
+copy_iov:
+	ret2 = io_setup_async_rw(req, iovec, inline_vecs, iter, true);
+	if (ret2) {
+		ret = ret2;
+		goto out_free;
+	}
+	/* any defer here is final, must blocking retry */
+	if (!(req->flags & REQ_F_NOWAIT) &&
+	    !file_can_poll(req->file))
+		req->flags |= REQ_F_MUST_PUNT;
+	if (no_async)
+		return -EAGAIN;
+
+	iovec = NULL;
+	iter = &req->io->rw.iter;
+retry:
+	req->io->rw.bytes_done += ret;
+	/* if we can retry, do so with the callbacks armed */
+	if (!io_rw_should_retry(req)) {
+		kiocb->ki_flags &= ~IOCB_WAITQ;
+		return -EAGAIN;
+	}
+
+	/*
+	 * Now retry read with the IOCB_WAITQ parts set in the iocb. If we
+	 * get -EIOCBQUEUED, then we'll get a notification when the desired
+	 * page gets unlocked. We can also get a partial read here, and if we
+	 * do, then just retry at the new offset.
+	 */
+	ret = io_iter_do_read(req, iter);
+	if (ret == -EIOCBQUEUED) {
+		ret = 0;
+		goto out_free;
+	} else if (ret > 0 && ret < io_size) {
+		/* we got some bytes, but not all. retry. */
+		goto retry;
+	}
+done:
+	kiocb_done(kiocb, ret);
+	ret = 0;
 out_free:
 	if (!(req->flags & REQ_F_NEED_CLEANUP))
 		kfree(iovec);
@@ -3236,7 +3268,7 @@ static int io_write(struct io_kiocb *req, bool force_nonblock)
 			kiocb_done(kiocb, ret2);
 		} else {
 copy_iov:
-			ret = io_setup_async_rw(req, iovec, inline_vecs, iter);
+			ret = io_setup_async_rw(req, iovec, inline_vecs, iter, false);
 			if (ret)
 				goto out_free;
 			/* any defer here is final, must blocking retry */
