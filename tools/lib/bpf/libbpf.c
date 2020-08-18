@@ -1061,6 +1061,29 @@ skip_mods_and_typedefs(const struct btf *btf, __u32 id, __u32 *res_id)
 	return t;
 }
 
+static const char *btf_kind_str(const struct btf_type *t)
+{
+	switch (btf_kind(t)) {
+	case BTF_KIND_UNKN: return "void";
+	case BTF_KIND_INT: return "int";
+	case BTF_KIND_PTR: return "ptr";
+	case BTF_KIND_ARRAY: return "array";
+	case BTF_KIND_STRUCT: return "struct";
+	case BTF_KIND_UNION: return "union";
+	case BTF_KIND_ENUM: return "enum";
+	case BTF_KIND_FWD: return "fwd";
+	case BTF_KIND_TYPEDEF: return "typedef";
+	case BTF_KIND_VOLATILE: return "volatile";
+	case BTF_KIND_CONST: return "const";
+	case BTF_KIND_RESTRICT: return "restrict";
+	case BTF_KIND_FUNC: return "func";
+	case BTF_KIND_FUNC_PROTO: return "func_proto";
+	case BTF_KIND_VAR: return "var";
+	case BTF_KIND_DATASEC: return "datasec";
+	default: return "unknown";
+	}
+}
+
 /*
  * Fetch integer attribute of BTF map definition. Such attributes are
  * represented using a pointer to an array, in which dimensionality of array
@@ -1078,8 +1101,8 @@ static bool get_map_field_int(const char *map_name, const struct btf *btf,
 	const struct btf_type *arr_t;
 
 	if (!btf_is_ptr(t)) {
-		pr_warn("map '%s': attr '%s': expected PTR, got %u.\n",
-			map_name, name, btf_kind(t));
+		pr_warn("map '%s': attr '%s': expected PTR, got %s.\n",
+			map_name, name, btf_kind_str(t));
 		return false;
 	}
 
@@ -1090,8 +1113,8 @@ static bool get_map_field_int(const char *map_name, const struct btf *btf,
 		return false;
 	}
 	if (!btf_is_array(arr_t)) {
-		pr_warn("map '%s': attr '%s': expected ARRAY, got %u.\n",
-			map_name, name, btf_kind(arr_t));
+		pr_warn("map '%s': attr '%s': expected ARRAY, got %s.\n",
+			map_name, name, btf_kind_str(arr_t));
 		return false;
 	}
 	arr_info = btf_array(arr_t);
@@ -1149,8 +1172,8 @@ static int bpf_object__init_user_btf_map(struct bpf_object *obj,
 		return -EINVAL;
 	}
 	if (!btf_is_var(var)) {
-		pr_warn("map '%s': unexpected var kind %u.\n",
-			map_name, btf_kind(var));
+		pr_warn("map '%s': unexpected var kind %s.\n",
+			map_name, btf_kind_str(var));
 		return -EINVAL;
 	}
 	if (var_extra->linkage != BTF_VAR_GLOBAL_ALLOCATED &&
@@ -1162,8 +1185,8 @@ static int bpf_object__init_user_btf_map(struct bpf_object *obj,
 
 	def = skip_mods_and_typedefs(obj->btf, var->type, NULL);
 	if (!btf_is_struct(def)) {
-		pr_warn("map '%s': unexpected def kind %u.\n",
-			map_name, btf_kind(var));
+		pr_warn("map '%s': unexpected def kind %s.\n",
+			map_name, btf_kind_str(var));
 		return -EINVAL;
 	}
 	if (def->size > vi->size) {
@@ -1237,8 +1260,8 @@ static int bpf_object__init_user_btf_map(struct bpf_object *obj,
 				return -EINVAL;
 			}
 			if (!btf_is_ptr(t)) {
-				pr_warn("map '%s': key spec is not PTR: %u.\n",
-					map_name, btf_kind(t));
+				pr_warn("map '%s': key spec is not PTR: %s.\n",
+					map->name, btf_kind_str(t));
 				return -EINVAL;
 			}
 			sz = btf__resolve_size(obj->btf, t->type);
@@ -1280,8 +1303,8 @@ static int bpf_object__init_user_btf_map(struct bpf_object *obj,
 				return -EINVAL;
 			}
 			if (!btf_is_ptr(t)) {
-				pr_warn("map '%s': value spec is not PTR: %u.\n",
-					map_name, btf_kind(t));
+				pr_warn("map '%s': value spec is not PTR: %s.\n",
+					map->name, btf_kind_str(t));
 				return -EINVAL;
 			}
 			sz = btf__resolve_size(obj->btf, t->type);
@@ -2714,8 +2737,8 @@ static int bpf_core_spec_parse(const struct btf *btf,
 				return sz;
 			spec->bit_offset += access_idx * sz * 8;
 		} else {
-			pr_warn("relo for [%u] %s (at idx %d) captures type [%d] of unexpected kind %d\n",
-				type_id, spec_str, i, id, btf_kind(t));
+			pr_warn("relo for [%u] %s (at idx %d) captures type [%d] of unexpected kind %s\n",
+				type_id, spec_str, i, id, btf_kind_str(t));
 			return -EINVAL;
 		}
 	}
