@@ -8,6 +8,7 @@
 #include <asm/coco.h>
 #include <linux/swiotlb.h>
 #include <asm/tdx.h>
+#include <asm/i8259.h>
 #include <asm/vmx.h>
 #include <asm/insn.h>
 #include <asm/insn-eval.h>
@@ -667,6 +668,8 @@ void __init tdx_early_init(void)
 	x86_platform.guest.enc_status_change_finish = tdx_enc_status_changed;
 
 	swiotlb_force = SWIOTLB_FORCE;
+
+	legacy_pic = &null_legacy_pic;
 
 	pr_info("Guest detected\n");
 }
