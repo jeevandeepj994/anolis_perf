@@ -2576,10 +2576,21 @@ static void pvclock_update_vm_gtod_copy(struct kvm *kvm)
 #endif
 }
 
-void kvm_make_mclock_inprogress_request(struct kvm *kvm)
+void kvm_make_block_vmentry_request(struct kvm *kvm)
 {
-	kvm_make_all_cpus_request(kvm, KVM_REQ_MCLOCK_INPROGRESS);
+	kvm_make_all_cpus_request(kvm, KVM_REQ_BLOCK_VMENTRY);
 }
+EXPORT_SYMBOL_GPL(kvm_make_block_vmentry_request);
+
+void kvm_clear_block_vmentry_request(struct kvm *kvm)
+{
+	int i;
+	struct kvm_vcpu *vcpu;
+
+	kvm_for_each_vcpu(i, vcpu, kvm)
+		kvm_clear_request(KVM_REQ_BLOCK_VMENTRY, vcpu);
+}
+EXPORT_SYMBOL_GPL(kvm_clear_block_vmentry_request);
 
 static void kvm_gen_update_masterclock(struct kvm *kvm)
 {
@@ -2589,7 +2600,8 @@ static void kvm_gen_update_masterclock(struct kvm *kvm)
 	struct kvm_arch *ka = &kvm->arch;
 
 	spin_lock(&ka->pvclock_gtod_sync_lock);
-	kvm_make_mclock_inprogress_request(kvm);
+	kvm_make_block_vmentry_request(kvm);
+
 	/* no guest entries from this point */
 	pvclock_update_vm_gtod_copy(kvm);
 
@@ -2597,8 +2609,7 @@ static void kvm_gen_update_masterclock(struct kvm *kvm)
 		kvm_make_request(KVM_REQ_CLOCK_UPDATE, vcpu);
 
 	/* guest entries allowed */
-	kvm_for_each_vcpu(i, vcpu, kvm)
-		kvm_clear_request(KVM_REQ_MCLOCK_INPROGRESS, vcpu);
+	kvm_clear_block_vmentry_request(kvm);
 
 	spin_unlock(&ka->pvclock_gtod_sync_lock);
 #endif
@@ -7811,7 +7822,7 @@ static void kvm_hyperv_tsc_notifier(void)
 
 	mutex_lock(&kvm_lock);
 	list_for_each_entry(kvm, &vm_list, vm_list)
-		kvm_make_mclock_inprogress_request(kvm);
+		kvm_make_block_vmentry_request(kvm);
 
 	hyperv_stop_tsc_emulation();
 
@@ -7830,9 +7841,7 @@ static void kvm_hyperv_tsc_notifier(void)
 		kvm_for_each_vcpu(cpu, vcpu, kvm)
 			kvm_make_request(KVM_REQ_CLOCK_UPDATE, vcpu);
 
-		kvm_for_each_vcpu(cpu, vcpu, kvm)
-			kvm_clear_request(KVM_REQ_MCLOCK_INPROGRESS, vcpu);
-
+		kvm_clear_block_vmentry_request(kvm);
 		spin_unlock(&ka->pvclock_gtod_sync_lock);
 	}
 	mutex_unlock(&kvm_lock);
