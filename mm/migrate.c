@@ -201,14 +201,20 @@ void putback_movable_pages(struct list_head *l)
 	}
 }
 
+struct rmpte_params {
+	struct page *oldpage;
+	enum rmpte_flags flags;
+};
+
 /*
  * Restore a potential migration pte to a working pte entry
  */
 static bool remove_migration_pte(struct page *page, struct vm_area_struct *vma,
-				 unsigned long addr, void *old)
+				 unsigned long addr, void *params)
 {
+	struct rmpte_params *rparams = params;
 	struct page_vma_mapped_walk pvmw = {
-		.page = old,
+		.page = rparams->oldpage,
 		.vma = vma,
 		.address = addr,
 		.flags = PVMW_SYNC | PVMW_MIGRATION,
@@ -267,6 +273,16 @@ static bool remove_migration_pte(struct page *page, struct vm_area_struct *vma,
 		} else
 #endif
 		{
+#ifdef CONFIG_NUMA_BALANCING
+			if (rparams->flags & RMPTE_PROT_NUMA &&
+			    page_is_demoted(page) && vma_migratable(vma)) {
+				bool writable = pte_write(pte);
+
+				pte = pte_modify(pte, PAGE_NONE);
+				if (writable)
+					pte = pte_mk_savedwrite(pte);
+			}
+#endif
 			set_pte_at(vma->vm_mm, pvmw.address, pvmw.pte, pte);
 
 			if (PageAnon(new))
@@ -294,9 +310,13 @@ static bool remove_migration_pte(struct page *page, struct vm_area_struct *vma,
 void remove_migration_ptes(struct page *old, struct page *new,
 			   enum rmpte_flags flags)
 {
+	struct rmpte_params rp = {
+		.oldpage = old,
+		.flags = flags,
+	};
 	struct rmap_walk_control rwc = {
 		.rmap_one = remove_migration_pte,
-		.arg = old,
+		.arg = &rp,
 	};
 
 	if (flags & RMPTE_LOCKED)
@@ -732,10 +752,19 @@ void migrate_page_states(struct page *newpage, struct page *page)
 		bool f_toptier = node_is_toptier(page_to_nid(page));
 		bool t_toptier = node_is_toptier(page_to_nid(newpage));
 
+		/*
+		 * Treat demoted pages as just scanned, so they can be
+		 * promoted as soon as possible if hot
+		 */
+		if (page_is_demoted(newpage)) {
+			xchg_page_access_time(newpage, jiffies_to_msecs(jiffies));
+			goto cpupid_done;
+		}
 		if (f_toptier != t_toptier)
 			cpupid = -1;
 	}
 	page_cpupid_xchg_last(newpage, cpupid);
+cpupid_done:
 
 	ksm_migrate_page(newpage, page);
 	/*
@@ -1145,7 +1174,9 @@ static int __unmap_and_move(struct page *page, struct page *newpage,
 
 	if (page_was_mapped)
 		remove_migration_ptes(page,
-			rc == MIGRATEPAGE_SUCCESS ? newpage : page, 0);
+			rc == MIGRATEPAGE_SUCCESS ? newpage : page,
+			rc == MIGRATEPAGE_SUCCESS && page_is_demoted(newpage) ?
+				RMPTE_PROT_NUMA : 0);
 
 out_unlock_both:
 	unlock_page(newpage);
@@ -1237,6 +1268,14 @@ static ICE_noinline int unmap_and_move(new_page_t get_new_page,
 	newpage = get_new_page(page, private);
 	if (!newpage)
 		return -ENOMEM;
+
+	/* TODO: check whether Ksm pages can be demoted? */
+	if (reason == MR_DEMOTION &&
+	    sysctl_numa_balancing_mode & NUMA_BALANCING_MEMORY_TIERING &&
+	    sysctl_numa_balancing_scan_demoted &&
+	    !PageKsm(page)) {
+		set_page_demoted(newpage);
+	}
 
 	if (page_count(page) == 1) {
 		/* page was freed from under us. So we are done. */
