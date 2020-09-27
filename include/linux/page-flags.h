@@ -102,6 +102,9 @@ enum pageflags {
 	PG_young,
 	PG_idle,
 #endif
+#if defined(CONFIG_NUMA_BALANCING) && defined(CONFIG_64BIT)
+	PG_demoted,
+#endif
 	__NR_PAGEFLAGS,
 
 	/* Filesystems */
@@ -390,6 +393,12 @@ TESTPAGEFLAG(Young, young, PF_ANY)
 SETPAGEFLAG(Young, young, PF_ANY)
 TESTCLEARFLAG(Young, young, PF_ANY)
 PAGEFLAG(Idle, idle, PF_ANY)
+#endif
+
+#if defined(CONFIG_NUMA_BALANCING) && defined(CONFIG_64BIT)
+TESTPAGEFLAG(Demoted, demoted, PF_NO_TAIL)
+SETPAGEFLAG(Demoted, demoted, PF_NO_TAIL)
+TESTCLEARFLAG(Demoted, demoted, PF_NO_TAIL)
 #endif
 
 /*
