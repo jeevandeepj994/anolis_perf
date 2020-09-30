@@ -1189,6 +1189,7 @@ const char * const vmstat_text[] = {
 #ifdef CONFIG_NUMA_BALANCING
 	"pgpromote_success",
 	"pgpromote_candidate",
+	"promote_threshold",
 #endif
 
 	/* enum writeback_stat_item counters */
