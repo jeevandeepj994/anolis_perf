@@ -126,6 +126,9 @@
  *  7.31
  *  - add FUSE_WRITE_KILL_PRIV flag
  *
+ *  7.33
+ *  - add FUSE_HANDLE_KILLPRIV_V2
+ *
  *  7.36
  *  - extend fuse_init_in with reserved fields, add FUSE_INIT_EXT init flag
  *  - add flags2 to fuse_init_in and fuse_init_out
@@ -272,6 +275,11 @@ struct fuse_file_lock {
  * FUSE_MAP_ALIGNMENT: init_out.map_alignment contains log2(byte alignment) for
  *		       foffset and moffset fields in struct
  *		       fuse_setupmapping_out and fuse_removemapping_one.
+ * FUSE_HANDLE_KILLPRIV_V2: fs kills suid/sgid/cap on write/chown/trunc.
+ *			Upon write/truncate suid/sgid is only killed if caller
+ *			does not have CAP_FSETID. Additionally upon
+ *			write/truncate sgid is killed only if file has group
+ *			execute permission. (Same as Linux VFS behavior).
  * FUSE_INIT_EXT: extended fuse_init_in request
  * FUSE_INIT_RESERVED: reserved, do not use
  * FUSE_HAS_INODE_DAX:  use per inode DAX
@@ -301,6 +309,7 @@ struct fuse_file_lock {
 #define FUSE_MAX_PAGES		(1 << 22)
 #define FUSE_CACHE_SYMLINKS	(1 << 23)
 #define FUSE_MAP_ALIGNMENT	(1 << 26)
+#define FUSE_HANDLE_KILLPRIV_V2	(1 << 28)
 #define FUSE_INIT_EXT		(1 << 30)
 #define FUSE_INIT_RESERVED	(1 << 31)
 /* bits 32..63 get shifted down 32 bits into the flags2 field */

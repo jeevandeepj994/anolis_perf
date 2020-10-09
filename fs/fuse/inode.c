@@ -1050,6 +1050,8 @@ static void process_init_reply(struct fuse_conn *fc, struct fuse_req *req)
 					fc->inode_dax = 1;
 
 			}
+			if (flags & FUSE_HANDLE_KILLPRIV_V2)
+				fc->handle_killpriv_v2 = 1;
 		} else {
 			ra_pages = fc->max_read / PAGE_SIZE;
 			fc->no_lock = 1;
@@ -1089,7 +1091,7 @@ void fuse_send_init(struct fuse_conn *fc, struct fuse_req *req)
 		FUSE_WRITEBACK_CACHE | FUSE_NO_OPEN_SUPPORT |
 		FUSE_PARALLEL_DIROPS | FUSE_HANDLE_KILLPRIV | FUSE_POSIX_ACL |
 		FUSE_ABORT_ERROR | FUSE_MAX_PAGES | FUSE_CACHE_SYMLINKS |
-		FUSE_INIT_EXT;
+		FUSE_HANDLE_KILLPRIV_V2 | FUSE_INIT_EXT;
 #ifdef CONFIG_FUSE_DAX
 	if (fc->dax)
 		flags |= FUSE_MAP_ALIGNMENT;
