@@ -127,7 +127,7 @@
  *  - add FUSE_WRITE_KILL_PRIV flag
  *
  *  7.33
- *  - add FUSE_HANDLE_KILLPRIV_V2, FUSE_WRITE_KILL_SUIDGID
+ *  - add FUSE_HANDLE_KILLPRIV_V2, FUSE_WRITE_KILL_SUIDGID, FATTR_KILL_SUIDGID
  *
  *  7.36
  *  - extend fuse_init_in with reserved fields, add FUSE_INIT_EXT init flag
@@ -229,6 +229,7 @@ struct fuse_file_lock {
 #define FATTR_MTIME_NOW	(1 << 8)
 #define FATTR_LOCKOWNER	(1 << 9)
 #define FATTR_CTIME	(1 << 10)
+#define FATTR_KILL_SUIDGID	(1 << 11)
 
 /**
  * Flags returned by the OPEN request
