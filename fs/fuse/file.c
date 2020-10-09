@@ -1053,6 +1053,10 @@ static size_t fuse_send_write_pages(struct fuse_req *req, struct kiocb *iocb,
 	unsigned offset;
 	unsigned i;
 	struct fuse_io_priv io = FUSE_IO_PRIV_SYNC(iocb);
+	struct fuse_file *ff = iocb->ki_filp->private_data;
+
+	if (ff->fc->handle_killpriv_v2 && !capable(CAP_FSETID))
+		req->misc.write.in.write_flags |= FUSE_WRITE_KILL_SUIDGID;
 
 	res = fuse_send_write(req, &io, pos, count, NULL);
 
