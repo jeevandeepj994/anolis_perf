@@ -94,6 +94,7 @@ struct perf_env {
 	struct hybrid_node	*hybrid_nodes;
 	struct pmu_caps		*pmu_caps;
 
+#ifdef HAVE_LIBBPF_SUPPORT
 	/*
 	 * bpf_info_lock protects bpf rbtrees. This is needed because the
 	 * trees are accessed by different threads in perf-top
@@ -105,7 +106,7 @@ struct perf_env {
 		struct rb_root		btfs;
 		u32			btfs_cnt;
 	} bpf_progs;
-
+#endif // HAVE_LIBBPF_SUPPORT
 	/* same reason as above (for perf-top) */
 	struct {
 		struct rw_semaphore	lock;
