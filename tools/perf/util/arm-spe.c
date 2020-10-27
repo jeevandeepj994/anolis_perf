@@ -455,7 +455,6 @@ static const struct midr_range neoverse_spe[] = {
 	MIDR_ALL_VERSIONS(MIDR_NEOVERSE_N1),
 	MIDR_ALL_VERSIONS(MIDR_NEOVERSE_N2),
 	MIDR_ALL_VERSIONS(MIDR_NEOVERSE_V1),
-	{},
 };
 
 static void arm_spe__synth_data_source_neoverse(const struct arm_spe_record *record,
