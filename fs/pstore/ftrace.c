@@ -26,7 +26,7 @@ static u64 pstore_ftrace_stamp;
 static void notrace pstore_do_ftrace(unsigned long ip,
 				     unsigned long parent_ip,
 				     struct ftrace_ops *op,
-				     struct pt_regs *regs,
+				     struct ftrace_regs *fregs,
 				     struct pstore_info *psinfo)
 {
 	int bit;
@@ -61,14 +61,14 @@ static void notrace pstore_do_ftrace(unsigned long ip,
 static void notrace pstore_ftrace_call(unsigned long ip,
 				       unsigned long parent_ip,
 				       struct ftrace_ops *op,
-				       struct pt_regs *regs)
+				       struct ftrace_regs *fregs)
 {
 	struct pstore_info_list *entry;
 
 	rcu_read_lock();
 	list_for_each_entry_rcu(entry, &psback->list_entry, list)
 		if (entry->psi->flags & PSTORE_FLAGS_FTRACE)
-			pstore_do_ftrace(ip, parent_ip, op, regs, entry->psi);
+			pstore_do_ftrace(ip, parent_ip, op, fregs, entry->psi);
 	rcu_read_unlock();
 }
 
