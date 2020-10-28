@@ -97,8 +97,24 @@ ftrace_enable_sysctl(struct ctl_table *table, int write,
 
 struct ftrace_ops;
 
+struct ftrace_regs {
+	struct pt_regs		regs;
+};
+
+static __always_inline struct pt_regs *ftrace_get_regs(struct ftrace_regs *fregs)
+{
+	if (!fregs)
+		return NULL;
+
+	return &fregs->regs;
+}
+
 typedef void (*ftrace_func_t)(unsigned long ip, unsigned long parent_ip,
+#ifndef __GENKSYMS__
+			      struct ftrace_ops *op, struct ftrace_regs *fregs);
+#else
 			      struct ftrace_ops *op, struct pt_regs *regs);
+#endif
 
 ftrace_func_t ftrace_ops_get_func(struct ftrace_ops *ops);
 
@@ -268,7 +284,7 @@ int register_ftrace_function(struct ftrace_ops *ops);
 int unregister_ftrace_function(struct ftrace_ops *ops);
 
 extern void ftrace_stub(unsigned long a0, unsigned long a1,
-			struct ftrace_ops *op, struct pt_regs *regs);
+			struct ftrace_ops *op, struct ftrace_regs *fregs);
 
 #else /* !CONFIG_FUNCTION_TRACER */
 /*
