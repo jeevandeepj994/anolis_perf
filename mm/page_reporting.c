@@ -11,6 +11,7 @@
 #include "page_reporting.h"
 #include "internal.h"
 
+int reporting_min_order = pageblock_order;
 static int reporting_factor = 100;
 
 #define PAGE_REPORTING_DELAY	(2 * HZ)
@@ -242,6 +243,7 @@ page_reporting_process_zone(struct page_reporting_dev_info *prdev,
 {
 	unsigned int order, mt, leftover, offset = PAGE_REPORTING_CAPACITY;
 	unsigned long watermark, threshold;
+	int min_order = reporting_min_order;
 	int err = 0;
 
 	threshold = zone_managed_pages(zone) * reporting_factor / 100;
@@ -250,7 +252,7 @@ page_reporting_process_zone(struct page_reporting_dev_info *prdev,
 
 	/* Generate minimum watermark to be able to guarantee progress */
 	watermark = low_wmark_pages(zone) +
-		    (PAGE_REPORTING_CAPACITY << PAGE_REPORTING_MIN_ORDER);
+		    (PAGE_REPORTING_CAPACITY << min_order);
 
 	/*
 	 * Cancel request if insufficient free memory or if we failed
@@ -260,7 +262,7 @@ page_reporting_process_zone(struct page_reporting_dev_info *prdev,
 		return err;
 
 	/* Process each free list starting from lowest order/mt */
-	for (order = PAGE_REPORTING_MIN_ORDER; order < MAX_ORDER; order++) {
+	for (order = min_order; order < MAX_ORDER; order++) {
 		for (mt = 0; mt < MIGRATE_TYPES; mt++) {
 			/* We do not pull pages from the isolate free list */
 			if (is_migrate_isolate(mt))
@@ -424,7 +426,7 @@ REPORTING_ATTR(reported_kbytes);
 static ssize_t reporting_factor_show(struct kobject *kobj,
 		struct kobj_attribute *attr, char *buf)
 {
-	return sprintf(buf, "%u\n", reporting_factor);
+	return sprintf(buf, "%d\n", reporting_factor);
 }
 
 static ssize_t reporting_factor_store(struct kobject *kobj,
@@ -433,6 +435,7 @@ static ssize_t reporting_factor_store(struct kobject *kobj,
 {
 	int new, old, err;
 	struct page *page;
+	int min_order = reporting_min_order;
 
 	err = kstrtoint(buf, 10, &new);
 	if (err || (new < 0 || new > 100))
@@ -446,19 +449,41 @@ static ssize_t reporting_factor_store(struct kobject *kobj,
 
 	/* Trigger reporting with new larger reporting_factor */
 	smp_mb();
-	page = alloc_pages(__GFP_HIGHMEM | __GFP_NOWARN,
-			PAGE_REPORTING_MIN_ORDER);
+	page = alloc_pages(__GFP_HIGHMEM | __GFP_NOWARN, min_order);
 	if (page)
-		__free_pages(page, PAGE_REPORTING_MIN_ORDER);
+		__free_pages(page, min_order);
 
 out:
 	return count;
 }
 REPORTING_ATTR(reporting_factor);
 
+static ssize_t reporting_min_order_show(struct kobject *kobj,
+		struct kobj_attribute *attr, char *buf)
+{
+	return sprintf(buf, "%d\n", reporting_min_order);
+}
+
+static ssize_t reporting_min_order_store(struct kobject *kobj,
+		struct kobj_attribute *attr,
+		const char *buf, size_t count)
+{
+	int new, err;
+
+	err = kstrtoint(buf, 10, &new);
+	if (err || (new < 0 || new > MAX_ORDER - 1))
+		return -EINVAL;
+
+	reporting_min_order = new;
+
+	return count;
+}
+REPORTING_ATTR(reporting_min_order);
+
 static struct attribute *reporting_attrs[] = {
 	&reported_kbytes_attr.attr,
 	&reporting_factor_attr.attr,
+	&reporting_min_order_attr.attr,
 	NULL,
 };
 
