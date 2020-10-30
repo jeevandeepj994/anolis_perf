@@ -1194,7 +1194,7 @@ static unsigned int hv_msi_get_int_vector(struct irq_data *data)
 static int hv_msi_prepare(struct irq_domain *domain, struct device *dev,
 			  int nvec, msi_alloc_info_t *info)
 {
-	int ret = pci_msi_prepare(domain, dev, nvec, info);
+	int ret = arch_msi_prepare(domain, dev, nvec, info);
 
 	/*
 	 * By using the interrupt remapper in the hypervisor IOMMU, contiguous
