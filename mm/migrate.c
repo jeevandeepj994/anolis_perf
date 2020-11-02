@@ -291,14 +291,15 @@ static bool remove_migration_pte(struct page *page, struct vm_area_struct *vma,
  * Get rid of all migration entries and replace them by
  * references to the indicated page.
  */
-void remove_migration_ptes(struct page *old, struct page *new, bool locked)
+void remove_migration_ptes(struct page *old, struct page *new,
+			   enum rmpte_flags flags)
 {
 	struct rmap_walk_control rwc = {
 		.rmap_one = remove_migration_pte,
 		.arg = old,
 	};
 
-	if (locked)
+	if (flags & RMPTE_LOCKED)
 		rmap_walk_locked(new, &rwc);
 	else
 		rmap_walk(new, &rwc);
@@ -897,7 +898,7 @@ static int writeout(struct address_space *mapping, struct page *page)
 	 * At this point we know that the migration attempt cannot
 	 * be successful.
 	 */
-	remove_migration_ptes(page, page, false);
+	remove_migration_ptes(page, page, 0);
 
 	rc = mapping->a_ops->writepage(page, &wbc);
 
@@ -1144,7 +1145,7 @@ static int __unmap_and_move(struct page *page, struct page *newpage,
 
 	if (page_was_mapped)
 		remove_migration_ptes(page,
-			rc == MIGRATEPAGE_SUCCESS ? newpage : page, false);
+			rc == MIGRATEPAGE_SUCCESS ? newpage : page, 0);
 
 out_unlock_both:
 	unlock_page(newpage);
@@ -1403,7 +1404,7 @@ static int unmap_and_move_huge_page(new_page_t get_new_page,
 
 	if (page_was_mapped)
 		remove_migration_ptes(hpage,
-			rc == MIGRATEPAGE_SUCCESS ? new_hpage : hpage, false);
+			rc == MIGRATEPAGE_SUCCESS ? new_hpage : hpage, 0);
 
 	unlock_page(new_hpage);
 
@@ -2748,7 +2749,7 @@ restore:
 		if (!page || (migrate->src[i] & MIGRATE_PFN_MIGRATE))
 			continue;
 
-		remove_migration_ptes(page, page, false);
+		remove_migration_ptes(page, page, 0);
 
 		migrate->src[i] = 0;
 		unlock_page(page);
@@ -3010,7 +3011,7 @@ static void migrate_vma_finalize(struct migrate_vma *migrate)
 			newpage = page;
 		}
 
-		remove_migration_ptes(page, newpage, false);
+		remove_migration_ptes(page, newpage, 0);
 		unlock_page(page);
 		migrate->cpages--;
 
