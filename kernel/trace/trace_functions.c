@@ -140,21 +140,19 @@ function_trace_call(unsigned long ip, unsigned long parent_ip,
 	if (unlikely(!tr->function_enabled))
 		return;
 
+	bit = ftrace_test_recursion_trylock();
+	if (bit < 0)
+		return;
+
 	trace_ctx = tracing_gen_ctx();
 	preempt_disable_notrace();
-
-	bit = trace_test_and_set_recursion(TRACE_FTRACE_START);
-	if (bit < 0)
-		goto out;
 
 	cpu = smp_processor_id();
 	data = per_cpu_ptr(tr->array_buffer.data, cpu);
 	if (!atomic_read(&data->disabled)) {
 		trace_function(tr, ip, parent_ip, trace_ctx);
 	}
-	trace_clear_recursion(bit);
-
- out:
+	ftrace_test_recursion_unlock(bit);
 	preempt_enable_notrace();
 }
 
