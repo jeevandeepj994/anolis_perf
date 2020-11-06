@@ -373,9 +373,10 @@ static struct perf_c2c c2c = {
 		.comm		= perf_event__process_comm,
 		.exit		= perf_event__process_exit,
 		.fork		= perf_event__process_fork,
-		.lost		= perf_event__process_lost,
-		.auxtrace_info	= perf_event__process_auxtrace_info,
-		.auxtrace	= perf_event__process_auxtrace,
+		.attr		= perf_event__process_attr,
+		.auxtrace_info  = perf_event__process_auxtrace_info,
+		.auxtrace       = perf_event__process_auxtrace,
+		.auxtrace_error = perf_event__process_auxtrace_error,
 		.ordered_events	= true,
 		.ordering_requires_timestamps = true,
 	},
@@ -2830,8 +2831,13 @@ static int setup_coalesce(const char *coalesce, bool no_source)
 
 int perf_c2c__report(int argc, const char **argv)
 {
+	struct itrace_synth_opts itrace_synth_opts = {
+		.set = true,
+		.mem = true,	/* Only enable memory event */
+		.default_no_sample = true,
+	};
+
 	struct perf_session *session;
-	struct itrace_synth_opts itrace_synth_opts = { .set = 0, };
 	struct arm_spe_synth_opts arm_spe_synth_opts = { .c2c_mode = true,
 								.set = 0, };
 
