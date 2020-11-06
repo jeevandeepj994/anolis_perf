@@ -44,9 +44,13 @@ static void notrace klp_ftrace_handler(unsigned long ip,
 {
 	struct klp_ops *ops;
 	struct klp_func *func;
+	int bit;
 
 	ops = container_of(fops, struct klp_ops, fops);
 
+	bit = ftrace_test_recursion_trylock();
+	if (bit < 0)
+		return;
 	/*
 	 * A variant of synchronize_rcu() is used to allow patching functions
 	 * where RCU is not watching, see klp_synchronize_transition().
@@ -123,6 +127,7 @@ static void notrace klp_ftrace_handler(unsigned long ip,
 
 unlock:
 	preempt_enable_notrace();
+	ftrace_test_recursion_unlock(bit);
 }
 
 /*
