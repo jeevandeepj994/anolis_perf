@@ -29,6 +29,7 @@ static void notrace pstore_do_ftrace(unsigned long ip,
 				     struct pt_regs *regs,
 				     struct pstore_info *psinfo)
 {
+	int bit;
 	unsigned long flags;
 	struct pstore_ftrace_record rec = {};
 	struct pstore_record record = {
@@ -41,6 +42,10 @@ static void notrace pstore_do_ftrace(unsigned long ip,
 	if (unlikely(oops_in_progress))
 		return;
 
+	bit = ftrace_test_recursion_trylock();
+	if (bit < 0)
+		return;
+
 	local_irq_save(flags);
 
 	rec.ip = ip;
@@ -50,6 +55,7 @@ static void notrace pstore_do_ftrace(unsigned long ip,
 	psinfo->write(&record);
 
 	local_irq_restore(flags);
+	ftrace_test_recursion_unlock(bit);
 }
 
 static void notrace pstore_ftrace_call(unsigned long ip,
