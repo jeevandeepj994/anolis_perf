@@ -42,7 +42,7 @@ static void notrace pstore_do_ftrace(unsigned long ip,
 	if (unlikely(oops_in_progress))
 		return;
 
-	bit = ftrace_test_recursion_trylock();
+	bit = ftrace_test_recursion_trylock(ip, parent_ip);
 	if (bit < 0)
 		return;
 
