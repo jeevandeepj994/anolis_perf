@@ -99,6 +99,13 @@ enum {
 
 #define TRACE_CONTEXT_MASK	((1 << (TRACE_LIST_START + TRACE_CONTEXT_BITS)) - 1)
 
+/*
+ * Used for setting context
+ *  NMI     = 0
+ *  IRQ     = 1
+ *  SOFTIRQ = 2
+ *  NORMAL  = 3
+ */
 enum {
 	TRACE_CTX_NMI,
 	TRACE_CTX_IRQ,
@@ -109,20 +116,13 @@ enum {
 
 static __always_inline int trace_get_context_bit(void)
 {
-	int bit;
+	unsigned long pc = preempt_count();
 
-	if (in_interrupt()) {
-		if (in_nmi())
-			bit = TRACE_CTX_NMI;
-
-		else if (in_irq())
-			bit = TRACE_CTX_IRQ;
-		else
-			bit = TRACE_CTX_SOFTIRQ;
-	} else
-		bit = TRACE_CTX_NORMAL;
-
-	return bit;
+	if (!(pc & (NMI_MASK | HARDIRQ_MASK | SOFTIRQ_OFFSET)))
+		return TRACE_CTX_NORMAL;
+	else
+		return pc & NMI_MASK ? TRACE_CTX_NMI :
+			pc & HARDIRQ_MASK ? TRACE_CTX_IRQ : TRACE_CTX_SOFTIRQ;
 }
 
 static __always_inline int trace_test_and_set_recursion(int start)
