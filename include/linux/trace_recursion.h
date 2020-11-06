@@ -75,6 +75,9 @@ enum {
 	 * function is called to clear it.
 	 */
 	TRACE_GRAPH_NOTRACE_BIT,
+
+	/* Used to prevent recursion recording from recursing. */
+	TRACE_RECORD_RECURSION_BIT,
 };
 
 #define trace_recursion_set(bit)	do { (current)->trace_recursion |= (1<<(bit)); } while (0)
@@ -125,7 +128,22 @@ static __always_inline int trace_get_context_bit(void)
 			pc & HARDIRQ_MASK ? TRACE_CTX_IRQ : TRACE_CTX_SOFTIRQ;
 }
 
-static __always_inline int trace_test_and_set_recursion(int start)
+#ifdef CONFIG_FTRACE_RECORD_RECURSION
+extern void ftrace_record_recursion(unsigned long ip, unsigned long parent_ip);
+# define do_ftrace_record_recursion(ip, pip)				\
+	do {								\
+		if (!trace_recursion_test(TRACE_RECORD_RECURSION_BIT)) { \
+			trace_recursion_set(TRACE_RECORD_RECURSION_BIT); \
+			ftrace_record_recursion(ip, pip);		\
+			trace_recursion_clear(TRACE_RECORD_RECURSION_BIT); \
+		}							\
+	} while (0)
+#else
+# define do_ftrace_record_recursion(ip, pip)	do { } while (0)
+#endif
+
+static __always_inline int trace_test_and_set_recursion(unsigned long ip, unsigned long pip,
+							int start)
 {
 	unsigned int val = current->trace_recursion;
 	int bit;
@@ -137,8 +155,10 @@ static __always_inline int trace_test_and_set_recursion(int start)
 		 * a switch between contexts. Allow for a single recursion.
 		 */
 		bit = start + TRACE_CTX_TRANSITION;
-		if (trace_recursion_test(bit))
+		if (trace_recursion_test(bit)) {
+			do_ftrace_record_recursion(ip, pip);
 			return -1;
+		}
 		trace_recursion_set(bit);
 		barrier();
 		return bit;
@@ -171,9 +191,10 @@ static __always_inline void trace_clear_recursion(int bit)
  * Returns: -1 if a recursion happened.
  *           >= 0 if no recursion
  */
-static __always_inline int ftrace_test_recursion_trylock(void)
+static __always_inline int ftrace_test_recursion_trylock(unsigned long ip,
+							 unsigned long parent_ip)
 {
-	return trace_test_and_set_recursion(TRACE_FTRACE_START);
+	return trace_test_and_set_recursion(ip, parent_ip, TRACE_FTRACE_START);
 }
 
 /**
