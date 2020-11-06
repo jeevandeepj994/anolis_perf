@@ -8,6 +8,7 @@
 #define _LINUX_FTRACE_H
 
 #include <linux/ck_kabi.h>
+#include <linux/trace_recursion.h>
 #include <linux/trace_clock.h>
 #include <linux/kallsyms.h>
 #include <linux/linkage.h>
