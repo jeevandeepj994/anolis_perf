@@ -142,7 +142,10 @@ static int ast_detect_chip(struct drm_device *dev, bool *need_post)
 		ast->chip = AST1100;
 		DRM_INFO("AST 1180 detected\n");
 	} else {
-		if (dev->pdev->revision >= 0x40) {
+		if (dev->pdev->revision >= 0x50) {
+			ast->chip = AST2600;
+			DRM_INFO("AST 2600 detected\n");
+		} else if (dev->pdev->revision >= 0x40) {
 			ast->chip = AST2500;
 			DRM_INFO("AST 2500 detected\n");
 		} else if (dev->pdev->revision >= 0x30) {
