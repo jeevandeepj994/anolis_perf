@@ -1412,7 +1412,7 @@ ssize_t fuse_direct_io(struct fuse_io_priv *io, struct iov_iter *iter,
 				struct fuse_write_in *inarg;
 
 				inarg = &req->misc.write.in;
-				inarg->write_flags |= FUSE_WRITE_KILL_PRIV;
+				inarg->write_flags |= FUSE_WRITE_KILL_SUIDGID;
 			}
 			nres = fuse_send_write(req, io, pos, nbytes, owner);
 		} else {
