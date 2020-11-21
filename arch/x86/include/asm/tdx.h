@@ -76,6 +76,8 @@ bool tdx_early_handle_ve(struct pt_regs *regs);
 
 int tdx_mcall_get_report0(u8 *reportdata, u8 *tdreport);
 
+extern int tdx_notify_irq;
+
 #else
 
 static inline void tdx_early_init(void) { };
