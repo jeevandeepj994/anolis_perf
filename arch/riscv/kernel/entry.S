@@ -132,6 +132,8 @@ skip_context_tracking:
 	beqz t0, 1f
 #ifdef CONFIG_TRACE_IRQFLAGS
 	call __trace_hardirqs_on
+
+	REG_L s1, PT_STATUS(sp)
 #endif
 	csrs CSR_STATUS, SR_IE
 
