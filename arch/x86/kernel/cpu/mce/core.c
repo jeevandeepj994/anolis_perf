@@ -1468,9 +1468,6 @@ noinstr void do_machine_check(struct pt_regs *regs)
 	else if (no_way_out)
 		mce_panic("Fatal machine check on current CPU", &m, msg);
 
-	if (worst > 0)
-		irq_work_queue(&mce_irq_work);
-
 	if (worst != MCE_AR_SEVERITY && !kill_it)
 		goto out;
 
