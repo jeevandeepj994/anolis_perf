@@ -1327,9 +1327,8 @@ out_err:
 	return err;
 }
 
-int perf_evlist__prepare_workload(struct evlist *evlist, struct target *target,
-				  const char *argv[], bool pipe_output,
-				  void (*exec_error)(int signo, siginfo_t *info, void *ucontext))
+int evlist__prepare_workload(struct evlist *evlist, struct target *target, const char *argv[],
+			     bool pipe_output, void (*exec_error)(int signo, siginfo_t *info, void *ucontext))
 {
 	int child_ready_pipe[2], go_pipe[2];
 	char bf;
@@ -1374,7 +1373,7 @@ int perf_evlist__prepare_workload(struct evlist *evlist, struct target *target,
 		/*
 		 * The parent will ask for the execvp() to be performed by
 		 * writing exactly one byte, in workload.cork_fd, usually via
-		 * perf_evlist__start_workload().
+		 * evlist__start_workload().
 		 *
 		 * For cancelling the workload without actually running it,
 		 * the parent will just close workload.cork_fd, without writing
@@ -1441,7 +1440,7 @@ out_close_ready_pipe:
 	return -1;
 }
 
-int perf_evlist__start_workload(struct evlist *evlist)
+int evlist__start_workload(struct evlist *evlist)
 {
 	if (evlist->workload.cork_fd > 0) {
 		char bf = 0;
