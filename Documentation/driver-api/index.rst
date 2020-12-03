@@ -52,6 +52,7 @@ available subsections can be seen below.
    dmaengine/index
    slimbus
    soundwire/index
+   auxiliary_bus
    fpga/index
 
 .. only::  subproject and html
