@@ -70,6 +70,7 @@ available subsections can be seen below.
    slimbus
    soundwire/index
    thermal/index
+   auxiliary_bus
    fpga/index
    acpi/index
    backlight/lp855x-driver.rst
