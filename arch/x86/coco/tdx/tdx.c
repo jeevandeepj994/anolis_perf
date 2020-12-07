@@ -169,6 +169,11 @@ long tdx_kvm_hypercall(unsigned int nr, unsigned long p1, unsigned long p2,
 EXPORT_SYMBOL_GPL(tdx_kvm_hypercall);
 #endif
 
+bool tdx_debug_enabled(void)
+{
+	return td_info.attributes & BIT(0);
+}
+
 /* TDX guest event notification handler */
 DEFINE_IDTENTRY_SYSVEC(sysvec_tdx_event_notify)
 {
