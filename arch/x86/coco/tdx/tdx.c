@@ -117,6 +117,22 @@ long tdx_kvm_hypercall(unsigned int nr, unsigned long p1, unsigned long p2,
 EXPORT_SYMBOL_GPL(tdx_kvm_hypercall);
 #endif
 
+static unsigned long td_info_attrs = 0;
+
+static u64 get_td_info_attrs(void)
+{
+	struct tdx_module_output out;
+
+	__tdx_module_call(TDX_GET_INFO, 0, 0, 0, 0, &out);
+
+	return out.rdx;
+}
+
+bool tdx_debug_enabled(void)
+{
+	return td_info_attrs & BIT(0);
+}
+
 /* TDX guest event notification handler */
 DEFINE_IDTENTRY_SYSVEC(sysvec_tdx_event_notify)
 {
@@ -969,6 +985,8 @@ void __init tdx_early_init(void)
 	x86_platform.guest.enc_cache_flush_required = tdx_cache_flush_required;
 	x86_platform.guest.enc_tlb_flush_required   = tdx_tlb_flush_required;
 	x86_platform.guest.enc_status_change_finish = tdx_enc_status_changed;
+
+	td_info_attrs = get_td_info_attrs();
 
 	tdx_filter_init();
 
