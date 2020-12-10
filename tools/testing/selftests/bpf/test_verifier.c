@@ -2987,8 +2987,9 @@ static struct bpf_test tests[] = {
 			BPF_EXIT_INSN(),
 		},
 		.fixup_map_hash_8b = { 3 },
-		.errstr = "invalid indirect read from stack off -8+0 size 8",
-		.result = REJECT,
+		.errstr_unpriv = "invalid indirect read from stack off -8+0 size 8",
+		.result_unpriv = REJECT,
+		.result = ACCEPT,
 	},
 	{
 		"unpriv: mangle pointer on stack 1",
