@@ -4131,6 +4131,7 @@ enum {
 	RES_SOFT_LIMIT,
 	WMARK_HIGH_LIMIT,
 	WMARK_LOW_LIMIT,
+	RES_RECLAIM,
 };
 
 static u64 mem_cgroup_read_u64(struct cgroup_subsys_state *css,
@@ -4377,6 +4378,40 @@ out:
 	return ret;
 }
 
+static unsigned long mem_cgroup_reclaim_pages(struct mem_cgroup *memcg,
+					   unsigned long nr_pages,
+					   gfp_t gfp_mask,
+					   bool may_swap)
+{
+	unsigned long reclaimed = 0;
+	int nr_retries = MAX_RECLAIM_RETRIES;
+	bool drained = false;
+
+	while (nr_retries &&
+		    (memcg == root_mem_cgroup || page_counter_read(&memcg->memory))) {
+		unsigned long progress;
+
+		if (signal_pending(current))
+			return -EINTR;
+
+		progress = try_to_free_mem_cgroup_pages(memcg, 1, gfp_mask, may_swap);
+		reclaimed += progress;
+		if (progress >= nr_pages)
+			break;
+		nr_pages -= progress;
+
+		if (!progress) {
+			if (!drained) {
+				drained = true;
+				drain_all_stock(memcg);
+			}
+			nr_retries--;
+		}
+	}
+
+	return reclaimed;
+}
+
 /*
  * The user of this function is...
  * RES_LIMIT.
@@ -4419,6 +4454,10 @@ static ssize_t mem_cgroup_write(struct kernfs_open_file *of,
 		break;
 	case RES_SOFT_LIMIT:
 		memcg->soft_limit = nr_pages;
+		ret = 0;
+		break;
+	case RES_RECLAIM:
+		mem_cgroup_reclaim_pages(memcg, nr_pages, GFP_KERNEL, true);
 		ret = 0;
 		break;
 	}
@@ -7330,6 +7369,11 @@ static struct cftype mem_cgroup_legacy_files[] = {
 		.write = memcg_thp_control_write,
 	},
 #endif
+	{
+		.name = "reclaim_caches",
+		.private = MEMFILE_PRIVATE(_MEM, RES_RECLAIM),
+		.write = mem_cgroup_write,
+	},
 #ifdef CONFIG_PGTABLE_BIND
 	{
 		.name = "pgtable_bind",
