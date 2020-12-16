@@ -154,6 +154,7 @@ OPTIONS
 	- dcacheline: the cacheline the data address is on at the time of the sample
 	- phys_daddr: physical address of data being executed on at the time of sample
 	- blocked: reason of blocked load access for the data at the time of the sample
+	- data_page_size: the data page size of data being executed on at the time of sample
 
 	And the default sort keys are changed to local_weight, mem, sym, dso,
 	symbol_daddr, dso_daddr, snoop, tlb, locked, blocked, local_ins_lat,
