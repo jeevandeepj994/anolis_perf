@@ -146,6 +146,7 @@ struct perf_missing_features {
 	bool cgroup;
 	bool weight_struct;
 	bool data_page_size;
+	bool code_page_size;
 };
 
 extern struct perf_missing_features perf_missing_features;
