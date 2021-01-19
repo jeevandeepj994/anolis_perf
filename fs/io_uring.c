@@ -1861,6 +1861,13 @@ static void io_cqring_add_event(struct io_kiocb *req, long res, long cflags)
 	io_cqring_ev_posted(ctx);
 }
 
+static void io_req_complete_nostate(struct io_kiocb *req, long res,
+				    unsigned int cflags)
+{
+	io_cqring_add_event(req, res, cflags);
+	io_put_req(req);
+}
+
 static void io_submit_flush_completions(struct io_comp_state *cs)
 {
 	struct io_ring_ctx *ctx = cs->ctx;
@@ -1894,23 +1901,27 @@ static void io_submit_flush_completions(struct io_comp_state *cs)
 	cs->nr = 0;
 }
 
-static void __io_req_complete(struct io_kiocb *req, long res, unsigned cflags,
-			      struct io_comp_state *cs)
+static void io_req_complete_state(struct io_kiocb *req, long res,
+				  unsigned int cflags, struct io_comp_state *cs)
 {
-	if (!cs) {
-		io_cqring_add_event(req, res, cflags);
-		io_put_req(req);
-	} else {
-		io_clean_op(req);
-		req->result = res;
-		req->compl.cflags = cflags;
-		list_add_tail(&req->compl.list, &cs->list);
-		if (++cs->nr >= 32)
-			io_submit_flush_completions(cs);
-	}
+	io_clean_op(req);
+	req->result = res;
+	req->compl.cflags = cflags;
+	list_add_tail(&req->compl.list, &cs->list);
+	if (++cs->nr >= 32)
+		io_submit_flush_completions(cs);
 }
 
-static void io_req_complete(struct io_kiocb *req, long res)
+static inline void __io_req_complete(struct io_kiocb *req, long res,
+				     unsigned cflags, struct io_comp_state *cs)
+{
+	if (!cs)
+		io_req_complete_nostate(req, res, cflags);
+	else
+		io_req_complete_state(req, res, cflags, cs);
+}
+
+static inline void io_req_complete(struct io_kiocb *req, long res)
 {
 	__io_req_complete(req, res, 0, NULL);
 }
