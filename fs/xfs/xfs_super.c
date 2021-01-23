@@ -1727,7 +1727,7 @@ xfs_remount_ro(
 	 * cleanups during reclaim on a read-only mount.  We must process every
 	 * cached inode, so this requires a synchronous cache scan.
 	 */
-	error = xfs_icache_free_cowblocks(mp, &eofb);
+	error = xfs_blockgc_free_space(mp, &eofb);
 	if (error) {
 		xfs_force_shutdown(mp, SHUTDOWN_CORRUPT_INCORE);
 		return error;
