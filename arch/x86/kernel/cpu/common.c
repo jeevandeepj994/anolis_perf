@@ -1954,6 +1954,8 @@ static void wrmsrl_cstar(unsigned long val)
 		wrmsrl(MSR_CSTAR, val);
 }
 
+DEFINE_PER_CPU(unsigned long, cpu_current_top_of_stack) = TOP_OF_INIT_STACK;
+
 /* May not be marked __init: used by software suspend */
 void syscall_init(void)
 {
