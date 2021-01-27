@@ -299,6 +299,7 @@ xfs_trans_switch_context(
 }
 
 int xfs_trans_alloc_inode(struct xfs_inode *ip, struct xfs_trans_res *resv,
-		unsigned int dblocks, bool force, struct xfs_trans **tpp);
+		unsigned int dblocks, unsigned int rblocks, bool force,
+		struct xfs_trans **tpp);
 
 #endif	/* __XFS_TRANS_H__ */
