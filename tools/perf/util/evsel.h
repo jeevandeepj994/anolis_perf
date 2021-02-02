@@ -144,6 +144,7 @@ struct perf_missing_features {
 	bool aux_output;
 	bool branch_hw_idx;
 	bool cgroup;
+	bool weight_struct;
 };
 
 extern struct perf_missing_features perf_missing_features;
@@ -237,6 +238,8 @@ void __evsel__reset_sample_bit(struct evsel *evsel, enum perf_event_sample_forma
 	__evsel__reset_sample_bit(evsel, PERF_SAMPLE_##bit)
 
 void evsel__set_sample_id(struct evsel *evsel, bool use_sample_identifier);
+
+void arch_evsel__set_sample_weight(struct evsel *evsel);
 
 int evsel__set_filter(struct evsel *evsel, const char *filter);
 int evsel__append_tp_filter(struct evsel *evsel, const char *filter);
