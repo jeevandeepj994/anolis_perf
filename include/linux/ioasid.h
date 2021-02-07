@@ -6,6 +6,7 @@
 #include <linux/errno.h>
 #include <linux/xarray.h>
 #include <linux/refcount.h>
+#include <uapi/linux/ioasid.h>
 
 #define INVALID_IOASID ((ioasid_t)-1)
 typedef unsigned int ioasid_t;
@@ -157,6 +158,31 @@ static inline bool pasid_valid(ioasid_t ioasid)
 {
 	return ioasid != INVALID_IOASID;
 }
+
+/* IOASID userspace support */
+struct ioasid_user;
+#if IS_ENABLED(CONFIG_IOASID_USER)
+extern struct ioasid_user *ioasid_user_get_from_task(struct task_struct *task);
+extern void ioasid_user_put(struct ioasid_user *iuser);
+extern void ioasid_user_for_each_id(struct ioasid_user *iuser, void *data,
+				   void (*fn)(ioasid_t id, void *data));
+
+#else /* CONFIG_IOASID_USER */
+static inline struct ioasid_user *
+ioasid_user_get_from_task(struct task_struct *task)
+{
+	return ERR_PTR(-ENOTTY);
+}
+
+static inline void ioasid_user_put(struct ioasid_user *iuser)
+{
+}
+
+static inline void ioasid_user_for_each_id(struct ioasid_user *iuser, void *data,
+					  void (*fn)(ioasid_t id, void *data))
+{
+}
+#endif /* CONFIG_IOASID_USER */
 
 #else /* !CONFIG_IOASID */
 
