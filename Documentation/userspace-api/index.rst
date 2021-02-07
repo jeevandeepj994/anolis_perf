@@ -24,6 +24,8 @@ place where this information is gathered.
    ioctl/index
    iommu
    media/index
+   sysfs-platform_profile
+   ioasid
 
 .. only::  subproject and html
 
