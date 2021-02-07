@@ -1139,38 +1139,49 @@ static sector_t dax_iomap_sector(struct iomap *iomap, loff_t pos)
 	return (iomap->addr + (pos & PAGE_MASK) - iomap->offset) >> 9;
 }
 
-int dax_iomap_pfn(struct iomap *iomap, loff_t pos, size_t size,
-		  pfn_t *pfnp)
+int dax_iomap_direct_access(struct iomap *iomap, loff_t pos, size_t size,
+			    void **kaddr, pfn_t *pfnp)
 {
 	const sector_t sector = dax_iomap_sector(iomap, pos);
 	pgoff_t pgoff;
 	int id, rc;
 	long length;
 
+	if (!kaddr && !pfnp)
+		return -EINVAL;
+
 	rc = bdev_dax_pgoff(iomap->bdev, sector, size, &pgoff);
 	if (rc)
 		return rc;
 	id = dax_read_lock();
 	length = dax_direct_access(iomap->dax_dev, pgoff, PHYS_PFN(size),
-				   NULL, pfnp);
+				   kaddr, pfnp);
 	if (length < 0) {
 		rc = length;
 		goto out;
 	}
-	rc = -EINVAL;
-	if (PFN_PHYS(length) < size)
+
+	if (kaddr && !*kaddr) {
+		rc = -EFAULT;
 		goto out;
-	if (pfn_t_to_pfn(*pfnp) & (PHYS_PFN(size)-1))
-		goto out;
-	/* For larger pages we need devmap */
-	if (length > 1 && !pfn_t_devmap(*pfnp))
-		goto out;
-	rc = 0;
+	}
+
+	if (pfnp) {
+		rc = -EINVAL;
+		if (PFN_PHYS(length) < size)
+			goto out;
+		if (pfn_t_to_pfn(*pfnp) & (PHYS_PFN(size)-1))
+			goto out;
+		/* For larger pages we need devmap */
+		if (length > 1 && !pfn_t_devmap(*pfnp))
+			goto out;
+		rc = 0;
+	}
 out:
 	dax_read_unlock(id);
 	return rc;
 }
-EXPORT_SYMBOL_GPL(dax_iomap_pfn);
+EXPORT_SYMBOL_GPL(dax_iomap_direct_access);
 
 /*
  * The user has performed a load from a hole in the file.  Allocating a new
@@ -1502,7 +1513,8 @@ static vm_fault_t dax_iomap_pte_fault(struct vm_fault *vmf, pfn_t *pfnp,
 			count_memcg_event_mm(vma->vm_mm, PGMAJFAULT);
 			major = VM_FAULT_MAJOR;
 		}
-		error = dax_iomap_pfn(&iomap, pos, PAGE_SIZE, &pfn);
+		error = dax_iomap_direct_access(&iomap, pos, PAGE_SIZE,
+						NULL, &pfn);
 		if (error < 0)
 			goto error_finish_iomap;
 
@@ -1707,7 +1719,8 @@ static vm_fault_t dax_iomap_pmd_fault(struct vm_fault *vmf, pfn_t *pfnp,
 
 	switch (iomap.type) {
 	case IOMAP_MAPPED:
-		error = dax_iomap_pfn(&iomap, pos, PMD_SIZE, &pfn);
+		error = dax_iomap_direct_access(&iomap, pos, PMD_SIZE,
+						NULL, &pfn);
 		if (error < 0)
 			goto finish_iomap;
 
