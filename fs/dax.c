@@ -1184,6 +1184,53 @@ out:
 EXPORT_SYMBOL_GPL(dax_iomap_direct_access);
 
 /*
+ * Copy the part of the pages not included in the write, but required for CoW
+ * because offset/offset+length are not page aligned.
+ */
+static int dax_copy_edges(loff_t pos, loff_t length, struct iomap *srcmap,
+			  void *daddr, bool pmd, bool whole)
+{
+	size_t page_size = pmd ? PMD_SIZE : PAGE_SIZE;
+	loff_t offset = pos & (page_size - 1);
+	size_t size = ALIGN(offset + length, page_size);
+	loff_t end = pos + length;
+	loff_t pg_end = round_up(end, page_size);
+	void *saddr = 0;
+	int ret = 0;
+
+	ret = dax_iomap_direct_access(srcmap, pos, size, &saddr, NULL);
+	if (ret)
+		return ret;
+
+	if (whole) {
+		ret = memcpy_mcsafe(daddr, saddr, page_size);
+		return ret;
+	}
+
+	/*
+	 * Copy the first part of the page
+	 * Note: we pass offset as length
+	 */
+	if (offset) {
+		if (saddr)
+			ret = memcpy_mcsafe(daddr, saddr, offset);
+		else
+			memset(daddr, 0, offset);
+	}
+
+	/* Copy the last part of the range */
+	if (end < pg_end) {
+		if (saddr)
+			ret = memcpy_mcsafe(daddr + offset + length,
+			       saddr + offset + length,	pg_end - end);
+		else
+			memset(daddr + offset + length, 0, pg_end - end);
+	}
+
+	return ret;
+}
+
+/*
  * The user has performed a load from a hole in the file.  Allocating a new
  * page in the file would cause excessive storage usage for workloads with
  * sparse files.  Instead we insert a read-only mapping of the 4k zero page.
@@ -1219,15 +1266,17 @@ static bool dax_range_is_aligned(struct block_device *bdev,
 }
 
 int __dax_zero_page_range(struct block_device *bdev,
-		struct dax_device *dax_dev, sector_t sector,
-		unsigned int offset, unsigned int size)
+		struct dax_device *dax_dev, loff_t pos, sector_t sector,
+		unsigned int offset, unsigned int size,
+		struct iomap *iomap, struct iomap *srcmap)
 {
 	/*
 	 * After virtiofs supports DAX, @bdev can be NULL here. And if it is
 	 * the case, as a workaround, skip the following blkdev zero page
 	 * optimization and zero the requested area by memset() directly.
 	 */
-	if (bdev && dax_range_is_aligned(bdev, offset, size)) {
+	if ((iomap == srcmap) &&
+	    bdev && dax_range_is_aligned(bdev, offset, size)) {
 		sector_t start_sector = sector + (offset >> 9);
 
 		return blkdev_issue_zeroout(bdev, start_sector,
@@ -1247,7 +1296,10 @@ int __dax_zero_page_range(struct block_device *bdev,
 			dax_read_unlock(id);
 			return rc;
 		}
-		memset(kaddr + offset, 0, size);
+		if (iomap != srcmap)
+			dax_copy_edges(pos, size, srcmap, kaddr, false, false);
+		else
+			memset(kaddr + offset, 0, size);
 		dax_flush(dax_dev, kaddr + offset, size);
 		dax_read_unlock(id);
 	}
@@ -1276,7 +1328,8 @@ dax_iomap_actor(struct inode *inode, loff_t pos, loff_t length, void *data,
 			return iov_iter_zero(min(length, end - pos), iter);
 	}
 
-	if (WARN_ON_ONCE(iomap->type != IOMAP_MAPPED))
+	if (WARN_ON_ONCE(iomap->type != IOMAP_MAPPED &&
+	    !(iomap->flags & IOMAP_F_SHARED)))
 		return -EIO;
 
 	/*
@@ -1313,6 +1366,13 @@ dax_iomap_actor(struct inode *inode, loff_t pos, loff_t length, void *data,
 		if (map_len < 0) {
 			ret = map_len;
 			break;
+		}
+
+		if ((iomap != srcmap) && (iov_iter_rw(iter) == WRITE)) {
+			ret = dax_copy_edges(pos, length, srcmap, kaddr,
+					     false, false);
+			if (ret)
+				break;
 		}
 
 		map_len = PFN_PHYS(map_len);
@@ -1427,6 +1487,7 @@ static vm_fault_t dax_iomap_pte_fault(struct vm_fault *vmf, pfn_t *pfnp,
 	vm_fault_t ret = 0;
 	void *entry;
 	pfn_t pfn;
+	void *kaddr;
 
 	trace_dax_pte_fault(inode, vmf, ret);
 	/*
@@ -1508,18 +1569,26 @@ static vm_fault_t dax_iomap_pte_fault(struct vm_fault *vmf, pfn_t *pfnp,
 
 	switch (iomap.type) {
 	case IOMAP_MAPPED:
+cow:
 		if (iomap.flags & IOMAP_F_NEW) {
 			count_vm_event(PGMAJFAULT);
 			count_memcg_event_mm(vma->vm_mm, PGMAJFAULT);
 			major = VM_FAULT_MAJOR;
 		}
 		error = dax_iomap_direct_access(&iomap, pos, PAGE_SIZE,
-						NULL, &pfn);
+						&kaddr, &pfn);
 		if (error < 0)
 			goto error_finish_iomap;
 
 		entry = dax_insert_mapping_entry(mapping, vmf, entry, pfn,
 						 0, write && !sync);
+
+		if (srcmap.type != IOMAP_HOLE) {
+			error = dax_copy_edges(pos, PAGE_SIZE, &srcmap, kaddr,
+					       false, true);
+			if (error)
+				goto error_finish_iomap;
+		}
 
 		/*
 		 * If we are doing synchronous page fault and inode needs fsync,
@@ -1544,6 +1613,8 @@ static vm_fault_t dax_iomap_pte_fault(struct vm_fault *vmf, pfn_t *pfnp,
 
 		goto finish_iomap;
 	case IOMAP_UNWRITTEN:
+		if (write && (iomap.flags & IOMAP_F_SHARED))
+			goto cow;
 	case IOMAP_HOLE:
 		if (!write) {
 			ret = dax_load_hole(mapping, entry, vmf);
@@ -1639,6 +1710,7 @@ static vm_fault_t dax_iomap_pmd_fault(struct vm_fault *vmf, pfn_t *pfnp,
 	loff_t pos;
 	int error;
 	pfn_t pfn;
+	void *kaddr;
 
 	/*
 	 * Check whether offset isn't beyond end of file now. Caller is
@@ -1719,14 +1791,21 @@ static vm_fault_t dax_iomap_pmd_fault(struct vm_fault *vmf, pfn_t *pfnp,
 
 	switch (iomap.type) {
 	case IOMAP_MAPPED:
+cow:
 		error = dax_iomap_direct_access(&iomap, pos, PMD_SIZE,
-						NULL, &pfn);
+						&kaddr, &pfn);
 		if (error < 0)
 			goto finish_iomap;
 
 		entry = dax_insert_mapping_entry(mapping, vmf, entry, pfn,
 						RADIX_DAX_PMD, write && !sync);
 
+		if (srcmap.type != IOMAP_HOLE) {
+			error = dax_copy_edges(pos, PMD_SIZE, &srcmap, kaddr,
+					       true, true);
+			if (error)
+				goto unlock_entry;
+		}
 		/*
 		 * If we are doing synchronous page fault and inode needs fsync,
 		 * we can insert PMD into page tables only after that happens.
@@ -1745,6 +1824,8 @@ static vm_fault_t dax_iomap_pmd_fault(struct vm_fault *vmf, pfn_t *pfnp,
 		result = vmf_insert_pfn_pmd(vmf, pfn, write);
 		break;
 	case IOMAP_UNWRITTEN:
+		if (write && (iomap.flags & IOMAP_F_SHARED))
+			goto cow;
 	case IOMAP_HOLE:
 		if (WARN_ON_ONCE(write))
 			break;
