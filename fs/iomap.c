@@ -1007,10 +1007,11 @@ static int iomap_zero(struct inode *inode, loff_t pos, unsigned offset,
 }
 
 static int iomap_dax_zero(loff_t pos, unsigned offset, unsigned bytes,
-		struct iomap *iomap)
+		struct iomap *iomap, struct iomap *srcmap)
 {
-	return __dax_zero_page_range(iomap->bdev, iomap->dax_dev,
-			iomap_sector(iomap, pos & PAGE_MASK), offset, bytes);
+	return __dax_zero_page_range(iomap->bdev, iomap->dax_dev, pos,
+			iomap_sector(iomap, pos & PAGE_MASK), offset, bytes,
+			iomap, srcmap);
 }
 
 static loff_t
@@ -1032,7 +1033,7 @@ iomap_zero_range_actor(struct inode *inode, loff_t pos, loff_t count,
 		bytes = min_t(loff_t, PAGE_SIZE - offset, count);
 
 		if (IS_DAX(inode))
-			status = iomap_dax_zero(pos, offset, bytes, iomap);
+			status = iomap_dax_zero(pos, offset, bytes, iomap, srcmap);
 		else
 			status = iomap_zero(inode, pos, offset, bytes, iomap,
 					srcmap);

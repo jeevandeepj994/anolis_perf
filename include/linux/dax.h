@@ -11,6 +11,7 @@
 #define DAXDEV_F_SYNC (1UL << 0)
 
 struct iomap_ops;
+struct iomap;
 struct dax_device;
 struct dax_operations {
 	/*
@@ -217,12 +218,14 @@ int dax_iomap_direct_access(struct iomap *iomap, loff_t pos, size_t size,
 
 #ifdef CONFIG_FS_DAX
 int __dax_zero_page_range(struct block_device *bdev,
-		struct dax_device *dax_dev, sector_t sector,
-		unsigned int offset, unsigned int length);
+		struct dax_device *dax_dev, loff_t pos, sector_t sector,
+		unsigned int offset, unsigned int length,
+		struct iomap *iomap, struct iomap *srcmap);
 #else
 static inline int __dax_zero_page_range(struct block_device *bdev,
-		struct dax_device *dax_dev, sector_t sector,
-		unsigned int offset, unsigned int length)
+		struct dax_device *dax_dev, loff_t pos, sector_t sector,
+		unsigned int offset, unsigned int length,
+		struct iomap *iomap, struct iomap *srcmap)
 {
 	return -ENXIO;
 }
