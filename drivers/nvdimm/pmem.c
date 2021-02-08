@@ -327,6 +327,48 @@ static void pmem_freeze_queue(struct percpu_ref *ref)
 	blk_freeze_queue_start(q);
 }
 
+static int pmem_pagemap_memory_failure(struct dev_pagemap *pgmap,
+				       unsigned long pfn, int flags)
+{
+	struct pmem_device *pdev =
+		container_of(pgmap, struct pmem_device, pgmap);
+	struct gendisk *disk = pdev->disk;
+	struct block_device *bdev = NULL;
+	struct super_block *sb;
+	unsigned long size = page_size(pfn_to_page(pfn));
+	loff_t disk_offset, bdev_offset;
+	sector_t disk_sector;
+	struct hd_struct *part;
+	int rc = -ENXIO;
+
+	if (!disk)
+		goto out;
+
+	disk_offset = PFN_PHYS(pfn) - pdev->phys_addr - pdev->data_offset;
+	disk_sector = disk_offset >> SECTOR_SHIFT;
+	part = disk_map_sector_rcu(disk, disk_sector);
+	bdev = bdget(part_devt(part));
+	if (!bdev) {
+		rc = -ENOMEM;
+		goto out;
+	}
+
+	sb = get_super(bdev);
+	if (!sb)
+		goto out;
+
+	bdev_offset = (disk_sector - get_start_sect(bdev)) << SECTOR_SHIFT;
+	if (sb->s_op->corrupted_range)
+		rc = sb->s_op->corrupted_range(sb, bdev, bdev_offset, size, &flags);
+	else
+		rc = -EOPNOTSUPP;
+	drop_super(sb);
+out:
+	if (bdev)
+		bdput(bdev);
+	return rc;
+}
+
 static void pmem_release_disk(void *__pmem)
 {
 	struct pmem_device *pmem = __pmem;
@@ -417,6 +459,7 @@ static int pmem_attach_disk(struct device *dev,
 	pmem->pfn_flags = PFN_DEV;
 	pmem->pgmap.ref = &q->q_usage_counter;
 	pmem->pgmap.kill = pmem_freeze_queue;
+	pmem->pgmap.memory_failure = pmem_pagemap_memory_failure;
 	if (is_nd_pfn(dev)) {
 		if (setup_pagemap_fsdax(dev, &pmem->pgmap))
 			return -ENOMEM;
