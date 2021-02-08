@@ -386,6 +386,8 @@ struct kvm_vcpu_arch {
 	/* Guest default MPAM register states */
 	u64 mpam0_el1;
 	u64 mpam1_el1;
+
+	struct id_registers idregs;
 };
 
 /* Pointer to the vcpu's SVE FFR for sve_{save,load}_state() */

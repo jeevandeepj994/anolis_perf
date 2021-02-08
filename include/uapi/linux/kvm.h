@@ -1346,6 +1346,17 @@ struct kvm_master_dev_info {
 	struct kvm_msi msi[];
 };
 
+#define ID_REG_MAX_NUMS 64
+struct id_reg_info {
+	__u64 sys_id;
+	__u64 sys_val;
+};
+
+struct id_registers {
+	struct id_reg_info regs[ID_REG_MAX_NUMS];
+	__u64 num;
+};
+
 /*
  * ioctls for VM fds
  */
