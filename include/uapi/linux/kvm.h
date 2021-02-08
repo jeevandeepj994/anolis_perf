@@ -1100,6 +1100,8 @@ struct kvm_ppc_resize_hpt {
 
 #define KVM_CAP_SEV_ES_GHCB 500
 
+#define KVM_CAP_ARM_CPU_FEATURE 555
+
 #define KVM_CAP_LOONGARCH_FPU 800
 #define KVM_CAP_LOONGARCH_LSX 801
 #define KVM_CAP_LOONGARCH_VZ 802
