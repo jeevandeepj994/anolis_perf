@@ -119,6 +119,7 @@ struct dev_pagemap {
 	struct resource res;
 	struct percpu_ref *ref;
 	void (*kill)(struct percpu_ref *ref);
+	int (*memory_failure)(struct dev_pagemap *pgmap, unsigned long pfn, int flags);
 	struct device *dev;
 	void *data;
 	enum memory_type type;
