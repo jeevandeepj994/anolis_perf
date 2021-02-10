@@ -381,9 +381,6 @@ struct io_ring_ctx {
 	struct completion	ref_comp;
 	struct completion	sq_thread_comp;
 
-	/* if all else fails... */
-	struct io_kiocb		*fallback_req;
-
 #if defined(CONFIG_UNIX)
 	struct socket		*ring_sock;
 #endif
@@ -1275,10 +1272,6 @@ static struct io_ring_ctx *io_ring_ctx_alloc(struct io_uring_params *p)
 	if (!ctx)
 		return NULL;
 
-	ctx->fallback_req = kmem_cache_alloc(req_cachep, GFP_KERNEL);
-	if (!ctx->fallback_req)
-		goto err;
-
 	/*
 	 * Use 5 bits less than the max cq entries, that should give us around
 	 * 32 entries per hash list if totally full and uniformly spread.
@@ -1319,8 +1312,6 @@ static struct io_ring_ctx *io_ring_ctx_alloc(struct io_uring_params *p)
 	init_llist_head(&ctx->file_put_llist);
 	return ctx;
 err:
-	if (ctx->fallback_req)
-		kmem_cache_free(req_cachep, ctx->fallback_req);
 	kfree(ctx->cancel_hash);
 	kfree(ctx);
 	return NULL;
@@ -1896,23 +1887,6 @@ static inline void io_req_complete(struct io_kiocb *req, long res)
 	__io_req_complete(req, 0, res, 0);
 }
 
-static inline bool io_is_fallback_req(struct io_kiocb *req)
-{
-	return req == (struct io_kiocb *)
-			((unsigned long) req->ctx->fallback_req & ~1UL);
-}
-
-static struct io_kiocb *io_get_fallback_req(struct io_ring_ctx *ctx)
-{
-	struct io_kiocb *req;
-
-	req = ctx->fallback_req;
-	if (!test_and_set_bit_lock(0, (unsigned long *) &ctx->fallback_req))
-		return req;
-
-	return NULL;
-}
-
 static struct io_kiocb *io_alloc_req(struct io_ring_ctx *ctx)
 {
 	struct io_submit_state *state = &ctx->submit_state;
@@ -1932,7 +1906,7 @@ static struct io_kiocb *io_alloc_req(struct io_ring_ctx *ctx)
 		if (unlikely(ret <= 0)) {
 			state->reqs[0] = kmem_cache_alloc(req_cachep, gfp);
 			if (!state->reqs[0])
-				goto fallback;
+				return NULL;
 			ret = 1;
 		}
 		state->free_reqs = ret;
@@ -1940,8 +1914,6 @@ static struct io_kiocb *io_alloc_req(struct io_ring_ctx *ctx)
 
 	state->free_reqs--;
 	return state->reqs[state->free_reqs];
-fallback:
-	return io_get_fallback_req(ctx);
 }
 
 static inline void io_put_file(struct io_kiocb *req, struct file *file,
@@ -1977,10 +1949,7 @@ static void __io_free_req(struct io_kiocb *req)
 		wake_up(&tctx->wait);
 	put_task_struct(req->task);
 
-	if (likely(!io_is_fallback_req(req)))
-		kmem_cache_free(req_cachep, req);
-	else
-		clear_bit_unlock(0, (unsigned long *) &ctx->fallback_req);
+	kmem_cache_free(req_cachep, req);
 	percpu_ref_put(&ctx->refs);
 }
 
@@ -2253,10 +2222,6 @@ static void io_req_free_batch_finish(struct io_ring_ctx *ctx,
 
 static void io_req_free_batch(struct req_batch *rb, struct io_kiocb *req)
 {
-	if (unlikely(io_is_fallback_req(req))) {
-		io_free_req(req);
-		return;
-	}
 	if (req->flags & REQ_F_LINK_HEAD)
 		io_queue_next(req);
 
@@ -8817,7 +8782,6 @@ static void io_ring_ctx_free(struct io_ring_ctx *ctx)
 	free_uid(ctx->user);
 	put_cred(ctx->creds);
 	kfree(ctx->cancel_hash);
-	kmem_cache_free(req_cachep, ctx->fallback_req);
 	kfree(ctx);
 }
 
