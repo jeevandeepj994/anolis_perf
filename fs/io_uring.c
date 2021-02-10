@@ -1316,6 +1316,7 @@ static struct io_ring_ctx *io_ring_ctx_alloc(struct io_uring_params *p)
 	INIT_LIST_HEAD(&ctx->inflight_list);
 	INIT_DELAYED_WORK(&ctx->file_put_work, io_file_put_work);
 	init_llist_head(&ctx->file_put_llist);
+	INIT_LIST_HEAD(&ctx->submit_state.comp.list);
 	return ctx;
 err:
 	if (ctx->fallback_req)
@@ -6636,8 +6637,10 @@ static void io_submit_state_end(struct io_submit_state *state,
 		io_submit_flush_completions(&state->comp, ctx);
 	blk_finish_plug(&state->plug);
 	io_state_file_put(state);
-	if (state->free_reqs)
+	if (state->free_reqs) {
 		kmem_cache_free_bulk(req_cachep, state->free_reqs, state->reqs);
+		state->free_reqs = 0;
+	}
 }
 
 /*
@@ -6647,10 +6650,6 @@ static void io_submit_state_start(struct io_submit_state *state,
 				  unsigned int max_ios)
 {
 	blk_start_plug(&state->plug);
-	state->comp.nr = 0;
-	INIT_LIST_HEAD(&state->comp.list);
-	state->free_reqs = 0;
-	state->file = NULL;
 	state->ios_left = max_ios;
 }
 
