@@ -3802,7 +3802,8 @@ static int io_splice(struct io_kiocb *req, unsigned int issue_flags)
 /*
  * IORING_OP_NOP just posts a completion event, nothing else.
  */
-static int io_nop(struct io_kiocb *req, struct io_comp_state *cs)
+static int io_nop(struct io_kiocb *req, unsigned int issue_flags,
+		  struct io_comp_state *cs)
 {
 	struct io_ring_ctx *ctx = req->ctx;
 
@@ -5548,7 +5549,7 @@ static int io_poll_remove_prep(struct io_kiocb *req,
  * Find a running poll command that matches one specified in sqe->addr,
  * and remove it if found.
  */
-static int io_poll_remove(struct io_kiocb *req)
+static int io_poll_remove(struct io_kiocb *req, unsigned int issue_flags)
 {
 	struct io_ring_ctx *ctx = req->ctx;
 	u64 addr;
@@ -5601,7 +5602,7 @@ static int io_poll_add_prep(struct io_kiocb *req, const struct io_uring_sqe *sqe
 	return 0;
 }
 
-static int io_poll_add(struct io_kiocb *req)
+static int io_poll_add(struct io_kiocb *req, unsigned int issue_flags)
 {
 	struct io_poll_iocb *poll = &req->poll;
 	struct io_ring_ctx *ctx = req->ctx;
@@ -5701,7 +5702,7 @@ static int io_timeout_remove_prep(struct io_kiocb *req,
 /*
  * Remove or update an existing timeout command
  */
-static int io_timeout_remove(struct io_kiocb *req)
+static int io_timeout_remove(struct io_kiocb *req, unsigned int issue_flags)
 {
 	struct io_ring_ctx *ctx = req->ctx;
 	int ret;
@@ -5758,7 +5759,7 @@ static int io_timeout_prep(struct io_kiocb *req, const struct io_uring_sqe *sqe,
 	return 0;
 }
 
-static int io_timeout(struct io_kiocb *req)
+static int io_timeout(struct io_kiocb *req, unsigned int issue_flags)
 {
 	struct io_ring_ctx *ctx = req->ctx;
 	struct io_timeout_data *data = req->async_data;
@@ -5882,7 +5883,7 @@ static int io_async_cancel_prep(struct io_kiocb *req,
 	return 0;
 }
 
-static int io_async_cancel(struct io_kiocb *req)
+static int io_async_cancel(struct io_kiocb *req, unsigned int issue_flags)
 {
 	struct io_ring_ctx *ctx = req->ctx;
 
@@ -6151,7 +6152,7 @@ static int io_issue_sqe(struct io_kiocb *req, unsigned int issue_flags,
 
 	switch (req->opcode) {
 	case IORING_OP_NOP:
-		ret = io_nop(req, cs);
+		ret = io_nop(req, issue_flags, cs);
 		break;
 	case IORING_OP_READV:
 	case IORING_OP_READ_FIXED:
@@ -6167,10 +6168,10 @@ static int io_issue_sqe(struct io_kiocb *req, unsigned int issue_flags,
 		ret = io_fsync(req, issue_flags);
 		break;
 	case IORING_OP_POLL_ADD:
-		ret = io_poll_add(req);
+		ret = io_poll_add(req, issue_flags);
 		break;
 	case IORING_OP_POLL_REMOVE:
-		ret = io_poll_remove(req);
+		ret = io_poll_remove(req, issue_flags);
 		break;
 	case IORING_OP_SYNC_FILE_RANGE:
 		ret = io_sync_file_range(req, issue_flags);
@@ -6188,10 +6189,10 @@ static int io_issue_sqe(struct io_kiocb *req, unsigned int issue_flags,
 		ret = io_recv(req, issue_flags, cs);
 		break;
 	case IORING_OP_TIMEOUT:
-		ret = io_timeout(req);
+		ret = io_timeout(req, issue_flags);
 		break;
 	case IORING_OP_TIMEOUT_REMOVE:
-		ret = io_timeout_remove(req);
+		ret = io_timeout_remove(req, issue_flags);
 		break;
 	case IORING_OP_ACCEPT:
 		ret = io_accept(req, issue_flags, cs);
@@ -6200,7 +6201,7 @@ static int io_issue_sqe(struct io_kiocb *req, unsigned int issue_flags,
 		ret = io_connect(req, issue_flags, cs);
 		break;
 	case IORING_OP_ASYNC_CANCEL:
-		ret = io_async_cancel(req);
+		ret = io_async_cancel(req, issue_flags);
 		break;
 	case IORING_OP_FALLOCATE:
 		ret = io_fallocate(req, issue_flags);
