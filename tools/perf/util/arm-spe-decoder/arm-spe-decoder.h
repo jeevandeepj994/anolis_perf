@@ -24,9 +24,15 @@ enum arm_spe_sample_type {
 	ARM_SPE_REMOTE_ACCESS	= 1 << 7,
 };
 
+enum arm_spe_op_type {
+	ARM_SPE_LD		= 1 << 0,
+	ARM_SPE_ST		= 1 << 1,
+};
+
 struct arm_spe_record {
 	enum arm_spe_sample_type type;
 	int err;
+	u32 op;
 	bool is_ld;		/* Is load ? */
 	bool is_st;		/* Is store ? */
 	bool is_l1d_access;	/* Is l1d access ? */
