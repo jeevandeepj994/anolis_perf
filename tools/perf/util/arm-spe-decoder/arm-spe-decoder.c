@@ -180,7 +180,7 @@ static int arm_spe_read_record(struct arm_spe_decoder *decoder)
 				decoder->record.to_ip = ip;
 				break;
 			case SPE_ADDR_PKT_HDR_INDEX_DATA_VIRT:
-				decoder->record.addr = ip;
+				decoder->record.virt_addr = ip;
 				break;
 			case SPE_ADDR_PKT_HDR_INDEX_DATA_PHYS:
 				decoder->record.phys_addr = ip;
