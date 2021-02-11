@@ -213,6 +213,12 @@ static int arm_spe_read_record(struct arm_spe_decoder *decoder)
 				else
 					decoder->record.is_ld = true;
 			}
+			if (idx == SPE_OP_PKT_HDR_CLASS_LD_ST_ATOMIC) {
+				if (payload & 0x1)
+					decoder->record.op = ARM_SPE_ST;
+				else
+					decoder->record.op = ARM_SPE_LD;
+			}
 			break;
 		case ARM_SPE_EVENTS:
 			if (payload & BIT(EV_L1D_REFILL)) {
