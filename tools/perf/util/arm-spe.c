@@ -303,7 +303,7 @@ static void arm_spe_prep_sample(struct arm_spe *spe,
 	sample->cpumode = arm_spe_cpumode(spe, sample->ip);
 	sample->pid = speq->pid;
 	sample->tid = speq->tid;
-	sample->addr = record->addr;
+	sample->addr = record->virt_addr;
 	sample->phys_addr = record->phys_addr;
 	sample->period = 1;
 	sample->cpu = speq->cpu;
@@ -507,7 +507,7 @@ static void arm_spe_c2c_queue_store(struct arm_spe_queue *speq,
 		ret = spe_sample_insert(root, sample);
 		if (ret) {
 			pr_err("spe_c2c: The %lx(%lx) already exists.",
-					record->addr, record->ts);
+					record->virt_addr, record->ts);
 			free(sample);
 			return;
 		}
@@ -843,7 +843,7 @@ static void arm_spe_c2c_sample(struct spe_c2c_sample_queues *c2c_queues,
 	sample.cpumode = arm_spe_cpumode(speq->spe, sample.ip);
 	sample.pid = c2c_sample->pid;
 	sample.tid = c2c_sample->tid;
-	sample.addr = c2c_sample->record.addr;
+	sample.addr = c2c_sample->record.virt_addr;
 	if (arm_spe) {
 		srcp[0] = src;
 		srcp[1].val = c2c_sample->record.tot_lat;
