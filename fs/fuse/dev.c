@@ -2354,14 +2354,14 @@ static long fuse_dev_ioctl(struct file *file, unsigned int cmd,
 			   unsigned long arg)
 {
 	int res;
-	int oldfd;
+	int fd;
 	struct fuse_dev *fud = NULL;
 
 	switch (cmd) {
 	case FUSE_DEV_IOC_CLONE:
 		res = -EFAULT;
-		if (!get_user(oldfd, (__u32 __user *)arg)) {
-			struct file *old = fget(oldfd);
+		if (!get_user(fd, (__u32 __user *)arg)) {
+			struct file *old = fget(fd);
 
 			res = -EINVAL;
 			if (old) {
@@ -2380,6 +2380,15 @@ static long fuse_dev_ioctl(struct file *file, unsigned int cmd,
 				}
 				fput(old);
 			}
+		}
+		break;
+	case FUSE_DEV_IOC_PASSTHROUGH_OPEN_V0:
+		res = -EFAULT;
+		if (!get_user(fd, (__u32 __user *)arg)) {
+			res = -EINVAL;
+			fud = fuse_get_dev(file);
+			if (fud)
+				res = fuse_passthrough_open(fud, fd);
 		}
 		break;
 	default:

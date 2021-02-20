@@ -180,6 +180,14 @@ struct fuse_conn;
 struct fuse_mount;
 struct fuse_release_args;
 
+/**
+ * Reference to lower filesystem file for read/write operations handled in
+ * passthrough mode
+ */
+struct fuse_passthrough {
+	struct file *filp;
+};
+
 /** FUSE specific file data */
 struct fuse_file {
 	/** Fuse connection for this file */
@@ -224,6 +232,9 @@ struct fuse_file {
 		u64 version;
 
 	} readdir;
+
+	/** Container for data related to the passthrough functionality */
+	struct fuse_passthrough passthrough;
 
 	/** RB node to be linked on fuse_conn->polled_files */
 	struct rb_node polled_node;
@@ -763,6 +774,9 @@ struct fuse_conn {
 	/* Does the filesystem support per inode DAX? */
 	unsigned int inode_dax:1;
 
+	/** Passthrough mode for read/write IO */
+	unsigned int passthrough:1;
+
 	/** The number of requests waiting for completion */
 	atomic_t num_waiting;
 
@@ -798,6 +812,12 @@ struct fuse_conn {
 
 	/** List of device instances belonging to this connection */
 	struct list_head devices;
+
+	/** IDR for passthrough requests */
+	struct idr passthrough_req;
+
+	/** Protects passthrough_req */
+	spinlock_t passthrough_req_lock;
 
 #ifdef CONFIG_FUSE_DAX
 	/* Dax mode */
@@ -1258,5 +1278,11 @@ void fuse_dax_inode_cleanup(struct inode *inode);
 void fuse_dax_dontcache(struct inode *inode, unsigned int flags);
 bool fuse_dax_check_alignment(struct fuse_conn *fc, unsigned int map_alignment);
 void fuse_dax_cancel_work(struct fuse_conn *fc);
+
+/* passthrough.c */
+int fuse_passthrough_open(struct fuse_dev *fud, int fd);
+int fuse_passthrough_setup(struct fuse_conn *fc, struct fuse_file *ff,
+			   struct fuse_open_out *openarg);
+void fuse_passthrough_release(struct fuse_passthrough *passthrough);
 
 #endif /* _FS_FUSE_I_H */
