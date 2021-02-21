@@ -211,7 +211,7 @@ __switch_to(struct task_struct *prev_p, struct task_struct *next_p)
 
 	this_cpu_write(current_task, next_p);
 
-	switch_fpu_finish(next_p);
+	switch_fpu_finish(&prev->fpu, next_p);
 
 	/* Load the Intel cache allocation PQR MSR. */
 	resctrl_sched_in();
