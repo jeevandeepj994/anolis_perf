@@ -2356,6 +2356,7 @@ static long fuse_dev_ioctl(struct file *file, unsigned int cmd,
 	int res;
 	int fd;
 	struct fuse_dev *fud = NULL;
+	bool passthrough_write_only = false;
 
 	switch (cmd) {
 	case FUSE_DEV_IOC_CLONE:
@@ -2382,13 +2383,17 @@ static long fuse_dev_ioctl(struct file *file, unsigned int cmd,
 			}
 		}
 		break;
+	case FUSE_DEV_IOC_PASSTHROUGH_WRITE_OPEN_V0:
+		passthrough_write_only = true;
+		/* fallthrough */
 	case FUSE_DEV_IOC_PASSTHROUGH_OPEN_V0:
 		res = -EFAULT;
 		if (!get_user(fd, (__u32 __user *)arg)) {
 			res = -EINVAL;
 			fud = fuse_get_dev(file);
 			if (fud)
-				res = fuse_passthrough_open(fud, fd);
+				res = fuse_passthrough_open(fud, fd,
+						passthrough_write_only);
 		}
 		break;
 	default:

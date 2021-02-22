@@ -183,7 +183,7 @@ ssize_t fuse_passthrough_mmap(struct file *file, struct vm_area_struct *vma)
 	return ret;
 }
 
-int fuse_passthrough_open(struct fuse_dev *fud, int fd)
+int fuse_passthrough_open(struct fuse_dev *fud, int fd, bool write_only)
 {
 	int res;
 	struct file *passthrough_filp;
@@ -224,6 +224,7 @@ int fuse_passthrough_open(struct fuse_dev *fud, int fd)
 
 	passthrough->filp = passthrough_filp;
 	passthrough->cred = prepare_creds();
+	passthrough->write_only = write_only;
 
 	idr_preload(GFP_NOFS);
 	spin_lock(&fc->passthrough_req_lock);

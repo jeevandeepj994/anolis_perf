@@ -189,6 +189,8 @@ struct fuse_release_args;
 struct fuse_passthrough {
 	struct file *filp;
 	struct cred *cred;
+	/* only passthrough write operation */
+	bool write_only;
 };
 
 /** FUSE specific file data */
@@ -1286,7 +1288,7 @@ bool fuse_dax_check_alignment(struct fuse_conn *fc, unsigned int map_alignment);
 void fuse_dax_cancel_work(struct fuse_conn *fc);
 
 /* passthrough.c */
-int fuse_passthrough_open(struct fuse_dev *fud, int fd);
+int fuse_passthrough_open(struct fuse_dev *fud, int fd, bool write_only);
 int fuse_passthrough_setup(struct fuse_conn *fc, struct fuse_file *ff,
 			   struct fuse_open_out *openarg);
 void fuse_passthrough_release(struct fuse_passthrough *passthrough);
