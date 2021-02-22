@@ -1074,6 +1074,7 @@ static void process_init_reply(struct fuse_mount *fm, struct fuse_args *args,
 			}
 			if (arg->flags & FUSE_PASSTHROUGH) {
 				fc->passthrough = 1;
+				fc->passthrough_enabled = true;
 				/* Prevent further stacking */
 				fm->sb->s_stack_depth =
 					FILESYSTEM_MAX_STACK_DEPTH;
