@@ -45,7 +45,7 @@
 #define FUSE_NAME_MAX 1024
 
 /** Number of dentries for each connection in the control filesystem */
-#define FUSE_CTL_NUM_DENTRIES 7
+#define FUSE_CTL_NUM_DENTRIES 8
 
 /** List of active connections */
 extern struct list_head fuse_conn_list;
@@ -628,6 +628,9 @@ struct fuse_conn {
 
 	/** Connection aborted via sysfs */
 	bool aborted;
+
+	/** Connection supports fd passthrough and enabled */
+	bool passthrough_enabled;
 
 	/** Connection failed (version mismatch).  Cannot race with
 	    setting other bitfields since it is only set once in INIT

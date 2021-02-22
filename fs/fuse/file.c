@@ -1575,6 +1575,11 @@ static ssize_t fuse_direct_write_iter(struct kiocb *iocb, struct iov_iter *from)
 	return res;
 }
 
+static bool fuse_file_passthrough_enabled(struct fuse_file *ff)
+{
+	return ff->passthrough.filp && READ_ONCE(ff->fm->fc->passthrough_enabled);
+}
+
 static ssize_t fuse_file_read_iter(struct kiocb *iocb, struct iov_iter *to)
 {
 	struct file *file = iocb->ki_filp;
@@ -1587,7 +1592,7 @@ static ssize_t fuse_file_read_iter(struct kiocb *iocb, struct iov_iter *to)
 	if (FUSE_IS_DAX(inode))
 		return fuse_dax_read_iter(iocb, to);
 
-	if (ff->passthrough.filp)
+	if (fuse_file_passthrough_enabled(ff))
 		return fuse_passthrough_read_iter(iocb, to);
 	else if (!(ff->open_flags & FOPEN_DIRECT_IO))
 		return fuse_cache_read_iter(iocb, to);
@@ -1607,7 +1612,7 @@ static ssize_t fuse_file_write_iter(struct kiocb *iocb, struct iov_iter *from)
 	if (FUSE_IS_DAX(inode))
 		return fuse_dax_write_iter(iocb, from);
 
-	if (ff->passthrough.filp)
+	if (fuse_file_passthrough_enabled(ff))
 		return fuse_passthrough_write_iter(iocb, from);
 	else if (!(ff->open_flags & FOPEN_DIRECT_IO))
 		return fuse_cache_write_iter(iocb, from);
@@ -2389,7 +2394,7 @@ static int fuse_file_mmap(struct file *file, struct vm_area_struct *vma)
 {
 	struct fuse_file *ff = file->private_data;
 
-	if (ff->passthrough.filp)
+	if (fuse_file_passthrough_enabled(ff))
 		return fuse_passthrough_mmap(file, vma);
 
 	/* DAX mmap is superior to direct_io mmap */

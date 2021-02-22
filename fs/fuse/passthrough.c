@@ -192,7 +192,7 @@ int fuse_passthrough_open(struct fuse_dev *fud, int fd)
 	struct super_block *passthrough_sb;
 	struct fuse_passthrough *passthrough;
 
-	if (!fc->passthrough)
+	if (!fc->passthrough || !fc->passthrough_enabled)
 		return -EPERM;
 
 	passthrough_filp = fget(fd);
@@ -250,7 +250,7 @@ int fuse_passthrough_setup(struct fuse_conn *fc, struct fuse_file *ff,
 	struct fuse_passthrough *passthrough;
 	int passthrough_fh = openarg->passthrough_fh;
 
-	if (!fc->passthrough)
+	if (!fc->passthrough || !fc->passthrough_enabled)
 		return -EPERM;
 
 	/* Default case, passthrough is not requested */
