@@ -5,35 +5,6 @@
 
 typedef void(*test_ubsan_fp)(void);
 
-static void test_ubsan_add_overflow(void)
-{
-	volatile int val = INT_MAX;
-
-	val += 2;
-}
-
-static void test_ubsan_sub_overflow(void)
-{
-	volatile int val = INT_MIN;
-	volatile int val2 = 2;
-
-	val -= val2;
-}
-
-static void test_ubsan_mul_overflow(void)
-{
-	volatile int val = INT_MAX / 2;
-
-	val *= 3;
-}
-
-static void test_ubsan_negate_overflow(void)
-{
-	volatile int val = INT_MIN;
-
-	val = -val;
-}
-
 static void test_ubsan_divrem_overflow(void)
 {
 	volatile int val = 16;
@@ -90,10 +61,6 @@ static void test_ubsan_misaligned_access(void)
 }
 
 static const test_ubsan_fp test_ubsan_array[] = {
-	test_ubsan_add_overflow,
-	test_ubsan_sub_overflow,
-	test_ubsan_mul_overflow,
-	test_ubsan_negate_overflow,
 	test_ubsan_divrem_overflow,
 	test_ubsan_shift_out_of_bounds,
 	test_ubsan_out_of_bounds,
