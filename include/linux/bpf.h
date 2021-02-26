@@ -38,6 +38,7 @@ struct seq_operations;
 struct bpf_iter_aux_info;
 struct bpf_local_storage;
 struct bpf_local_storage_map;
+struct bpf_func_state;
 
 extern struct idr btf_idr;
 extern spinlock_t btf_idr_lock;
@@ -136,8 +137,11 @@ struct bpf_map_ops {
 	/* bpf_iter info used to open a seq_file */
 	const struct bpf_iter_seq_info *iter_seq_info;
 
-	CK_KABI_RESERVE(1)
-	CK_KABI_RESERVE(2)
+	CK_KABI_USE(1, int (*map_set_for_each_callback_args)(struct bpf_verifier_env *env,
+							     struct bpf_func_state *caller,
+							     struct bpf_func_state *callee))
+	CK_KABI_USE(2, int (*map_for_each_callback)(struct bpf_map *map, void *callback_fn,
+						    void *callback_ctx, u64 flags))
 	CK_KABI_RESERVE(3)
 	CK_KABI_RESERVE(4)
 };
@@ -332,6 +336,8 @@ enum bpf_arg_type {
 	ARG_CONST_ALLOC_SIZE_OR_ZERO,	/* number of allocated bytes requested */
 	ARG_PTR_TO_BTF_ID_SOCK_COMMON,	/* pointer to in-kernel sock_common or bpf-mirrored bpf_sock */
 	ARG_PTR_TO_PERCPU_BTF_ID,	/* pointer to in-kernel percpu type */
+	ARG_PTR_TO_FUNC,	/* pointer to a bpf program function */
+	ARG_PTR_TO_STACK,	/* pointer to stack */
 	__BPF_ARG_TYPE_MAX,
 
 	/* Extended arg_types. */
@@ -340,6 +346,7 @@ enum bpf_arg_type {
 	ARG_PTR_TO_CTX_OR_NULL		= PTR_MAYBE_NULL | ARG_PTR_TO_CTX,
 	ARG_PTR_TO_SOCKET_OR_NULL	= PTR_MAYBE_NULL | ARG_PTR_TO_SOCKET,
 	ARG_PTR_TO_ALLOC_MEM_OR_NULL	= PTR_MAYBE_NULL | ARG_PTR_TO_ALLOC_MEM,
+	ARG_PTR_TO_STACK_OR_NULL	= PTR_MAYBE_NULL | ARG_PTR_TO_STACK,
 
 	/* This must be the last entry. Its purpose is to ensure the enum is
 	 * wide enough to hold the higher bits reserved for bpf_type_flag.
@@ -478,7 +485,15 @@ enum bpf_reg_type {
 	 */
 	__BPF_REG_TYPE_LIMIT	= BPF_TYPE_LIMIT,
 };
-static_assert(__BPF_REG_TYPE_MAX <= BPF_BASE_TYPE_LIMIT);
+
+/* For KABI compatibility, we build a new enum bpf_reg_type. */
+enum bpf_reg_type_extra {
+	BPF_REG_TYPE_EXTRA_START = __BPF_REG_TYPE_MAX - 1,
+	PTR_TO_FUNC,		/* reg points to a bpf program function */
+	PTR_TO_MAP_KEY,		/* reg points to a map element key */
+	__BPF_REG_TYPE_EXTRA_MAX,
+};
+static_assert(__BPF_REG_TYPE_EXTRA_MAX <= BPF_BASE_TYPE_LIMIT);
 
 /* The information passed from prog-specific *_is_valid_access
  * back to the verifier.
@@ -1995,6 +2010,7 @@ extern const struct bpf_func_proto bpf_snprintf_btf_proto;
 extern const struct bpf_func_proto bpf_per_cpu_ptr_proto;
 extern const struct bpf_func_proto bpf_this_cpu_ptr_proto;
 extern const struct bpf_func_proto bpf_ktime_get_coarse_ns_proto;
+extern const struct bpf_func_proto bpf_for_each_map_elem_proto;
 
 const struct bpf_func_proto *bpf_tracing_func_proto(
 	enum bpf_func_id func_id, const struct bpf_prog *prog);
