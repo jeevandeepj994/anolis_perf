@@ -1075,9 +1075,10 @@ static void process_init_reply(struct fuse_mount *fm, struct fuse_args *args,
 			if (arg->flags & FUSE_PASSTHROUGH) {
 				fc->passthrough = 1;
 				fc->passthrough_enabled = true;
-				/* Prevent further stacking */
-				fm->sb->s_stack_depth =
-					FILESYSTEM_MAX_STACK_DEPTH;
+				/* increase s_stack_depth so that further stacking
+				 * takes it into account.
+				 */
+				fm->sb->s_stack_depth = 1;
 			}
 		} else {
 			ra_pages = fc->max_read / PAGE_SIZE;
