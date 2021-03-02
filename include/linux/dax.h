@@ -126,6 +126,7 @@ int dax_writeback_mapping_range(struct address_space *mapping,
 
 struct page *dax_layout_busy_page(struct address_space *mapping);
 struct page *dax_layout_busy_page_range(struct address_space *mapping, loff_t start, loff_t end);
+unsigned long dax_load_pfn(struct address_space *mapping, unsigned long index);
 bool dax_lock_mapping_entry(struct page *page);
 void dax_unlock_mapping_entry(struct page *page);
 pgoff_t dax_get_multi_order(struct address_space *mapping, pgoff_t index,
@@ -165,6 +166,11 @@ static inline int dax_writeback_mapping_range(struct address_space *mapping,
 		struct dax_device *dax_dev, struct writeback_control *wbc)
 {
 	return -EOPNOTSUPP;
+}
+
+static inline unsigned long dax_load_pfn(struct address_space *mapping, unsigned long index)
+{
+	return 0;
 }
 
 static inline bool dax_lock_mapping_entry(struct page *page)
