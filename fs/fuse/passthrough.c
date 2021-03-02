@@ -14,11 +14,31 @@ struct fuse_aio_req {
 	struct kiocb *iocb_fuse;
 };
 
+static void fuse_file_accessed(struct file *fuse_file, struct file *passthrough_filp)
+{
+	struct inode *fuse_inode, *passthrough_inode;
+
+	if (fuse_file->f_flags & O_NOATIME)
+		return;
+
+	fuse_inode = file_inode(fuse_file);
+	passthrough_inode = file_inode(passthrough_filp);
+
+	if ((!timespec64_equal(&fuse_inode->i_mtime, &passthrough_inode->i_mtime) ||
+	     !timespec64_equal(&fuse_inode->i_ctime, &passthrough_inode->i_ctime))) {
+		fuse_inode->i_mtime = passthrough_inode->i_mtime;
+		fuse_inode->i_ctime = passthrough_inode->i_ctime;
+	}
+
+	touch_atime(&fuse_file->f_path);
+}
+
 static void fuse_copyattr(struct file *dst_file, struct file *src_file)
 {
 	struct inode *dst = file_inode(dst_file);
 	struct inode *src = file_inode(src_file);
 
+	fuse_file_accessed(dst_file, src_file);
 	i_size_write(dst, i_size_read(src));
 }
 
@@ -32,6 +52,8 @@ static void fuse_aio_cleanup_handler(struct fuse_aio_req *aio_req)
 				      SB_FREEZE_WRITE);
 		file_end_write(iocb->ki_filp);
 		fuse_copyattr(iocb_fuse->ki_filp, iocb->ki_filp);
+	} else {
+		fuse_file_accessed(iocb_fuse->ki_filp, iocb->ki_filp);
 	}
 
 	iocb_fuse->ki_pos = iocb->ki_pos;
@@ -65,6 +87,8 @@ ssize_t fuse_passthrough_read_iter(struct kiocb *iocb_fuse,
 		ret = vfs_iter_read(passthrough_filp, iter, &iocb_fuse->ki_pos,
 				    iocb_to_rw_flags(iocb_fuse->ki_flags,
 						     PASSTHROUGH_IOCB_MASK));
+		if (ret > 0)
+			fuse_file_accessed(fuse_filp, passthrough_filp);
 	} else {
 		struct fuse_aio_req *aio_req;
 
@@ -144,9 +168,7 @@ ssize_t fuse_passthrough_mmap(struct file *file, struct vm_area_struct *vma)
 	int ret;
 	const struct cred *old_cred;
 	struct fuse_file *ff = file->private_data;
-	struct inode *fuse_inode = file_inode(file);
 	struct file *passthrough_filp = ff->passthrough.filp;
-	struct inode *passthrough_inode = file_inode(passthrough_filp);
 
 	if (!passthrough_filp->f_op->mmap)
 		return -ENODEV;
@@ -165,20 +187,9 @@ ssize_t fuse_passthrough_mmap(struct file *file, struct vm_area_struct *vma)
 		vma->vm_file = file;
 		fput(passthrough_filp);
 	} else {
+		fuse_file_accessed(file, passthrough_filp);
 		fput(file);
 	}
-
-	if (file->f_flags & O_NOATIME)
-		return ret;
-
-	if ((!timespec64_equal(&fuse_inode->i_mtime,
-			       &passthrough_inode->i_mtime) ||
-	     !timespec64_equal(&fuse_inode->i_ctime,
-			       &passthrough_inode->i_ctime))) {
-		fuse_inode->i_mtime = passthrough_inode->i_mtime;
-		fuse_inode->i_ctime = passthrough_inode->i_ctime;
-	}
-	touch_atime(&file->f_path);
 
 	return ret;
 }
