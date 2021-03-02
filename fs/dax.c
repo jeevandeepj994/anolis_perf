@@ -403,6 +403,28 @@ static struct page *dax_busy_page(void *entry)
 	return NULL;
 }
 
+/*
+ * dax_load_pfn - Load pfn of the DAX entry corresponding to a page
+ * @mapping: The file whose entry we want to load
+ * @index:   The offset where the DAX entry located in
+ *
+ * Return:   pfn of the DAX entry
+ */
+unsigned long dax_load_pfn(struct address_space *mapping, unsigned long index)
+{
+	void *entry, **slot;
+	unsigned long pfn;
+
+	xa_lock_irq(&mapping->i_pages);
+	entry = __radix_tree_lookup(&mapping->i_pages, index,
+				    NULL, &slot);
+	WARN_ON(!radix_tree_exceptional_entry(entry));
+	pfn = dax_radix_pfn(entry);
+	xa_unlock_irq(&mapping->i_pages);
+
+	return pfn;
+}
+
 bool dax_lock_mapping_entry(struct page *page)
 {
 	pgoff_t index;
