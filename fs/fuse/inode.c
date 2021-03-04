@@ -1170,6 +1170,7 @@ static int free_fuse_passthrough(int id, void *p, void *data)
 void fuse_free_conn(struct fuse_conn *fc)
 {
 	WARN_ON(!list_empty(&fc->devices));
+	fuse_io_counter_stop(fc);
 	idr_for_each(&fc->passthrough_req, free_fuse_passthrough, NULL);
 	idr_destroy(&fc->passthrough_req);
 	kfree_rcu(fc, rcu);
@@ -1382,6 +1383,10 @@ int fuse_fill_super_common(struct super_block *sb, struct fuse_fs_context *ctx)
 		sb->s_blocksize = PAGE_SIZE;
 		sb->s_blocksize_bits = PAGE_SHIFT;
 	}
+
+	err = fuse_io_counter_init(fc);
+	if (err < 0)
+		goto err;
 
 	sb->s_subtype = ctx->subtype;
 	ctx->subtype = NULL;
