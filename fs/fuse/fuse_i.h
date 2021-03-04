@@ -45,7 +45,7 @@
 #define FUSE_NAME_MAX 1024
 
 /** Number of dentries for each connection in the control filesystem */
-#define FUSE_CTL_NUM_DENTRIES 8
+#define FUSE_CTL_NUM_DENTRIES 9
 
 /** List of active connections */
 extern struct list_head fuse_conn_list;
@@ -827,6 +827,9 @@ struct fuse_conn {
 	/** Protects passthrough_req */
 	spinlock_t passthrough_req_lock;
 
+	/** Optional io metrics counter */
+	struct fuse_io_counter *io_counter;
+
 #ifdef CONFIG_FUSE_DAX
 	/* Dax mode */
 	enum fuse_dax_mode dax_mode;
@@ -1295,5 +1298,21 @@ void fuse_passthrough_release(struct fuse_passthrough *passthrough);
 ssize_t fuse_passthrough_read_iter(struct kiocb *iocb, struct iov_iter *to);
 ssize_t fuse_passthrough_write_iter(struct kiocb *iocb, struct iov_iter *from);
 ssize_t fuse_passthrough_mmap(struct file *file, struct vm_area_struct *vma);
+
+/* io_stats.c */
+struct fuse_req_stat {
+	int			type;
+	size_t			count;
+	unsigned long long	start_time_ns;
+};
+
+int fuse_io_counter_init(struct fuse_conn *fc);
+void fuse_io_counter_stop(struct fuse_conn *fc);
+void fuse_io_start(struct fuse_io_counter *fic, struct fuse_req_stat *req,
+		   size_t count, int type);
+void fuse_io_end(struct fuse_io_counter *fic, struct fuse_req_stat *req);
+int fuse_io_metrics_show(struct seq_file *s, void *unused);
+void fuse_io_counter_set_latency_target(struct fuse_io_counter *fic,
+					u64 target_ns);
 
 #endif /* _FS_FUSE_I_H */

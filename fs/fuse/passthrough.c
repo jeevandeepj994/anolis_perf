@@ -78,10 +78,12 @@ ssize_t fuse_passthrough_read_iter(struct kiocb *iocb_fuse,
 	struct file *fuse_filp = iocb_fuse->ki_filp;
 	struct fuse_file *ff = fuse_filp->private_data;
 	struct file *passthrough_filp = ff->passthrough.filp;
+	struct fuse_req_stat stat;
 
 	if (!iov_iter_count(iter))
 		return 0;
 
+	fuse_io_start(ff->fm->fc->io_counter, &stat, iter->count, READ);
 	old_cred = override_creds(ff->passthrough.cred);
 	if (is_sync_kiocb(iocb_fuse)) {
 		ret = vfs_iter_read(passthrough_filp, iter, &iocb_fuse->ki_pos,
@@ -107,6 +109,7 @@ ssize_t fuse_passthrough_read_iter(struct kiocb *iocb_fuse,
 	}
 out:
 	revert_creds(old_cred);
+	fuse_io_end(ff->fm->fc->io_counter, &stat);
 
 	return ret;
 }
@@ -121,10 +124,12 @@ ssize_t fuse_passthrough_write_iter(struct kiocb *iocb_fuse,
 	struct inode *fuse_inode = file_inode(fuse_filp);
 	struct file *passthrough_filp = ff->passthrough.filp;
 	struct inode *passthrough_inode = file_inode(passthrough_filp);
+	struct fuse_req_stat stat;
 
 	if (!iov_iter_count(iter))
 		return 0;
 
+	fuse_io_start(ff->fm->fc->io_counter, &stat, iter->count, WRITE);
 	inode_lock(fuse_inode);
 
 	old_cred = override_creds(ff->passthrough.cred);
@@ -159,6 +164,7 @@ ssize_t fuse_passthrough_write_iter(struct kiocb *iocb_fuse,
 out:
 	revert_creds(old_cred);
 	inode_unlock(fuse_inode);
+	fuse_io_end(ff->fm->fc->io_counter, &stat);
 
 	return ret;
 }

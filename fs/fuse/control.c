@@ -288,6 +288,50 @@ out:
 	return ret;
 }
 
+static int fuse_io_metrics_open(struct inode *inode, struct file *file)
+{
+	/* inode->i_private is fuse_conn as being set in fuse_ctl_add_dentry */
+	return single_open(file, fuse_io_metrics_show, inode->i_private);
+}
+
+static ssize_t fuse_io_metrics_write(struct file *file,
+				     const char __user *buf,
+				     size_t count, loff_t *ppos)
+{
+	struct fuse_conn *fc;
+	u64 target_ns;
+	int ret = -EINVAL;
+
+	if (*ppos)
+		goto out;
+
+	ret = kstrtoull_from_user(buf, count, 0, &target_ns);
+	if (ret < 0)
+		goto out;
+
+	if (target_ns * 100 < target_ns) {
+		ret = -EOVERFLOW;
+		goto out;
+	}
+	fc = fuse_ctl_file_conn_get(file);
+	if (fc) {
+		fuse_io_counter_set_latency_target(fc->io_counter, target_ns);
+		fuse_conn_put(fc);
+	}
+	ret = count;
+
+out:
+	return ret;
+}
+
+static const struct file_operations fuse_io_metrics_fops = {
+	.open = fuse_io_metrics_open,
+	.read = seq_read,
+	.write = fuse_io_metrics_write,
+	.llseek = seq_lseek,
+	.release = single_release,
+};
+
 static const struct file_operations fuse_ctl_abort_ops = {
 	.open = nonseekable_open,
 	.write = fuse_conn_abort_write,
@@ -405,6 +449,8 @@ int fuse_ctl_add_conn(struct fuse_conn *fc)
 				 1, NULL, &fuse_conn_max_background_ops) ||
 	    !fuse_ctl_add_dentry(parent, fc, "passthrough", S_IFREG | 0600,
 				 1, NULL, &fuse_conn_passthrough_ops) ||
+	    !fuse_ctl_add_dentry(parent, fc, "passthrough_metrics", S_IFREG | 0600,
+				 1, NULL, &fuse_io_metrics_fops) ||
 	    !fuse_ctl_add_dentry(parent, fc, "congestion_threshold",
 				 S_IFREG | 0600, 1, NULL,
 				 &fuse_conn_congestion_threshold_ops))
