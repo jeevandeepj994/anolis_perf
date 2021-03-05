@@ -851,6 +851,9 @@ static int copy_user_dax(struct block_device *bdev, struct dax_device *dax_dev,
 	return 0;
 }
 
+#define DAX_IF_DIRTY	(1UL << 0)
+#define DAX_IF_COW	(1UL << 1)
+
 /*
  * By this point grab_mapping_entry() has ensured that we have a locked entry
  * of the appropriate size so we don't have to worry about downgrading PMDs to
@@ -861,17 +864,20 @@ static int copy_user_dax(struct block_device *bdev, struct dax_device *dax_dev,
 static void *dax_insert_mapping_entry(struct address_space *mapping,
 				      struct vm_fault *vmf,
 				      void *entry, pfn_t pfn_t,
-				      unsigned long flags, bool dirty)
+				      unsigned long flags,
+				      unsigned long insert_flags)
 {
 	struct radix_tree_root *pages = &mapping->i_pages;
 	unsigned long pfn = pfn_t_to_pfn(pfn_t);
 	pgoff_t index = vmf->pgoff;
 	void *new_entry;
+	bool dirty = insert_flags & DAX_IF_DIRTY;
+	bool cow = insert_flags & DAX_IF_COW;
 
 	if (dirty)
 		__mark_inode_dirty(mapping->host, I_DIRTY_PAGES);
 
-	if (dax_is_zero_entry(entry) && !(flags & RADIX_DAX_ZERO_PAGE)) {
+	if (cow || (dax_is_zero_entry(entry) && !(flags & RADIX_DAX_ZERO_PAGE))) {
 		/* we are replacing a zero page with block mapping */
 		if (dax_is_pmd_entry(entry))
 			unmap_mapping_pages(mapping, index & ~PG_PMD_COLOUR,
@@ -887,7 +893,7 @@ static void *dax_insert_mapping_entry(struct address_space *mapping,
 		dax_associate_entry(new_entry, mapping, vmf->vma, vmf->address);
 	}
 
-	if (dax_is_zero_entry(entry) || dax_is_empty_entry(entry)) {
+	if (cow || (dax_is_zero_entry(entry) || dax_is_empty_entry(entry))) {
 		/*
 		 * Only swap our new entry into the radix tree if the current
 		 * entry is a zero page or an empty entry.  If a normal PTE or
@@ -909,6 +915,8 @@ static void *dax_insert_mapping_entry(struct address_space *mapping,
 
 	if (dirty)
 		radix_tree_tag_set(pages, index, PAGECACHE_TAG_DIRTY);
+	if (cow)
+		radix_tree_tag_set(pages, index, PAGECACHE_TAG_TOWRITE);
 
 	xa_unlock_irq(pages);
 	return entry;
@@ -1246,7 +1254,7 @@ static vm_fault_t dax_load_hole(struct address_space *mapping, void *entry,
 	vm_fault_t ret;
 
 	dax_insert_mapping_entry(mapping, vmf, entry, pfn, RADIX_DAX_ZERO_PAGE,
-			false);
+			0);
 	ret = vmf_insert_mixed(vmf->vma, vaddr, pfn);
 	trace_dax_load_hole(inode, vmf, ret);
 	return ret;
@@ -1488,6 +1496,7 @@ static vm_fault_t dax_iomap_pte_fault(struct vm_fault *vmf, pfn_t *pfnp,
 	void *entry;
 	pfn_t pfn;
 	void *kaddr;
+	unsigned long insert_flags = 0;
 
 	trace_dax_pte_fault(inode, vmf, ret);
 	/*
@@ -1580,8 +1589,15 @@ cow:
 		if (error < 0)
 			goto error_finish_iomap;
 
+		if (write) {
+			if (!sync)
+				insert_flags |= DAX_IF_DIRTY;
+
+			if (iomap.flags & IOMAP_F_SHARED)
+				insert_flags |= DAX_IF_COW;
+		}
 		entry = dax_insert_mapping_entry(mapping, vmf, entry, pfn,
-						 0, write && !sync);
+						 0, insert_flags);
 
 		if (srcmap.type != IOMAP_HOLE) {
 			error = dax_copy_edges(pos, PAGE_SIZE, &srcmap, kaddr,
@@ -1672,7 +1688,7 @@ static vm_fault_t dax_pmd_load_hole(struct vm_fault *vmf, struct iomap *iomap,
 
 	pfn = page_to_pfn_t(zero_page);
 	ret = dax_insert_mapping_entry(mapping, vmf, entry, pfn,
-			RADIX_DAX_PMD | RADIX_DAX_ZERO_PAGE, false);
+			RADIX_DAX_PMD | RADIX_DAX_ZERO_PAGE, 0);
 
 	ptl = pmd_lock(vmf->vma->vm_mm, vmf->pmd);
 	if (!pmd_none(*(vmf->pmd))) {
@@ -1711,6 +1727,7 @@ static vm_fault_t dax_iomap_pmd_fault(struct vm_fault *vmf, pfn_t *pfnp,
 	int error;
 	pfn_t pfn;
 	void *kaddr;
+	unsigned long insert_flags = 0;
 
 	/*
 	 * Check whether offset isn't beyond end of file now. Caller is
@@ -1797,8 +1814,14 @@ cow:
 		if (error < 0)
 			goto finish_iomap;
 
+		if (write) {
+			if (!sync)
+				insert_flags |= DAX_IF_DIRTY;
+			if (iomap.flags & IOMAP_F_SHARED)
+				insert_flags |= DAX_IF_COW;
+		}
 		entry = dax_insert_mapping_entry(mapping, vmf, entry, pfn,
-						RADIX_DAX_PMD, write && !sync);
+						RADIX_DAX_PMD, insert_flags);
 
 		if (srcmap.type != IOMAP_HOLE) {
 			error = dax_copy_edges(pos, PMD_SIZE, &srcmap, kaddr,
