@@ -3536,7 +3536,7 @@ static void update_numa_stats(struct task_numa_env *env,
 
 		if (find_idle && !rq->nr_running && idle_cpu(cpu)) {
 			if (READ_ONCE(rq->numa_migrate_on) ||
-			    !cpumask_test_cpu(cpu, env->p->cpus_ptr))
+			    !cpumask_test_cpu(cpu, task_allowed_cpu(env->p)))
 				continue;
 
 			if (ns->idle_cpu == -1)
@@ -3568,7 +3568,7 @@ static void task_numa_assign(struct task_numa_env *env,
 		/* Find alternative idle CPU. */
 		for_each_cpu_wrap(cpu, cpumask_of_node(env->dst_nid), start) {
 			if (cpu == env->best_cpu || !idle_cpu(cpu) ||
-			    !cpumask_test_cpu(cpu, env->p->cpus_ptr)) {
+			    !cpumask_test_cpu(cpu, task_allowed_cpu(env->p))) {
 				continue;
 			}
 
@@ -3681,7 +3681,7 @@ static bool task_numa_compare(struct task_numa_env *env,
 	}
 
 	/* Skip this swap candidate if cannot move to the source cpu. */
-	if (!cpumask_test_cpu(env->src_cpu, cur->cpus_ptr))
+	if (!cpumask_test_cpu(env->src_cpu, task_allowed_cpu(cur)))
 		goto unlock;
 
 	/*
@@ -3871,7 +3871,7 @@ static void task_numa_find_cpu(struct task_numa_env *env,
 
 	for_each_cpu(cpu, cpumask_of_node(env->dst_nid)) {
 		/* Skip this CPU if the source task cannot migrate */
-		if (!cpumask_test_cpu(cpu, env->p->cpus_ptr))
+		if (!cpumask_test_cpu(cpu, task_allowed_cpu(env->p)))
 			continue;
 
 		env->dst_cpu = cpu;
@@ -8281,7 +8281,7 @@ find_idlest_group_cpu(struct sched_group *group, struct task_struct *p, int this
 		return cpumask_first(sched_group_span(group));
 
 	/* Traverse only the allowed CPUs */
-	for_each_cpu_and(i, sched_group_span(group), p->cpus_ptr) {
+	for_each_cpu_and(i, sched_group_span(group), task_allowed_cpu(p)) {
 		struct rq *rq = cpu_rq(i);
 
 		if (!sched_core_cookie_match(rq, p))
@@ -8328,7 +8328,7 @@ static inline int find_idlest_cpu(struct sched_domain *sd, struct task_struct *p
 {
 	int new_cpu = cpu;
 
-	if (!cpumask_intersects(sched_domain_span(sd), p->cpus_ptr))
+	if (!cpumask_intersects(sched_domain_span(sd), task_allowed_cpu(p)))
 		return prev_cpu;
 
 	/*
@@ -8445,7 +8445,7 @@ static int select_idle_core(struct task_struct *p, struct sched_domain *sd, int 
 	if (!test_idle_cores(target, false))
 		return -1;
 
-	cpumask_and(cpus, sched_domain_span(sd), p->cpus_ptr);
+	cpumask_and(cpus, sched_domain_span(sd), task_allowed_cpu(p));
 
 	for_each_cpu_wrap(core, cpus, target) {
 		bool idle = true;
@@ -8484,7 +8484,7 @@ static int select_idle_smt(struct task_struct *p, struct sched_domain *sd, int t
 
 	is_expellee = is_expellee_task(p);
 	for_each_cpu(cpu, cpu_smt_mask(target)) {
-		if (!cpumask_test_cpu(cpu, p->cpus_ptr) ||
+		if (!cpumask_test_cpu(cpu, task_allowed_cpu(p)) ||
 		    !cpumask_test_cpu(cpu, sched_domain_span(sd)))
 			continue;
 		if (id_idle_cpu(p, cpu, is_expellee, NULL) || sched_idle_cpu(cpu))
@@ -8548,7 +8548,7 @@ static noinline int select_idle_cpu(struct task_struct *p, struct sched_domain *
 
 	time = cpu_clock(this);
 
-	cpumask_and(cpus, sched_domain_span(sd), p->cpus_ptr);
+	cpumask_and(cpus, sched_domain_span(sd), task_allowed_cpu(p));
 
 	is_expellee = is_expellee_task(p);
 	for_each_cpu_wrap(cpu, cpus, target) {
@@ -8595,7 +8595,7 @@ select_idle_capacity(struct task_struct *p, struct sched_domain *sd, int target)
 	struct cpumask *cpus;
 
 	cpus = this_cpu_cpumask_var_ptr(select_idle_mask);
-	cpumask_and(cpus, sched_domain_span(sd), p->cpus_ptr);
+	cpumask_and(cpus, sched_domain_span(sd), task_allowed_cpu(p));
 
 	task_util = uclamp_task_util(p);
 
@@ -8683,7 +8683,7 @@ static int select_idle_sibling(struct task_struct *p, int prev, int target)
 	    cpus_share_cache(recent_used_cpu, target) &&
 	    (id_idle_cpu(p, recent_used_cpu, is_expellee, NULL) ||
 	    sched_idle_cpu(recent_used_cpu)) &&
-	    cpumask_test_cpu(p->recent_used_cpu, p->cpus_ptr) &&
+	    cpumask_test_cpu(p->recent_used_cpu, task_allowed_cpu(p)) &&
 	    asym_fits_capacity(task_util, recent_used_cpu)) {
 		/*
 		 * Replace recent_used_cpu with prev as it is a potential
@@ -9040,7 +9040,7 @@ static int find_energy_efficient_cpu(struct task_struct *p, int prev_cpu)
 		base_energy += base_energy_pd;
 
 		for_each_cpu_and(cpu, perf_domain_span(pd), sched_domain_span(sd)) {
-			if (!cpumask_test_cpu(cpu, p->cpus_ptr))
+			if (!cpumask_test_cpu(cpu, task_allowed_cpu(p)))
 				continue;
 
 			util = cpu_util_next(cpu, p, cpu);
@@ -9144,7 +9144,7 @@ select_task_rq_fair(struct task_struct *p, int prev_cpu, int sd_flag, int wake_f
 			new_cpu = prev_cpu;
 		}
 
-		want_affine = !wake_wide(p) && cpumask_test_cpu(cpu, p->cpus_ptr)
+		want_affine = !wake_wide(p) && cpumask_test_cpu(cpu, task_allowed_cpu(p))
 			      && id_wake_affine(p, cpu, prev_cpu);
 	}
 
@@ -10075,7 +10075,7 @@ int can_migrate_task(struct task_struct *p, struct lb_env *env)
 	if (kthread_is_per_cpu(p))
 		return 0;
 
-	if (!cpumask_test_cpu(env->dst_cpu, p->cpus_ptr)) {
+	if (!cpumask_test_cpu(env->dst_cpu, task_allowed_cpu(p))) {
 		int cpu;
 
 		schedstat_inc(p->se.statistics.nr_failed_migrations_affine);
@@ -10095,7 +10095,7 @@ int can_migrate_task(struct task_struct *p, struct lb_env *env)
 
 		/* Prevent to re-select dst_cpu via env's CPUs: */
 		for_each_cpu_and(cpu, env->dst_grpmask, env->cpus) {
-			if (cpumask_test_cpu(cpu, p->cpus_ptr)) {
+			if (cpumask_test_cpu(cpu, task_allowed_cpu(p))) {
 				env->flags |= LBF_DST_PINNED;
 				env->new_dst_cpu = cpu;
 				break;
@@ -11357,7 +11357,7 @@ find_idlest_group(struct sched_domain *sd, struct task_struct *p, int this_cpu)
 
 		/* Skip over this group if it has no CPUs allowed */
 		if (!cpumask_intersects(sched_group_span(group),
-					p->cpus_ptr))
+					task_allowed_cpu(p)))
 			continue;
 
 		/* Skip over this group if no cookie matched */
@@ -12329,7 +12329,7 @@ more_balance:
 			 * if the curr task on busiest CPU can't be
 			 * moved to this_cpu:
 			 */
-			if (!cpumask_test_cpu(this_cpu, busiest->curr->cpus_ptr)) {
+			if (!cpumask_test_cpu(this_cpu, task_allowed_cpu(busiest->curr))) {
 				raw_spin_rq_unlock_irqrestore(busiest, flags);
 				env.flags |= LBF_ALL_PINNED;
 				goto out_one_pinned;
