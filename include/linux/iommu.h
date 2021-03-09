@@ -302,6 +302,10 @@ struct iommu_ops {
 
 	int (*set_hwdbm)(struct iommu_domain *domain, bool enable,
 			unsigned long iova, size_t size);
+	int (*sync_dirty_log)(struct iommu_domain *domain,
+			unsigned long iova, size_t size,
+			unsigned long *bitmap, unsigned long base_iova,
+			unsigned long bitmap_pgshift);
 
 	unsigned long pgsize_bitmap;
 	struct module *owner;
@@ -512,6 +516,10 @@ extern int iommu_domain_set_attr(struct iommu_domain *domain, enum iommu_attr,
 				 void *data);
 extern int iommu_domain_set_hwdbm(struct iommu_domain *domain, bool enable,
 				  unsigned long iova, size_t size);
+extern int iommu_sync_dirty_log(struct iommu_domain *domain, unsigned long iova,
+				size_t size, unsigned long *bitmap,
+				unsigned long base_iova,
+				unsigned long bitmap_pgshift);
 
 /* Window handling function prototypes */
 extern int iommu_domain_window_enable(struct iommu_domain *domain, u32 wnd_nr,
@@ -913,6 +921,15 @@ static inline int iommu_domain_set_hwdbm(struct iommu_domain *domain,
 					 bool enable,
 					 unsigned long iova,
 					 size_t size)
+{
+	return -EINVAL;
+}
+
+static inline int iommu_sync_dirty_log(struct iommu_domain *domain,
+				       unsigned long iova, size_t size,
+				       unsigned long *bitmap,
+				       unsigned long base_iova,
+				       unsigned long pgshift)
 {
 	return -EINVAL;
 }

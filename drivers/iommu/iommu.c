@@ -2728,6 +2728,47 @@ int iommu_domain_set_hwdbm(struct iommu_domain *domain, bool enable,
 }
 EXPORT_SYMBOL_GPL(iommu_domain_set_hwdbm);
 
+int iommu_sync_dirty_log(struct iommu_domain *domain, unsigned long iova,
+			 size_t size, unsigned long *bitmap,
+			 unsigned long base_iova, unsigned long bitmap_pgshift)
+{
+	const struct iommu_ops *ops = domain->ops;
+	unsigned int min_pagesz;
+	size_t pgsize;
+	int ret;
+
+	min_pagesz = 1 << __ffs(domain->pgsize_bitmap);
+
+	if (!IS_ALIGNED(iova | size, min_pagesz)) {
+		pr_err("unaligned: iova 0x%lx size 0x%zx min_pagesz 0x%x\n",
+			iova, size, min_pagesz);
+		return -EINVAL;
+	}
+
+	if (!ops || !ops->sync_dirty_log) {
+		pr_err("don't support sync dirty log\n");
+		return -ENODEV;
+	}
+
+	while (size) {
+		pgsize = iommu_pgsize(domain, iova, size);
+
+		ret = ops->sync_dirty_log(domain, iova, pgsize,
+					bitmap, base_iova, bitmap_pgshift);
+		if (ret)
+			break;
+
+		pr_debug("dirty_log_sync: iova 0x%lx pagesz 0x%zx\n", iova,
+			pgsize);
+
+		iova += pgsize;
+		size -= pgsize;
+	}
+
+	return ret;
+}
+EXPORT_SYMBOL_GPL(iommu_sync_dirty_log);
+
 void iommu_get_resv_regions(struct device *dev, struct list_head *list)
 {
 	const struct iommu_ops *ops = dev->bus->iommu_ops;
