@@ -6098,6 +6098,14 @@ intel_iommu_dev_has_feat(struct device *dev, enum iommu_dev_features feat)
 			info->ats_supported;
 	}
 
+	if (feat == IOMMU_DEV_FEAT_HWDBM) {
+		struct device_domain_info *info = get_domain_info(dev);
+
+		/* FL supports dirty bit by default. */
+		return domain_use_first_level(info->domain) ||
+		       (!domain_use_first_level(info->domain) && slad_support());
+	}
+
 	return false;
 }
 
@@ -6142,6 +6150,9 @@ intel_iommu_dev_feat_enabled(struct device *dev, enum iommu_dev_features feat)
 
 	if (feat == IOMMU_DEV_FEAT_AUX)
 		return scalable_mode_support() && info && info->auxd_enabled;
+
+	if (feat == IOMMU_DEV_FEAT_HWDBM)
+		return intel_iommu_dev_has_feat(dev, feat);
 
 	return false;
 }
