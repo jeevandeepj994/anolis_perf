@@ -306,6 +306,10 @@ struct iommu_ops {
 			unsigned long iova, size_t size,
 			unsigned long *bitmap, unsigned long base_iova,
 			unsigned long bitmap_pgshift);
+	int (*clear_dirty_log)(struct iommu_domain *domain,
+			unsigned long iova, size_t size,
+			unsigned long *bitmap, unsigned long base_iova,
+			unsigned long bitmap_pgshift);
 
 	unsigned long pgsize_bitmap;
 	struct module *owner;
@@ -520,6 +524,10 @@ extern int iommu_sync_dirty_log(struct iommu_domain *domain, unsigned long iova,
 				size_t size, unsigned long *bitmap,
 				unsigned long base_iova,
 				unsigned long bitmap_pgshift);
+extern int iommu_clear_dirty_log(struct iommu_domain *domain, unsigned long iova,
+				 size_t dma_size, unsigned long *bitmap,
+				 unsigned long base_iova,
+				 unsigned long bitmap_pgshift);
 
 /* Window handling function prototypes */
 extern int iommu_domain_window_enable(struct iommu_domain *domain, u32 wnd_nr,
@@ -932,6 +940,15 @@ static inline int iommu_sync_dirty_log(struct iommu_domain *domain,
 				       unsigned long pgshift)
 {
 	return -EINVAL;
+}
+
+static inline int iommu_clear_dirty_log(struct iommu_domain *domain,
+					unsigned long iova, size_t size,
+					unsigned long *bitmap,
+					unsigned long base_iova,
+					unsigned long pgshift)
+{
+	return -ENODEV;
 }
 
 static inline int  iommu_device_register(struct iommu_device *iommu)
