@@ -4934,6 +4934,10 @@ static int prepare_domain_attach_device(struct iommu_domain *domain,
 	if (addr_width > cap_mgaw(iommu->cap))
 		addr_width = cap_mgaw(iommu->cap);
 
+	if (!cpu_feature_enabled(X86_FEATURE_LA57) &&
+	    addr_width == ADDR_WIDTH_5LEVEL)
+		addr_width = ADDR_WIDTH_4LEVEL;
+
 	if (dmar_domain->max_addr > (1LL << addr_width)) {
 		dev_err(dev, "%s: iommu width (%d) is not "
 		        "sufficient for the mapped address (%llx)\n",
