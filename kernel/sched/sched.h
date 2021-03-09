@@ -3384,3 +3384,8 @@ extern int preempt_dynamic_mode;
 extern int sched_dynamic_mode(const char *str);
 extern void sched_dynamic_update(int mode);
 #endif
+
+static inline const struct cpumask *task_allowed_cpu(struct task_struct *p)
+{
+	return p->cpus_ptr;
+}
