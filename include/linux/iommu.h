@@ -300,6 +300,9 @@ struct iommu_ops {
 
 	int (*def_domain_type)(struct device *dev);
 
+	int (*set_hwdbm)(struct iommu_domain *domain, bool enable,
+			unsigned long iova, size_t size);
+
 	unsigned long pgsize_bitmap;
 	struct module *owner;
 };
@@ -507,6 +510,8 @@ extern int iommu_domain_get_attr(struct iommu_domain *domain, enum iommu_attr,
 				 void *data);
 extern int iommu_domain_set_attr(struct iommu_domain *domain, enum iommu_attr,
 				 void *data);
+extern int iommu_domain_set_hwdbm(struct iommu_domain *domain, bool enable,
+				  unsigned long iova, size_t size);
 
 /* Window handling function prototypes */
 extern int iommu_domain_window_enable(struct iommu_domain *domain, u32 wnd_nr,
@@ -900,6 +905,14 @@ static inline int iommu_domain_get_attr(struct iommu_domain *domain,
 
 static inline int iommu_domain_set_attr(struct iommu_domain *domain,
 					enum iommu_attr attr, void *data)
+{
+	return -EINVAL;
+}
+
+static inline int iommu_domain_set_hwdbm(struct iommu_domain *domain,
+					 bool enable,
+					 unsigned long iova,
+					 size_t size)
 {
 	return -EINVAL;
 }
