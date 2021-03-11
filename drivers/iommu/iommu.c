@@ -2711,6 +2711,23 @@ int iommu_domain_set_attr(struct iommu_domain *domain,
 }
 EXPORT_SYMBOL_GPL(iommu_domain_set_attr);
 
+int iommu_domain_set_hwdbm(struct iommu_domain *domain, bool enable,
+			   unsigned long iova, size_t size)
+{
+	const struct iommu_ops *ops = domain->ops;
+	int ret = 0;
+
+	if (!ops || !ops->set_hwdbm) {
+		pr_err_ratelimited("Don't support set_hwdbm\n");
+		return -EINVAL;
+	}
+
+	ret = ops->set_hwdbm(domain, enable, iova, size);
+
+	return ret;
+}
+EXPORT_SYMBOL_GPL(iommu_domain_set_hwdbm);
+
 void iommu_get_resv_regions(struct device *dev, struct list_head *list)
 {
 	const struct iommu_ops *ops = dev->bus->iommu_ops;
