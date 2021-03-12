@@ -6245,6 +6245,13 @@ static int __setup_slade(struct iommu_domain *domain,
 	return ret;
 }
 
+static int
+__domain_clear_dirty_log(struct dmar_domain *domain,
+			 unsigned long iova, size_t size,
+			 unsigned long *bitmap,
+			 unsigned long base_iova,
+			 unsigned long bitmap_pgshift);
+
 static int intel_iommu_set_hwdbm(struct iommu_domain *domain, bool enable,
 				 unsigned long iova, size_t size)
 {
@@ -6256,6 +6263,10 @@ static int intel_iommu_set_hwdbm(struct iommu_domain *domain, bool enable,
 
 	if (domain_use_first_level(dmar_domain)) {
 		/* FL supports A/D bits by default. */
+		/* TODO: shall we clear FLT existing D bits? */
+		if (enable)
+			__domain_clear_dirty_log(dmar_domain, iova, size, NULL,
+						 iova, VTD_PAGE_SHIFT);
 		return 0;
 	}
 
