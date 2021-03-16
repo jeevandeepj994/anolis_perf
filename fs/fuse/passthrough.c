@@ -263,7 +263,7 @@ err_free_file:
 }
 
 int fuse_passthrough_setup(struct fuse_conn *fc, struct fuse_file *ff,
-			   struct fuse_open_out *openarg)
+			   struct file *f, struct fuse_open_out *openarg)
 {
 	struct fuse_passthrough *passthrough;
 	int passthrough_fh = openarg->passthrough_fh;
@@ -281,6 +281,17 @@ int fuse_passthrough_setup(struct fuse_conn *fc, struct fuse_file *ff,
 
 	if (!passthrough)
 		return -EINVAL;
+
+	/* Do not passthrough if file is opened with O_DIRECT and the underlying
+	 * file system does not support it.
+	 */
+	if (f->f_flags & O_DIRECT &&
+	    (!passthrough->filp->f_mapping->a_ops ||
+	     !passthrough->filp->f_mapping->a_ops->direct_IO)) {
+		fuse_passthrough_release(passthrough);
+		kfree(passthrough);
+		return -EINVAL;
+	}
 
 	ff->passthrough = *passthrough;
 	kfree(passthrough);

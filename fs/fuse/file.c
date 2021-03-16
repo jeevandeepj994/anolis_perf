@@ -152,7 +152,7 @@ int fuse_do_open(struct fuse_mount *fm, u64 nodeid, struct file *file,
 		if (!err) {
 			ff->fh = outarg.fh;
 			ff->open_flags = outarg.open_flags;
-			fuse_passthrough_setup(fc, ff, &outarg);
+			fuse_passthrough_setup(fc, ff, file, &outarg);
 		} else if (err != -ENOSYS) {
 			fuse_file_free(ff);
 			return err;
