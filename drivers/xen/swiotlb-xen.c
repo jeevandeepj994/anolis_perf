@@ -192,8 +192,8 @@ retry:
 	/*
 	 * IO TLB memory already allocated. Just use it.
 	 */
-	if (io_tlb_default_mem.start != 0) {
-		xen_io_tlb_start = phys_to_virt(io_tlb_default_mem.start);
+	if (io_tlb_default_mem) {
+		xen_io_tlb_start = phys_to_virt(io_tlb_default_mem->start);
 		goto end;
 	}
 
