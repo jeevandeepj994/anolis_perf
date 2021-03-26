@@ -2736,6 +2736,14 @@ relock:
 			cgroup_leave_frozen(true);
 
 		/*
+		 * PF_IO_WORKER threads will catch and exit on fatal signals
+		 * themselves. They have cleanup that must be performed, so
+		 * we cannot call do_exit() on their behalf.
+		 */
+		if (current->flags & PF_IO_WORKER)
+			goto out;
+
+		/*
 		 * Anything else is fatal, maybe with a core dump.
 		 */
 		current->flags |= PF_SIGNALED;
@@ -2772,7 +2780,7 @@ relock:
 		/* NOTREACHED */
 	}
 	spin_unlock_irq(&sighand->siglock);
-
+out:
 	ksig->sig = signr;
 	return ksig->sig > 0;
 }
