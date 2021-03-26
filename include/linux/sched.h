@@ -2324,4 +2324,10 @@ const struct cpumask *sched_trace_rd_span(struct root_domain *rd);
 
 extern void sched_task_release(struct task_struct *p);
 
+#ifdef CONFIG_SCHED_CORE
+extern void sched_core_free(struct task_struct *tsk);
+#else
+static inline void sched_core_free(struct task_struct *tsk) { }
+#endif
+
 #endif
