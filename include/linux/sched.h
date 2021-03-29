@@ -2326,8 +2326,10 @@ extern void sched_task_release(struct task_struct *p);
 
 #ifdef CONFIG_SCHED_CORE
 extern void sched_core_free(struct task_struct *tsk);
+extern void sched_core_fork(struct task_struct *p);
 #else
 static inline void sched_core_free(struct task_struct *tsk) { }
+static inline void sched_core_fork(struct task_struct *p) { }
 #endif
 
 #endif
