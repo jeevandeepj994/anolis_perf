@@ -309,8 +309,14 @@ static int erofs_read_superblock(struct super_block *sb)
 		goto out;
 	}
 
+	/* parse on-disk compression configurations */
+	ret = z_erofs_load_lz4_config(sb, dsb);
+	if (ret < 0)
+		goto out;
+
 	/* handle multiple devices */
 	ret = erofs_scan_devices(sb, dsb);
+
 out:
 	erofs_put_metabuf(&buf);
 	return ret;

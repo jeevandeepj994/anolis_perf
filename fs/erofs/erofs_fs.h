@@ -54,7 +54,8 @@ struct erofs_super_block {
 	__u8 uuid[16];          /* 128-bit uuid for volume */
 	__u8 volume_name[16];   /* volume name */
 	__le32 feature_incompat;
-	__le16 reserved2;
+	/* customized lz4 sliding window size instead of 64k by default */
+	__le16 lz4_max_distance;
 	__le16 extra_devices;	/* # of devices besides the primary device */
 	__le16 devt_slotoff;	/* startoff = devt_slotoff * devt_slotsize */
 	__u8 dirblkbits;	/* directory block size in bit shift */
