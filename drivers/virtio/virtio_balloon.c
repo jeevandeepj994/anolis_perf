@@ -245,6 +245,12 @@ static unsigned fill_balloon(struct virtio_balloon *vb, size_t num)
 	struct page *page;
 	LIST_HEAD(pages);
 	bool is_cont = vb->current_pages_order != 0;
+	gfp_t gfp;
+
+	if (virtio_has_feature(vb->vdev, VIRTIO_BALLOON_F_ALLOC_RETRY))
+		gfp = __GFP_RETRY_MAYFAIL;
+	else
+		gfp = __GFP_NORETRY;
 
 	if (is_cont)
 		pfn_per_alloc = 2;
@@ -262,7 +268,7 @@ static unsigned fill_balloon(struct virtio_balloon *vb, size_t num)
 			    num - num_allocated_pages <
 				VIRTIO_BALLOON_PAGES_PER_PAGE << vb->current_pages_order)
 				continue;
-			page = balloon_pages_alloc(vb->current_pages_order);
+			page = balloon_pages_alloc(vb->current_pages_order, gfp);
 			if (page) {
 				/* If the first allocated page is not continuous pages,
 				 * go back to transport page as signle page.
@@ -1277,6 +1283,7 @@ static unsigned int features[] = {
 	VIRTIO_BALLOON_F_PAGE_POISON,
 	VIRTIO_BALLOON_F_REPORTING,
 	VIRTIO_BALLOON_F_CONT_PAGES,
+	VIRTIO_BALLOON_F_ALLOC_RETRY,
 };
 
 static struct virtio_driver virtio_balloon_driver = {
