@@ -272,7 +272,7 @@ static unsigned fill_balloon(struct virtio_balloon *vb, size_t num)
 	}
 
 	if (virtio_has_feature(vb->vdev, VIRTIO_BALLOON_F_ALLOC_RETRY))
-		gfp = __GFP_RETRY_MAYFAIL;
+		gfp = __GFP_RETRY_MAYFAIL | __GFP_RECLAIM;
 	else
 		gfp = __GFP_NORETRY;
 
