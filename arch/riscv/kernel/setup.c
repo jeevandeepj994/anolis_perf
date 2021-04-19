@@ -20,6 +20,7 @@
 #include <linux/swiotlb.h>
 #include <linux/smp.h>
 #include <linux/efi.h>
+#include <linux/crash_dump.h>
 
 #include <asm/cpu_ops.h>
 #include <asm/early_ioremap.h>
@@ -150,6 +151,15 @@ static void __init init_resources(void)
 	mem_res = memblock_alloc(mem_res_sz, SMP_CACHE_BYTES);
 	if (!mem_res)
 		panic("%s: Failed to allocate %zu bytes\n", __func__, mem_res_sz);
+
+#ifdef CONFIG_KEXEC_CORE
+	if (crashk_res.start != crashk_res.end) {
+		ret = add_resource(&iomem_resource, &crashk_res);
+		if (ret < 0)
+			goto error;
+	}
+#endif
+
 	/*
 	 * Start by adding the reserved regions, if they overlap
 	 * with /memory regions, insert_resource later on will take
@@ -242,7 +252,6 @@ void __init setup_arch(char **cmdline_p)
 	efi_init();
 	setup_bootmem();
 	paging_init();
-	init_resources();
 #if IS_ENABLED(CONFIG_BUILTIN_DTB)
 	unflatten_and_copy_device_tree();
 #else
@@ -259,6 +268,8 @@ void __init setup_arch(char **cmdline_p)
 #ifdef CONFIG_KASAN
 	kasan_init();
 #endif
+
+	init_resources();
 
 #if IS_ENABLED(CONFIG_RISCV_SBI)
 	sbi_init();
