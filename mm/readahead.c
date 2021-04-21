@@ -203,8 +203,6 @@ void page_cache_ra_unbounded(struct readahead_control *ractl,
 		struct page *page = xa_load(&mapping->i_pages, index + i);
 		int error;
 
-		BUG_ON(index + i != ractl->_index + ractl->_nr_pages);
-
 		if (page && !xa_is_value(page)) {
 			/*
 			 * Page already present?  Kick off the current batch
@@ -215,6 +213,7 @@ void page_cache_ra_unbounded(struct readahead_control *ractl,
 			 * not worth getting one just for that.
 			 */
 			read_pages(ractl, &page_pool, true);
+			i = ractl->_index + ractl->_nr_pages - index - 1;
 			continue;
 		}
 
@@ -231,6 +230,7 @@ void page_cache_ra_unbounded(struct readahead_control *ractl,
 				read_pages(ractl, &page_pool, true);
 				if (error == -EEXIST && sysctl_enable_multithread_ra_boost)
 					break;
+				i = ractl->_index + ractl->_nr_pages - index - 1;
 				continue;
 			}
 		}
