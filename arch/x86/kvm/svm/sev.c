@@ -2461,12 +2461,20 @@ void __init sev_hardware_setup(void)
 		goto out;
 
 	sev_reclaim_asid_bitmap = bitmap_zalloc(max_sev_asid, GFP_KERNEL);
-	if (!sev_reclaim_asid_bitmap)
+	if (!sev_reclaim_asid_bitmap) {
+		bitmap_free(sev_asid_bitmap);
+		sev_asid_bitmap = NULL;
 		goto out;
+	}
 
 	if (boot_cpu_data.x86_vendor == X86_VENDOR_HYGON) {
-		if (alloc_trans_mempool())
+		if (alloc_trans_mempool()) {
+			bitmap_free(sev_asid_bitmap);
+			sev_asid_bitmap = NULL;
+			bitmap_free(sev_reclaim_asid_bitmap);
+			sev_reclaim_asid_bitmap = NULL;
 			goto out;
+		}
 		pr_info("CSV supported: %u ASIDs\n",
 			max_sev_asid - min_sev_asid + 1);
 	} else {
