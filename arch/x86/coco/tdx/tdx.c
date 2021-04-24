@@ -176,6 +176,9 @@ EXPORT_SYMBOL_GPL(tdx_kvm_hypercall);
 
 bool tdx_debug_enabled(void)
 {
+#ifdef CONFIG_INTEL_TDX_KVM_SDV
+	return true;
+#endif
 	return td_info.attributes & BIT(0);
 }
 
