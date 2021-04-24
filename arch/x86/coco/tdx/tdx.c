@@ -136,7 +136,11 @@ static u64 get_td_info_attrs(void)
 
 bool tdx_debug_enabled(void)
 {
+#ifdef CONFIG_INTEL_TDX_KVM_SDV
+	return true;
+#else
 	return td_info_attrs & BIT(0);
+#endif
 }
 
 /* TDX guest event notification handler */
