@@ -25,6 +25,7 @@
 #include "string2.h"
 #include "strbuf.h"
 #include "fncache.h"
+#include "pmu-hybrid.h"
 
 struct perf_pmu perf_pmu__fake;
 
@@ -598,7 +599,6 @@ static struct perf_cpu_map *__pmu_cpumask(const char *path)
  * may have a "cpus" file.
  */
 #define CPUS_TEMPLATE_UNCORE	"%s/bus/event_source/devices/%s/cpumask"
-#define CPUS_TEMPLATE_CPU	"%s/bus/event_source/devices/%s/cpus"
 
 static struct perf_cpu_map *pmu_cpumask(const char *name)
 {
@@ -629,6 +629,9 @@ static bool pmu_is_uncore(const char *name)
 {
 	char path[PATH_MAX];
 	const char *sysfs;
+
+	if (perf_pmu__hybrid_mounted(name))
+		return false;
 
 	sysfs = sysfs__mountpoint();
 	snprintf(path, PATH_MAX, CPUS_TEMPLATE_UNCORE, sysfs, name);
@@ -847,6 +850,7 @@ static struct perf_pmu *pmu_lookup(const char *name)
 	pmu->name = strdup(name);
 	pmu->type = type;
 	pmu->is_uncore = pmu_is_uncore(name);
+	pmu->is_hybrid = perf_pmu__hybrid_mounted(name);
 	pmu->max_precise = pmu_max_precise(name);
 	pmu_add_cpu_aliases(&aliases, pmu);
 
@@ -856,6 +860,9 @@ static struct perf_pmu *pmu_lookup(const char *name)
 	list_splice(&format, &pmu->format);
 	list_splice(&aliases, &pmu->aliases);
 	list_add_tail(&pmu->list, &pmus);
+
+	if (pmu->is_hybrid)
+		list_add_tail(&pmu->hybrid_list, &perf_pmu__hybrid_pmus);
 
 	pmu->default_config = perf_pmu__get_default_config(pmu);
 
