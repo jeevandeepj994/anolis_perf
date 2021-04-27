@@ -78,6 +78,7 @@ struct perf_pmu_alias {
 	bool deprecated;
 	char *metric_expr;
 	char *metric_name;
+	char *pmu_name;
 };
 
 struct perf_pmu *perf_pmu__find(const char *name);
