@@ -374,7 +374,7 @@ void check_tsc_sync_source(int cpu)
 	if (!boot_cpu_has(X86_FEATURE_TSC_ADJUST))
 		atomic_set(&test_runs, 1);
 	else
-		atomic_set(&test_runs, 3);
+		atomic_set(&test_runs, 10);
 retry:
 	/*
 	 * Wait for the target to start or to skip the test:
