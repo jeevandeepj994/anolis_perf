@@ -8924,6 +8924,8 @@ static int __alloc_contig_migrate_range(struct compact_control *cc,
 		if (ret == -ENOMEM)
 			break;
 	}
+
+	migrate_finish();
 	if (ret < 0) {
 		putback_movable_pages(&cc->migratepages);
 		return ret;
