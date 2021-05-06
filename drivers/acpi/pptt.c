@@ -388,6 +388,41 @@ u32 acpi_pptt_count_containers(void)
 	return count;
 }
 
+struct __cpus_from_container_arg {
+	u32 acpi_cpu_id;
+	cpumask_t *cpus;
+};
+
+static int __cpus_from_container(struct acpi_pptt_processor *container, void *arg)
+{
+	struct __cpus_from_container_arg *params = arg;
+
+	if (container->acpi_processor_id == params->acpi_cpu_id)
+		acpi_pptt_get_child_cpus(container, params->cpus);
+
+	return 0;
+}
+
+/**
+ * acpi_pptt_get_cpus_from_container() - Populate a cpumask with all CPUs in a
+ * 					 processor containers
+ *
+ * Find the specified Processor Container, and fill cpus with all the cpus
+ * below it.
+ *
+ * Return: 0 for a complete walk, or an error if the mask is incomplete.
+ */
+int acpi_pptt_get_cpus_from_container(u32 acpi_cpu_id, cpumask_t *cpus)
+{
+	struct __cpus_from_container_arg params;
+
+	params.acpi_cpu_id = acpi_cpu_id;
+	params.cpus = cpus;
+
+	cpumask_clear(cpus);
+	return acpi_pptt_for_each_container(&__cpus_from_container, &params);
+}
+
 /*
  * acpi_pptt_find_cache_backwards() - Given a PPTT cache find a processor node
  * that points to it. This lets us find a cacheinfo node by fw_token, but
