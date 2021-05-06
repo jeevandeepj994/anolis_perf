@@ -913,8 +913,8 @@ KBUILD_CFLAGS	+= $(CC_FLAGS_SCS)
 export CC_FLAGS_SCS
 endif
 
-ifdef CONFIG_DEBUG_FORCE_FUNCTION_ALIGN_32B
-KBUILD_CFLAGS += -falign-functions=32
+ifdef CONFIG_DEBUG_FORCE_FUNCTION_ALIGN_64B
+KBUILD_CFLAGS += -falign-functions=64
 endif
 
 # arch Makefile may override CC so keep this after arch Makefile is included
