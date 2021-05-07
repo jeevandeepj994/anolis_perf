@@ -2869,8 +2869,13 @@ static void vfio_dma_dirty_log_set(struct vfio_iommu *iommu,
 	struct vfio_domain *d;
 
 	list_for_each_entry(d, &iommu->domain_list, next) {
-		/* Go through all domain anyway even if we fail */
-		iommu_domain_set_hwdbm(d->domain, start, dma->iova, dma->size);
+		/* TODO: Unify the interface as iommu_switch_dirty_log() which is
+		 * more general.
+		 */
+		if (iommu_support_dirty_log(d->domain))
+			iommu_switch_dirty_log(d->domain, start, dma->iova, dma->size, dma->prot);
+		else
+			iommu_domain_set_hwdbm(d->domain, start, dma->iova, dma->size);
 	}
 }
 
