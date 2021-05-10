@@ -115,8 +115,8 @@ SYM_INNER_LABEL(entry_SYSCALL_64_after_hwframe, SYM_L_GLOBAL)
 	PUSH_AND_CLEAR_REGS rax=$-ENOSYS
 
 	/* IRQs are off. */
-	movq	%rax, %rdi
-	movq	%rsp, %rsi
+	movq	%rsp, %rdi
+	movq	%rax, %rsi
 
 	/* clobbers %rax, make sure it is after saving the syscall nr */
 	IBRS_ENTER
