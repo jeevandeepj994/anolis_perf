@@ -670,12 +670,11 @@ static void mpam_reset_ris_partid(struct mpam_msc_ris *ris, u16 partid)
 	spin_unlock(&msc->part_sel_lock);
 }
 
-static void mpam_reset_ris(struct mpam_msc_ris *ris)
+/* Call with MSC lock held */
+static void mpam_reset_ris(void *arg)
 {
 	u16 partid, partid_max;
-	struct mpam_msc *msc = ris->msc;
-
-	lockdep_assert_held(&msc->lock);
+	struct mpam_msc_ris *ris = arg;
 
 	if (ris->in_reset_state)
 		return;
@@ -687,6 +686,14 @@ static void mpam_reset_ris(struct mpam_msc_ris *ris)
 		mpam_reset_ris_partid(ris, partid);
 }
 
+static int mpam_touch_msc(struct mpam_msc *msc, void (*fn)(void *a), void *arg)
+{
+	lockdep_assert_irqs_enabled();
+	lockdep_assert_cpus_held();
+
+	return smp_call_function_any(&msc->accessibility, fn, arg, true);
+}
+
 static void mpam_reset_msc(struct mpam_msc *msc, bool online)
 {
 	struct mpam_msc_ris *ris;
@@ -695,7 +702,7 @@ static void mpam_reset_msc(struct mpam_msc *msc, bool online)
 
 	rcu_read_lock();
 	list_for_each_entry_rcu(ris, &msc->ris, msc_list) {
-		mpam_reset_ris(ris);
+		mpam_touch_msc(msc, &mpam_reset_ris, ris);
 
 		/*
 		 * Set in_reset_state when coming online. The reset state
