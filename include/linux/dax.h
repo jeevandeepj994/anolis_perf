@@ -281,6 +281,8 @@ vm_fault_t dax_finish_sync_fault(struct vm_fault *vmf,
 int dax_delete_mapping_entry(struct address_space *mapping, pgoff_t index);
 int dax_invalidate_mapping_entry_sync(struct address_space *mapping,
 				      pgoff_t index);
+int dax_copy_range(struct block_device *bdev, struct dax_device *dax_dev,
+		u64 src_addr, u64 dst_addr, size_t size);
 int dax_iomap_direct_access(const struct iomap *iomap, loff_t pos,
 		size_t size, void **kaddr, pfn_t *pfnp);
 int dax_dedupe_file_range_compare(struct inode *src, loff_t srcoff,
