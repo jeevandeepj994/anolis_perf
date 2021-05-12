@@ -207,7 +207,10 @@ bool tsc_store_and_check_tsc_adjust(bool bootcpu)
 	 */
 	mask = topology_core_cpumask(cpu);
 	refcpu = mask ? cpumask_any_but(mask, cpu) : nr_cpu_ids;
-
+	#ifdef CONFIG_DRAGONBALL_DRIVERS
+	if (sync_clock)
+		refcpu = nr_cpu_ids;
+	#endif
 	if (refcpu >= nr_cpu_ids) {
 		tsc_sanitize_first_cpu(cur, bootval, smp_processor_id(),
 				       bootcpu);
