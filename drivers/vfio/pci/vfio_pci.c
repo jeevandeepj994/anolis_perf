@@ -577,8 +577,6 @@ static void vfio_pci_release(struct vfio_device *core_vdev)
 	}
 
 	mutex_unlock(&vdev->reflck->lock);
-
-	module_put(THIS_MODULE);
 }
 
 static int vfio_pci_open(struct vfio_device *core_vdev)
@@ -586,9 +584,6 @@ static int vfio_pci_open(struct vfio_device *core_vdev)
 	struct vfio_pci_device *vdev =
 		container_of(core_vdev, struct vfio_pci_device, vdev);
 	int ret = 0;
-
-	if (!try_module_get(THIS_MODULE))
-		return -ENODEV;
 
 	mutex_lock(&vdev->reflck->lock);
 
@@ -603,8 +598,6 @@ static int vfio_pci_open(struct vfio_device *core_vdev)
 	vdev->refcnt++;
 error:
 	mutex_unlock(&vdev->reflck->lock);
-	if (ret)
-		module_put(THIS_MODULE);
 	return ret;
 }
 
