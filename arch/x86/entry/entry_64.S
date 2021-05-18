@@ -116,7 +116,8 @@ SYM_INNER_LABEL(entry_SYSCALL_64_after_hwframe, SYM_L_GLOBAL)
 
 	/* IRQs are off. */
 	movq	%rsp, %rdi
-	movq	%rax, %rsi
+	/* Sign extend the lower 32bit as syscall numbers are treated as int */
+	movslq	%eax, %rsi
 
 	/* clobbers %rax, make sure it is after saving the syscall nr */
 	IBRS_ENTER
