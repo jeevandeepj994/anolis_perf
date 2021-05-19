@@ -271,9 +271,9 @@ static int arm_spe_recording_options(struct auxtrace_record *itr,
 	 */
 	perf_evlist__to_front(evlist, arm_spe_evsel);
 
-	evsel__set_sample_bit(arm_spe_evsel, CPU);
-	evsel__set_sample_bit(arm_spe_evsel, TIME);
-	evsel__set_sample_bit(arm_spe_evsel, TID);
+	/* In the case of per-cpu mmaps, sample CPU for AUX event. */
+	if (!perf_cpu_map__empty(cpus))
+		evsel__set_sample_bit(arm_spe_evsel, CPU);
 
 	/*
 	 * Set this only so that perf report knows that SPE generates memory info. It has no effect
