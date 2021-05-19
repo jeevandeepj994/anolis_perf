@@ -14,6 +14,7 @@
 #include "../../../util/cpumap.h"
 #include "../../../util/event.h"
 #include "../../../util/evsel.h"
+#include "../../../util/evsel_config.h"
 #include "../../../util/evlist.h"
 #include "../../../util/mmap.h"
 #include "../../../util/session.h"
@@ -35,6 +36,27 @@ struct arm_spe_recording {
 	struct evlist		*evlist;
 	int				have_sched_switch;
 };
+
+static void arm_spe_set_timestamp(struct auxtrace_record *itr,
+				 struct evsel *evsel)
+{
+	struct arm_spe_recording *ptr;
+	struct perf_pmu *arm_spe_pmu;
+	struct evsel_config_term *term = evsel__get_config_term(evsel, CFG_CHG);
+	u64 user_bits = 0, bit;
+
+	ptr = container_of(itr, struct arm_spe_recording, itr);
+	arm_spe_pmu = ptr->arm_spe_pmu;
+
+	if (term)
+		user_bits = term->val.cfg_chg;
+	bit = perf_pmu__format_bits(&arm_spe_pmu->format, "ts_enable");
+
+	/* Skip if user has set it */
+	if (bit & user_bits)
+		return;
+	evsel->core.attr.config |= bit;
+}
 
 static size_t
 arm_spe_info_priv_size(struct auxtrace_record *itr __maybe_unused,
@@ -271,9 +293,14 @@ static int arm_spe_recording_options(struct auxtrace_record *itr,
 	 */
 	perf_evlist__to_front(evlist, arm_spe_evsel);
 
-	/* In the case of per-cpu mmaps, sample CPU for AUX event. */
-	if (!perf_cpu_map__empty(cpus))
+	/*
+	 * In the case of per-cpu mmaps, sample CPU for AUX event;
+	 * also enable the timestamp tracing for samples correlation.
+	 */
+	if (!perf_cpu_map__empty(cpus)) {
 		evsel__set_sample_bit(arm_spe_evsel, CPU);
+		arm_spe_set_timestamp(itr, arm_spe_evsel);
+	}
 
 	/*
 	 * Set this only so that perf report knows that SPE generates memory info. It has no effect
