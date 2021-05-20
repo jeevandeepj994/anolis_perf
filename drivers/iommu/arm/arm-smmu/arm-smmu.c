@@ -37,6 +37,7 @@
 #include <linux/pm_runtime.h>
 #include <linux/ratelimit.h>
 #include <linux/slab.h>
+#include <asm/machine_types.h>
 
 #include <linux/amba/bus.h>
 #include <linux/fsl/mc.h>
@@ -1539,19 +1540,22 @@ static struct iommu_group *arm_smmu_device_group(struct device *dev)
 	struct iommu_group *group = NULL;
 	int i, idx;
 
-	for_each_cfg_sme(cfg, fwspec, i, idx) {
-		if (group && smmu->s2crs[idx].group &&
-		    group != smmu->s2crs[idx].group) {
-			dev_warn(smmu->dev, "unable handle %s stream conflict\n",
-				 dev_name(dev));
-			return ERR_PTR(-EINVAL);
-		}
+	if (!(typeof_ft2000plus() || typeof_s2500())) {
+		for_each_cfg_sme(cfg, fwspec, i, idx) {
+			if (group && smmu->s2crs[idx].group &&
+			    group != smmu->s2crs[idx].group) {
+				dev_warn(smmu->dev,
+					 "unable handle %s stream conflict\n",
+					 dev_name(dev));
+				return ERR_PTR(-EINVAL);
+			}
 
-		if (ft2000_iommu_hwfix) {
-			if (smmu->s2crs[idx].group)
+			if (ft2000_iommu_hwfix) {
+				if (smmu->s2crs[idx].group)
+					group = smmu->s2crs[idx].group;
+			} else {
 				group = smmu->s2crs[idx].group;
-		} else {
-			group = smmu->s2crs[idx].group;
+			}
 		}
 	}
 
