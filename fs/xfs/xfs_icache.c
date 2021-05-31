@@ -55,9 +55,9 @@ xfs_icwalk_tag(enum xfs_icwalk_goal goal)
 }
 
 static int xfs_icwalk(struct xfs_mount *mp,
-		enum xfs_icwalk_goal goal, void *args);
+		enum xfs_icwalk_goal goal, struct xfs_eofblocks *eofb);
 static int xfs_icwalk_ag(struct xfs_perag *pag,
-		enum xfs_icwalk_goal goal, void *args);
+		enum xfs_icwalk_goal goal, struct xfs_eofblocks *eofb);
 
 /*
  * Private inode cache walk flags for struct xfs_eofblocks.  Must not coincide
@@ -817,10 +817,8 @@ out_unlock:
 static void
 xfs_dqrele_inode(
 	struct xfs_inode	*ip,
-	void			*priv)
+	struct xfs_eofblocks	*eofb)
 {
-	struct xfs_eofblocks	*eofb = priv;
-
 	if (xfs_iflags_test(ip, XFS_INEW))
 		xfs_inew_wait(ip);
 
@@ -1235,10 +1233,9 @@ xfs_reclaim_worker(
 STATIC int
 xfs_inode_free_eofblocks(
 	struct xfs_inode	*ip,
-	void			*args,
+	struct xfs_eofblocks	*eofb,
 	unsigned int		*lockflags)
 {
-	struct xfs_eofblocks	*eofb = args;
 	bool			wait;
 
 	wait = eofb && (eofb->eof_flags & XFS_EOF_FLAGS_SYNC);
@@ -1443,10 +1440,9 @@ xfs_prep_free_cowblocks(
 STATIC int
 xfs_inode_free_cowblocks(
 	struct xfs_inode	*ip,
-	void			*args,
+	struct xfs_eofblocks	*eofb,
 	unsigned int		*lockflags)
 {
-	struct xfs_eofblocks	*eofb = args;
 	bool			wait;
 	int			ret = 0;
 
@@ -1583,16 +1579,16 @@ out_unlock_noent:
 static int
 xfs_blockgc_scan_inode(
 	struct xfs_inode	*ip,
-	void			*args)
+	struct xfs_eofblocks	*eofb)
 {
 	unsigned int		lockflags = 0;
 	int			error;
 
-	error = xfs_inode_free_eofblocks(ip, args, &lockflags);
+	error = xfs_inode_free_eofblocks(ip, eofb, &lockflags);
 	if (error)
 		goto unlock;
 
-	error = xfs_inode_free_cowblocks(ip, args, &lockflags);
+	error = xfs_inode_free_cowblocks(ip, eofb, &lockflags);
 unlock:
 	if (lockflags)
 		xfs_iunlock(ip, lockflags);
@@ -1728,16 +1724,16 @@ static inline int
 xfs_icwalk_process_inode(
 	enum xfs_icwalk_goal	goal,
 	struct xfs_inode	*ip,
-	void			*args)
+	struct xfs_eofblocks	*eofb)
 {
 	int			error = 0;
 
 	switch (goal) {
 	case XFS_ICWALK_DQRELE:
-		xfs_dqrele_inode(ip, args);
+		xfs_dqrele_inode(ip, eofb);
 		break;
 	case XFS_ICWALK_BLOCKGC:
-		error = xfs_blockgc_scan_inode(ip, args);
+		error = xfs_blockgc_scan_inode(ip, eofb);
 		break;
 	}
 	return error;
@@ -1751,7 +1747,7 @@ static int
 xfs_icwalk_ag(
 	struct xfs_perag	*pag,
 	enum xfs_icwalk_goal	goal,
-	void			*args)
+	struct xfs_eofblocks	*eofb)
 {
 	struct xfs_mount	*mp = pag->pag_mount;
 	uint32_t		first_index;
@@ -1823,7 +1819,7 @@ restart:
 		for (i = 0; i < nr_found; i++) {
 			if (!batch[i])
 				continue;
-			error = xfs_icwalk_process_inode(goal, batch[i], args);
+			error = xfs_icwalk_process_inode(goal, batch[i], eofb);
 			if (error == -EAGAIN) {
 				skipped++;
 				continue;
@@ -1866,7 +1862,7 @@ static int
 xfs_icwalk(
 	struct xfs_mount	*mp,
 	enum xfs_icwalk_goal	goal,
-	void			*args)
+	struct xfs_eofblocks	*eofb)
 {
 	struct xfs_perag	*pag;
 	int			error = 0;
@@ -1875,7 +1871,7 @@ xfs_icwalk(
 
 	while ((pag = xfs_icwalk_get_perag(mp, agno, goal))) {
 		agno = pag->pag_agno + 1;
-		error = xfs_icwalk_ag(pag, goal, args);
+		error = xfs_icwalk_ag(pag, goal, eofb);
 		xfs_perag_put(pag);
 		if (error) {
 			last_error = error;
