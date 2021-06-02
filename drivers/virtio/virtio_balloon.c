@@ -254,16 +254,6 @@ static void set_page_pfns_size(struct virtio_balloon *vb,
 	pfns[1] = (__virtio32) size;
 }
 
-static void set_page_pfns_order(struct virtio_balloon *vb,
-				char *pfns_buf, struct page *page,
-				unsigned int order)
-{
-	if (order == 0)
-		return set_page_pfns(vb, pfns_buf, page);
-
-	set_page_pfns_size(vb, pfns_buf, page, PAGE_SIZE << order);
-}
-
 static void set_page_pfns_64(struct virtio_balloon *vb,
 			     char *pfns_buf, struct page *page)
 {
@@ -289,16 +279,6 @@ static void set_page_pfns_size_64(struct virtio_balloon *vb,
 	pfns[0] = cpu_to_virtio64(vb->vdev, page_to_balloon_pfn(page));
 	/* Set the size of the continuous pages.  */
 	pfns[1] = (__virtio64) size;
-}
-
-static void set_page_pfns_order_64(struct virtio_balloon *vb,
-				   char *pfns_buf, struct page *page,
-				   unsigned int order)
-{
-	if (order == 0)
-		return set_page_pfns_64(vb, pfns_buf, page);
-
-	set_page_pfns_size_64(vb, pfns_buf, page, PAGE_SIZE << order);
 }
 
 static unsigned fill_balloon(struct virtio_balloon *vb, size_t num)
@@ -403,12 +383,23 @@ static unsigned fill_balloon(struct virtio_balloon *vb, size_t num)
 
 		balloon_pages_enqueue(&vb->vb_dev_info, page, order);
 
-		if (virtio_has_feature(vb->vdev, VIRTIO_BALLOON_F_TELL_64BIT))
-			set_page_pfns_order_64(vb,
-				vb->pfns_buf + vb->num_pfns * sizeof(__virtio64), page, order);
-		else
-			set_page_pfns_order(vb,
-				vb->pfns_buf + vb->num_pfns * sizeof(__virtio32), page, order);
+		if (virtio_has_feature(vb->vdev, VIRTIO_BALLOON_F_TELL_64BIT)) {
+			if (is_cont)
+				set_page_pfns_size_64(vb,
+					vb->pfns_buf + vb->num_pfns * sizeof(__virtio64),
+					page, PAGE_SIZE << order);
+			else
+				set_page_pfns_64(vb, vb->pfns_buf +
+					vb->num_pfns * sizeof(__virtio64), page);
+		} else {
+			if (is_cont)
+				set_page_pfns_size(vb,
+					vb->pfns_buf + vb->num_pfns * sizeof(__virtio32),
+					page, PAGE_SIZE << order);
+			else
+				set_page_pfns(vb, vb->pfns_buf +
+					vb->num_pfns * sizeof(__virtio32), page);
+		}
 
 		if (!virtio_has_feature(vb->vdev,
 					VIRTIO_BALLOON_F_DEFLATE_ON_OOM))
