@@ -1871,6 +1871,7 @@ struct sched_class {
 #endif
 
 	void (*update_nr_uninterruptible)(struct task_struct *p, long inc);
+	void (*update_nr_iowait)(struct task_struct *p, long inc);
 } __aligned(STRUCT_ALIGNMENT); /* STRUCT_ALIGN(), vmlinux.lds.h */
 
 static inline void put_prev_task(struct rq *rq, struct task_struct *prev)
@@ -1883,6 +1884,12 @@ static inline void set_next_task(struct rq *rq, struct task_struct *next)
 {
 	WARN_ON_ONCE(rq->curr != next);
 	next->sched_class->set_next_task(rq, next, false);
+}
+
+static inline void update_nr_iowait(struct task_struct *p, long inc)
+{
+	if (p->sched_class->update_nr_iowait)
+		p->sched_class->update_nr_iowait(p, inc);
 }
 
 /* Defined in include/asm-generic/vmlinux.lds.h */
