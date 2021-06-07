@@ -507,15 +507,7 @@ alternative_endif
 
 #ifdef CONFIG_PREEMPTION
 	ldr	x24, [tsk, #TSK_TI_PREEMPT]	// get preempt count
-alternative_if ARM64_HAS_IRQ_PRIO_MASKING
-	/*
-	 * DA_F were cleared at start of handling. If anything is set in DAIF,
-	 * we come back from an NMI, so skip preemption
-	 */
-	mrs	x0, daif
-	orr	x24, x24, x0
-alternative_else_nop_endif
-	cbnz	x24, 1f				// preempt count != 0 || NMI return path
+	cbnz	x24, 1f				// preempt count != 0
 	bl	arm64_preempt_schedule_irq	// irq en/disable is done inside
 1:
 #endif
