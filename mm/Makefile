@@ -134,3 +134,4 @@ obj-$(CONFIG_DUPTEXT) += page_dup.o
 obj-$(CONFIG_ASYNC_FORK) += async_fork.o
 obj-$(CONFIG_PAGE_PREZERO) += prezero.o
 obj-$(CONFIG_PAGECACHE_LIMIT) += pagecache_limit.o
+obj-$(CONFIG_HAVE_BOOTMEM_INFO_NODE) += bootmem_info.o
