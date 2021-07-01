@@ -134,4 +134,6 @@ bool perf_pmu__has_hybrid(void);
 void perf_pmu__warn_invalid_config(struct perf_pmu *pmu, __u64 config,
 				   const char *name);
 double perf_pmu__cpu_slots_per_cycle(void);
+int perf_pmu__match(char *pattern, char *name, char *tok);
+
 #endif /* __PMU_H */
