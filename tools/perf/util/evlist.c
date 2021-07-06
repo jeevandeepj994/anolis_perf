@@ -189,7 +189,7 @@ void perf_evlist__splice_list_tail(struct evlist *evlist,
 		}
 
 		__evlist__for_each_entry_safe(list, temp, evsel) {
-			if (evsel->leader == leader) {
+			if (evsel__has_leader(evsel, leader)) {
 				list_del_init(&evsel->core.node);
 				evlist__add(evlist, evsel);
 			}
@@ -230,7 +230,7 @@ void __evlist__set_leader(struct list_head *list)
 	leader->core.nr_members = evsel->core.idx - leader->core.idx + 1;
 
 	__evlist__for_each_entry(list, evsel) {
-		evsel->leader = leader;
+		evsel->core.leader = &leader->core;
 	}
 }
 
@@ -1569,7 +1569,7 @@ void perf_evlist__to_front(struct evlist *evlist,
 		return;
 
 	evlist__for_each_entry_safe(evlist, n, evsel) {
-		if (evsel->leader == move_evsel->leader)
+		if (evsel__leader(evsel) == evsel__leader(move_evsel))
 			list_move_tail(&evsel->core.node, &move);
 	}
 
@@ -1709,7 +1709,8 @@ struct evsel *perf_evlist__reset_weak_group(struct evlist *evsel_list,
 	struct evsel *c2, *leader;
 	bool is_open = true;
 
-	leader = evsel->leader;
+	leader = evsel__leader(evsel);
+
 	pr_debug("Weak group for %s/%d failed\n",
 			leader->name, leader->core.nr_members);
 
@@ -1720,10 +1721,10 @@ struct evsel *perf_evlist__reset_weak_group(struct evlist *evsel_list,
 	evlist__for_each_entry(evsel_list, c2) {
 		if (c2 == evsel)
 			is_open = false;
-		if (c2->leader == leader) {
+		if (evsel__has_leader(c2, leader)) {
 			if (is_open && close)
 				perf_evsel__close(&c2->core);
-			c2->leader = c2;
+			evsel__set_leader(c2, c2);
 			c2->core.nr_members = 0;
 			/*
 			 * Set this for all former members of the group

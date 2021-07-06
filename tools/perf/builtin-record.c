@@ -921,7 +921,7 @@ try_again:
 				goto try_again;
 			}
 			if ((errno == EINVAL || errno == EBADF) &&
-			    pos->leader != pos &&
+			    pos->core.leader != &pos->core &&
 			    pos->weak_group) {
 			        pos = perf_evlist__reset_weak_group(evlist, pos, true);
 				goto try_again;

@@ -238,7 +238,6 @@ void evsel__init(struct evsel *evsel,
 {
 	perf_evsel__init(&evsel->core, attr, idx);
 	evsel->tracking	   = !idx;
-	evsel->leader	   = evsel;
 	evsel->unit	   = "";
 	evsel->scale	   = 1.0;
 	evsel->max_events  = ULONG_MAX;
@@ -405,7 +404,7 @@ struct evsel *evsel__clone(struct evsel *orig)
 	evsel->cgrp = cgroup__get(orig->cgrp);
 	evsel->tp_format = orig->tp_format;
 	evsel->handler = orig->handler;
-	evsel->leader = orig->leader;
+	evsel->core.leader = orig->core.leader;
 
 	evsel->max_events = orig->max_events;
 	evsel->tool_event = orig->tool_event;
@@ -1063,7 +1062,7 @@ static void evsel__set_default_freq_period(struct record_opts *opts,
 void evsel__config(struct evsel *evsel, struct record_opts *opts,
 		   struct callchain_param *callchain)
 {
-	struct evsel *leader = evsel->leader;
+	struct evsel *leader = evsel__leader(evsel);
 	struct perf_event_attr *attr = &evsel->core.attr;
 	int track = evsel->tracking;
 	bool per_cpu = opts->target.default_per_cpu && !opts->target.per_thread;
@@ -1567,7 +1566,7 @@ int __evsel__read_on_cpu(struct evsel *evsel, int cpu, int thread, bool scale)
 
 static int get_group_fd(struct evsel *evsel, int cpu, int thread)
 {
-	struct evsel *leader = evsel->leader;
+	struct evsel *leader = evsel__leader(evsel);
 	int fd;
 
 	if (evsel__is_group_leader(evsel))
@@ -2789,4 +2788,21 @@ int evsel__store_ids(struct evsel *evsel, struct evlist *evlist)
 		return -ENOMEM;
 
 	return store_evsel_ids(evsel, evlist);
+}
+
+struct evsel *evsel__leader(struct evsel *evsel)
+{
+	return container_of(evsel->core.leader, struct evsel, core);
+}
+bool evsel__has_leader(struct evsel *evsel, struct evsel *leader)
+{
+	return evsel->core.leader == &leader->core;
+}
+bool evsel__is_leader(struct evsel *evsel)
+{
+	return evsel__has_leader(evsel, evsel);
+}
+void evsel__set_leader(struct evsel *evsel, struct evsel *leader)
+{
+	evsel->core.leader = &leader->core;
 }
