@@ -195,7 +195,6 @@ int __encap_ip6gre(struct __sk_buff *skb)
 
 static int decap_internal(struct __sk_buff *skb, int off, int len, char proto)
 {
-	char buf[sizeof(struct grev6hdr)];
 	int olen;
 
 	switch (proto) {
