@@ -636,6 +636,9 @@ struct arm_smmu_device {
 
 	/* IOMMU core code handle */
 	struct iommu_device		iommu;
+#ifdef CONFIG_ARM_SMMU_V3_POLLING_EVT
+	struct task_struct *evt_polling;
+#endif
 };
 
 /* SMMU private data for each master */
