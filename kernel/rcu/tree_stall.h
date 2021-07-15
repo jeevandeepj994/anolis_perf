@@ -12,6 +12,9 @@
 // Controlling CPU stall warnings, including delay calculation.
 
 /* panic() on RCU Stall sysctl. */
+
+#include <linux/fault_event.h>
+
 int sysctl_panic_on_rcu_stall __read_mostly;
 
 #ifdef CONFIG_PROVE_RCU
@@ -471,6 +474,9 @@ static void print_other_cpu_stall(unsigned long gp_seq, unsigned long gps)
 	int ndetected = 0;
 	struct rcu_node *rnp;
 	long totqlen = 0;
+	enum FAULT_CLASS class = SLIGHT_FAULT;
+	int first_cpu = -1;
+	unsigned int stall_cpus = 0;
 
 	/* Kick and suppress, if so configured. */
 	rcu_stall_kick_kthreads();
@@ -490,10 +496,17 @@ static void print_other_cpu_stall(unsigned long gp_seq, unsigned long gps)
 				if (rnp->qsmask & leaf_node_cpu_bit(rnp, cpu)) {
 					print_cpu_stall_info(cpu);
 					ndetected++;
+					if (first_cpu == -1)
+						first_cpu = cpu;
+					stall_cpus++;
 				}
 		}
 		ndetected += rcu_print_task_stall(rnp, flags); // Releases rnp->lock.
 	}
+
+	if (stall_cpus > 1)
+		class = FATAL_FAULT;
+	report_fault_event(first_cpu, NULL, class, FE_RCUSTALL, NULL);
 
 	for_each_possible_cpu(cpu)
 		totqlen += rcu_get_n_cbs_cpu(cpu);
@@ -542,6 +555,9 @@ static void print_cpu_stall(unsigned long gps)
 	rcu_stall_kick_kthreads();
 	if (rcu_stall_is_suppressed())
 		return;
+
+	report_fault_event(smp_processor_id(), current, SLIGHT_FAULT,
+		FE_RCUSTALL, NULL);
 
 	/*
 	 * OK, time to rat on ourselves...
