@@ -100,7 +100,11 @@ struct kernfs_elem_dir {
 	 */
 	struct kernfs_root	*root;
 
-	CK_KABI_RESERVE(1)
+	/*
+	 * Monotonic revision counter, used to identify if a directory
+	 * node has changed during negative dentry revalidation.
+	 */
+	CK_KABI_USE(1, unsigned long rev)
 };
 
 struct kernfs_elem_symlink {
