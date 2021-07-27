@@ -135,6 +135,7 @@ struct nvme_dev {
 	u32 cmbloc;
 	struct nvme_ctrl ctrl;
 	u32 last_ps;
+	bool hmb;
 
 	mempool_t *iod_mempool;
 
@@ -1889,7 +1890,9 @@ static int nvme_set_host_mem(struct nvme_dev *dev, u32 bits)
 		dev_warn(dev->ctrl.device,
 			 "failed to set host mem (err %d, flags %#x).\n",
 			 ret, bits);
-	}
+	} else
+		dev->hmb = bits & NVME_HOST_MEM_ENABLE;
+
 	return ret;
 }
 
@@ -2046,6 +2049,42 @@ static int nvme_setup_host_mem(struct nvme_dev *dev)
 	return ret;
 }
 
+static ssize_t hmb_show(struct device *dev, struct device_attribute *attr,
+			char *buf)
+{
+	struct nvme_dev *ndev = to_nvme_dev(dev_get_drvdata(dev));
+
+	return sysfs_emit(buf, "%d\n", ndev->hmb);
+}
+
+static ssize_t hmb_store(struct device *dev, struct device_attribute *attr,
+			 const char *buf, size_t count)
+{
+	struct nvme_dev *ndev = to_nvme_dev(dev_get_drvdata(dev));
+	bool new;
+	int ret;
+
+	if (strtobool(buf, &new) < 0)
+		return -EINVAL;
+
+	if (new == ndev->hmb)
+		return count;
+
+	if (new) {
+		ret = nvme_setup_host_mem(ndev);
+	} else {
+		ret = nvme_set_host_mem(ndev, 0);
+		if (!ret)
+			nvme_free_host_mem(ndev);
+	}
+
+	if (ret < 0)
+		return ret;
+
+	return count;
+}
+static DEVICE_ATTR_RW(hmb);
+
 static ssize_t cmb_show(struct device *dev, struct device_attribute *attr,
 		char *buf)
 {
@@ -2065,11 +2104,15 @@ static umode_t nvme_pci_attrs_are_visible(struct kobject *kobj,
 
 	if (a == &dev_attr_cmb.attr && !dev->cmbsz)
 		return 0;
+
+	if (a == &dev_attr_hmb.attr && !ctrl->hmpre)
+		return 0;
 	return a->mode;
 }
 
 static struct attribute *nvme_pci_attrs[] = {
 	&dev_attr_cmb.attr,
+	&dev_attr_hmb.attr,
 	NULL,
 };
 
@@ -2194,7 +2237,7 @@ static int nvme_setup_io_queues(struct nvme_dev *dev)
 
 	if (nr_io_queues == 0)
 		return 0;
-	
+
 	clear_bit(NVMEQ_ENABLED, &adminq->flags);
 
 	if (dev->cmb_use_sqes) {
