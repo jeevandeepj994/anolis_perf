@@ -440,6 +440,7 @@ struct kvm_pmc {
 	 * ctrl value for fixed counters.
 	 */
 	u64 current_config;
+	bool is_paused;
 };
 
 #define KVM_PMC_MAX_FIXED	3
