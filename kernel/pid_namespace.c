@@ -29,6 +29,24 @@ int sysctl_rich_container_enable = 1;
 #elif defined(CONFIG_RICH_CONTAINER)
 int sysctl_rich_container_enable;
 int sysctl_rich_container_source; /* 0 - current; 1 - child_reaper */
+
+static int __init rich_container_enable(char *str)
+{
+	sysctl_rich_container_enable = 1;
+
+#ifndef CONFIG_SCHEDSTATS_HOST
+	/* If enable the rich container, the schedstats should be enabled.
+	 * We can't change the static branch directly of sched_schedstats
+	 * because the jump label have been not set up. So we change the
+	 * __sched_schedstats var and set up the static key later in the
+	 * init_schedstats().
+	 */
+	__sched_schedstats = true;
+#endif
+
+	return 0;
+}
+__setup("rich_container", rich_container_enable);
 #endif
 
 static DEFINE_MUTEX(pid_caches_mutex);

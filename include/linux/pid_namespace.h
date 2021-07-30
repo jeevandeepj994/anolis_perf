@@ -90,6 +90,9 @@ void pid_idr_init(void);
 
 #ifdef CONFIG_RICH_CONTAINER
 extern int sysctl_rich_container_enable;
+#ifndef CONFIG_SCHEDSTATS_HOST
+extern bool __sched_schedstats;
+#endif
 #ifndef CONFIG_RICH_CONTAINER_CG_SWITCH
 extern int sysctl_rich_container_source;
 extern int sysctl_rich_container_cpuinfo_source;

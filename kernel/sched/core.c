@@ -3196,7 +3196,7 @@ DEFINE_STATIC_KEY_TRUE(sched_schedstats);
 static bool __sched_schedstats __initdata = true;
 #else
 DEFINE_STATIC_KEY_FALSE(sched_schedstats);
-static bool __initdata __sched_schedstats = false;
+bool __initdata __sched_schedstats;
 #endif
 
 static void set_schedstats(bool enabled)
