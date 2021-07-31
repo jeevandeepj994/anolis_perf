@@ -429,6 +429,31 @@ static int read_msr(struct pt_regs *regs, struct ve_info *ve)
 	return ve_instr_len(ve);
 }
 
+/*
+ * TDX has context switched MSRs and emulated MSRs. The emulated MSRs
+ * normally trigger a #VE, but that is expensive, which can be avoided
+ * by doing a direct TDCALL. Unfortunately, this cannot be done for all
+ * because some MSRs are "context switched" and need WRMSR.
+ *
+ * The list for this is unfortunately quite long. To avoid maintaining
+ * very long switch statements just do a fast path for the few critical
+ * MSRs that need TDCALL, currently only TSC_DEADLINE.
+ *
+ * More can be added as needed.
+ *
+ * The others will be handled by the #VE handler as needed.
+ * See 18.1 "MSR virtualization" in the TDX Module EAS
+ */
+static bool tdx_fast_tdcall_path_msr(unsigned int msr)
+{
+	switch (msr) {
+	case MSR_IA32_TSC_DEADLINE:
+		return true;
+	default:
+		return false;
+	}
+}
+
 static int write_msr(struct pt_regs *regs, struct ve_info *ve)
 {
 	struct tdx_hypercall_args args = {
@@ -447,6 +472,23 @@ static int write_msr(struct pt_regs *regs, struct ve_info *ve)
 		return -EIO;
 
 	return ve_instr_len(ve);
+}
+
+static void notrace tdx_write_msr(unsigned int msr, u32 low, u32 high)
+{
+	struct ve_info ve;
+	struct pt_regs regs;
+
+	regs.cx = msr;
+	regs.dx = high;
+	regs.ax = low;
+	ve.exit_reason = EXIT_REASON_MSR_WRITE;
+	ve.instr_len = 0;
+
+	if (tdx_fast_tdcall_path_msr(msr))
+		write_msr(&regs, &ve);
+	else
+		native_write_msr(msr, low, high);
 }
 
 static int handle_cpuid(struct pt_regs *regs, struct ve_info *ve)
@@ -1013,6 +1055,8 @@ void __init tdx_early_init(void)
 	td_info_attrs = get_td_info_attrs();
 
 	tdx_filter_init();
+
+	pv_ops.cpu.write_msr = tdx_write_msr;
 
 	legacy_pic = &null_legacy_pic;
 
