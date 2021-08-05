@@ -266,8 +266,10 @@ static int erofs_fill_inode(struct inode *inode, int isdir)
 		inode->i_op = &erofs_generic_iops;
 		if (erofs_is_rafsv6_mode(inode->i_sb))
 			inode->i_fop = &rafs_v6_file_ro_fops;
-		else
+		else if (erofs_inode_is_data_compressed(vi->datalayout))
 			inode->i_fop = &generic_ro_fops;
+		else
+			inode->i_fop = &erofs_file_fops;
 		break;
 	case S_IFDIR:
 		inode->i_op = &erofs_dir_iops;
