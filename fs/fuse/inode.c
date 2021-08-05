@@ -1413,9 +1413,27 @@ err:
 	return err;
 }
 
+/*
+ * This is the path where user supplied an already initialized fuse dev.
+ * In this case never create a new super if the old one is gone.
+ */
+static int fuse_set_no_super(struct super_block *sb, void *data)
+{
+	return -ENOTCONN;
+}
+
+static int fuse_test_super(struct super_block *sb, void *data)
+{
+
+	return sb->s_fs_info == data;
+}
+
 static struct dentry *fuse_try_mount(struct file_system_type *fs_type,
 				     int flags, void *raw_data)
 {
+	struct file *file;
+	struct fuse_dev *fud;
+	struct super_block *sb;
 	struct fuse_mount_data d;
 	struct dentry *root;
 	char *opts;
@@ -1428,8 +1446,27 @@ static struct dentry *fuse_try_mount(struct file_system_type *fs_type,
 	if (!parse_fuse_opt(opts, &d, 0, current_user_ns(), 0))
 		goto out;
 
-	/* placeholder for following initialization for root */
-	root = NULL;
+	if (!d.fd_present)
+		goto out;
+
+	file = fget(d.fd);
+	if (!file)
+		goto out;
+
+	fud = READ_ONCE(file->private_data);
+	if (file->f_op == &fuse_dev_operations && fud) {
+		/*
+		 * Allow creating a fuse mount with an already initialized fuse
+		 * connection.
+		 */
+		sb = sget(fs_type, fuse_test_super, fuse_set_no_super, flags, fud->fc);
+		if (IS_ERR(sb))
+			root = ERR_CAST(sb);
+		else
+			root = dget(sb->s_root);
+	}
+
+	fput(file);
 out:
 	kfree(opts);
 	return root;
