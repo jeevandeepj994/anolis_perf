@@ -466,6 +466,7 @@ void erofs_put_metabuf(struct erofs_buf *buf);
 void *erofs_read_metabuf(struct erofs_buf *buf, struct super_block *sb,
 			 erofs_blk_t blkaddr, enum erofs_kmap_type type);
 int erofs_map_dev(struct super_block *sb, struct erofs_map_dev *dev);
+extern const struct file_operations erofs_file_fops;
 
 /* inode.c */
 static inline unsigned long erofs_inode_hash(erofs_nid_t nid)
