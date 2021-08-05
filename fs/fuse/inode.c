@@ -1597,9 +1597,33 @@ static int fuse_fill_super(struct super_block *sb, struct fs_context *fsc)
 	return err;
 }
 
+/*
+ * This is the path where user supplied an already initialized fuse dev.  In
+ * this case never create a new super if the old one is gone.
+ */
+static int fuse_set_no_super(struct super_block *sb, struct fs_context *fsc)
+{
+	return -ENOTCONN;
+}
+
+static int fuse_test_super(struct super_block *sb, struct fs_context *fsc)
+{
+	/*
+	 * As commit 80019f113832 ("fuse: always initialize sb->s_fs_info")
+	 * said, get_fuse_conn_super(sb) may return NULL.  We make
+	 * fuse_test_super() return 0 in this case, and thus the attempt to
+	 * share existing sb will fail.
+	 */
+	return fsc->sget_key && fsc->sget_key == get_fuse_conn_super(sb);
+}
+
 static int fuse_get_tree(struct fs_context *fc)
 {
 	struct fuse_fs_context *ctx = fc->fs_private;
+	struct fuse_dev *fud;
+	struct super_block *sb;
+	struct file *file;
+	int err;
 
 	if (!ctx->fd_present || !ctx->rootmode_present ||
 	    !ctx->user_id_present || !ctx->group_id_present)
@@ -1609,8 +1633,33 @@ static int fuse_get_tree(struct fs_context *fc)
 	if (ctx->is_bdev)
 		return get_tree_bdev(fc, fuse_fill_super);
 #endif
+	/*
+	 * While block dev mount can be initialized with a dummy device fd
+	 * (found by device name), normal fuse mounts can't
+	 */
+	file = fget(ctx->fd);
+	if (!file) {
+		pr_err("fuse: invalid fd option\n");
+		return -EINVAL;
+	}
 
-	return get_tree_nodev(fc, fuse_fill_super);
+	/*
+	 * Allow creating a fuse mount with an already initialized fuse
+	 * connection
+	 */
+	fud = READ_ONCE(file->private_data);
+	if (file->f_op == &fuse_dev_operations && fud) {
+		fc->sget_key = fud->fc;
+		sb = sget_fc(fc, fuse_test_super, fuse_set_no_super);
+		err = PTR_ERR_OR_ZERO(sb);
+		if (!IS_ERR(sb))
+			fc->root = dget(sb->s_root);
+	} else {
+		err = get_tree_nodev(fc, fuse_fill_super);
+	}
+
+	fput(file);
+	return err;
 }
 
 static const struct fs_context_operations fuse_context_ops = {
