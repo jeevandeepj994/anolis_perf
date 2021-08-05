@@ -15,6 +15,7 @@
 #include <linux/fs_parser.h>
 #include <linux/blkdev.h>
 #include <linux/exportfs.h>
+#include <linux/dax.h>
 #include "xattr.h"
 
 #define CREATE_TRACE_POINTS
@@ -398,6 +399,8 @@ enum {
 	Opt_user_xattr,
 	Opt_acl,
 	Opt_cache_strategy,
+	Opt_dax,
+	Opt_dax_enum,
 	Opt_device,
 	Opt_fsid,
 	Opt_domain_id,
@@ -416,11 +419,19 @@ static const struct constant_table erofs_param_cache_strategy[] = {
 	{}
 };
 
+static const struct constant_table erofs_dax_param_enums[] = {
+	{"always",	EROFS_MOUNT_DAX_ALWAYS},
+	{"never",	EROFS_MOUNT_DAX_NEVER},
+	{}
+};
+
 static const struct fs_parameter_spec erofs_fs_parameters[] = {
 	fsparam_flag_no("user_xattr",		Opt_user_xattr),
 	fsparam_flag_no("acl",			Opt_acl),
 	fsparam_enum("cache_strategy",		Opt_cache_strategy,
 		     erofs_param_cache_strategy),
+	fsparam_flag("dax",             Opt_dax),
+	fsparam_enum("dax",		Opt_dax_enum, erofs_dax_param_enums),
 	fsparam_string("device",		Opt_device),
 	fsparam_string("fsid",			Opt_fsid),
 	fsparam_string("domain_id",		Opt_domain_id),
@@ -431,6 +442,31 @@ static const struct fs_parameter_spec erofs_fs_parameters[] = {
 #endif
 	{}
 };
+
+static bool erofs_fc_set_dax_mode(struct fs_context *fc, unsigned int mode)
+{
+#ifdef CONFIG_FS_DAX
+	struct erofs_fs_context *ctx = fc->fs_private;
+
+	switch (mode) {
+	case EROFS_MOUNT_DAX_ALWAYS:
+		warnfc(fc, "DAX enabled. Warning: EXPERIMENTAL, use at your own risk");
+		set_opt(&ctx->opt, DAX_ALWAYS);
+		clear_opt(&ctx->opt, DAX_NEVER);
+		return true;
+	case EROFS_MOUNT_DAX_NEVER:
+		set_opt(&ctx->opt, DAX_NEVER);
+		clear_opt(&ctx->opt, DAX_ALWAYS);
+		return true;
+	default:
+		DBG_BUGON(1);
+		return false;
+	}
+#else
+	errorfc(fc, "dax options not supported");
+	return false;
+#endif
+}
 
 static int erofs_fc_parse_param(struct fs_context *fc,
 				struct fs_parameter *param)
@@ -471,6 +507,14 @@ static int erofs_fc_parse_param(struct fs_context *fc,
 #else
 		errorfc(fc, "compression not supported, cache_strategy ignored");
 #endif
+		break;
+	case Opt_dax:
+		if (!erofs_fc_set_dax_mode(fc, EROFS_MOUNT_DAX_ALWAYS))
+			return -EINVAL;
+		break;
+	case Opt_dax_enum:
+		if (!erofs_fc_set_dax_mode(fc, result.uint_32))
+			return -EINVAL;
 		break;
 	case Opt_device:
 		dif = kzalloc(sizeof(*dif), GFP_KERNEL);
@@ -722,6 +766,7 @@ static int erofs_fc_fill_super(struct super_block *sb, struct fs_context *fc)
 			errorfc(fc, "failed to set initial blksize");
 			return -EINVAL;
 		}
+		sbi->dax_dev = fs_dax_get_by_bdev(sb->s_bdev, NULL, NULL);
 	}
 
 	if (erofs_is_fscache_mode(sb)) {
@@ -754,6 +799,12 @@ static int erofs_fc_fill_super(struct super_block *sb, struct fs_context *fc)
 			sb->s_blocksize =  1 << sbi->blkszbits;
 			sb->s_blocksize_bits = sbi->blkszbits;
 		}
+	}
+
+	if (test_opt(&sbi->opt, DAX_ALWAYS) &&
+	    !bdev_dax_supported(sb->s_bdev, sb->s_blocksize)) {
+		errorfc(fc, "DAX unsupported by block device. Turning off DAX.");
+		clear_opt(&sbi->opt, DAX_ALWAYS);
 	}
 
 	sb->s_time_gran = 1;
@@ -875,6 +926,7 @@ static int erofs_release_device_info(int id, void *ptr, void *data)
 {
 	struct erofs_device_info *dif = ptr;
 
+	fs_put_dax(dif->dax_dev, NULL);
 	if (dif->bdev)
 		blkdev_put(dif->bdev, FMODE_READ | FMODE_EXCL);
 #ifdef CONFIG_EROFS_FS_RAFS_V6
@@ -970,6 +1022,7 @@ static void erofs_kill_sb(struct super_block *sb)
 	if (!sbi)
 		return;
 	erofs_free_dev_context(sbi->devs);
+	fs_put_dax(sbi->dax_dev, NULL);
 #ifdef CONFIG_EROFS_FS_RAFS_V6
 	if (sbi->bootstrap)
 		filp_close(sbi->bootstrap, NULL);
@@ -1112,8 +1165,8 @@ static int erofs_statfs(struct dentry *dentry, struct kstatfs *buf)
 
 static int erofs_show_options(struct seq_file *seq, struct dentry *root)
 {
-	struct erofs_sb_info *sbi __maybe_unused = EROFS_SB(root->d_sb);
-	struct erofs_mount_opts *opt __maybe_unused = &sbi->opt;
+	struct erofs_sb_info *sbi = EROFS_SB(root->d_sb);
+	struct erofs_mount_opts *opt = &sbi->opt;
 
 #ifdef CONFIG_EROFS_FS_XATTR
 	if (test_opt(opt, XATTR_USER))
@@ -1135,6 +1188,10 @@ static int erofs_show_options(struct seq_file *seq, struct dentry *root)
 	else if (opt->cache_strategy == EROFS_ZIP_CACHE_READAROUND)
 		seq_puts(seq, ",cache_strategy=readaround");
 #endif
+	if (test_opt(opt, DAX_ALWAYS))
+		seq_puts(seq, ",dax=always");
+	if (test_opt(opt, DAX_NEVER))
+		seq_puts(seq, ",dax=never");
 #ifdef CONFIG_EROFS_FS_ONDEMAND
 	if (sbi->fsid)
 		seq_printf(seq, ",fsid=%s", sbi->fsid);
