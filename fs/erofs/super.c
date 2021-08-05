@@ -12,6 +12,7 @@
 #include <linux/crc32c.h>
 #include <linux/backing-dev-defs.h>
 #include <linux/exportfs.h>
+#include <linux/dax.h>
 #include "xattr.h"
 
 #define CREATE_TRACE_POINTS
@@ -276,6 +277,7 @@ static int erofs_init_device(struct erofs_buf *buf, struct super_block *sb,
 		if (IS_ERR(bdev))
 			return PTR_ERR(bdev);
 		dif->bdev = bdev;
+		dif->dax_dev = fs_dax_get_by_bdev(bdev);
 	}
 
 	dif->blocks = le32_to_cpu(dis->blocks);
@@ -497,6 +499,7 @@ enum {
 	Opt_domain_id,
 	Opt_bootstrap_path,
 	Opt_blob_dir_path,
+	Opt_dax, Opt_dax_always, Opt_dax_never,
 	Opt_err
 };
 
@@ -511,6 +514,9 @@ static match_table_t erofs_tokens = {
 	{Opt_domain_id, "domain_id=%s"},
 	{Opt_bootstrap_path, "bootstrap_path=%s"},
 	{Opt_blob_dir_path, "blob_dir_path=%s"},
+	{Opt_dax_always, "dax=always"},
+	{Opt_dax_never, "dax=never"},
+	{Opt_dax, "dax"},
 	{Opt_err, NULL}
 };
 
@@ -625,10 +631,28 @@ static int erofs_parse_options(struct super_block *sb, char *options)
 				return -ENOMEM;
 			erofs_dbg("RAFS bootstrap_path %s", sbi->bootstrap_path);
 			break;
+#ifdef CONFIG_FS_DAX
+		case Opt_dax:
+		case Opt_dax_always:
+			set_opt(sbi, DAX_ALWAYS);
+			clear_opt(sbi, DAX_NEVER);
+			break;
+		case Opt_dax_never:
+			set_opt(sbi, DAX_NEVER);
+			clear_opt(sbi, DAX_ALWAYS);
+			break;
+#else
+		case Opt_dax:
+		case Opt_dax_always:
+		case Opt_dax_never:
+			erofs_err(sb, "dax options not supported");
+			break;
+#endif
 		default:
 			erofs_err(sb, "Unrecognized mount option \"%s\" or missing value", p);
 			return -EINVAL;
 		}
+		break;
 	}
 
 	if (sbi->blob_dir_path && !sbi->bootstrap_path) {
@@ -837,6 +861,7 @@ static int erofs_fill_super(struct super_block *sb, void *data, int silent)
 	if (err)
 		return err;
 
+	sbi->dax_dev = fs_dax_get_by_bdev(sb->s_bdev);
 	err = erofs_read_superblock(sb);
 	if (err)
 		return err;
@@ -854,6 +879,12 @@ static int erofs_fill_super(struct super_block *sb, void *data, int silent)
 			erofs_err(sb, "failed to set erofs blksize");
 			return -EINVAL;
 		}
+	}
+
+	if (test_opt(sbi, DAX_ALWAYS) &&
+	    !bdev_dax_supported(sb->s_bdev, sb->s_blocksize)) {
+		erofs_err(sb, "DAX unsupported by block device. Turning off DAX.");
+		clear_opt(sbi, DAX_ALWAYS);
 	}
 
 	if (test_opt(sbi, POSIX_ACL))
@@ -906,6 +937,7 @@ static int erofs_release_device_info(int id, void *ptr, void *data)
 {
 	struct erofs_device_info *dif = ptr;
 
+	fs_put_dax(dif->dax_dev);
 	if (dif->bdev)
 		blkdev_put(dif->bdev, FMODE_READ | FMODE_EXCL);
 	if (dif->blobfile)
@@ -998,6 +1030,7 @@ static void erofs_kill_sb(struct super_block *sb)
 	if (!sbi)
 		return;
 	erofs_free_dev_context(sbi->devs);
+	fs_put_dax(sbi->dax_dev);
 	if (sbi->bootstrap)
 		filp_close(sbi->bootstrap, NULL);
 	if (sbi->blob_dir_path)
@@ -1141,7 +1174,7 @@ static int erofs_statfs(struct dentry *dentry, struct kstatfs *buf)
 
 static int erofs_show_options(struct seq_file *seq, struct dentry *root)
 {
-	struct erofs_sb_info *sbi __maybe_unused = EROFS_SB(root->d_sb);
+	struct erofs_sb_info *sbi = EROFS_SB(root->d_sb);
 
 #ifdef CONFIG_EROFS_FS_XATTR
 	if (test_opt(sbi, XATTR_USER))
@@ -1170,6 +1203,10 @@ static int erofs_show_options(struct seq_file *seq, struct dentry *root)
 	if (sbi->domain_id)
 		seq_printf(seq, ",domain_id=%s", sbi->domain_id);
 #endif
+	if (test_opt(sbi, DAX_ALWAYS))
+		seq_puts(seq, ",dax=always");
+	if (test_opt(sbi, DAX_NEVER))
+		seq_puts(seq, ",dax=never");
 	return 0;
 }
 

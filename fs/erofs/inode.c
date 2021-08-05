@@ -187,6 +187,10 @@ static void *erofs_read_inode(struct erofs_buf *buf,
 	inode->i_mtime.tv_nsec = inode->i_ctime.tv_nsec;
 	inode->i_atime.tv_nsec = inode->i_ctime.tv_nsec;
 
+	inode->i_flags &= ~S_DAX;
+	if (test_opt(sbi, DAX_ALWAYS) && S_ISREG(inode->i_mode) &&
+	    vi->datalayout == EROFS_INODE_FLAT_PLAIN)
+		inode->i_flags |= S_DAX;
 	if (!nblks)
 		/* measure inode.i_blocks as generic filesystems */
 		inode->i_blocks = round_up(inode->i_size, sb->s_blocksize) >> 9;
