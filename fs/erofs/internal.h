@@ -51,6 +51,7 @@ struct erofs_device_info {
 	char *path;
 	struct erofs_fscache *fscache;
 	struct block_device *bdev;
+	struct dax_device *dax_dev;
 	struct file *blobfile;
 
 	u32 blocks;
@@ -116,6 +117,7 @@ struct erofs_sb_info {
 	struct file *bootstrap;
 	char *bootstrap_path;
 	char *blob_dir_path;
+	struct dax_device *dax_dev;
 	struct erofs_dev_context *devs;
 	u64 total_blocks;
 	u32 primarydevice_blocks;
@@ -160,6 +162,8 @@ struct erofs_sb_info {
 /* Mount flags set via mount options or defaults */
 #define EROFS_MOUNT_XATTR_USER		0x00000010
 #define EROFS_MOUNT_POSIX_ACL		0x00000020
+#define EROFS_MOUNT_DAX_ALWAYS		0x00000040
+#define EROFS_MOUNT_DAX_NEVER		0x00000080
 
 #define clear_opt(sbi, option)	((sbi)->mount_opt &= ~EROFS_MOUNT_##option)
 #define set_opt(sbi, option)	((sbi)->mount_opt |= EROFS_MOUNT_##option)
@@ -399,6 +403,7 @@ extern const struct iomap_ops z_erofs_iomap_report_ops;
 struct erofs_map_dev {
 	struct erofs_fscache *m_fscache;
 	struct block_device *m_bdev;
+	struct dax_device *m_daxdev;
 	struct file *m_fp;
 
 	erofs_off_t m_pa;
