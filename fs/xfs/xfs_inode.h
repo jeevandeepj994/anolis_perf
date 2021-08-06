@@ -487,6 +487,8 @@ extern struct kmem_cache	*xfs_inode_cache;
 /* atomic write file extent size (16k) */
 #define XFS_ATOMIC_WRITE_EXTSZ_BYTES 16384
 
+bool xfs_inode_needs_inactive(struct xfs_inode *ip);
+
 int xfs_iunlink_init(struct xfs_perag *pag);
 void xfs_iunlink_destroy(struct xfs_perag *pag);
 
