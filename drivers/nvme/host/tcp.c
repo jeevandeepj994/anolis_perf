@@ -1272,6 +1272,7 @@ static void nvme_tcp_free_queue(struct nvme_ctrl *nctrl, int qid)
 
 	sock_release(queue->sock);
 	kfree(queue->pdu);
+	mutex_destroy(&queue->send_mutex);
 	mutex_destroy(&queue->queue_lock);
 }
 
@@ -1565,6 +1566,7 @@ err_sock:
 	sock_release(queue->sock);
 	queue->sock = NULL;
 err_destroy_mutex:
+	mutex_destroy(&queue->send_mutex);
 	mutex_destroy(&queue->queue_lock);
 	return ret;
 }
