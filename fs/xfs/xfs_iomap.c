@@ -873,6 +873,13 @@ xfs_buffered_write_iomap_begin(
 	if (XFS_FORCED_SHUTDOWN(mp))
 		return -EIO;
 
+	if ((flags & IOMAP_WRITE) && xfs_is_atomic_write_inode(ip)) {
+		xfs_alert(mp, "%s: buffered write triggered on atomic write"
+			" file, inode %lld",
+			__func__, ip->i_ino);
+		return -EIO;
+	}
+
 	/* we can't use delayed allocations when using extent size hints */
 	if (xfs_get_extsz_hint(ip))
 		return xfs_direct_write_iomap_begin(inode, offset, count,

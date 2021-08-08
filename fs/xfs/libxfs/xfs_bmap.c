@@ -32,6 +32,7 @@
 #include "xfs_filestream.h"
 #include "xfs_rmap.h"
 #include "xfs_ag_resv.h"
+#include "xfs_reflink.h"
 #include "xfs_refcount.h"
 #include "xfs_icache.h"
 #include "xfs_iomap.h"
@@ -2128,6 +2129,14 @@ xfs_bmap_add_extent_unwritten_real(
 			<= MAXEXTLEN))
 		state |= BMAP_RIGHT_CONTIG;
 
+	if (xfs_is_atomic_write_inode(ip)) {
+		xfs_extlen_t extsz __maybe_unused = xfs_get_cowextsz_hint(ip);
+
+		ASSERT(!(new->br_startoff % extsz));
+		ASSERT(!(new->br_blockcount % extsz));
+		state &= ~(BMAP_LEFT_CONTIG | BMAP_RIGHT_CONTIG);
+	}
+
 	/*
 	 * Switch out based on the FILLING and CONTIG state bits.
 	 */
@@ -2605,6 +2614,8 @@ xfs_bmap_add_extent_hole_delay(
 			state |= BMAP_RIGHT_DELAY;
 	}
 
+	ASSERT(!xfs_is_atomic_write_inode(ip));
+
 	/*
 	 * Set contiguity flags on the left and right neighbors.
 	 * Don't let extents get too large, even if the pieces are contiguous.
@@ -2754,6 +2765,14 @@ xfs_bmap_add_extent_hole_real(
 			state |= BMAP_RIGHT_DELAY;
 	}
 
+	if (xfs_is_atomic_write_inode(ip)) {
+		xfs_extlen_t extsz __maybe_unused = xfs_get_cowextsz_hint(ip);
+
+		ASSERT(!(new->br_startoff % extsz));
+		ASSERT(!(new->br_blockcount % extsz));
+		goto nomerge;
+	}
+
 	/*
 	 * We're inserting a real allocation between "left" and "right".
 	 * Set the contiguity flags.  Don't let extents get too large.
@@ -2774,6 +2793,7 @@ xfs_bmap_add_extent_hole_real(
 	     left.br_blockcount + new->br_blockcount +
 	     right.br_blockcount <= MAXEXTLEN))
 		state |= BMAP_RIGHT_CONTIG;
+nomerge:
 
 	error = 0;
 	/*
@@ -3508,6 +3528,8 @@ xfs_bmap_btalloc(
 		ASSERT(ap->length);
 	}
 
+	if (xfs_is_atomic_write_inode(ap->ip) && ap->length > align)
+		ap->length = align;
 
 	nullfb = ap->tp->t_firstblock == NULLFSBLOCK;
 	fb_agno = nullfb ? NULLAGNUMBER : XFS_FSB_TO_AGNO(mp,
@@ -4425,7 +4447,10 @@ xfs_bmapi_write(
 			 * xfs_extlen_t and therefore 32 bits. Hence we have to
 			 * check for 32-bit overflows and handle them here.
 			 */
-			if (len > (xfs_filblks_t)MAXEXTLEN)
+			if (xfs_is_atomic_write_inode(ip)) {
+				bma.length = xfs_get_cowextsz_hint(ip);
+				bma.flags |= XFS_BMAPI_CONTIG;
+			} else if (len > (xfs_filblks_t)MAXEXTLEN)
 				bma.length = MAXEXTLEN;
 			else
 				bma.length = len;

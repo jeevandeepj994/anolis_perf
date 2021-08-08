@@ -58,7 +58,7 @@ xfs_get_extsz_hint(
 	 * No point in aligning allocations if we need to COW to actually
 	 * write to them.
 	 */
-	if (xfs_is_always_cow_inode(ip))
+	if (xfs_is_always_cow_inode(ip) && !xfs_is_atomic_write_inode(ip))
 		return 0;
 	if ((ip->i_d.di_flags & XFS_DIFLAG_EXTSIZE) && ip->i_d.di_extsize)
 		return ip->i_d.di_extsize;
@@ -80,7 +80,8 @@ xfs_get_cowextsz_hint(
 	xfs_extlen_t		a, b;
 
 	a = 0;
-	if (ip->i_d.di_flags2 & XFS_DIFLAG2_COWEXTSIZE)
+	if (!xfs_is_atomic_write_inode(ip) &&
+	    ip->i_d.di_flags2 & XFS_DIFLAG2_COWEXTSIZE)
 		a = ip->i_d.di_cowextsize;
 	b = xfs_get_extsz_hint(ip);
 

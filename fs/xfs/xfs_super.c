@@ -639,6 +639,9 @@ xfs_fs_destroy_inode(
 	XFS_STATS_INC(ip->i_mount, vn_rele);
 	XFS_STATS_INC(ip->i_mount, vn_remove);
 
+	if ((ip->i_d.di_flags2 & XFS_DIFLAG2_DIO_ATOMIC_WRITE) && !inode->i_nlink)
+		xfs_info(ip->i_mount, "atomic write inode %lld evicting",
+			 ip->i_ino);
 	xfs_inactive(ip);
 
 	if (!XFS_FORCED_SHUTDOWN(ip->i_mount) && ip->i_delayed_blks) {
