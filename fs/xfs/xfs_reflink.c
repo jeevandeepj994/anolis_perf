@@ -227,9 +227,11 @@ xfs_bmap_trim_cow(
 	struct xfs_bmbt_irec	*imap,
 	bool			*shared)
 {
+	/* always COW for atomic write */
 	/* We can't update any real extents in always COW mode. */
-	if (xfs_is_always_cow_inode(ip) &&
-	    !isnullstartblock(imap->br_startblock)) {
+	if (xfs_is_atomic_write_inode(ip) ||
+	    (xfs_is_always_cow_inode(ip) &&
+	     !isnullstartblock(imap->br_startblock))) {
 		*shared = true;
 		return 0;
 	}
