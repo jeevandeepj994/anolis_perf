@@ -1527,6 +1527,16 @@ xfs_itruncate_extents_flags(
 		return 0;
 	}
 
+	/* don't split extents when truncating for atomic write files */
+	if (xfs_is_atomic_write_inode(ip)) {
+		first_unmap_block = roundup(first_unmap_block,
+			xfs_get_cowextsz_hint(ip));
+		if (first_unmap_block > XFS_B_TO_FSB(mp, XFS_ISIZE(ip))) {
+			ASSERT(0);
+			return -EIO;
+		}
+	}
+
 	unmap_len = XFS_MAX_FILEOFF - first_unmap_block + 1;
 	while (unmap_len > 0) {
 		ASSERT(tp->t_firstblock == NULLFSBLOCK);
