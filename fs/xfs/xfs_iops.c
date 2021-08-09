@@ -921,6 +921,8 @@ xfs_setattr_size(
 						     newsize);
 		if (error)
 			return error;
+
+		/* TODO: zeroout unaligned part in case of atomic write */
 		error = iomap_truncate_page(inode, newsize, &did_zeroing,
 				&xfs_buffered_write_iomap_ops);
 	}
