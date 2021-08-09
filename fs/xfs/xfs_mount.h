@@ -305,6 +305,12 @@ struct xfs_ag_resv {
 	xfs_extlen_t			ar_asked;
 };
 
+struct xfs_atomic_staging {
+	struct xfs_atomic_staging *next;
+	xfs_agblock_t	agbno;
+	xfs_extlen_t	aglen;
+};
+
 /*
  * Per-ag incore structure, copies of information in agf and agi, to improve the
  * performance of allocation group selection.
@@ -378,6 +384,8 @@ typedef struct xfs_perag {
 	 * or have some other means to control concurrency.
 	 */
 	struct rhashtable	pagi_unlinked_hash;
+	spinlock_t		atomic_staging_lock;
+	struct xfs_atomic_staging *atomic_staging;
 } xfs_perag_t;
 
 static inline struct xfs_ag_resv *

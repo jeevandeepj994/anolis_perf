@@ -4120,6 +4120,7 @@ xfs_bmapi_allocate(
 
 	ASSERT(bma->length > 0);
 
+	bma->as = false;
 	/*
 	 * For the wasdelay case, we could also just allocate the stuff asked
 	 * for in this bmap call but that wouldn't be as good.
@@ -4141,6 +4142,57 @@ xfs_bmapi_allocate(
 	else
 		bma->minlen = 1;
 
+	/* check out atomic staging first */
+	if (whichfork == XFS_COW_FORK && xfs_is_atomic_write_inode(bma->ip)) {
+		xfs_agnumber_t fb_agno, fst_agno, agno;
+
+		/* to avoid deadlock */
+		if (bma->tp->t_firstblock == NULLFSBLOCK) {
+			fb_agno = NULLAGNUMBER;
+			if (isnullstartblock(bma->prev.br_startblock))
+				fst_agno = 0;
+			else
+				fst_agno = XFS_FSB_TO_AGNO(mp,
+						bma->prev.br_startblock);
+		} else {
+			fb_agno = XFS_FSB_TO_AGNO(mp, bma->tp->t_firstblock);
+			fst_agno = fb_agno;
+		}
+
+		agno = fst_agno;
+		do {
+			struct xfs_perag *pag = xfs_perag_get(mp, agno);
+			struct xfs_atomic_staging *as;
+			bool found = false;
+
+			spin_lock(&pag->atomic_staging_lock);
+			as = pag->atomic_staging;
+			if (as) {
+				pag->atomic_staging = as->next;
+				found = true;
+			}
+			spin_unlock(&pag->atomic_staging_lock);
+			xfs_perag_put(pag);
+
+			if (found) {
+				struct xfs_alloc_arg args;
+
+				bma->blkno = XFS_AGB_TO_FSB(mp, agno, as->agbno);
+				bma->length = as->aglen;
+				bma->as = true;
+				args.len = bma->length;
+				xfs_bmap_btalloc_accounting(bma, &args);
+				goto finish;
+			}
+			kfree(as);
+
+			if (fb_agno != NULLAGNUMBER)
+				break;
+			if (++agno >= mp->m_sb.sb_agcount)
+				agno = 0;
+		} while (agno != fst_agno);
+	}
+
 	if (bma->flags & XFS_BMAPI_METADATA)
 		error = xfs_bmap_btalloc(bma);
 	else
@@ -4148,6 +4200,7 @@ xfs_bmapi_allocate(
 	if (error || bma->blkno == NULLFSBLOCK)
 		return error;
 
+finish:
 	if (bma->flags & XFS_BMAPI_ZERO) {
 		error = xfs_zero_extent(bma->ip, bma->blkno, bma->length);
 		if (error)
@@ -4467,7 +4520,7 @@ xfs_bmapi_write(
 			 * If this is a CoW allocation, record the data in
 			 * the refcount btree for orphan recovery.
 			 */
-			if (whichfork == XFS_COW_FORK)
+			if (whichfork == XFS_COW_FORK && !bma.as)
 				xfs_refcount_alloc_cow_extent(tp, bma.blkno,
 						bma.length);
 		}
@@ -4621,7 +4674,7 @@ xfs_bmapi_convert_delalloc(
 	xfs_bmbt_to_iomap(ip, iomap, &bma.got, flags);
 	*seq = READ_ONCE(ifp->if_seq);
 
-	if (whichfork == XFS_COW_FORK)
+	if (whichfork == XFS_COW_FORK && !bma.as)
 		xfs_refcount_alloc_cow_extent(tp, bma.blkno, bma.length);
 
 	error = xfs_bmap_btree_to_extents(tp, ip, bma.cur, &bma.logflags,
@@ -5245,6 +5298,31 @@ xfs_bmap_del_extent_real(
 	 * If we need to, add to list of extents to delete.
 	 */
 	if (do_fx && !(bflags & XFS_BMAPI_REMAP)) {
+		if (xfs_is_atomic_write_inode(ip) &&
+		    del->br_blockcount == xfs_get_cowextsz_hint(ip)) {
+			xfs_agnumber_t agno;
+			struct xfs_perag *pag;
+			struct xfs_atomic_staging *as;
+
+			as = kmalloc(sizeof(*as), GFP_NOFS);
+			if (error)
+				goto fail;
+
+			xfs_refcount_alloc_cow_extent(tp,
+				del->br_startblock, del->br_blockcount);
+			agno = XFS_FSB_TO_AGNO(mp, del->br_startblock);
+			pag = xfs_perag_get(mp, agno);
+			as->agbno = XFS_FSB_TO_AGBNO(mp, del->br_startblock);
+			as->aglen = del->br_blockcount;
+			spin_lock(&pag->atomic_staging_lock);
+			as->next = pag->atomic_staging;
+			pag->atomic_staging = as;
+			spin_unlock(&pag->atomic_staging_lock);
+			xfs_perag_put(pag);
+			goto finish;
+		}
+
+fail:
 		if (xfs_is_reflink_inode(ip) && whichfork == XFS_DATA_FORK) {
 			xfs_refcount_decrease_extent(tp, del);
 		} else {
@@ -5255,6 +5333,7 @@ xfs_bmap_del_extent_real(
 		}
 	}
 
+finish:
 	/*
 	 * Adjust inode # blocks in the file.
 	 */
