@@ -40,6 +40,7 @@ struct xfs_bmalloca {
 	bool			wasdel;	/* replacing a delayed allocation */
 	bool			aeof;	/* allocated space at eof */
 	bool			conv;	/* overwriting unwritten extents */
+	bool			as;	/* atomic staging */
 	int			datatype;/* data type being allocated */
 	int			flags;
 };
