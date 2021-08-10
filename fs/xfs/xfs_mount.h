@@ -384,6 +384,7 @@ typedef struct xfs_perag {
 	 * or have some other means to control concurrency.
 	 */
 	struct rhashtable	pagi_unlinked_hash;
+	atomic_t		atomic_staging_count;
 	spinlock_t		atomic_staging_lock;
 	struct xfs_atomic_staging *atomic_staging;
 } xfs_perag_t;
