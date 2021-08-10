@@ -4169,6 +4169,7 @@ xfs_bmapi_allocate(
 			as = pag->atomic_staging;
 			if (as) {
 				pag->atomic_staging = as->next;
+				atomic_dec(&pag->atomic_staging_count);
 				found = true;
 			}
 			spin_unlock(&pag->atomic_staging_lock);
@@ -5062,6 +5063,47 @@ xfs_bmap_del_extent_cow(
 	ip->i_delayed_blks -= del->br_blockcount;
 }
 
+#define XFS_MAX_ATOMIC_STAGING_COUNT		48
+
+static int
+xfs_atomic_staging_add(
+	struct xfs_trans	*tp,
+	struct xfs_bmbt_irec	*del)
+{
+	struct xfs_mount *mp = tp->t_mountp;
+	xfs_agnumber_t	agno = XFS_FSB_TO_AGNO(mp, del->br_startblock);
+	struct xfs_perag *pag;
+	struct xfs_atomic_staging *as;
+	int error;
+
+	pag = xfs_perag_get(mp, agno);
+	if (atomic_read(&pag->atomic_staging_count) >=
+	    XFS_MAX_ATOMIC_STAGING_COUNT) {
+		error = -EBUSY;
+		goto out;
+	}
+
+	as = kmalloc(sizeof(*as), GFP_NOFS);
+	if (!as) {
+		error = -ENOMEM;
+		goto out;
+	}
+
+	xfs_refcount_alloc_cow_extent(tp,
+			del->br_startblock, del->br_blockcount);
+	as->agbno = XFS_FSB_TO_AGBNO(mp, del->br_startblock);
+	as->aglen = del->br_blockcount;
+	spin_lock(&pag->atomic_staging_lock);
+	as->next = pag->atomic_staging;
+	pag->atomic_staging = as;
+	atomic_inc(&pag->atomic_staging_count);
+	spin_unlock(&pag->atomic_staging_lock);
+	error = 0;
+out:
+	xfs_perag_put(pag);
+	return error;
+}
+
 /*
  * Called by xfs_bmapi to update file extent records and the btree
  * after removing space.
@@ -5300,29 +5342,11 @@ xfs_bmap_del_extent_real(
 	if (do_fx && !(bflags & XFS_BMAPI_REMAP)) {
 		if (xfs_is_atomic_write_inode(ip) &&
 		    del->br_blockcount == xfs_get_cowextsz_hint(ip)) {
-			xfs_agnumber_t agno;
-			struct xfs_perag *pag;
-			struct xfs_atomic_staging *as;
-
-			as = kmalloc(sizeof(*as), GFP_NOFS);
-			if (error)
-				goto fail;
-
-			xfs_refcount_alloc_cow_extent(tp,
-				del->br_startblock, del->br_blockcount);
-			agno = XFS_FSB_TO_AGNO(mp, del->br_startblock);
-			pag = xfs_perag_get(mp, agno);
-			as->agbno = XFS_FSB_TO_AGBNO(mp, del->br_startblock);
-			as->aglen = del->br_blockcount;
-			spin_lock(&pag->atomic_staging_lock);
-			as->next = pag->atomic_staging;
-			pag->atomic_staging = as;
-			spin_unlock(&pag->atomic_staging_lock);
-			xfs_perag_put(pag);
-			goto finish;
+			error = xfs_atomic_staging_add(tp, del);
+			if (!error)
+				goto finish;
 		}
 
-fail:
 		if (xfs_is_reflink_inode(ip) && whichfork == XFS_DATA_FORK) {
 			xfs_refcount_decrease_extent(tp, del);
 		} else {
