@@ -39,6 +39,7 @@ config RISCV
 	select CLONE_BACKWARDS
 	select CLINT_TIMER if !MMU
 	select COMMON_CLK
+	select CPU_PM if (SUSPEND || CPU_IDLE)
 	select EDAC_SUPPORT
 	select DMA_DIRECT_REMAP
 	select GENERIC_ALLOCATOR
