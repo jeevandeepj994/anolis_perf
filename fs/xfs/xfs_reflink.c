@@ -672,6 +672,16 @@ xfs_reflink_end_cow_extent(
 	xfs_trim_extent(&del, del.br_startoff + rlen, del.br_blockcount - rlen);
 	trace_xfs_reflink_cow_remap(ip, &del);
 
+	if (xfs_is_atomic_write_inode(ip)) {
+		unsigned int extsz = xfs_get_cowextsz_hint(ip);
+
+		if ((del.br_startoff % extsz) || del.br_blockcount != extsz) {
+			xfs_alert(mp, "atomic write broken on offset %llu, "
+				"size %llu, inode %lld",
+				 del.br_startoff, del.br_blockcount, ip->i_ino);
+		}
+	}
+
 	/* Free the CoW orphan record. */
 	xfs_refcount_free_cow_extent(tp, del.br_startblock, del.br_blockcount);
 
