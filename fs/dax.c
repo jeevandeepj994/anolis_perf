@@ -1320,7 +1320,7 @@ static vm_fault_t dax_pmd_load_hole(struct xa_state *xas, struct vm_fault *vmf,
 #endif /* CONFIG_FS_DAX_PMD */
 
 s64 dax_iomap_zero(loff_t pos, u64 length, struct iomap *iomap,
-		   struct iomap *srcmap)
+		   const struct iomap *srcmap)
 {
 	sector_t sector = iomap_sector(iomap, pos & PAGE_MASK);
 	pgoff_t pgoff;

@@ -276,7 +276,7 @@ int dax_invalidate_mapping_entry_sync(struct address_space *mapping,
 int dax_iomap_direct_access(const struct iomap *iomap, loff_t pos,
 		size_t size, void **kaddr, pfn_t *pfnp);
 s64 dax_iomap_zero(loff_t pos, u64 length, struct iomap *iomap,
-		   struct iomap *srcmap);
+		   const struct iomap *srcmap);
 static inline bool dax_mapping(struct address_space *mapping)
 {
 	return mapping->host && IS_DAX(mapping->host);
