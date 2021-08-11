@@ -4075,6 +4075,89 @@ out_unreserve_quota:
 	return error;
 }
 
+static bool
+xfs_atomic_staging_del(
+	struct xfs_mount	*mp,
+	struct xfs_bmalloca	*bma)
+{
+	xfs_agino_t agino = XFS_INO_TO_AGINO(mp, bma->ip->i_ino);
+	xfs_agnumber_t fb_agno, fst_agno, agno;
+
+	/* to avoid deadlock */
+	if (bma->tp->t_firstblock == NULLFSBLOCK) {
+		fb_agno = NULLAGNUMBER;
+		if (isnullstartblock(bma->prev.br_startblock))
+			fst_agno = 0;
+		else
+			fst_agno = XFS_FSB_TO_AGNO(mp,
+					bma->prev.br_startblock);
+	} else {
+		fb_agno = XFS_FSB_TO_AGNO(mp, bma->tp->t_firstblock);
+		fst_agno = fb_agno;
+	}
+
+	agno = fst_agno;
+	do {
+		struct xfs_perag *pag = xfs_perag_get(mp, agno);
+		struct xfs_atomic_staging *p, **pprev, *as = NULL, **asp = NULL;
+		bool found = false;
+
+		spin_lock(&pag->atomic_staging_lock);
+		pprev = &pag->atomic_staging;
+		for (p = pag->atomic_staging; p; pprev = &p->next, p = p->next) {
+			if (bma->offset == p->next_offset &&
+			    agino == p->agino) {
+				asp = pprev;
+				as = p;
+				break;
+			}
+
+			if (!as || p->aglen <= as->aglen) {
+				asp = pprev;
+				as = p;
+			}
+		}
+		if (as) {
+			bma->blkno = XFS_AGB_TO_FSB(mp, agno, as->agbno);
+			if (as->aglen <= bma->length) {
+				ASSERT(as->aglen == bma->length);
+				bma->length = as->aglen;
+				as->aglen = 0;
+			} else {
+				as->agino = agino;
+				as->next_offset = bma->offset + bma->length;
+				as->agbno += bma->length;
+				as->aglen -= bma->length;
+			}
+
+			if (!as->aglen) {
+				*asp = as->next;
+				atomic_dec(&pag->atomic_staging_count);
+			} else {
+				as = NULL;
+			}
+			found = true;
+		}
+		spin_unlock(&pag->atomic_staging_lock);
+		xfs_perag_put(pag);
+
+		kfree(as);
+		if (found) {
+			struct xfs_alloc_arg args;
+
+			bma->as = true;
+			args.len = bma->length;
+			xfs_bmap_btalloc_accounting(bma, &args);
+			return true;
+		}
+		if (fb_agno != NULLAGNUMBER)
+			break;
+		if (++agno >= mp->m_sb.sb_agcount)
+			agno = 0;
+	} while (agno != fst_agno);
+	return false;
+}
+
 static int
 xfs_bmap_alloc_userdata(
 	struct xfs_bmalloca	*bma)
@@ -4144,54 +4227,8 @@ xfs_bmapi_allocate(
 
 	/* check out atomic staging first */
 	if (whichfork == XFS_COW_FORK && xfs_is_atomic_write_inode(bma->ip)) {
-		xfs_agnumber_t fb_agno, fst_agno, agno;
-
-		/* to avoid deadlock */
-		if (bma->tp->t_firstblock == NULLFSBLOCK) {
-			fb_agno = NULLAGNUMBER;
-			if (isnullstartblock(bma->prev.br_startblock))
-				fst_agno = 0;
-			else
-				fst_agno = XFS_FSB_TO_AGNO(mp,
-						bma->prev.br_startblock);
-		} else {
-			fb_agno = XFS_FSB_TO_AGNO(mp, bma->tp->t_firstblock);
-			fst_agno = fb_agno;
-		}
-
-		agno = fst_agno;
-		do {
-			struct xfs_perag *pag = xfs_perag_get(mp, agno);
-			struct xfs_atomic_staging *as;
-			bool found = false;
-
-			spin_lock(&pag->atomic_staging_lock);
-			as = pag->atomic_staging;
-			if (as) {
-				pag->atomic_staging = as->next;
-				atomic_dec(&pag->atomic_staging_count);
-				found = true;
-			}
-			spin_unlock(&pag->atomic_staging_lock);
-			xfs_perag_put(pag);
-
-			if (found) {
-				struct xfs_alloc_arg args;
-
-				bma->blkno = XFS_AGB_TO_FSB(mp, agno, as->agbno);
-				bma->length = as->aglen;
-				bma->as = true;
-				args.len = bma->length;
-				xfs_bmap_btalloc_accounting(bma, &args);
-				goto finish;
-			}
-			kfree(as);
-
-			if (fb_agno != NULLAGNUMBER)
-				break;
-			if (++agno >= mp->m_sb.sb_agcount)
-				agno = 0;
-		} while (agno != fst_agno);
+		if (xfs_atomic_staging_del(mp, bma))
+			goto finish;
 	}
 
 	if (bma->flags & XFS_BMAPI_METADATA)
@@ -5073,7 +5110,7 @@ xfs_atomic_staging_add(
 	struct xfs_mount *mp = tp->t_mountp;
 	xfs_agnumber_t	agno = XFS_FSB_TO_AGNO(mp, del->br_startblock);
 	struct xfs_perag *pag;
-	struct xfs_atomic_staging *as;
+	struct xfs_atomic_staging *as, *new;
 	int error;
 
 	pag = xfs_perag_get(mp, agno);
@@ -5083,19 +5120,37 @@ xfs_atomic_staging_add(
 		goto out;
 	}
 
-	as = kmalloc(sizeof(*as), GFP_NOFS);
-	if (!as) {
+	new = kmalloc(sizeof(*as), GFP_NOFS);
+	if (!new) {
 		error = -ENOMEM;
 		goto out;
 	}
 
 	xfs_refcount_alloc_cow_extent(tp,
 			del->br_startblock, del->br_blockcount);
-	as->agbno = XFS_FSB_TO_AGBNO(mp, del->br_startblock);
-	as->aglen = del->br_blockcount;
+	new->agbno = XFS_FSB_TO_AGBNO(mp, del->br_startblock);
+	new->aglen = del->br_blockcount;
+	new->next_offset = -1;
+	new->agino = NULLAGINO;
 	spin_lock(&pag->atomic_staging_lock);
-	as->next = pag->atomic_staging;
-	pag->atomic_staging = as;
+	/* extent merging */
+	for (as = pag->atomic_staging; as; as = as->next) {
+		if (new->agbno == as->agbno + as->aglen) {
+			as->aglen += new->aglen;
+			spin_unlock(&pag->atomic_staging_lock);
+			kfree(new);
+			goto out;
+		}
+		if (new->agbno + new->aglen == as->agbno) {
+			as->agbno = new->agbno;
+			as->aglen += new->aglen;
+			spin_unlock(&pag->atomic_staging_lock);
+			kfree(new);
+			goto out;
+		}
+	}
+	new->next = pag->atomic_staging;
+	pag->atomic_staging = new;
 	atomic_inc(&pag->atomic_staging_count);
 	spin_unlock(&pag->atomic_staging_lock);
 	error = 0;
