@@ -309,6 +309,9 @@ struct xfs_atomic_staging {
 	struct xfs_atomic_staging *next;
 	xfs_agblock_t	agbno;
 	xfs_extlen_t	aglen;
+
+	xfs_agino_t	agino;
+	xfs_fileoff_t	next_offset;	/* next offset hint */
 };
 
 /*
