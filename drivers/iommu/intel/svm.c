@@ -29,8 +29,6 @@ static irqreturn_t prq_event_thread(int irq, void *d);
 static void intel_svm_drain_prq(struct device *dev, u32 pasid);
 #define to_intel_svm_dev(handle) container_of(handle, struct intel_svm_dev, sva)
 
-#define PRQ_ORDER 0
-
 static struct intel_svm_dev *
 svm_lookup_device_by_sid(struct intel_svm *svm, u16 sid)
 {
