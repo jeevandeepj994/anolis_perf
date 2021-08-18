@@ -418,6 +418,12 @@ struct erofs_map_blocks {
 
 int erofs_map_blocks(struct inode *inode, struct erofs_map_blocks *map);
 
+/*
+ * Used to get the exact decompressed length, e.g. fiemap (consider lookback
+ * approach instead if possible since it's more metadata lightweight.)
+ */
+#define EROFS_GET_BLOCKS_FIEMAP	0x0001
+
 /* zmap.c */
 #ifdef CONFIG_EROFS_FS_ZIP
 int z_erofs_fill_inode(struct inode *inode);
