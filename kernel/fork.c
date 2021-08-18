@@ -1867,7 +1867,6 @@ static __latent_entropy struct task_struct *copy_process(
 	struct file *pidfile = NULL;
 	u64 clone_flags = args->flags;
 	struct nsproxy *nsp = current->nsproxy;
-	unsigned long flags;
 
 	/*
 	 * Don't allow sharing the root directory with processes in a different
@@ -2224,11 +2223,7 @@ static __latent_entropy struct task_struct *copy_process(
 	 * Make it visible to the rest of the system, but dont wake it up yet.
 	 * Need tasklist lock for parent etc handling!
 	 */
-retry:
-	if (!write_trylock_irqsave(&tasklist_lock, flags)) {
-		cond_resched();
-		goto retry;
-	}
+	write_lock_irq(&tasklist_lock);
 
 	/* CLONE_PARENT re-uses the old parent */
 	if (clone_flags & (CLONE_PARENT|CLONE_THREAD)) {
