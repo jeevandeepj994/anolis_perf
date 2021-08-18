@@ -667,6 +667,8 @@ static int erofs_fill_super(struct super_block *sb, void *data, int silent)
 	else
 		sb->s_iflags &= ~SB_I_OVL_OPT_CREDS;
 
+	sb->s_iflags |= SB_I_OVL_OPT_ACL_RCU;
+
 #ifdef CONFIG_EROFS_FS_ZIP
 	INIT_RADIX_TREE(&sbi->workstn_tree, GFP_ATOMIC);
 #endif

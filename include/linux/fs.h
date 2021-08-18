@@ -593,6 +593,11 @@ static inline void mapping_allow_writable(struct address_space *mapping)
 
 struct posix_acl;
 #define ACL_NOT_CACHED ((void *)(-1))
+/*
+ * ACL_DONT_CACHE is for stacked filesystems, that rely on underlying fs to
+ * cache the ACL.  This also means that ->get_acl() can be called in RCU mode
+ * with the LOOKUP_RCU flag.
+ */
 #define ACL_DONT_CACHE ((void *)(-3))
 
 static inline struct posix_acl *
@@ -1391,6 +1396,7 @@ extern int send_sigurg(struct fown_struct *fown);
 
 /* hint from lowerfs for overlayfs optimizations (e.g. for container scenarios) */
 #define SB_I_OVL_OPT_CREDS	0x40000000 /* bypass [override|revert]_creds */
+#define SB_I_OVL_OPT_ACL_RCU	0x80000000 /* enable RCU'd ACL */
 
 /* Possible states of 'frozen' field */
 enum {
