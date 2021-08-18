@@ -10,11 +10,11 @@ struct inode;
 struct posix_acl;
 
 #ifdef CONFIG_XFS_POSIX_ACL
-extern struct posix_acl *xfs_get_acl(struct inode *inode, int type);
+extern struct posix_acl *xfs_get_acl(struct inode *inode, int type, bool rcu);
 extern int xfs_set_acl(struct inode *inode, struct posix_acl *acl, int type);
 extern int __xfs_set_acl(struct inode *inode, struct posix_acl *acl, int type);
 #else
-static inline struct posix_acl *xfs_get_acl(struct inode *inode, int type)
+static inline struct posix_acl *xfs_get_acl(struct inode *inode, int type, bool rcu)
 {
 	return NULL;
 }
