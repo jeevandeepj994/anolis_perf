@@ -11,6 +11,7 @@
 #include <linux/posix_acl.h>
 #include <linux/ratelimit.h>
 #include <linux/fiemap.h>
+#include <linux/namei.h>
 #include "overlayfs.h"
 
 
@@ -450,14 +451,18 @@ ssize_t ovl_listxattr(struct dentry *dentry, char *list, size_t size)
 struct posix_acl *ovl_get_acl(struct inode *inode, int type, bool rcu)
 {
 	struct inode *realinode = ovl_inode_real(inode);
+	struct ovl_fs *ofs = inode->i_sb->s_fs_info;
 	const struct cred *old_cred;
 	struct posix_acl *acl;
 
-	if (rcu)
-		return ERR_PTR(-ECHILD);
-
 	if (!IS_ENABLED(CONFIG_FS_POSIX_ACL) || !IS_POSIXACL(realinode))
 		return NULL;
+
+	if (rcu) {
+		if (!ofs->config.opt_acl_rcu)
+			return ERR_PTR(-ECHILD);
+		return get_cached_acl_rcu(realinode, type);
+	}
 
 	old_cred = ovl_override_creds_opt(inode->i_sb);
 	acl = get_acl(realinode, type);

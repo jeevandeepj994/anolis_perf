@@ -2094,6 +2094,7 @@ static int ovl_fill_super(struct super_block *sb, void *data, int silent)
 	sb->s_iflags |= SB_I_SKIP_SYNC;
 
 	ofs->config.opt_creds = ovl_config_opt(ofs, SB_I_OVL_OPT_CREDS);
+	ofs->config.opt_acl_rcu = ovl_config_opt(ofs, SB_I_OVL_OPT_ACL_RCU);
 
 	err = -ENOMEM;
 	root_dentry = ovl_get_root(sb, upperpath.dentry, oe);

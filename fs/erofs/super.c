@@ -547,6 +547,8 @@ static int erofs_fc_fill_super(struct super_block *sb, struct fs_context *fc)
 	else
 		sb->s_iflags &= ~SB_I_OVL_OPT_CREDS;
 
+	sb->s_iflags |= SB_I_OVL_OPT_ACL_RCU;
+
 #ifdef CONFIG_EROFS_FS_ZIP
 	xa_init(&sbi->managed_pslots);
 #endif
