@@ -1209,7 +1209,7 @@ static void kill_me_maybe(struct callback_head *cb)
 		flags |= MF_MUST_KILL;
 
 	ret = memory_failure(p->mce_addr >> PAGE_SHIFT, flags);
-	if (!ret && !(p->mce_kflags & MCE_IN_KERNEL_COPYIN)) {
+	if (!ret) {
 		set_mce_nospec(p->mce_addr >> PAGE_SHIFT, p->mce_whole_page);
 		report_fault_event(smp_processor_id(), p, SLIGHT_FAULT,
 			FE_MCE, "UCE recovered");
@@ -1224,17 +1224,26 @@ static void kill_me_maybe(struct callback_head *cb)
 	if (ret == -EHWPOISON)
 		return;
 
-	if (p->mce_vaddr != (void __user *)-1l) {
-		force_sig_mceerr(BUS_MCEERR_AR, p->mce_vaddr, PAGE_SHIFT, current);
-	} else {
-		pr_err("Memory error not recovered");
-		report_fault_event(smp_processor_id(), p, FATAL_FAULT,
-			FE_MCE, "UCE not recovered");
-		kill_me_now(cb);
-	}
+	pr_err("Memory error not recovered");
+
+	/* report mce event to UKFEF */
+	report_fault_event(smp_processor_id(), p, FATAL_FAULT,
+		FE_MCE, "UCE not recovered");
+
+	kill_me_now(cb);
 }
 
-static void queue_task_work(struct mce *m, char *msg, int kill_it)
+static void kill_me_never(struct callback_head *cb)
+{
+	struct task_struct *p = container_of(cb, struct task_struct, mce_kill_me);
+
+	p->mce_count = 0;
+	pr_err("Kernel accessed poison in user space at %llx\n", p->mce_addr);
+	if (!memory_failure(p->mce_addr >> PAGE_SHIFT, 0))
+		set_mce_nospec(p->mce_addr >> PAGE_SHIFT, p->mce_whole_page);
+}
+
+static void queue_task_work(struct mce *m, char *msg, void (*func)(struct callback_head *))
 {
 	int count = ++current->mce_count;
 
@@ -1244,11 +1253,7 @@ static void queue_task_work(struct mce *m, char *msg, int kill_it)
 		current->mce_kflags = m->kflags;
 		current->mce_ripv = !!(m->mcgstatus & MCG_STATUS_RIPV);
 		current->mce_whole_page = whole_page(m);
-
-		if (kill_it)
-			current->mce_kill_me.func = kill_me_now;
-		else
-			current->mce_kill_me.func = kill_me_maybe;
+		current->mce_kill_me.func = func;
 	}
 
 	/* Ten is likely overkill. Don't expect more than two faults before task_work() */
@@ -1402,7 +1407,10 @@ void do_machine_check(struct pt_regs *regs, long error_code)
 
 	/* Fault was in user mode and we need to take some action */
 	if ((m.cs & 3) == 3) {
-		queue_task_work(&m, msg, kill_it);
+		if (kill_it)
+			queue_task_work(&m, msg, kill_me_now);
+		else
+			queue_task_work(&m, msg, kill_me_maybe);
 
 	} else {
 		/*
@@ -1420,7 +1428,7 @@ void do_machine_check(struct pt_regs *regs, long error_code)
 		}
 
 		if (m.kflags & MCE_IN_KERNEL_COPYIN)
-			queue_task_work(&m, msg, kill_it);
+			queue_task_work(&m, msg, kill_me_never);
 	}
 
 }
