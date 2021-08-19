@@ -795,8 +795,8 @@ int inet_getname(struct socket *sock, struct sockaddr *uaddr,
 	}
 	if (cgroup_bpf_enabled)
 		BPF_CGROUP_RUN_SA_PROG_LOCK(sk, (struct sockaddr *)sin,
-					    peer ? BPF_CGROUP_INET4_GETPEERNAME :
-						   BPF_CGROUP_INET4_GETSOCKNAME,
+					    peer ? CGROUP_INET4_GETPEERNAME :
+						   CGROUP_INET4_GETSOCKNAME,
 					    NULL);
 	memset(sin->sin_zero, 0, sizeof(sin->sin_zero));
 	return sizeof(*sin);
