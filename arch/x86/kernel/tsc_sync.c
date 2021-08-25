@@ -20,6 +20,7 @@
 #include <linux/kernel.h>
 #include <linux/smp.h>
 #include <linux/nmi.h>
+#include <linux/delay.h>
 #include <asm/tsc.h>
 
 struct tsc_adjust {
@@ -325,6 +326,9 @@ static cycles_t check_tsc_warp(unsigned int timeout)
 			cur_warps = nr_warps;
 			arch_spin_unlock(&sync_lock);
 		}
+
+		/* sleep 20ns to let peer have chance to hold the sync_lock */
+		ndelay(20);
 	}
 	WARN(!(now-start),
 		"Warning: zero tsc calibration delta: %Ld [max: %Ld]\n",
