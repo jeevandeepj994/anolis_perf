@@ -5481,6 +5481,10 @@ static struct intel_uncore_type spr_uncore_m2pcie = {
 	.name			= "m2pcie",
 };
 
+static struct intel_uncore_type spr_uncore_pcu = {
+	.name			= "pcu",
+};
+
 #define UNCORE_SPR_NUM_UNCORE_TYPES		12
 
 static struct intel_uncore_type *spr_uncores[UNCORE_SPR_NUM_UNCORE_TYPES] = {
@@ -5488,7 +5492,7 @@ static struct intel_uncore_type *spr_uncores[UNCORE_SPR_NUM_UNCORE_TYPES] = {
 	&spr_uncore_iio,
 	&spr_uncore_irp,
 	&spr_uncore_m2pcie,
-	NULL,
+	&spr_uncore_pcu,
 	NULL,
 	NULL,
 	NULL,
