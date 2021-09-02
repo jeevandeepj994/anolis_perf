@@ -1359,7 +1359,7 @@ do_migrate_range(unsigned long start_pfn, unsigned long end_pfn)
 
 		/* Allocate a new page from the nearest neighbor node */
 		ret = migrate_pages(&source, new_node_page, NULL, 0,
-					MIGRATE_SYNC, MR_MEMORY_HOTPLUG);
+					MIGRATE_SYNC, MR_MEMORY_HOTPLUG, NULL);
 		if (ret)
 			putback_movable_pages(&source);
 	}
