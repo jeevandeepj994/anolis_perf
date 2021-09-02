@@ -25,6 +25,7 @@ enum migrate_reason {
 	MR_MEMPOLICY_MBIND,
 	MR_NUMA_MISPLACED,
 	MR_CONTIG_RANGE,
+	MR_DEMOTION,
 	MR_TYPES
 };
 
@@ -286,6 +287,15 @@ static inline int migrate_vma(const struct migrate_vma_ops *ops,
 	return -EINVAL;
 }
 #endif /* IS_ENABLED(CONFIG_MIGRATE_VMA_HELPER) */
+
+int next_demotion_node(int node);
+
+#else /* CONFIG_MIGRATION disabled: */
+
+static inline int next_demotion_node(int node)
+{
+	return NUMA_NO_NODE;
+}
 
 #endif /* CONFIG_MIGRATION */
 
