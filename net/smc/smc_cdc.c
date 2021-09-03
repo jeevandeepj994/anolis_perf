@@ -53,6 +53,13 @@ static void smc_cdc_tx_handler(struct smc_wr_tx_pend_priv *pnd_snd,
 		wake_up(&conn->cdc_pend_tx_wq);
 	WARN_ON(atomic_read(&conn->cdc_pend_tx_wr) < 0);
 
+	/* If this is the last pending WR complete, push them to prevent
+	 * no one trying to push when corked.
+	 */
+	if (likely(!cdcpend->validation) &&
+	    atomic_dec_and_test(&conn->cdc_pend_tx_wr))
+		smc_tx_sndbuf_nonempty(conn);
+
 	smc_tx_sndbuf_nonfull(smc);
 	bh_unlock_sock(&smc->sk);
 }
@@ -108,13 +115,16 @@ int smc_cdc_msg_send(struct smc_connection *conn,
 
 	conn->tx_cdc_seq++;
 	conn->local_tx_ctrl.seqno = conn->tx_cdc_seq;
+	atomic_inc(&conn->cdc_pend_tx_wr);
+	smp_mb__after_atomic(); /* Make sure cdc_pend_tx_wr added before post */
+
 	smc_host_msg_to_cdc((struct smc_cdc_msg *)wr_buf, conn, &cfed);
 
 	atomic_inc(&conn->cdc_pend_tx_wr);
 	smp_mb__after_atomic(); /* Make sure cdc_pend_tx_wr added before post */
 
 	rc = smc_wr_tx_send(link, (struct smc_wr_tx_pend_priv *)pend);
-	if (!rc) {
+	if (likely(!rc)) {
 		smc_curs_copy(&conn->rx_curs_confirmed, &cfed, conn);
 		conn->local_rx_ctrl.prod_flags.cons_curs_upd_req = 0;
 	} else {
@@ -142,6 +152,7 @@ int smcr_cdc_msg_send_validation(struct smc_connection *conn,
 	peer->seqno = htons(conn->tx_cdc_seq_fin); /* seqno last compl. tx */
 	peer->token = htonl(local->token);
 	peer->prod_flags.failover_validation = 1;
+	pend->validation = 1;
 
 	/* We need to set pend->conn here to make sure smc_cdc_tx_handler()
 	 * can handle properly
