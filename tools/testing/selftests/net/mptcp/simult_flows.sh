@@ -50,7 +50,7 @@ setup()
 	sout=$(mktemp)
 	cout=$(mktemp)
 	capout=$(mktemp)
-	size=$((2048 * 4096))
+	size=$((2048 * 4096 * 4))
 	dd if=/dev/zero of=$small bs=4096 count=20 >/dev/null 2>&1
 	dd if=/dev/zero of=$large bs=4096 count=$((size / 4096)) >/dev/null 2>&1
 
@@ -126,7 +126,11 @@ do_transfer()
 	local cin=$1
 	local sin=$2
 	local max_time=$3
+	local reverse=$4
 	local port
+	local srv_args="-j"
+	local cl_args=""
+
 	port=$((10000+$test_cnt))
 	test_cnt=$((test_cnt+1))
 
@@ -157,14 +161,19 @@ do_transfer()
 		sleep 1
 	fi
 
-	ip netns exec ${ns3} ./mptcp_connect -jt $timeout -l -p $port 0.0.0.0 < "$sin" > "$sout" &
+	if [ "$reverse" = true ]; then
+		srv_args=""
+		cl_args="-j"
+	fi
+
+	ip netns exec ${ns3} ./mptcp_connect $srv_args -t $timeout -l -p $port 0.0.0.0 < "$sin" > "$sout" &
 	local spid=$!
 
 	wait_local_port_listen "${ns3}" "${port}"
 
 	local start
 	start=$(date +%s%3N)
-	ip netns exec ${ns1} ./mptcp_connect -jt $timeout -p $port 10.0.3.3 < "$cin" > "$cout" &
+	ip netns exec ${ns1} ./mptcp_connect $srv_args -t $timeout -p $port 10.0.3.3 < "$cin" > "$cout" &
 	local cpid=$!
 
 	wait $cpid
@@ -236,12 +245,12 @@ run_test()
 	tc -n $ns2 qdisc add dev ns2eth1 root netem rate ${rate1}mbit $delay1
 	tc -n $ns2 qdisc add dev ns2eth2 root netem rate ${rate2}mbit $delay2
 
-	# time is measure in ms
-	local time=$((size * 8 * 1000 / (( $rate1 + $rate2) * 1024 *1024) ))
+	# time is measure in ms, account for headers overhead, with DSS+ACK64 presence
+	local time=$((size * 8 * 1000 * 1514 / (( $rate1 + $rate2) * 1024 * 1024 * 1424) ))
 
 	# mptcp_connect will do some sleeps to allow the mp_join handshake
 	# completion
-	time=$((time + 1350))
+	time=$((time + 350))
 
 	printf "%-50s" "$msg"
 	do_transfer $small $large $((time * 11 / 10))
