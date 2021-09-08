@@ -27,6 +27,7 @@
 #include <linux/nmi.h>
 #include <linux/swait.h>
 #include <linux/syscore_ops.h>
+#include <linux/cc_platform.h>
 #include <linux/efi.h>
 #include <asm/timer.h>
 #include <asm/cpu.h>
@@ -459,7 +460,7 @@ static void __init sev_map_percpu_data(void)
 {
 	int cpu;
 
-	if (!sev_active())
+	if (!cc_platform_has(CC_ATTR_GUEST_MEM_ENCRYPT))
 		return;
 
 	for_each_possible_cpu(cpu) {
@@ -598,7 +599,7 @@ static int __init setup_efi_kvm_sev_migration(void)
 	unsigned long size;
 	bool enabled;
 
-	if (!sev_active() ||
+	if (!cc_platform_has(CC_ATTR_GUEST_MEM_ENCRYPT) ||
 	    !kvm_para_has_feature(KVM_FEATURE_MIGRATION_CONTROL))
 		return 0;
 
@@ -894,7 +895,7 @@ static void kvm_sev_hc_page_enc_status(unsigned long pfn, int npages, bool enc)
 
 static void __init kvm_init_platform(void)
 {
-	if (sev_active() &&
+	if (cc_platform_has(CC_ATTR_GUEST_MEM_ENCRYPT) &&
 	    kvm_para_has_feature(KVM_FEATURE_MIGRATION_CONTROL)) {
 		unsigned long nr_pages;
 		int i;
