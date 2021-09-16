@@ -58,7 +58,7 @@ static struct perf_pmu_test_event test_cpu_events[] = {
 			.desc = "Number of segment register loads",
 			.topic = "other",
 		},
-		.alias_str = "umask=0x80,(null)=0x30d40,event=0x6",
+		.alias_str = "umask=0x80,period=0x30d40,event=0x6",
 		.alias_long_desc = "Number of segment register loads",
 	},
 	{
@@ -68,7 +68,7 @@ static struct perf_pmu_test_event test_cpu_events[] = {
 			.desc = "Memory cluster signals to block micro-op dispatch for any reason",
 			.topic = "other",
 		},
-		.alias_str = "umask=0x20,(null)=0x30d40,event=0x9",
+		.alias_str = "umask=0x20,period=0x30d40,event=0x9",
 		.alias_long_desc = "Memory cluster signals to block micro-op dispatch for any reason",
 	},
 	{
@@ -78,7 +78,7 @@ static struct perf_pmu_test_event test_cpu_events[] = {
 			.desc = "Number of Enhanced Intel SpeedStep(R) Technology (EIST) transitions",
 			.topic = "other",
 		},
-		.alias_str = "umask=0,(null)=0x30d40,event=0x3a",
+		.alias_str = "umask=0,period=0x30d40,event=0x3a",
 		.alias_long_desc = "Number of Enhanced Intel SpeedStep(R) Technology (EIST) transitions",
 	},
 	{
