@@ -2247,6 +2247,7 @@ static int smc_listen_find_device(struct smc_sock *new_smc,
 				  struct smc_clc_msg_proposal *pclc,
 				  struct smc_init_info *ini)
 {
+	struct net *net = sock_net(&new_smc->sk);
 	int prfx_rc;
 
 	/* check for ISM device matching V2 proposed device */
@@ -2254,10 +2255,12 @@ static int smc_listen_find_device(struct smc_sock *new_smc,
 	if (ini->ism_dev[0])
 		return 0;
 
-	/* check for matching IP prefix and subnet length (V1) */
-	prfx_rc = smc_listen_prfx_check(new_smc, pclc);
-	if (prfx_rc)
-		smc_find_ism_store_rc(prfx_rc, ini);
+	if (!net->smc.sysctl_allow_different_subnet) {
+		/* check for matching IP prefix and subnet length (V1) */
+		prfx_rc = smc_listen_prfx_check(new_smc, pclc);
+		if (prfx_rc)
+			smc_find_ism_store_rc(prfx_rc, ini);
+	}
 
 	/* get vlan id from IP device */
 	if (smc_vlan_by_tcpsk(new_smc->clcsock, ini))
