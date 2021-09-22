@@ -30,5 +30,6 @@ struct netns_smc {
 	int				sysctl_wmem;
 	int				sysctl_rmem;
 	int				sysctl_tcp2smc;
+	int				sysctl_allow_different_subnet;
 };
 #endif
