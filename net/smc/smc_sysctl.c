@@ -52,6 +52,15 @@ static struct ctl_table smc_table[] = {
 		.mode		= 0644,
 		.proc_handler	= proc_dointvec,
 	},
+	{
+		.procname	= "allow_different_subnet",
+		.data		= &init_net.smc.sysctl_allow_different_subnet,
+		.maxlen		= sizeof(init_net.smc.sysctl_allow_different_subnet),
+		.mode		= 0644,
+		.proc_handler	= proc_dointvec_minmax,
+		.extra1		= SYSCTL_ZERO,
+		.extra2		= SYSCTL_ONE,
+	},
 	{  }
 };
 
@@ -79,6 +88,7 @@ int __net_init smc_sysctl_net_init(struct net *net)
 	net->smc.sysctl_wmem_default = 256 * 1024;
 	net->smc.sysctl_rmem_default = 384 * 1024;
 	net->smc.sysctl_tcp2smc = 0;
+	net->smc.sysctl_allow_different_subnet = 1;
 
 	return 0;
 
