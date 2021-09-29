@@ -426,8 +426,9 @@ static int read_msr(struct pt_regs *regs, struct ve_info *ve)
 	if (__tdx_hypercall(&args, TDX_HCALL_HAS_OUTPUT))
 		return -EIO;
 
-	regs->ax = lower_32_bits(args.r11);
-	regs->dx = upper_32_bits(args.r11);
+	/* Should filter the MSRs to only fuzz host controlled */
+	regs->ax = lower_32_bits(tdx_fuzz(args.r11, TDX_FUZZ_MSR_READ));
+	regs->dx = upper_32_bits(tdx_fuzz(args.r11, TDX_FUZZ_MSR_READ));
 	return ve_instr_len(ve);
 }
 
@@ -527,10 +528,10 @@ static int handle_cpuid(struct pt_regs *regs, struct ve_info *ve)
 	 * EAX, EBX, ECX, EDX registers after the CPUID instruction execution.
 	 * So copy the register contents back to pt_regs.
 	 */
-	regs->ax = args.r12;
-	regs->bx = args.r13;
-	regs->cx = args.r14;
-	regs->dx = args.r15;
+	regs->ax = tdx_fuzz(args.r12, TDX_FUZZ_CPUID1);
+	regs->bx = tdx_fuzz(args.r13, TDX_FUZZ_CPUID2);
+	regs->cx = tdx_fuzz(args.r14, TDX_FUZZ_CPUID3);
+	regs->dx = tdx_fuzz(args.r15, TDX_FUZZ_CPUID4);
 
 	return ve_instr_len(ve);
 }
@@ -548,7 +549,7 @@ static bool mmio_read(int size, unsigned long addr, unsigned long *val)
 
 	if (__tdx_hypercall(&args, TDX_HCALL_HAS_OUTPUT))
 		return false;
-	*val = args.r11;
+	*val = tdx_fuzz(args.r11, TDX_FUZZ_MMIO_READ);
 	return true;
 }
 
@@ -832,6 +833,9 @@ static int handle_io(struct pt_regs *regs, struct ve_info *ve)
 		ret = handle_out(regs, size, port);
 	if (!ret)
 		return -EIO;
+
+	regs->ax &= ~mask;
+	regs->ax |= tdx_fuzz(ret ? UINT_MAX : out.r11, TDX_FUZZ_PORT_IN) & mask;
 
 	return ve_instr_len(ve);
 }
