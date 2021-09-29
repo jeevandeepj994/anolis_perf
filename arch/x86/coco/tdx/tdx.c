@@ -423,7 +423,8 @@ static int read_msr(struct pt_regs *regs, struct ve_info *ve)
 	 * can be found in TDX Guest-Host-Communication Interface
 	 * (GHCI), section titled "TDG.VP.VMCALL<Instruction.RDMSR>".
 	 */
-	if (__tdx_hypercall(&args, TDX_HCALL_HAS_OUTPUT))
+	if (__tdx_hypercall(&args, TDX_HCALL_HAS_OUTPUT) ||
+	    tdx_fuzz_err(TDX_FUZZ_MSR_READ_ERR))
 		return -EIO;
 
 	/* Should filter the MSRs to only fuzz host controlled */
@@ -474,7 +475,7 @@ static int write_msr(struct pt_regs *regs, struct ve_info *ve)
 	if (__tdx_hypercall(&args, 0))
 		return -EIO;
 
-	return ve_instr_len(ve);
+	return tdx_fuzz_err(TDX_FUZZ_MSR_WRITE_ERR) ? 0 : ve_instr_len(ve);
 }
 
 static void notrace tdx_write_msr(unsigned int msr, u32 low, u32 high)
@@ -835,7 +836,8 @@ static int handle_io(struct pt_regs *regs, struct ve_info *ve)
 		return -EIO;
 
 	regs->ax &= ~mask;
-	regs->ax |= tdx_fuzz(ret ? UINT_MAX : out.r11, TDX_FUZZ_PORT_IN) & mask;
+	regs->ax |= tdx_fuzz(ret || tdx_fuzz_err(TDX_FUZZ_PORT_IN_ERR) ?
+			     UINT_MAX : regs->r11, TDX_FUZZ_PORT_IN) & mask;
 
 	return ve_instr_len(ve);
 }
