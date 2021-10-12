@@ -389,7 +389,7 @@ xfs_refcount_update_finish_item(
 		xfs_atomic_staging_add_post(tp,
 				XFS_FSB_TO_AGNO(tp->t_mountp, refc->ri_startblock),
 				refc->ri_as);
-	kmem_free(refc);
+	kmem_cache_free(xfs_refcount_intent_cache, refc);
 	return error;
 }
 
@@ -409,7 +409,7 @@ xfs_refcount_update_cancel_item(
 	struct xfs_refcount_intent	*refc;
 
 	refc = container_of(item, struct xfs_refcount_intent, ri_list);
-	kmem_free(refc);
+	kmem_cache_free(xfs_refcount_intent_cache, refc);
 }
 
 const struct xfs_defer_op_type xfs_refcount_update_defer_type = {
