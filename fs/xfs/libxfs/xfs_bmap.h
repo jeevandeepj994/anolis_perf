@@ -298,4 +298,9 @@ xfs_atomic_staging_add_post(
 	xfs_agnumber_t		agno,
 	struct xfs_atomic_staging *new);
 
+extern struct kmem_cache	*xfs_bmap_intent_cache;
+
+int __init xfs_bmap_intent_init_cache(void);
+void xfs_bmap_intent_destroy_cache(void);
+
 #endif	/* __XFS_BMAP_H__ */
