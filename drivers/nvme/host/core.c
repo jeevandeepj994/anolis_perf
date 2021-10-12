@@ -1034,7 +1034,7 @@ static void nvme_execute_rq_polled(struct request_queue *q,
 	blk_execute_rq_nowait(q, bd_disk, rq, at_head, nvme_end_sync_rq);
 
 	while (!completion_done(&wait)) {
-		bio_poll(rq->bio, 0);
+		bio_poll(rq->bio, NULL, 0);
 		cond_resched();
 	}
 }
