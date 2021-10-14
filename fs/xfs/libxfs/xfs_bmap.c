@@ -5400,6 +5400,7 @@ xfs_bmap_del_extent_real(
 			error = xfs_atomic_staging_add(tp, del);
 			if (!error)
 				goto finish;
+			error = 0;
 		}
 
 		if (xfs_is_reflink_inode(ip) && whichfork == XFS_DATA_FORK) {
