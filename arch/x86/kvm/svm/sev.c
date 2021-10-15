@@ -625,6 +625,8 @@ static int __sev_launch_update_vmsa(struct kvm *kvm, struct kvm_vcpu *vcpu,
 	if (ret)
 		goto e_free;
 
+	vcpu->arch.guest_state_protected = true;
+
 e_free:
 	kfree(vmsa);
 	return ret;
