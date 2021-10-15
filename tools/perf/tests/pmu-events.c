@@ -165,7 +165,7 @@ static const struct pmu_events_map *__test_pmu_get_events_map(void)
 static int test_pmu_event_table(void)
 {
 	const struct pmu_events_map *map = __test_pmu_get_events_map();
-	struct pmu_event *table;
+	const struct pmu_event *table;
 	int map_events = 0, expected_events;
 
 	/* ignore 2x sentinels */
@@ -428,7 +428,7 @@ static int check_parse_id(const char *id, struct parse_events_error *error,
 	return ret;
 }
 
-static int check_parse_cpu(const char *id, bool same_cpu, struct pmu_event *pe)
+static int check_parse_cpu(const char *id, bool same_cpu, const struct pmu_event *pe)
 {
 	struct parse_events_error error = { .idx = 0, };
 
@@ -492,7 +492,7 @@ static int resolve_metric_simple(struct expr_parse_ctx *pctx,
 		all = true;
 		hashmap__for_each_entry_safe(pctx->ids, cur, cur_tmp, bkt) {
 			struct metric_ref *ref;
-			struct pmu_event *pe;
+			const struct pmu_event *pe;
 
 			pe = metricgroup__find_metric(cur->key, map);
 			if (!pe)
@@ -541,7 +541,7 @@ static int test_parsing(void)
 {
 	const struct pmu_events_map *cpus_map = pmu_events_map__find();
 	const struct pmu_events_map *map;
-	struct pmu_event *pe;
+	const struct pmu_event *pe;
 	int i, j, k;
 	int ret = 0;
 	struct expr_parse_ctx *ctx;
@@ -682,7 +682,7 @@ out:
 static int test_parsing_fake(void)
 {
 	const struct pmu_events_map *map;
-	struct pmu_event *pe;
+	const struct pmu_event *pe;
 	unsigned int i, j;
 	int err = 0;
 
