@@ -325,12 +325,7 @@ const char *event_type(int type)
 	return "unknown";
 }
 
-static int parse_events__is_name_term(struct parse_events_term *term)
-{
-	return term->type_term == PARSE_EVENTS__TERM_TYPE_NAME;
-}
-
-static const char *get_config_name(struct list_head *head_terms)
+static char *get_config_str(struct list_head *head_terms, int type_term)
 {
 	struct parse_events_term *term;
 
@@ -338,17 +333,27 @@ static const char *get_config_name(struct list_head *head_terms)
 		return NULL;
 
 	list_for_each_entry(term, head_terms, list)
-		if (parse_events__is_name_term(term))
+		if (term->type_term == type_term)
 			return term->val.str;
 
 	return NULL;
+}
+
+static char *get_config_metric_id(struct list_head *head_terms)
+{
+	return get_config_str(head_terms, PARSE_EVENTS__TERM_TYPE_METRIC_ID);
+}
+
+static char *get_config_name(struct list_head *head_terms)
+{
+	return get_config_str(head_terms, PARSE_EVENTS__TERM_TYPE_NAME);
 }
 
 static struct evsel *
 __add_event(struct list_head *list, int *idx,
 	    struct perf_event_attr *attr,
 	    bool init_attr,
-	    const char *name, struct perf_pmu *pmu,
+	    const char *name, const char *metric_id, struct perf_pmu *pmu,
 	    struct list_head *config_terms, bool auto_merge_stats,
 	    const char *cpu_list)
 {
@@ -377,6 +382,9 @@ __add_event(struct list_head *list, int *idx,
 	if (name)
 		evsel->name = strdup(name);
 
+	if (metric_id)
+		evsel->metric_id = strdup(metric_id);
+
 	if (config_terms)
 		list_splice(config_terms, &evsel->config_terms);
 
@@ -387,18 +395,21 @@ __add_event(struct list_head *list, int *idx,
 }
 
 struct evsel *parse_events__add_event(int idx, struct perf_event_attr *attr,
-				      const char *name, struct perf_pmu *pmu)
+				      const char *name, const char *metric_id,
+				      struct perf_pmu *pmu)
 {
-	return __add_event(NULL, &idx, attr, false, name, pmu, NULL, false,
-			   NULL);
+	return __add_event(/*list=*/NULL, &idx, attr, /*init_attr=*/false, name,
+			   metric_id, pmu, /*config_terms=*/NULL,
+			   /*auto_merge_stats=*/false, /*cpu_list=*/NULL);
 }
 
 static int add_event(struct list_head *list, int *idx,
 		     struct perf_event_attr *attr, const char *name,
-		     struct list_head *config_terms)
+		     const char *metric_id, struct list_head *config_terms)
 {
-	return __add_event(list, idx, attr, true, name, NULL, config_terms,
-			   false, NULL) ? 0 : -ENOMEM;
+	return __add_event(list, idx, attr, /*init_attr*/true, name, metric_id,
+			   /*pmu=*/NULL, config_terms,
+			   /*auto_merge_stats=*/false, /*cpu_list=*/NULL) ? 0 : -ENOMEM;
 }
 
 static int add_event_tool(struct list_head *list, int *idx,
@@ -410,8 +421,10 @@ static int add_event_tool(struct list_head *list, int *idx,
 		.config = PERF_COUNT_SW_DUMMY,
 	};
 
-	evsel = __add_event(list, idx, &attr, true, NULL, NULL, NULL, false,
-			    "0");
+	evsel = __add_event(list, idx, &attr, /*init_attr=*/true, /*name=*/NULL,
+			    /*metric_id=*/NULL, /*pmu=*/NULL,
+			    /*config_terms=*/NULL, /*auto_merge_stats=*/false,
+			    /*cpu_list=*/"0");
 	if (!evsel)
 		return -ENOMEM;
 	evsel->tool_event = tool_event;
@@ -457,7 +470,7 @@ int parse_events_add_cache(struct list_head *list, int *idx,
 	struct perf_event_attr attr;
 	LIST_HEAD(config_terms);
 	char name[MAX_NAME_LEN];
-	const char *config_name;
+	const char *config_name, *metric_id;
 	int cache_type = -1, cache_op = -1, cache_result = -1;
 	char *op_result[2] = { op_result1, op_result2 };
 	int i, n;
@@ -520,7 +533,10 @@ int parse_events_add_cache(struct list_head *list, int *idx,
 		if (get_config_terms(head_config, &config_terms))
 			return -ENOMEM;
 	}
-	return add_event(list, idx, &attr, config_name ? : name, &config_terms);
+	metric_id = get_config_metric_id(head_config);
+
+	return add_event(list, idx, &attr, config_name ? : name, metric_id,
+			&config_terms);
 }
 
 static void tracepoint_error(struct parse_events_error *e, int err,
@@ -969,7 +985,8 @@ int parse_events_add_breakpoint(struct list_head *list, int *idx,
 	attr.type = PERF_TYPE_BREAKPOINT;
 	attr.sample_period = 1;
 
-	return add_event(list, idx, &attr, NULL, NULL);
+	return add_event(list, idx, &attr, /*name=*/NULL, /*mertic_id=*/NULL,
+			 /*config_terms=*/NULL);
 }
 
 static int check_type_val(struct parse_events_term *term,
@@ -1014,6 +1031,7 @@ static const char *config_term_names[__PARSE_EVENTS__TERM_TYPE_NR] = {
 	[PARSE_EVENTS__TERM_TYPE_PERCORE]		= "percore",
 	[PARSE_EVENTS__TERM_TYPE_AUX_OUTPUT]		= "aux-output",
 	[PARSE_EVENTS__TERM_TYPE_AUX_SAMPLE_SIZE]	= "aux-sample-size",
+	[PARSE_EVENTS__TERM_TYPE_METRIC_ID]		= "metric-id",
 };
 
 static bool config_term_shrinked;
@@ -1036,6 +1054,7 @@ config_term_avail(int term_type, struct parse_events_error *err)
 	case PARSE_EVENTS__TERM_TYPE_CONFIG1:
 	case PARSE_EVENTS__TERM_TYPE_CONFIG2:
 	case PARSE_EVENTS__TERM_TYPE_NAME:
+	case PARSE_EVENTS__TERM_TYPE_METRIC_ID:
 	case PARSE_EVENTS__TERM_TYPE_SAMPLE_PERIOD:
 	case PARSE_EVENTS__TERM_TYPE_PERCORE:
 		return true;
@@ -1124,6 +1143,9 @@ do {									   \
 		CHECK_TYPE_VAL(NUM);
 		break;
 	case PARSE_EVENTS__TERM_TYPE_NAME:
+		CHECK_TYPE_VAL(STR);
+		break;
+	case PARSE_EVENTS__TERM_TYPE_METRIC_ID:
 		CHECK_TYPE_VAL(STR);
 		break;
 	case PARSE_EVENTS__TERM_TYPE_MAX_STACK:
@@ -1395,7 +1417,7 @@ int parse_events_add_numeric(struct parse_events_state *parse_state,
 {
 	struct perf_event_attr attr;
 	LIST_HEAD(config_terms);
-
+	const char *name, *metric_id;
 	memset(&attr, 0, sizeof(attr));
 	attr.type = type;
 	attr.config = config;
@@ -1409,8 +1431,11 @@ int parse_events_add_numeric(struct parse_events_state *parse_state,
 			return -ENOMEM;
 	}
 
-	return add_event(list, &parse_state->idx, &attr,
-			 get_config_name(head_config), &config_terms);
+	name = get_config_name(head_config);
+	metric_id = get_config_metric_id(head_config);
+
+	return add_event(list, &parse_state->idx, &attr, name, metric_id,
+			 &config_terms);
 }
 
 int parse_events_add_tool(struct parse_events_state *parse_state,
@@ -1482,8 +1507,11 @@ int parse_events_add_pmu(struct parse_events_state *parse_state,
 
 	if (!head_config) {
 		attr.type = pmu->type;
-		evsel = __add_event(list, &parse_state->idx, &attr, true, NULL,
-				    pmu, NULL, auto_merge_stats, NULL);
+		evsel = __add_event(list, &parse_state->idx, &attr,
+				    /*init_attr=*/true, /*name=*/NULL,
+				    /*metric_id=*/NULL, pmu,
+				    /*config_terms=*/NULL, auto_merge_stats,
+				    /*cpu_list=*/NULL);
 		if (evsel) {
 			evsel->pmu_name = name ? strdup(name) : NULL;
 			evsel->use_uncore_alias = use_uncore_alias;
@@ -1538,9 +1566,10 @@ int parse_events_add_pmu(struct parse_events_state *parse_state,
 		return -EINVAL;
 	}
 
-	evsel = __add_event(list, &parse_state->idx, &attr, true,
-			    get_config_name(head_config), pmu,
-			    &config_terms, auto_merge_stats, NULL);
+	evsel = __add_event(list, &parse_state->idx, &attr, /*init_attr=*/true,
+			    get_config_name(head_config),
+			    get_config_metric_id(head_config), pmu,
+			    &config_terms, auto_merge_stats, /*cpu_list=*/NULL);
 	if (!evsel)
 		return -ENOMEM;
 
