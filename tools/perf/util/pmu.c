@@ -1847,7 +1847,7 @@ bool perf_pmu__has_hybrid(void)
 }
 
 void perf_pmu__warn_invalid_config(struct perf_pmu *pmu, __u64 config,
-				   char *name)
+				   const char *name)
 {
 	struct perf_pmu_format *format;
 	__u64 masks = 0, bits;
