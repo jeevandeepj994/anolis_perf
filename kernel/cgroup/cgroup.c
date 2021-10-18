@@ -2153,8 +2153,10 @@ static void cgroup_kill_sb(struct super_block *sb)
 	if (!list_empty(&root->cgrp.self.children) ||
 	    root == &cgrp_dfl_root)
 		cgroup_put(&root->cgrp);
-	else
+	else {
+		cgroup_bpf_offline(&root->cgrp);
 		percpu_ref_kill(&root->cgrp.self.refcnt);
+	}
 
 	kernfs_kill_sb(sb);
 }
