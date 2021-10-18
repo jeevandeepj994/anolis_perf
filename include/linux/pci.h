@@ -485,6 +485,7 @@ struct pci_dev {
 #endif
 #ifdef CONFIG_PCI_MSI
 	const struct attribute_group **msi_irq_groups;
+	int		msix_alloc_count;	/* No. of MSI-X vectors allocated to device */
 	void __iomem	*msix_table_base;	/* Base address of device MSI-X table */
 	struct mutex	msix_mutex;		/* Serialize MSI-X interrupt allocation */
 	unsigned long	*msix_map;		/* Bitmap to track allocated MSI-X vectors */
@@ -1498,6 +1499,7 @@ static inline int pci_enable_msix_exact(struct pci_dev *dev,
 int pci_alloc_irq_vectors_affinity(struct pci_dev *dev, unsigned int min_vecs,
 				   unsigned int max_vecs, unsigned int flags,
 				   struct irq_affinity *affd);
+int pci_add_msix_irq_vector(struct pci_dev *dev);
 
 void pci_free_irq_vectors(struct pci_dev *dev);
 int pci_irq_vector(struct pci_dev *dev, unsigned int nr);
@@ -1528,6 +1530,9 @@ pci_alloc_irq_vectors_affinity(struct pci_dev *dev, unsigned int min_vecs,
 		return 1;
 	return -ENOSPC;
 }
+
+static inline int pci_add_msix_irq_vector(struct pci_dev *dev)
+{ return -ENOSYS; }
 
 static inline void pci_free_irq_vectors(struct pci_dev *dev)
 {
