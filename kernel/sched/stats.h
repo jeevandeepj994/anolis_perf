@@ -2,6 +2,12 @@
 
 #ifdef CONFIG_SCHEDSTATS
 
+#ifdef CONFIG_SCHEDSTATS_HOST
+extern struct static_key_true sched_schedstats;
+#else
+extern struct static_key_false sched_schedstats;
+#endif
+
 /*
  * Expects runqueue lock to be held for atomicity of update
  */
