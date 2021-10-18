@@ -1518,6 +1518,50 @@ static int rdtgroup_id_show(struct kernfs_open_file *of,
 	return ret;
 }
 
+/*
+ * rdtgroup_closid_show - Display closid of this resource group
+ */
+static int rdtgroup_closid_show(struct kernfs_open_file *of,
+				struct seq_file *s, void *v)
+{
+	struct rdtgroup *rdtgrp;
+
+	rdtgrp = rdtgroup_kn_lock_live(of->kn);
+	if (!rdtgrp) {
+		rdtgroup_kn_unlock(of->kn);
+		return -ENOENT;
+	}
+
+	if (rdtgrp->type == RDTCTRL_GROUP)
+		seq_printf(s, "%u\n", rdtgrp->closid);
+	else if (rdtgrp->type == RDTMON_GROUP)
+		seq_printf(s, "%u\n", rdtgrp->mon.parent->closid);
+
+	rdtgroup_kn_unlock(of->kn);
+	return 0;
+}
+
+/*
+ * rdtgroup_rmid_show - Display rmid of this resource group
+ */
+static int rdtgroup_rmid_show(struct kernfs_open_file *of,
+			      struct seq_file *s, void *v)
+{
+	struct rdtgroup *rdtgrp;
+
+	rdtgrp = rdtgroup_kn_lock_live(of->kn);
+	if (!rdtgrp) {
+		rdtgroup_kn_unlock(of->kn);
+		return -ENOENT;
+	}
+
+	seq_printf(s, "%u\n", rdtgrp->mon.rmid);
+
+	rdtgroup_kn_unlock(of->kn);
+	return 0;
+}
+
+
 /* rdtgroup information files for one cache resource. */
 static struct rftype res_common_files[] = {
 	{
@@ -1669,6 +1713,20 @@ static struct rftype res_common_files[] = {
 		.mode		= 0444,
 		.kf_ops		= &rdtgroup_kf_single_ops,
 		.seq_show	= rdtgroup_id_show,
+		.fflags		= RFTYPE_BASE,
+	},
+	{
+		.name		= "closid",
+		.mode		= 0444,
+		.kf_ops		= &rdtgroup_kf_single_ops,
+		.seq_show	= rdtgroup_closid_show,
+		.fflags		= RFTYPE_BASE,
+	},
+	{
+		.name		= "rmid",
+		.mode		= 0444,
+		.kf_ops		= &rdtgroup_kf_single_ops,
+		.seq_show	= rdtgroup_rmid_show,
 		.fflags		= RFTYPE_BASE,
 	},
 };
