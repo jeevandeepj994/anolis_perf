@@ -135,7 +135,6 @@ SECTIONS
 			IDMAP_TEXT
 			HIBERNATE_TEXT
 			TRAMP_TEXT
-			*(.fixup)
 			*(.gnu.warning)
 		. = ALIGN(16);
 		*(.got)			/* Global offset table		*/
