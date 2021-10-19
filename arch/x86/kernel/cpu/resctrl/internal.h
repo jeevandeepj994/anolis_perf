@@ -11,6 +11,17 @@
 #include <asm/atomic.h>
 #include <asm/resctrl.h>
 
+#include <asm/intel-family.h>
+
+/* Memory bandwidth HWDRC */
+#define HWDRC_MSR_OS_MAILBOX_INTERFACE	0xb0
+#define HWDRC_MSR_OS_MAILBOX_DATA	0xb1
+#define HWDRC_MSR_OS_MAILBOX_BUSY_BIT	BIT_ULL(31)
+#define HWDRC_COMMAND_MEM_CLOS_EN	0xd0
+#define HWDRC_SUB_COMMAND_MEM_CLOS_EN	0x54
+#define HWDRC_MEMCLOS_AVAILABLE		BIT_ULL(0)
+#define HWDRC_OS_MAILBOX_RETRY_COUNT	30
+
 #define MSR_IA32_L3_QOS_CFG		0xc81
 #define MSR_IA32_L2_QOS_CFG		0xc82
 #define MSR_IA32_L3_CBM_BASE		0xc90
@@ -30,6 +41,7 @@
 
 #define RMID_VAL_ERROR			BIT_ULL(63)
 #define RMID_VAL_UNAVAIL		BIT_ULL(62)
+
 /*
  * With the above fields in use 62 bits remain in MSR_IA32_QM_CTR for
  * data to be returned. The counter width is discovered from the hardware
@@ -92,6 +104,84 @@ static inline bool is_mbm_event(int e)
 {
 	return (e >= QOS_L3_MBM_TOTAL_EVENT_ID &&
 		e <= QOS_L3_MBM_LOCAL_EVENT_ID);
+}
+
+/*
+ * Workaround to detect if memory bandwidth HWDRC feature is capable.
+ *
+ * CPUID for memory bandwidth HWDRC feature is not exposed by H/W.
+ * Check presence of HWDRC OS mailbox MSRs. Read out the discovery bit of
+ * HWDRC OS mailbox data which indicates if the feature is capable.
+ */
+static inline bool is_hwdrc_mb_capable(void)
+{
+	u32 retries;
+	u64 data;
+	int status;
+
+	/* Only enable memory bandwidth HWDRC on ICELAKE server */
+	if (boot_cpu_data.x86_model != INTEL_FAM6_ICELAKE_X) {
+		pr_debug("HWDRC: Not on ICELAKE server\n");
+		goto out;
+	}
+
+	/* Check presence of mailbox MSRs */
+	if (rdmsrl_safe(HWDRC_MSR_OS_MAILBOX_INTERFACE, &data)) {
+		pr_debug("HWDRC: Can't access OS mailbox interface MSR\n");
+		goto out;
+	}
+
+	if (rdmsrl_safe(HWDRC_MSR_OS_MAILBOX_DATA, &data)) {
+		pr_debug("HWDRC: Can't access OS mailbox data MSR\n");
+		goto out;
+	}
+
+	/* Poll for run_busy bit == 0 */
+	status = -EBUSY;
+	retries = HWDRC_OS_MAILBOX_RETRY_COUNT;
+	do {
+		rdmsrl(HWDRC_MSR_OS_MAILBOX_INTERFACE, data);
+		if (!(data & HWDRC_MSR_OS_MAILBOX_BUSY_BIT)) {
+			status = 0;
+			break;
+		}
+	} while (--retries);
+
+	if (status)
+		goto out;
+
+	/* Write command register: 0x800054d0 */
+	data = HWDRC_MSR_OS_MAILBOX_BUSY_BIT |
+		HWDRC_SUB_COMMAND_MEM_CLOS_EN << 8 |
+		HWDRC_COMMAND_MEM_CLOS_EN;
+	pr_debug("HWDRC: Write command register: 0x%llx\n", data);
+	if (wrmsrl_safe(HWDRC_MSR_OS_MAILBOX_INTERFACE, data)) {
+		pr_debug("HWDRC: Write command register 0x%llx failed!\n", data);
+		goto out;
+	}
+
+	/* Poll for run_busy bit == 0 */
+	retries = HWDRC_OS_MAILBOX_RETRY_COUNT;
+	do {
+		rdmsrl(HWDRC_MSR_OS_MAILBOX_INTERFACE, data);
+		if (!(data & HWDRC_MSR_OS_MAILBOX_BUSY_BIT)) {
+			rdmsrl(HWDRC_MSR_OS_MAILBOX_DATA, data);
+			pr_debug("HWDRC: Read MEM_CLOS_EN data: 0x%llx\n", data);
+
+			/* Feature capability bit is set */
+			if (data & HWDRC_MEMCLOS_AVAILABLE) {
+				pr_debug("HWDRC: Memory bandwidth HWDRC is capable\n");
+				return true;
+			}
+
+			/* Feature capability bit is not set */
+			break;
+		}
+	} while (--retries);
+
+out:
+	pr_debug("HWDRC: Memory bandwidth HWDRC is not capable\n");
+	return false;
 }
 
 /**
