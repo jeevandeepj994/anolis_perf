@@ -2176,9 +2176,23 @@ static int rdt_enable_ctx(struct rdt_fs_context *ctx)
 	if (!ret && ctx->enable_cdpl3)
 		ret = resctrl_arch_set_cdp_enabled(RDT_RESOURCE_L3, true);
 
+	/*
+	 * MBA and memory bandwidth HWDRC features are mutually exclusive.
+	 * So mba_MBps and hwdrc_mb options could not be set at the same time.
+	 */
+	if (ctx->enable_hwdrc_mb && ctx->enable_mba_mbps) {
+		pr_debug("Option 'mba_MBps' and 'hwdrc_mb' are mutually exclusive\n");
+		ret = -EINVAL;
+		goto out;
+	}
+
+	if (!ret && ctx->enable_hwdrc_mb)
+		ret = resctrl_arch_set_hwdrc_enabled(RDT_RESOURCE_MBA, true);
+
 	if (!ret && ctx->enable_mba_mbps)
 		ret = set_mba_sc(true);
 
+out:
 	return ret;
 }
 
@@ -2388,6 +2402,7 @@ enum rdt_param {
 	Opt_cdp,
 	Opt_cdpl2,
 	Opt_mba_mbps,
+	Opt_hwdrc_mb,
 	nr__rdt_params
 };
 
@@ -2395,6 +2410,7 @@ static const struct fs_parameter_spec rdt_fs_parameters[] = {
 	fsparam_flag("cdp",		Opt_cdp),
 	fsparam_flag("cdpl2",		Opt_cdpl2),
 	fsparam_flag("mba_MBps",	Opt_mba_mbps),
+	fsparam_flag("hwdrc_mb",	Opt_hwdrc_mb),
 	{}
 };
 
@@ -2419,6 +2435,11 @@ static int rdt_parse_param(struct fs_context *fc, struct fs_parameter *param)
 		if (!supports_mba_mbps())
 			return -EINVAL;
 		ctx->enable_mba_mbps = true;
+		return 0;
+	case Opt_hwdrc_mb:
+		if (!resctrl_arch_is_hwdrc_mb_capable())
+			return -EINVAL;
+		ctx->enable_hwdrc_mb = true;
 		return 0;
 	}
 
@@ -2562,6 +2583,7 @@ static void rdt_kill_sb(struct super_block *sb)
 	mutex_lock(&rdtgroup_mutex);
 
 	set_mba_sc(false);
+	resctrl_arch_set_hwdrc_enabled(RDT_RESOURCE_MBA, false);
 
 	/* Put everything back to default values. */
 	resctrl_arch_reset_resources();
@@ -3361,6 +3383,9 @@ static int rdtgroup_show_options(struct seq_file *seq, struct kernfs_root *kf)
 
 	if (is_mba_sc(resctrl_arch_get_resource(RDT_RESOURCE_MBA)))
 		seq_puts(seq, ",mba_MBps");
+
+	if (is_hwdrc_enabled(resctrl_arch_get_resource(RDT_RESOURCE_MBA)))
+		seq_puts(seq, ",hwdrc_mb");
 
 	return 0;
 }
