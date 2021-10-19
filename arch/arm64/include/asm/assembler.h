@@ -14,6 +14,7 @@
 
 #include <asm-generic/export.h>
 
+#include <asm/asm-extable.h>
 #include <asm/asm-offsets.h>
 #include <asm/cpufeature.h>
 #include <asm/cputype.h>
@@ -125,32 +126,6 @@ alternative_endif
 	nop
 	.endr
 	.endm
-
-/*
- * Create an exception table entry for `insn`, which will branch to `fixup`
- * when an unhandled fault is taken.
- */
-	.macro		_asm_extable, insn, fixup
-	.pushsection	__ex_table, "a"
-	.align		3
-	.long		(\insn - .), (\fixup - .)
-	.popsection
-	.endm
-
-/*
- * Create an exception table entry for `insn` if `fixup` is provided. Otherwise
- * do nothing.
- */
-	.macro		_cond_extable, insn, fixup
-	.ifnc		\fixup,
-	_asm_extable	\insn, \fixup
-	.endif
-	.endm
-
-
-#define USER(l, x...)				\
-9999:	x;					\
-	_asm_extable	9999b, l
 
 /*
  * Register aliases.
