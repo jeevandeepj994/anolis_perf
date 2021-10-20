@@ -22,7 +22,6 @@
 #include <sys/syscall.h>
 
 #include <bpf.h>
-#include <perf-sys.h>
 
 #include "main.h"
 
