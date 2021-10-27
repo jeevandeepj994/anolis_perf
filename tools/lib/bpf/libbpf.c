@@ -355,6 +355,7 @@ struct bpf_map {
 	char *pin_path;
 	bool pinned;
 	bool reused;
+	__u64 map_extra;
 };
 
 enum extern_type {
@@ -2193,6 +2194,14 @@ static int parse_btf_map_def(struct bpf_object *obj,
 					return err;
 				}
 			}
+		} else if (strcmp(name, "map_extra") == 0) {
+			__u32 map_extra;
+
+			if (!get_map_field_int(map->name, obj->btf, m, &map_extra))
+				return -EINVAL;
+			pr_debug("map '%s': found map_extra = 0x%llx.\n", map->name,
+				(unsigned long long)map_extra);
+			map->map_extra = map_extra;
 		} else {
 			if (strict) {
 				pr_warn("map '%s': unknown field '%s'.\n",
@@ -3698,6 +3707,7 @@ int bpf_map__reuse_fd(struct bpf_map *map, int fd)
 	map->btf_key_type_id = info.btf_key_type_id;
 	map->btf_value_type_id = info.btf_value_type_id;
 	map->reused = true;
+	map->map_extra = info.map_extra;
 
 	return 0;
 
@@ -4090,7 +4100,8 @@ static bool map_is_reuse_compat(const struct bpf_map *map, int map_fd)
 		map_info.key_size == map->def.key_size &&
 		map_info.value_size == map->def.value_size &&
 		map_info.max_entries == map->def.max_entries &&
-		map_info.map_flags == map->def.map_flags);
+		map_info.map_flags == map->def.map_flags &&
+		map_info.map_extra == map->map_extra);
 }
 
 static int
@@ -4166,7 +4177,7 @@ static void bpf_map__destroy(struct bpf_map *map);
 
 static int bpf_object__create_map(struct bpf_object *obj, struct bpf_map *map)
 {
-	struct bpf_create_map_attr create_attr;
+	struct bpf_create_map_params create_attr;
 	struct bpf_map_def *def = &map->def;
 	int err = 0;
 
@@ -4180,6 +4191,7 @@ static int bpf_object__create_map(struct bpf_object *obj, struct bpf_map *map)
 	create_attr.key_size = def->key_size;
 	create_attr.value_size = def->value_size;
 	create_attr.numa_node = map->numa_node;
+	create_attr.map_extra = map->map_extra;
 
 	if (def->type == BPF_MAP_TYPE_PERF_EVENT_ARRAY && !def->max_entries) {
 		int nr_cpus;
@@ -4223,7 +4235,7 @@ static int bpf_object__create_map(struct bpf_object *obj, struct bpf_map *map)
 			create_attr.inner_map_fd = map->inner_map_fd;
 	}
 
-	map->fd = bpf_create_map_xattr(&create_attr);
+	map->fd = libbpf__bpf_create_map_xattr(&create_attr);
 	if (map->fd < 0 && (create_attr.btf_key_type_id ||
 			    create_attr.btf_value_type_id)) {
 		char *cp, errmsg[STRERR_BUFSIZE];
@@ -4237,7 +4249,7 @@ static int bpf_object__create_map(struct bpf_object *obj, struct bpf_map *map)
 		create_attr.btf_value_type_id = 0;
 		map->btf_key_type_id = 0;
 		map->btf_value_type_id = 0;
-		map->fd = bpf_create_map_xattr(&create_attr);
+		map->fd = libbpf__bpf_create_map_xattr(&create_attr);
 	}
 
 	err = map->fd < 0 ? -errno : 0;
@@ -8852,6 +8864,19 @@ int bpf_map__set_map_flags(struct bpf_map *map, __u32 flags)
 	if (map->fd >= 0)
 		return -EBUSY;
 	map->def.map_flags = flags;
+	return 0;
+}
+
+__u64 bpf_map__map_extra(const struct bpf_map *map)
+{
+	return map->map_extra;
+}
+
+int bpf_map__set_map_extra(struct bpf_map *map, __u64 map_extra)
+{
+	if (map->fd >= 0)
+		return -EBUSY;
+	map->map_extra = map_extra;
 	return 0;
 }
 
