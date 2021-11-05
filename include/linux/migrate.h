@@ -82,6 +82,8 @@ extern int migrate_page_move_mapping(struct address_space *mapping,
 		struct page *newpage, struct page *page,
 		struct buffer_head *head, enum migrate_mode mode,
 		int extra_count);
+
+extern bool numa_demotion_enabled;
 #else
 
 static inline void putback_movable_pages(struct list_head *l) {}
@@ -108,6 +110,7 @@ static inline int migrate_huge_page_move_mapping(struct address_space *mapping,
 	return -ENOSYS;
 }
 
+#define numa_demotion_enabled  false
 #endif /* CONFIG_MIGRATION */
 
 #ifdef CONFIG_COMPACTION
