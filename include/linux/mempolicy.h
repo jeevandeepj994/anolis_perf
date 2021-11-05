@@ -205,8 +205,6 @@ static inline bool vma_migratable(struct vm_area_struct *vma)
 extern int mpol_misplaced(struct page *, struct vm_area_struct *, unsigned long);
 extern void mpol_put_task_policy(struct task_struct *);
 
-extern bool numa_demotion_enabled;
-
 #else
 
 struct mempolicy {};
@@ -311,6 +309,5 @@ static inline void mpol_put_task_policy(struct task_struct *task)
 {
 }
 
-#define numa_demotion_enabled  false
 #endif /* CONFIG_NUMA */
 #endif
