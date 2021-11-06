@@ -330,8 +330,16 @@ static inline void memcg_slab_post_alloc_hook(struct kmem_cache *s,
 		if (likely(p[i])) {
 			page = virt_to_head_page(p[i]);
 
+#ifdef CONFIG_KIDLED
+			/*
+			 * Slab has allocated the obj_cgroups when create an new slab.
+			 * Do not count the account in the memcg in case allocation fails
+			 */
+			if (unlikely(!page_has_obj_cgroups(page))) {
+#else
 			if (!page_has_obj_cgroups(page) &&
-			    memcg_alloc_page_obj_cgroups(page, s, flags)) {
+				memcg_alloc_page_obj_cgroups(page, s, flags)) {
+#endif
 				obj_cgroup_uncharge(objcg, obj_full_size(s));
 				continue;
 			}
@@ -450,6 +458,10 @@ static __always_inline void unaccount_slab_page(struct page *page, int order,
 {
 	if (memcg_kmem_enabled())
 		memcg_free_page_obj_cgroups(page);
+	else {
+		VM_BUG_ON_PAGE(!page_has_slab_age(page), page);
+		kidled_free_slab_age(page);
+	}
 
 	mod_node_page_state(page_pgdat(page), cache_vmstat_idx(s),
 			    -(PAGE_SIZE << order));

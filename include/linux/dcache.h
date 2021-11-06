@@ -119,9 +119,6 @@ struct dentry {
 	 	struct rcu_head d_rcu;
 	} d_u;
 
-#ifdef CONFIG_KIDLED
-	unsigned short age;
-#endif
 } __randomize_layout;
 
 /*

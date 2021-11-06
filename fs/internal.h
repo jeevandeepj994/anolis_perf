@@ -203,35 +203,3 @@ int sb_init_dio_done_wq(struct super_block *sb);
  */
 int do_statx(int dfd, const char __user *filename, unsigned flags,
 	     unsigned int mask, struct statx __user *buffer);
-
-#ifdef CONFIG_KIDLED
-#define KIDLED_GET_SLAB_AGE(object)		(object->age)
-#define KIDLED_SET_SLAB_AGE(object, slab_age)	(object->age = slab_age)
-#define	KIDLED_INC_SLAB_AGE(object)					\
-({									\
-	u16 slab_age = KIDLED_GET_SLAB_AGE(object);			\
-									\
-	if (slab_age < KIDLED_MAX_IDLE_AGE) {				\
-		slab_age++;						\
-		KIDLED_SET_SLAB_AGE(object, slab_age);			\
-	}								\
-	slab_age;							\
-})
-#define KIDLED_CLEAR_SLAB_SCANNED(object)				\
-({									\
-	u16 slab_age = KIDLED_GET_SLAB_AGE(object);			\
-									\
-	slab_age &= ~KIDLED_SLAB_ACCESS_MASK;				\
-	KIDLED_SET_SLAB_AGE(object, slab_age);				\
-})
-#define KIDLED_MARK_SLAB_SCANNED(object, scan_rounds)			\
-({									\
-	u16 slab_age = KIDLED_GET_SLAB_AGE(object);			\
-									\
-	slab_age |= (scan_rounds & 0xff) << KIDLED_SLAB_ACCESS_SHIFT;	\
-	KIDLED_SET_SLAB_AGE(object, slab_age);				\
-})
-#else
-#define KIDLED_GET_SLAB_AGE(object)	0
-#define KIDLED_SET_SLAB_AGE(object, slab_age)
-#endif

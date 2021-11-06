@@ -205,6 +205,9 @@ struct page {
 #ifdef CONFIG_MEMCG
 	union {
 		struct mem_cgroup *mem_cgroup;
+#ifdef CONFIG_KIDLED
+		unsigned short *slab_age;
+#endif
 		struct obj_cgroup **obj_cgroups;
 	};
 #endif

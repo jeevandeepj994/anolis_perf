@@ -141,6 +141,13 @@ extern unsigned long kidled_scan_rounds;
 #define KIDLED_OP_SET_DURATION		(1 << 0)
 #define KIDLED_OP_INC_SEQ		(1 << 1)
 
+static inline unsigned short *kidled_slab_age(struct page *page)
+{
+	return (unsigned short *)((unsigned long)page->slab_age & ~0x2UL);
+}
+
+extern int kidled_alloc_slab_age(struct page *page, struct kmem_cache *s, gfp_t flags);
+extern void kidled_free_slab_age(struct page *page);
 extern void kidled_mem_cgroup_account(struct page *page,
 			void *ptr, int age, unsigned long size);
 static inline void kidled_mem_cgroup_slab_account(void *object,
@@ -311,6 +318,41 @@ static inline void kidled_inc_scan_seq(void)
 	kidled_set_scan_control(KIDLED_OP_INC_SEQ, 0, NULL);
 }
 
+static inline bool page_has_slab_age(struct page *page)
+{
+	return ((unsigned long)page->slab_age & 0x2UL);
+}
+
+extern unsigned short kidled_get_slab_age(void *object);
+extern void kidled_set_slab_age(void *object, unsigned short age);
+static inline unsigned short kidled_inc_slab_age(void *object)
+{
+	unsigned short slab_age = kidled_get_slab_age(object);
+
+	if (slab_age < KIDLED_MAX_IDLE_AGE) {
+		slab_age++;
+		kidled_set_slab_age(object, slab_age);
+	}
+
+	return slab_age;
+}
+
+static inline void kidled_clear_slab_scanned(void *object)
+{
+	unsigned short slab_age = kidled_get_slab_age(object);
+
+	slab_age &= ~KIDLED_SLAB_ACCESS_MASK;
+	kidled_set_slab_age(object, slab_age);
+}
+
+static inline void kidled_mark_slab_scanned(void *object, unsigned long scan_rounds)
+{
+	unsigned short slab_age = kidled_get_slab_age(object);
+
+	 slab_age |= (scan_rounds & 0xff) << KIDLED_SLAB_ACCESS_SHIFT;
+	kidled_set_slab_age(object, slab_age);
+}
+
 extern const int kidled_default_buckets[NUM_KIDLED_BUCKETS];
 
 bool kidled_use_hierarchy(void);
@@ -336,6 +378,28 @@ static inline void kidled_mem_cgroup_move_stats(struct mem_cgroup *from,
 }
 #endif /* CONFIG_MEMCG */
 
+static inline unsigned short kidled_get_slab_age(void *object)
+{
+	return 0;
+}
+
+static inline void kidled_set_slab_age(void *object, unsigned short age)
+{
+}
+
+static inline int kidled_alloc_slab_age(struct page *page, struct kmem_cache *s, gfp_t flags)
+{
+	return 0;
+}
+
+static inline void kidled_free_slab_age(struct page *page)
+{
+}
+
+static inline bool page_has_slab_age(struct page *page)
+{
+	return false;
+}
 #endif /* CONFIG_KIDLED */
 
 #endif /* _LINUX_MM_KIDLED_H */
