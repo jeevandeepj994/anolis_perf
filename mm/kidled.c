@@ -773,6 +773,97 @@ static int kidled(void *dummy)
 	return 0;
 }
 
+static unsigned short *kidled_get_slab_age_array(void *object)
+{
+	struct page *page = virt_to_head_page(object);
+	unsigned int objects = objs_per_slab_page(page->slab_cache, page);
+	unsigned short *slab_age;
+
+	if (memcg_kmem_enabled())
+		slab_age = (unsigned short *)page_obj_cgroups(page)[objects];
+	else
+		slab_age = kidled_slab_age(page);
+
+	return slab_age;
+}
+
+unsigned short kidled_get_slab_age(void *object)
+{
+	unsigned short *slab_age = kidled_get_slab_age_array(object);
+	struct page *page = virt_to_head_page(object);
+	unsigned int off = obj_to_index(page->slab_cache, page, object);
+
+	if (unlikely(!slab_age))
+		return 0;
+
+	return *(slab_age + off);
+}
+
+void kidled_set_slab_age(void *object, unsigned short age)
+{
+	unsigned short *slab_age = kidled_get_slab_age_array(object);
+	struct page *page = virt_to_head_page(object);
+	unsigned int off = obj_to_index(page->slab_cache, page, object);
+
+	if (unlikely(!slab_age))
+		return;
+
+	*(slab_age + off) = age;
+}
+
+static inline bool kidled_available_slab(struct kmem_cache *s)
+{
+	if (!strcmp(s->name, "inode_cache") ||
+		!strcmp(s->name, "ext4_inode_cache") ||
+		!strcmp(s->name, "dentry"))
+		return true;
+
+	return false;
+}
+
+/*
+ * each slab object pointer to an memcg respectively when kmem account enable,
+ * slab page can be used by root mem_cgroup and children memcg. slab object
+ * age is recorded in slab_age of page when kmem account disable. Otherwise,
+ * an special obj_cgroups pointer will store the value.
+ */
+#define OBJCGS_CLEAR_MASK   (__GFP_DMA | __GFP_RECLAIMABLE | __GFP_ACCOUNT)
+int kidled_alloc_slab_age(struct page *page, struct kmem_cache *s, gfp_t flags)
+{
+	unsigned int objects = objs_per_slab_page(s, page);
+	void *ver;
+	int ret;
+
+	if (!kidled_available_slab(s))
+		return 0;
+
+	/* void count the memory to kmem accounting when kmem enable */
+	flags &= ~OBJCGS_CLEAR_MASK;
+	ver = kzalloc_node(objects * 2, flags, page_to_nid(page));
+	if (!ver)
+		return -ENOMEM;
+
+	if (memcg_kmem_enabled()) {
+		ret = memcg_alloc_page_obj_cgroups(page, s, flags);
+		if (!ret)
+			page_obj_cgroups(page)[objects] = ver;
+		else {
+			kfree(ver);
+			return -ENOMEM;
+		}
+		return 0;
+	}
+
+	page->slab_age = (unsigned short *)((unsigned long)ver | 0x2UL);
+	return 0;
+}
+
+void kidled_free_slab_age(struct page *page)
+{
+	kfree(kidled_slab_age(page));
+	page->slab_age = NULL;
+}
+
 static ssize_t kidled_scan_period_show(struct kobject *kobj,
 				       struct kobj_attribute *attr,
 				       char *buf)

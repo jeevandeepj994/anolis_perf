@@ -602,11 +602,12 @@ ino_t page_cgroup_ino(struct page *page)
 
 	/*
 	 * The lowest bit set means that memcg isn't a valid
-	 * memcg pointer, but a obj_cgroups pointer.
+	 * memcg pointer, but a obj_cgroups pointer or pointer
+	 * array to record the related object age.
 	 * In this case the page is shared and doesn't belong
 	 * to any specific memory cgroup.
 	 */
-	if ((unsigned long) memcg & 0x1UL)
+	if ((unsigned long) memcg & 0x3UL)
 		memcg = NULL;
 
 	while (memcg && !(memcg->css.flags & CSS_ONLINE))
@@ -3200,6 +3201,10 @@ int memcg_alloc_page_obj_cgroups(struct page *page, struct kmem_cache *s,
 	unsigned int objects = objs_per_slab_page(s, page);
 	void *vec;
 
+#ifdef CONFIG_KIDLED
+	/* extra allocate an special pointer for cold slab */
+		objects += 1;
+#endif
 	gfp &= ~OBJCGS_CLEAR_MASK;
 	vec = kcalloc_node(objects, sizeof(struct obj_cgroup *), gfp,
 			   page_to_nid(page));
@@ -3238,7 +3243,7 @@ struct mem_cgroup *mem_cgroup_from_obj(void *p)
 	 * from NULL to (obj_cgroup_vec | 0x1UL), but can't be changed
 	 * from a valid memcg pointer to objcg vector or back.
 	 */
-	if (!page->mem_cgroup)
+	if (!page->mem_cgroup || page_has_slab_age(page))
 		return NULL;
 
 	/*
