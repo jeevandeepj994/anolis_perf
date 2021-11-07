@@ -567,7 +567,7 @@ static int rafs_v6_fill_super(struct super_block *sb)
 	if (sbi->bootstrap_path) {
 		struct file *f;
 
-		f = filp_open(sbi->bootstrap_path, O_RDONLY, 0644);
+		f = filp_open(sbi->bootstrap_path, O_RDONLY | O_LARGEFILE, 0);
 		if (IS_ERR(f))
 			return PTR_ERR(f);
 		sbi->bootstrap = f;
