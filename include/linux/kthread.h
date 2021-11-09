@@ -34,7 +34,6 @@ struct task_struct *kthread_create_on_cpu(int (*threadfn)(void *data),
 					  const char *namefmt);
 
 void kthread_set_per_cpu(struct task_struct *k, int cpu);
-bool kthread_is_per_cpu(struct task_struct *k);
 
 /**
  * kthread_run - create and wake a thread.
