@@ -31,9 +31,9 @@
 #include "internal.h"
 #include "coldpgs.h"
 
-#define DRIVER_VERSION	"2.2.0"
-#define DRIVER_AUTHOR	"Gavin Shan"
-#define DRIVER_DESC	"Reclaim Cold Pages"
+#define DRIVER_VERSION	"2.5.0"
+#define DRIVER_AUTHOR	"Gavin Shan and Jiang Zhong"
+#define DRIVER_DESC	"Reclaim Cold Pages and Slab"
 
 static struct reclaim_coldpgs_global_control global_control;
 
