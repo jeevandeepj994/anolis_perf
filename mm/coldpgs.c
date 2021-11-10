@@ -91,7 +91,11 @@ static bool *my_frontswap_writethrough_enabled;
 static u64 *my_frontswap_succ_stores;
 static u64 *my_frontswap_failed_stores;
 #endif
+static struct list_head *my_shrinker_list;
+static struct rw_semaphore *my_shrinker_rwsem;
+static struct idr *my_shrinker_idr;
 static struct mem_cgroup **my_root_mem_cgroup;
+static int *my_shrinker_nr_max;
 static void (*my_css_task_iter_start)(struct cgroup_subsys_state *,
 	unsigned int, struct css_task_iter *);
 static struct task_struct *(*my_css_task_iter_next)(struct css_task_iter *);
@@ -173,6 +177,9 @@ static void my__update_lru_size(struct lruvec *lruvec,
 	__mod_zone_page_state(&pgdat->node_zones[zid],
 				NR_ZONE_LRU_BASE + lru, nr_pages);
 }
+
+#define LRU_SLAB			(NR_LRU_LISTS + 1)
+#define SHRINKER_REGISTERING		(((struct shrinker *)~0UL))
 
 static inline void reclaim_coldpgs_update_stats(struct mem_cgroup *memcg,
 						unsigned int index,
@@ -978,6 +985,122 @@ static unsigned long reclaim_coldpgs_from_lru(struct mem_cgroup *memcg,
 					 &list);
 }
 
+#define SHRINK_BATCH 128
+
+static unsigned long reclaim_coldslab_from_shrinker(struct shrinker *shrinker,
+						    struct shrink_control *sc,
+						    unsigned long nr_to_reclaim)
+{
+	unsigned long batch_size = shrinker->batch ?: SHRINK_BATCH;
+	unsigned long freeable;
+	unsigned long nr_reclaimed = 0;
+
+	if (!shrinker->reap_objects)
+		return SHRINK_STOP;
+
+	freeable = shrinker->count_objects(shrinker, sc);
+	if (freeable == 0 || freeable == SHRINK_EMPTY)
+		return nr_reclaimed;
+
+	while (freeable > 0) {
+		unsigned long ret;
+		unsigned long nr_scanned = min(freeable, batch_size);
+
+		sc->nr_to_scan = nr_scanned;
+		ret =  shrinker->reap_objects(shrinker, sc);
+		if (ret == SHRINK_STOP)
+			break;
+		nr_reclaimed += ret;
+		if (nr_reclaimed >= nr_to_reclaim)
+			break;
+		freeable -= nr_scanned;
+		cond_resched();
+	}
+
+	return nr_reclaimed;
+}
+
+static unsigned long
+reclaim_coldslab_from_memcg_lru(struct shrink_control *sc,
+				unsigned long nr_to_reclaim)
+{
+	unsigned long nr_reclaimed = 0;
+	struct memcg_shrinker_map *map;
+	struct mem_cgroup *memcg = sc->memcg;
+	int i;
+
+	if (!mem_cgroup_online(memcg))
+		return nr_reclaimed;
+
+	if (!down_read_trylock(my_shrinker_rwsem))
+		return nr_reclaimed;
+
+	map = rcu_dereference_protected(memcg->nodeinfo[sc->nid]->shrinker_map,
+					true);
+	if (unlikely(map))
+		goto out;
+	for_each_set_bit(i, map->map, *my_shrinker_nr_max) {
+		struct shrinker *shrinker;
+		unsigned long ret;
+
+		shrinker = idr_find(my_shrinker_idr, i);
+		if (unlikely(!shrinker || shrinker == SHRINKER_REGISTERING)) {
+			if (!shrinker)
+				clear_bit(i, map->map);
+			continue;
+		}
+
+		ret = reclaim_coldslab_from_shrinker(shrinker, sc,
+						     nr_to_reclaim);
+		if (ret == SHRINK_STOP)
+			continue;
+		nr_reclaimed += ret;
+		if (nr_reclaimed >= nr_to_reclaim)
+			break;
+		if (rwsem_is_contended(my_shrinker_rwsem))
+			break;
+	}
+out:
+	up_read(my_shrinker_rwsem);
+	return nr_reclaimed;
+}
+
+static unsigned long reclaim_coldslab_from_lru(struct mem_cgroup *memcg,
+					       int node, unsigned int threshold,
+					       unsigned long nr_to_reclaim)
+{
+	struct shrinker *shrinker;
+	unsigned long nr_reclaimed = 0;
+	struct shrink_control sc = {
+		.gfp_mask = GFP_KERNEL,
+		.nid = node,
+		.memcg = memcg,
+		.threshold = threshold,
+	};
+
+	if (!mem_cgroup_disabled() && memcg != *my_root_mem_cgroup)
+		return reclaim_coldslab_from_memcg_lru(&sc, nr_to_reclaim);
+
+	if (!down_read_trylock(my_shrinker_rwsem))
+		goto out;
+	list_for_each_entry(shrinker, my_shrinker_list, list) {
+		unsigned long ret;
+
+		ret = reclaim_coldslab_from_shrinker(shrinker, &sc,
+						     nr_to_reclaim);
+		if (ret == SHRINK_STOP)
+			continue;
+		nr_reclaimed += ret;
+		if (nr_reclaimed >= nr_to_reclaim)
+			break;
+		if (rwsem_is_contended(my_shrinker_rwsem))
+			break;
+	}
+	up_read(my_shrinker_rwsem);
+out:
+	return nr_reclaimed;
+}
+
 static void reclaim_coldpgs_from_memcg(struct mem_cgroup *memcg,
 				       struct reclaim_coldpgs_filter *filter)
 {
@@ -1011,6 +1134,16 @@ static void reclaim_coldpgs_from_memcg(struct mem_cgroup *memcg,
 	}
 
 	/*
+	 * It's pointless to scan the child memcg when memcg_kmem is diabled.
+	 */
+	if (reclaim_coldpgs_has_mode(filter, RECLAIM_MODE_SLAB)) {
+		if (memcg_kmem_enabled())
+			bitmap_set(&bitmap, LRU_SLAB, 1);
+		else if (memcg == *my_root_mem_cgroup)
+			bitmap_set(&bitmap, LRU_SLAB, 1);
+	}
+
+	/*
 	 * It's pointless to scan the pages in unevictable LRU list without
 	 * reclaiming them. The pages in the unevictable LRU list won't be
 	 * iterated until the valid reclaim mode has been given.
@@ -1039,6 +1172,28 @@ static void reclaim_coldpgs_from_memcg(struct mem_cgroup *memcg,
 							filter, pgdat, lruvec,
 							lru, reclaim);
 			nr_reclaimed += nr_page_reclaimed << PAGE_SHIFT;
+		}
+
+		if (test_bit(LRU_SLAB, &bitmap) &&
+				nr_reclaimed < filter->size) {
+			unsigned long nr_slab_size, nr_to_reclaim;
+
+			/*
+			 * The user specified "nr_reclaimed" means it is used
+			 * to break the loop rather than the actual numbers
+			 * need to free to the system. Because the reclaimed
+			 * slab objects maybe are not freed to buddy system,
+			 * hence we will reclaim cold slab can be controlled
+			 * separately by idlemd tool.
+			 */
+			nr_to_reclaim = filter->size - nr_reclaimed;
+			nr_slab_size = reclaim_coldslab_from_lru(memcg,
+							pgdat->node_id,
+							filter->threshold,
+							nr_to_reclaim);
+			nr_reclaimed += nr_slab_size;
+			reclaim_coldpgs_update_stats(memcg,
+				RECLAIM_COLDPGS_STAT_SLAB_DROP, nr_slab_size);
 		}
 	}
 }
@@ -1229,6 +1384,7 @@ static int reclaim_coldpgs_read_stats(struct seq_file *m, void *v)
 		"anon migrate out",
 		"anon zswap out",
 		"anon swap out",
+		"slab drop",
 	};
 
 	self = kzalloc(sizeof(*self) * 3, GFP_KERNEL);
@@ -1881,7 +2037,11 @@ static int __init reclaim_coldpgs_resolve_symbols(void)
 	reclaim_coldpgs_resolve_symbol(frontswap_succ_stores);
 	reclaim_coldpgs_resolve_symbol(frontswap_failed_stores);
 #endif
+	reclaim_coldpgs_resolve_symbol(shrinker_list);
+	reclaim_coldpgs_resolve_symbol(shrinker_rwsem);
+	reclaim_coldpgs_resolve_symbol(shrinker_idr);
 	reclaim_coldpgs_resolve_symbol(root_mem_cgroup);
+	reclaim_coldpgs_resolve_symbol(shrinker_nr_max);
 	reclaim_coldpgs_resolve_symbol(css_task_iter_start);
 	reclaim_coldpgs_resolve_symbol(css_task_iter_next);
 	reclaim_coldpgs_resolve_symbol(css_task_iter_end);
