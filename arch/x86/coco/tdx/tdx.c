@@ -447,6 +447,11 @@ static bool tdx_virt_exception_kernel(struct pt_regs *regs, struct ve_info *ve)
 		ret = tdx_handle_cpuid(regs);
 		break;
 	case EXIT_REASON_EPT_VIOLATION:
+		if (!(ve->gpa & cc_mkdec(0))) {
+			panic("#VE due to access to unaccepted memory. "
+			      "GPA: %#llx\n", ve->gpa);
+		}
+
 		ve->instr_len = tdx_handle_mmio(regs, ve);
 		ret = ve->instr_len > 0;
 		if (!ret)
