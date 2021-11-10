@@ -189,6 +189,40 @@ static unsigned long super_cache_cold(struct shrinker *shrinker,
 }
 #endif
 
+#if IS_ENABLED(CONFIG_RECLAIM_COLDPGS)
+static unsigned long super_cache_reap(struct shrinker *shrinker,
+				      struct shrink_control *sc)
+{
+	unsigned long nr_reclaimed = 0;
+	struct super_block *sb;
+	unsigned long dentry_objects, inode_objects;
+	unsigned long total_objects;
+	unsigned long dentries, inodes;
+	unsigned long nr_to_scan = sc->nr_to_scan;
+
+	sb = container_of(shrinker, struct super_block, s_shrink);
+
+	if (!trylock_super(sb))
+		return SHRINK_STOP;
+
+	dentry_objects = list_lru_shrink_count(&sb->s_dentry_lru, sc);
+	inode_objects  = list_lru_shrink_count(&sb->s_inode_lru, sc);
+	total_objects = dentry_objects + inode_objects;
+	if (!total_objects)
+		total_objects = 1;
+
+	dentries = mult_frac(nr_to_scan, dentry_objects, total_objects);
+	inodes   = mult_frac(nr_to_scan, inode_objects, total_objects);
+	sc->nr_to_scan = dentries + 1;
+	nr_reclaimed += shrink_cold_dcache(sb, sc);
+	sc->nr_to_scan = inodes + 1;
+	nr_reclaimed += shrink_cold_icache(sb, sc);
+	up_read(&sb->s_umount);
+
+	return nr_reclaimed;
+}
+#endif
+
 static void destroy_super_work(struct work_struct *work)
 {
 	struct super_block *s = container_of(work, struct super_block,
@@ -302,6 +336,9 @@ static struct super_block *alloc_super(struct file_system_type *type, int flags,
 	s->s_shrink.count_objects = super_cache_count;
 #ifdef CONFIG_KIDLED
 	s->s_shrink.cold_objects = super_cache_cold;
+#endif
+#if IS_ENABLED(CONFIG_RECLAIM_COLDPGS)
+	s->s_shrink.reap_objects = super_cache_reap;
 #endif
 	s->s_shrink.batch = 1024;
 	s->s_shrink.flags = SHRINKER_NUMA_AWARE | SHRINKER_MEMCG_AWARE;
