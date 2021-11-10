@@ -3201,10 +3201,10 @@ int memcg_alloc_page_obj_cgroups(struct page *page, struct kmem_cache *s,
 	unsigned int objects = objs_per_slab_page(s, page);
 	void *vec;
 
-#ifdef CONFIG_KIDLED
 	/* extra allocate an special pointer for cold slab */
+	if (kidled_available_slab(s))
 		objects += 1;
-#endif
+
 	gfp &= ~OBJCGS_CLEAR_MASK;
 	vec = kcalloc_node(objects, sizeof(struct obj_cgroup *), gfp,
 			   page_to_nid(page));
