@@ -208,6 +208,23 @@ static inline int cache_vmstat_idx(struct kmem_cache *s)
 		NR_SLAB_RECLAIMABLE_B : NR_SLAB_UNRECLAIMABLE_B;
 }
 
+#ifdef CONFIG_KIDLED
+static inline bool kidled_available_slab(struct kmem_cache *s)
+{
+	if (!strcmp(s->name, "inode_cache") ||
+		!strcmp(s->name, "ext4_inode_cache") ||
+		!strcmp(s->name, "dentry"))
+		return true;
+
+	return false;
+}
+#else
+static inline bool kidled_available_slab(struct kmem_cache *s)
+{
+	return false;
+}
+#endif
+
 #ifdef CONFIG_SLUB_DEBUG
 #ifdef CONFIG_SLUB_DEBUG_ON
 DECLARE_STATIC_KEY_TRUE(slub_debug_enabled);
@@ -330,16 +347,8 @@ static inline void memcg_slab_post_alloc_hook(struct kmem_cache *s,
 		if (likely(p[i])) {
 			page = virt_to_head_page(p[i]);
 
-#ifdef CONFIG_KIDLED
-			/*
-			 * Slab has allocated the obj_cgroups when create an new slab.
-			 * Do not count the account in the memcg in case allocation fails
-			 */
-			if (unlikely(!page_has_obj_cgroups(page))) {
-#else
 			if (!page_has_obj_cgroups(page) &&
 				memcg_alloc_page_obj_cgroups(page, s, flags)) {
-#endif
 				obj_cgroup_uncharge(objcg, obj_full_size(s));
 				continue;
 			}
@@ -459,8 +468,8 @@ static __always_inline void unaccount_slab_page(struct page *page, int order,
 	if (memcg_kmem_enabled())
 		memcg_free_page_obj_cgroups(page);
 	else {
-		VM_BUG_ON_PAGE(!page_has_slab_age(page), page);
-		kidled_free_slab_age(page);
+		if (page_has_slab_age(page))
+			kidled_free_slab_age(page);
 	}
 
 	mod_node_page_state(page_pgdat(page), cache_vmstat_idx(s),
