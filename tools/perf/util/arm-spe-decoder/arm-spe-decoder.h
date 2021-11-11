@@ -48,6 +48,7 @@ struct arm_spe_record {
 	u64 data_src;
 	u64 virt_addr;
 	u64 phys_addr;
+	u64 context_id;
 	u64 timestamp;
 	uint64_t tot_lat;
 	uint64_t issue_lat;
