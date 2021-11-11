@@ -25,7 +25,10 @@ extern int expr_debug;
 
 struct expr_id_data {
 	union {
-		double val;
+		struct {
+			double val;
+			int source_count;
+		} val;
 		struct {
 			double val;
 			const char *metric_name;
@@ -148,6 +151,13 @@ int expr__add_id(struct expr_parse_ctx *ctx, const char *id)
 /* Caller must make sure id is allocated */
 int expr__add_id_val(struct expr_parse_ctx *ctx, const char *id, double val)
 {
+	return expr__add_id_val_source_count(ctx, id, val, /*source_count=*/1);
+}
+
+/* Caller must make sure id is allocated */
+int expr__add_id_val_source_count(struct expr_parse_ctx *ctx, const char *id,
+				  double val, int source_count)
+{
 	struct expr_id_data *data_ptr = NULL, *old_data = NULL;
 	char *old_key = NULL;
 	int ret;
@@ -155,7 +165,8 @@ int expr__add_id_val(struct expr_parse_ctx *ctx, const char *id, double val)
 	data_ptr = malloc(sizeof(*data_ptr));
 	if (!data_ptr)
 		return -ENOMEM;
-	data_ptr->val = val;
+	data_ptr->val.val = val;
+	data_ptr->val.source_count = source_count;
 	data_ptr->kind = EXPR_ID_DATA__VALUE;
 
 	ret = hashmap__set(ctx->ids, id, data_ptr,
@@ -251,7 +262,7 @@ int expr__resolve_id(struct expr_parse_ctx *ctx, const char *id,
 
 	switch (data->kind) {
 	case EXPR_ID_DATA__VALUE:
-		pr_debug2("lookup(%s): val %f\n", id, data->val);
+		pr_debug2("lookup(%s): val %f\n", id, data->val.val);
 		break;
 	case EXPR_ID_DATA__REF:
 		pr_debug2("lookup(%s): ref metric name %s\n", id,
@@ -262,7 +273,7 @@ int expr__resolve_id(struct expr_parse_ctx *ctx, const char *id,
 			pr_debug("%s failed to count\n", id);
 			return -1;
 		}
-		pr_debug("processing metric: %s EXIT: %f\n", id, data->val);
+		pr_debug("processing metric: %s EXIT: %f\n", id, data->ref.val);
 		break;
 	case EXPR_ID_DATA__REF_VALUE:
 		pr_debug2("lookup(%s): ref val %f metric name %s\n", id,
@@ -378,9 +389,15 @@ int expr__find_ids(const char *expr, const char *one,
 double expr_id_data__value(const struct expr_id_data *data)
 {
 	if (data->kind == EXPR_ID_DATA__VALUE)
-		return data->val;
+		return data->val.val;
 	assert(data->kind == EXPR_ID_DATA__REF_VALUE);
 	return data->ref.val;
+}
+
+double expr_id_data__source_count(const struct expr_id_data *data)
+{
+	assert(data->kind == EXPR_ID_DATA__VALUE);
+	return data->val.source_count;
 }
 
 double expr__get_literal(const char *literal)
