@@ -432,4 +432,5 @@ bool evsel__has_leader(struct evsel *evsel, struct evsel *leader);
 bool evsel__is_leader(struct evsel *evsel);
 void evsel__set_leader(struct evsel *evsel, struct evsel *leader);
 int evsel__store_ids(struct evsel *evsel, struct evlist *evlist);
+int evsel__source_count(const struct evsel *evsel);
 #endif /* __PERF_EVSEL_H */
