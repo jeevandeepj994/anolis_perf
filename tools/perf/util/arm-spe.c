@@ -1184,32 +1184,6 @@ static int arm_spe_process_switch(struct arm_spe *spe,
 	return machine__set_current_tid(spe->machine, cpu, -1, tid);
 }
 
-static int arm_spe_context_switch(struct arm_spe *spe, union perf_event *event,
-				   struct perf_sample *sample)
-{
-	bool out = event->header.misc & PERF_RECORD_MISC_SWITCH_OUT;
-	pid_t pid, tid;
-	int cpu;
-
-	cpu = sample->cpu;
-
-	if (out)
-		return 0;
-	pid = sample->pid;
-	tid = sample->tid;
-
-	if (tid == -1) {
-		pr_err("context_switch event has no tid\n");
-		return -EINVAL;
-	}
-
-	pr_debug4("context_switch: cpu %d pid %d tid %d time %"PRIu64" tsc %#"PRIx64"\n",
-		     cpu, pid, tid, sample->time, perf_time_to_tsc(sample->time,
-		     &spe->tc));
-
-	return machine__set_current_tid(spe->machine, cpu, pid, tid);
-}
-
 static int arm_spe_process_itrace_start(struct arm_spe *spe,
 					union perf_event *event,
 					struct perf_sample *sample)
@@ -1243,6 +1217,25 @@ static int arm_spe_process_timeless_queues(struct arm_spe *spe, pid_t tid,
 		}
 	}
 	return 0;
+}
+
+static int arm_spe_context_switch(struct arm_spe *spe, union perf_event *event,
+				  struct perf_sample *sample)
+{
+	pid_t pid, tid;
+	int cpu;
+
+	if (!(event->header.misc & PERF_RECORD_MISC_SWITCH_OUT))
+		return 0;
+
+	pid = event->context_switch.next_prev_pid;
+	tid = event->context_switch.next_prev_tid;
+	cpu = sample->cpu;
+
+	if (tid == -1)
+		pr_warning("context_switch event has no tid\n");
+
+	return machine__set_current_tid(spe->machine, cpu, pid, tid);
 }
 
 static int arm_spe_process_event(struct perf_session *session,
@@ -1284,6 +1277,9 @@ static int arm_spe_process_event(struct perf_session *session,
 		err = arm_spe_process_queues(spe, timestamp);
 		if (err)
 			return err;
+		if (event->header.type == PERF_RECORD_SWITCH_CPU_WIDE ||
+				event->header.type == PERF_RECORD_SWITCH)
+			err = arm_spe_context_switch(spe, event, sample);
 	}
 
 	if (spe->switch_evsel && event->header.type == PERF_RECORD_SAMPLE)
