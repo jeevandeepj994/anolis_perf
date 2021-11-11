@@ -10296,3 +10296,16 @@ void memcg_meminfo(struct mem_cgroup *memcg,
 		min(ext->slab_reclaimable / 2, memcg_wmark);
 }
 #endif
+
+#if IS_ENABLED(CONFIG_RECLAIM_COLDPGS)
+void reclaim_coldpgs_stats_mlock_refault(void)
+{
+	struct mem_cgroup *memcg;
+	unsigned int index = RECLIMA_COLDPGS_STAT_MLOCK_REFAULT;
+
+	rcu_read_lock();
+	memcg = mem_cgroup_from_task(current);
+	__this_cpu_add(memcg->coldpgs_stats->counts[index], PAGE_SIZE);
+	rcu_read_unlock();
+}
+#endif
