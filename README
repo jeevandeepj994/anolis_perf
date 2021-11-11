@@ -1,7 +1,9 @@
 Linux kernel
 ============
 
-Aone one line just for test
+Add one line just for test
+
+Add other line for test more patch in one PR.
 
 There are several guides for kernel developers and users. These guides can
 be rendered in a number of formats, like HTML and PDF. Please read
