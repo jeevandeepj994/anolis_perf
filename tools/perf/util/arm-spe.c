@@ -74,6 +74,7 @@ struct arm_spe {
 	u64				kernel_start;
 
 	unsigned long			num_events;
+	u8              use_ctx_pkt_for_pid;
 	int have_sched_switch;
 	struct evsel *switch_evsel;
 	u64				ts_bit;
@@ -289,6 +290,43 @@ static inline u8 arm_spe_cpumode(struct arm_spe *spe, u64 ip)
 	return ip >= spe->kernel_start ?
 		PERF_RECORD_MISC_KERNEL :
 		PERF_RECORD_MISC_USER;
+}
+
+static void arm_spe_set_pid_tid_cpu(struct arm_spe *spe,
+									struct auxtrace_queue *queue)
+{
+	struct arm_spe_queue *speq = queue->priv;
+	pid_t tid;
+	tid = machine__get_current_tid(spe->machine, speq->cpu);
+	if (tid != -1) {
+		speq->tid = tid;
+		thread__zput(speq->thread);
+	} else
+		speq->tid = queue->tid;
+
+	if ((!speq->thread) && (speq->tid != -1)) {
+		speq->thread = machine__find_thread(spe->machine, -1,
+											speq->tid);
+	}
+
+	if (speq->thread) {
+		speq->pid = speq->thread->pid_;
+		if (queue->cpu == -1)
+			speq->cpu = speq->thread->cpu;
+	}
+}
+
+static int arm_spe_set_tid(struct arm_spe_queue *speq, pid_t tid)
+{
+	struct arm_spe *spe = speq->spe;
+	int err = machine__set_current_tid(spe->machine, speq->cpu, -1, tid);
+
+	if (err)
+		return err;
+
+	arm_spe_set_pid_tid_cpu(spe, &spe->queues.queue_array[speq->queue_nr]);
+
+	return 0;
 }
 
 static void arm_spe_prep_sample(struct arm_spe *spe,
@@ -611,6 +649,18 @@ static int arm_spe_run_decoder(struct arm_spe_queue *speq, u64 *timestamp,
 		     speq->queue_nr, speq->cpu, speq->pid, speq->tid);
 
 	while (1) {
+		/*
+		 * Update pid/tid info.
+		 */
+		record = &speq->decoder->record;
+		if (!spe->timeless_decoding && record->context_id != (u64)-1) {
+			ret = arm_spe_set_tid(speq, record->context_id);
+			if (ret)
+				return ret;
+
+			spe->use_ctx_pkt_for_pid = true;
+		}
+
 		if (spe->sample_c2c_mode) {
 			if (spe_c2cq)
 				arm_spe_c2c_queue_store(speq, spe_c2cq);
@@ -765,28 +815,6 @@ static bool arm_spe__is_timeless_decoding(struct arm_spe *spe)	// FIXXUE
 	return timeless_decoding;
 }
 
-static void arm_spe_set_pid_tid_cpu(struct arm_spe *spe,
-				    struct auxtrace_queue *queue)
-{
-	struct arm_spe_queue *speq = queue->priv;
-
-	if (queue->tid == -1 || spe->have_sched_switch) {
-		speq->tid = machine__get_current_tid(spe->machine, speq->cpu);
-		thread__zput(speq->thread);
-	}
-
-	if ((!speq->thread) && (speq->tid != -1)) {
-		speq->thread = machine__find_thread(spe->machine, -1,
-						    speq->tid);
-	}
-
-	if (speq->thread) {
-		speq->pid = speq->thread->pid_;
-		if (queue->cpu == -1)
-			speq->cpu = speq->thread->cpu;
-	}
-}
-
 static struct spe_c2c_sample_queues*
 arm_spe_get_c2c_queue(struct arm_spe_queue *speq)
 {
@@ -847,6 +875,12 @@ static int arm_spe_process_queues(struct arm_spe *spe, u64 timestamp)
 		}
 
 		arm_spe_set_pid_tid_cpu(spe, queue);
+		/*
+		 * A previous context-switch event has set pid/tid in the machine's context, so
+		 * here we need to update the pid/tid in the thread and SPE queue.
+		 */
+		if (!spe->use_ctx_pkt_for_pid)
+			arm_spe_set_pid_tid_cpu(spe, queue);
 
 		spe_c2cq = arm_spe_get_c2c_queue(speq);
 
@@ -1277,8 +1311,9 @@ static int arm_spe_process_event(struct perf_session *session,
 		err = arm_spe_process_queues(spe, timestamp);
 		if (err)
 			return err;
-		if (event->header.type == PERF_RECORD_SWITCH_CPU_WIDE ||
-				event->header.type == PERF_RECORD_SWITCH)
+		if (!spe->use_ctx_pkt_for_pid &&
+			(event->header.type == PERF_RECORD_SWITCH_CPU_WIDE ||
+			event->header.type == PERF_RECORD_SWITCH))
 			err = arm_spe_context_switch(spe, event, sample);
 	}
 
@@ -1360,6 +1395,9 @@ static int arm_spe_flush(struct perf_session *session __maybe_unused,
 	ret = arm_spe_process_queues(spe, MAX_TIMESTAMP);
 	if (ret < 0)
 		return ret;
+	if (!spe->use_ctx_pkt_for_pid)
+		ui__warning("Arm SPE CONTEXT packets not found in the traces.\n"
+				"Matching of TIDs to SPE events could be inaccurate.\n");
 
 	if (spe->sample_c2c_mode)
 		ret = arm_spe_c2c_process(spe);
