@@ -407,8 +407,12 @@ static int arm_spe_recording_options(struct auxtrace_record *itr,
 		tracking_evsel->immediate = true;
 
 	/* In per-cpu case, always need the time of mmap events etc */
-	if (!perf_cpu_map__empty(cpus))
+	if (!perf_cpu_map__empty(cpus)) {
 		evsel__set_sample_bit(tracking_evsel, TIME);
+		evsel__set_sample_bit(tracking_evsel, CPU);
+		/* also track task context switch */
+		tracking_evsel->core.attr.context_switch = 1;
+	}
 	/*
 	 * Warn the user when we do not have enough information to decode i.e.
 	 * per-cpu with no sched_switch (except workload-only).
