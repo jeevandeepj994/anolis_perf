@@ -2026,4 +2026,12 @@ static inline struct mem_cgroup *mem_cgroup_from_obj(void *p)
 
 #endif /* CONFIG_MEMCG_KMEM */
 
+#if IS_ENABLED(CONFIG_RECLAIM_COLDPGS)
+extern void reclaim_coldpgs_stats_mlock_refault(void);
+#else
+static inline void reclaim_coldpgs_stats_mlock_refault(void)
+{
+}
+#endif
+
 #endif /* _LINUX_MEMCONTROL_H */
