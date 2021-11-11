@@ -4255,6 +4255,18 @@ vm_fault_t alloc_set_pte(struct vm_fault *vmf, struct page *page)
 		page_add_new_anon_rmap(page, vma, vmf->address, false);
 		lru_cache_add_inactive_or_unevictable(page, vma);
 	} else if (likely(!is_zero_page(page))) {
+#if IS_ENABLED(CONFIG_RECLAIM_COLDPGS)
+		if ((vma->vm_flags & VM_LOCKED) &&
+		    (vmf->flags & FAULT_FLAG_USER) &&
+		    !PageTransCompound(page)) {
+			if (!PageLRU(page))
+				lru_add_drain();
+			if (!PageMlocked(page)) {
+				mlock_vma_page(page);
+				reclaim_coldpgs_stats_mlock_refault();
+			}
+		}
+#endif
 		inc_mm_counter_fast(vma->vm_mm, mm_counter_file(page));
 		page_add_file_rmap(page, false);
 	}
