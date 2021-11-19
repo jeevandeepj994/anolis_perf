@@ -79,6 +79,10 @@ extern unsigned int sysctl_sched_cfs_bw_burst_enabled;
 #ifdef CONFIG_GROUP_IDENTITY
 extern unsigned int sysctl_sched_bvt_place_epsilon;
 extern unsigned int sysctl_sched_idle_saver_wmark;
+extern unsigned int sysctl_sched_group_indentity_enabled;
+extern int sched_group_identity_enable_handler(struct ctl_table *table, int write,
+		void __user *buffer, size_t *lenp,
+		loff_t *ppos);
 #ifdef CONFIG_SCHED_SMT
 extern int sysctl_sched_expel_idle_balance_delay;
 extern unsigned long sysctl_sched_expel_update_interval;
