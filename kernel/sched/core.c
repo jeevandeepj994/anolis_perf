@@ -6362,6 +6362,8 @@ void sched_offline_group(struct task_group *tg)
 {
 	unsigned long flags;
 
+	clear_identity(tg);
+
 	/* End participation in shares distribution: */
 	unregister_fair_sched_group(tg);
 

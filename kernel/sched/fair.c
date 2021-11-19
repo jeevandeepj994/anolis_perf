@@ -156,6 +156,18 @@ int sysctl_sched_expel_idle_balance_delay = -1;
  */
 unsigned long sysctl_sched_expel_update_interval = 10;
 #endif
+DEFINE_STATIC_KEY_FALSE(__group_identity_enabled);
+unsigned int sysctl_sched_group_indentity_enabled;
+/*
+ * We introduce a counter group_identity_count to indicate how many cgroups have
+ * enabled group identity, and introduced a function group_identity_enabled() to
+ * indicate whether there are cgroups with group identity enabled, that is, if
+ * group_identity_count is zero, group_identity_enabled() returns false, otherwise
+ * returns true.
+ *
+ * Ensure that identity_mutex is hold before modify group_identity_count.
+ */
+static atomic_t group_identity_count;
 #endif
 
 /*
@@ -1107,12 +1119,68 @@ static inline u64
 id_min_vruntime(struct cfs_rq *cfs_rq, struct sched_entity *se);
 static inline int throttled_hierarchy(struct cfs_rq *cfs_rq);
 
+static void __group_identity_enable(void)
+{
+	static_branch_enable(&__group_identity_enabled);
+}
+
+static void __group_identity_disable(void)
+{
+	static_branch_disable(&__group_identity_enabled);
+}
+
+/* Before we call group_identity_get() and group_identity_put(), we have hold
+ * the lock identity_mutex, so the atomicity of enable/disable group identity
+ * can be guaranteed.
+ */
+void group_identity_get(void)
+{
+	lockdep_assert_held(&identity_mutex);
+	atomic_inc(&group_identity_count);
+}
+
+void group_identity_put(void)
+{
+	lockdep_assert_held(&identity_mutex);
+	atomic_dec(&group_identity_count);
+}
+
+int sched_group_identity_enable_handler(struct ctl_table *table, int write,
+		void __user *buffer, size_t *lenp,
+		loff_t *ppos)
+{
+	int ret;
+	unsigned int old, new;
+
+	mutex_lock(&identity_mutex);
+	if (atomic_read(&group_identity_count)) {
+		mutex_unlock(&identity_mutex);
+		return -EBUSY;
+	}
+	old = sysctl_sched_group_indentity_enabled;
+	ret = proc_dointvec_minmax(table, write, buffer, lenp, ppos);
+	new = sysctl_sched_group_indentity_enabled;
+	if (!ret && write && (old != new)) {
+		if (new)
+			__group_identity_enable();
+		else
+			__group_identity_disable();
+	}
+	mutex_unlock(&identity_mutex);
+	return ret;
+}
+
 static void __update_identity(struct task_group *tg, int flags)
 {
 	int cpu;
+	int old_id_flags;
 	struct rq_flags rf;
 
+	old_id_flags = tg->id_flags;
 	tg->id_flags = flags;
+
+	if (flags && !old_id_flags)
+		group_identity_get();
 
 	for_each_online_cpu(cpu) {
 		bool on_rq, throttled;
@@ -1160,11 +1228,17 @@ static void __update_identity(struct task_group *tg, int flags)
 
 		rq_unlock_irq(rq, &rf);
 	}
+
+	if (!flags && old_id_flags)
+		group_identity_put();
 }
 
 int update_bvt_warp_ns(struct task_group *tg, s64 val)
 {
 	int flags = 0;
+
+	if (group_identity_disabled())
+		return -EINVAL;
 
 	/*
 	 * We can't change the bvt type of the root cgroup.
@@ -1203,6 +1277,10 @@ int update_bvt_warp_ns(struct task_group *tg, s64 val)
 
 int update_identity(struct task_group *tg, s64 val)
 {
+
+	if (group_identity_disabled())
+		return -EINVAL;
+
 	/*
 	 * We can't change the flags of the root cgroup.
 	 */
@@ -1221,6 +1299,16 @@ int update_identity(struct task_group *tg, s64 val)
 	mutex_unlock(&identity_mutex);
 
 	return 0;
+}
+
+int clear_identity(struct task_group *tg)
+{
+	int err = 0;
+
+	if (tg->bvt_warp_ns != 0 || tg->id_flags != 0)
+		err = update_identity(tg, 0);
+
+	return err;
 }
 
 static inline void identity_init_cfs_rq(struct cfs_rq *cfs_rq)
