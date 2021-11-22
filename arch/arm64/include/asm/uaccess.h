@@ -230,12 +230,22 @@ do {									\
 	(x) = (__force __typeof__(*(ptr)))__gu_val;			\
 } while (0)
 
+/*
+ * We must not call into the scheduler between uaccess_ttbr0_enable() and
+ * uaccess_ttbr0_disable(). As `x` and `ptr` could contain blocking functions,
+ * we must evaluate these outside of the critical section.
+ */
 #define __raw_get_user(x, ptr, err)					\
 do {									\
+	__typeof__(*(ptr)) __user *__rgu_ptr = (ptr);			\
+	__typeof__(x) __rgu_val;					\
 	__chk_user_ptr(ptr);						\
+									\
 	uaccess_ttbr0_enable();						\
-	__raw_get_mem("ldtr", x, ptr, err);				\
+	__raw_get_mem("ldtr", __rgu_val, __rgu_ptr, err);		\
 	uaccess_ttbr0_disable();					\
+									\
+	(x) = __rgu_val;						\
 } while (0)
 
 #define __get_user_error(x, ptr, err)					\
@@ -259,12 +269,18 @@ do {									\
 
 #define get_user	__get_user
 
+/*
+ * As `dst` and `src` may contain blocking
+ * functions, we must evaluate these outside of the critical section.
+ */
 #define __get_kernel_nofault(dst, src, type, err_label)			\
 do {									\
+	__typeof__(dst) __gkn_dst = (dst);				\
+	__typeof__(src) __gkn_src = (src);				\
 	int __gkn_err = 0;						\
 									\
-	__raw_get_mem("ldr", *((type *)(dst)),				\
-		      (__force type *)(src), __gkn_err);		\
+	__raw_get_mem("ldr", *((type *)(__gkn_dst)),			\
+		      (__force type *)(__gkn_src), __gkn_err);		\
 	if (unlikely(__gkn_err))					\
 		goto err_label;						\
 } while (0)
@@ -298,11 +314,19 @@ do {									\
 	}								\
 } while (0)
 
+/*
+ * We must not call into the scheduler between uaccess_ttbr0_enable() and
+ * uaccess_ttbr0_disable(). As `x` and `ptr` could contain blocking functions,
+ * we must evaluate these outside of the critical section.
+ */
 #define __raw_put_user(x, ptr, err)					\
 do {									\
-	__chk_user_ptr(ptr);						\
+	__typeof__(*(ptr)) __user *__rpu_ptr = (ptr);			\
+	__typeof__(*(ptr)) __rpu_val = (x);				\
+	__chk_user_ptr(__rpu_ptr);					\
+									\
 	uaccess_ttbr0_enable();						\
-	__raw_put_mem("sttr", x, ptr, err);				\
+	__raw_put_mem("sttr", __rpu_val, __rpu_ptr, err);		\
 	uaccess_ttbr0_disable();					\
 } while (0)
 
@@ -327,12 +351,18 @@ do {									\
 
 #define put_user	__put_user
 
+/*
+ * As `dst` and `src` may contain blocking
+ * functions, we must evaluate these outside of the critical section.
+ */
 #define __put_kernel_nofault(dst, src, type, err_label)			\
 do {									\
+	__typeof__(dst) __pkn_dst = (dst);				\
+	__typeof__(src) __pkn_src = (src);				\
 	int __pkn_err = 0;						\
 									\
-	__raw_put_mem("str", *((type *)(src)),				\
-		      (__force type *)(dst), __pkn_err);		\
+	__raw_put_mem("str", *((type *)(__pkn_src)),			\
+		      (__force type *)(__pkn_dst), __pkn_err);		\
 	if (unlikely(__pkn_err))					\
 		goto err_label;						\
 } while(0)
