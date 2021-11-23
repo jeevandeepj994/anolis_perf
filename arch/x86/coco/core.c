@@ -19,6 +19,9 @@ static u64 cc_mask __ro_after_init;
 
 static bool intel_cc_platform_has(enum cc_attr attr)
 {
+	if (attr == CC_ATTR_GUEST_UNROLL_STRING_IO)
+		return true;
+
 	return false;
 }
 
