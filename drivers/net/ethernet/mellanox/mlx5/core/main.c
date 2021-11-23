@@ -1682,9 +1682,13 @@ void mlx5_disable_device(struct mlx5_core_dev *dev)
 
 void mlx5_recover_device(struct mlx5_core_dev *dev)
 {
-	mlx5_pci_disable_device(dev);
-	if (mlx5_pci_slot_reset(dev->pdev) == PCI_ERS_RESULT_RECOVERED)
-		mlx5_pci_resume(dev->pdev);
+	if (!mlx5_core_is_sf(dev)) {
+		mlx5_pci_disable_device(dev);
+		if (mlx5_pci_slot_reset(dev->pdev) != PCI_ERS_RESULT_RECOVERED)
+			return;
+	}
+
+	mlx5_pci_resume(dev->pdev);
 }
 
 static struct pci_driver mlx5_core_driver = {
