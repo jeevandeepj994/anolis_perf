@@ -179,6 +179,7 @@
  *  7.36
  *  - extend fuse_init_in with reserved fields, add FUSE_INIT_EXT init flag
  *  - add flags2 to fuse_init_in and fuse_init_out
+ *  - add FUSE_HAS_INODE_DAX, FUSE_ATTR_DAX
  */
 
 #ifndef _LINUX_FUSE_H
@@ -326,6 +327,7 @@ struct fuse_file_lock {
  * FUSE_SUBMOUNTS: kernel supports auto-mounting directory submounts
  * FUSE_INIT_EXT: extended fuse_init_in request
  * FUSE_INIT_RESERVED: reserved, do not use
+ * FUSE_HAS_INODE_DAX:  use per inode DAX
  */
 #define FUSE_ASYNC_READ		(1 << 0)
 #define FUSE_POSIX_LOCKS	(1 << 1)
@@ -358,6 +360,7 @@ struct fuse_file_lock {
 #define FUSE_INIT_EXT		(1 << 30)
 #define FUSE_INIT_RESERVED	(1 << 31)
 /* bits 32..63 get shifted down 32 bits into the flags2 field */
+#define FUSE_HAS_INODE_DAX	(1ULL << 33)
 
 /**
  * CUSE INIT request/reply flags
@@ -437,8 +440,10 @@ struct fuse_file_lock {
  * fuse_attr flags
  *
  * FUSE_ATTR_SUBMOUNT: Object is a submount root
+ * FUSE_ATTR_DAX: Enable DAX for this file in per inode DAX mode
  */
 #define FUSE_ATTR_SUBMOUNT      (1 << 0)
+#define FUSE_ATTR_DAX		(1 << 1)
 
 enum fuse_opcode {
 	FUSE_LOOKUP		= 1,
