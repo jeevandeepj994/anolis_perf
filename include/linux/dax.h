@@ -12,6 +12,7 @@
 typedef unsigned long dax_entry_t;
 
 struct iomap_ops;
+struct iomap_iter;
 struct iomap;
 struct dax_device;
 struct dax_operations {
@@ -237,6 +238,11 @@ static inline void dax_unlock_mapping_entry(struct address_space *mapping,
 }
 #endif
 
+int dax_zero_range(struct inode *inode, loff_t pos, loff_t len, bool *did_zero,
+		const struct iomap_ops *ops);
+int dax_truncate_page(struct inode *inode, loff_t pos, bool *did_zero,
+		const struct iomap_ops *ops);
+
 #if IS_ENABLED(CONFIG_DAX)
 int dax_read_lock(void);
 void dax_read_unlock(int id);
@@ -275,8 +281,6 @@ int dax_invalidate_mapping_entry_sync(struct address_space *mapping,
 				      pgoff_t index);
 int dax_iomap_direct_access(const struct iomap *iomap, loff_t pos,
 		size_t size, void **kaddr, pfn_t *pfnp);
-s64 dax_iomap_zero(loff_t pos, u64 length, struct iomap *iomap,
-		   const struct iomap *srcmap);
 static inline bool dax_mapping(struct address_space *mapping)
 {
 	return mapping->host && IS_DAX(mapping->host);
