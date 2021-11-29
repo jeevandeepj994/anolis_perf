@@ -178,7 +178,9 @@ int test__expr(struct test *t __maybe_unused, int subtest __maybe_unused)
 	TEST_ASSERT_VAL("#num_dies", expr__parse(&num_dies, ctx, "#num_dies") == 0);
 	TEST_ASSERT_VAL("#num_cores >= #num_dies", num_cores >= num_dies);
 	TEST_ASSERT_VAL("#num_packages", expr__parse(&num_packages, ctx, "#num_packages") == 0);
-	TEST_ASSERT_VAL("#num_dies >= #num_packages", num_dies >= num_packages);
+
+	if (num_dies) // Some platforms do not have CPU die support, for example s390
+		TEST_ASSERT_VAL("#num_dies >= #num_packages", num_dies >= num_packages);
 
 	/*
 	 * Source count returns the number of events aggregating in a leader
