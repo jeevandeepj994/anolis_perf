@@ -125,6 +125,8 @@
 				| _PAGE_SHARE \
 				| _PAGE_SO)
 
+#define PAGE_KERNEL_IO		__pgprot(_PAGE_IOREMAP)
+
 extern pgd_t swapper_pg_dir[];
 
 /* MAP_PRIVATE permissions: xwr (copy-on-write) */
