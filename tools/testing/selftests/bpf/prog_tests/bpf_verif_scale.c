@@ -64,6 +64,9 @@ void test_bpf_verif_scale(void)
 		 */
 		{ "pyperf600.o", BPF_PROG_TYPE_RAW_TRACEPOINT },
 
+		/* use the bpf_loop helper*/
+		{ "pyperf600_bpf_loop.o", BPF_PROG_TYPE_RAW_TRACEPOINT },
+
 		/* no unroll at all.
 		 * C loop count -> 600.
 		 * ASM loop count -> 600.
@@ -82,6 +85,9 @@ void test_bpf_verif_scale(void)
 		 * ~350k processed_insns
 		 */
 		{ "strobemeta.o", BPF_PROG_TYPE_RAW_TRACEPOINT },
+
+		/* use the bpf_loop helper*/
+		{ "strobemeta_bpf_loop.o", BPF_PROG_TYPE_RAW_TRACEPOINT },
 
 		/* no unroll, tiny loops */
 		{ "strobemeta_nounroll1.o", BPF_PROG_TYPE_RAW_TRACEPOINT },
