@@ -1,8 +1,10 @@
 # SPDX-License-Identifier: GPL-2.0
 CFLAGS_REMOVE_tdx.o		= -pg
+CFLAGS_REMOVE_tdx-tests.o	= -pg
 KASAN_SANITIZE_tdx.o		:= n
 KASAN_SANITIZE_tdx-fuzz.o	:= n
 CFLAGS_tdx.o			+= -fno-stack-protector
 
 obj-y 				+= tdx.o tdcall.o tdx-filter.o
 obj-$(CONFIG_TDX_FUZZ)		+= tdx-fuzz.o
+obj-$(CONFIG_INTEL_TDX_GUEST)	+= tdx-tests.o
