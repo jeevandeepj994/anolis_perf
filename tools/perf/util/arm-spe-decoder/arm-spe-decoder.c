@@ -192,13 +192,14 @@ static int arm_spe_read_record(struct arm_spe_decoder *decoder)
 			break;
 		case ARM_SPE_COUNTER:
 			switch (idx) {
-			case 0:
+			case SPE_CNT_PKT_HDR_INDEX_TOTAL_LAT:
 				decoder->record.tot_lat = payload;
+				decoder->record.latency = payload;
 				break;
-			case 1:
+			case SPE_CNT_PKT_HDR_INDEX_ISSUE_LAT:
 				decoder->record.issue_lat = payload;
 				break;
-			case 2:
+			case SPE_CNT_PKT_HDR_INDEX_TRANS_LAT:
 				decoder->record.trans_lat = payload;
 				break;
 			default:
