@@ -224,6 +224,7 @@ struct idxd_wq {
 	char driver_name[WQ_NAME_SIZE + 1];
 
 	struct list_head vdcm_list;
+	void *private_data;
 };
 
 struct idxd_engine {
