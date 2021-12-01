@@ -33,6 +33,7 @@ struct arm_spe_record {
 	enum arm_spe_sample_type type;
 	int err;
 	u32 op;
+	u32 latency;
 	bool is_ld;		/* Is load ? */
 	bool is_st;		/* Is store ? */
 	bool is_l1d_access;	/* Is l1d access ? */
