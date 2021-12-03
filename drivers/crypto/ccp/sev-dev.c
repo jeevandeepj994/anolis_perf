@@ -30,6 +30,7 @@
 
 #define DEVICE_NAME		"sev"
 #define SEV_FW_FILE		"amd/sev.fw"
+#define CSV_FW_FILE		"hygon/csv.fw"
 #define SEV_FW_NAME_SIZE	64
 
 DEFINE_MUTEX(sev_cmd_mutex);
@@ -84,6 +85,11 @@ static inline bool sev_version_greater_or_equal(u8 maj, u8 min)
 		return true;
 
 	return false;
+}
+
+static inline bool csv_version_greater_or_equal(u32 build)
+{
+	return hygon_csv_build >= build;
 }
 
 static void sev_irq_handler(int irq, void *data, unsigned int status)
@@ -825,6 +831,14 @@ static int sev_get_firmware(struct device *dev,
 	char fw_name_specific[SEV_FW_NAME_SIZE];
 	char fw_name_subset[SEV_FW_NAME_SIZE];
 
+	if (boot_cpu_data.x86_vendor == X86_VENDOR_HYGON) {
+		/* Check for CSV FW to using generic name: csv.fw */
+		if (firmware_request_nowarn(firmware, CSV_FW_FILE, dev) >= 0)
+			return 0;
+		else
+			return -ENOENT;
+	}
+
 	snprintf(fw_name_specific, sizeof(fw_name_specific),
 		 "amd/amd_sev_fam%.2xh_model%.2xh.sbin",
 		 boot_cpu_data.x86, boot_cpu_data.x86_model);
@@ -896,9 +910,14 @@ static int sev_update_firmware(struct device *dev)
 
 	ret = sev_do_cmd(SEV_CMD_DOWNLOAD_FIRMWARE, data, &error);
 	if (ret)
-		dev_dbg(dev, "Failed to update SEV firmware: %#x\n", error);
+		dev_dbg(dev, "Failed to update %s firmware: %#x\n",
+			(boot_cpu_data.x86_vendor == X86_VENDOR_HYGON)
+				? "CSV" : "SEV",
+			error);
 	else
-		dev_info(dev, "SEV firmware update successful\n");
+		dev_info(dev, "%s firmware update successful\n",
+			 (boot_cpu_data.x86_vendor == X86_VENDOR_HYGON)
+				? "CSV" : "SEV");
 
 	__free_pages(p, order);
 
@@ -1616,6 +1635,8 @@ void sev_pci_init(void)
 		goto err;
 
 	if (sev_version_greater_or_equal(0, 15) &&
+	    (boot_cpu_data.x86_vendor != X86_VENDOR_HYGON ||
+	     csv_version_greater_or_equal(1667)) &&
 	    sev_update_firmware(sev->dev) == 0)
 		sev_get_api_version();
 
