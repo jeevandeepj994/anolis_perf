@@ -35,6 +35,8 @@ enum {
 	SEV_USER_CMD_INIT = 101,
 	SEV_USER_CMD_SHUTDOWN,
 
+	SEV_USER_CMD_DOWNLOAD_FIRMWARE = 128,
+
 	SEV_MAX,
 };
 
@@ -146,6 +148,17 @@ struct sev_user_data_get_id {
 struct sev_user_data_get_id2 {
 	__u64 address;				/* In */
 	__u32 length;				/* In/Out */
+} __packed;
+
+/**
+ * struct sev_user_data_download_firmware - DOWNLOAD_FIRMWARE command parameters
+ * DOWNLOAD_FIRMWARE command parameters
+ * @address: physical address of firmware image
+ * @length: length of the firmware image
+ */
+struct sev_user_data_download_firmware {
+	__u64 address;				/* In */
+	__u32 length;				/* In */
 } __packed;
 
 /**
