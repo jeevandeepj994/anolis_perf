@@ -78,6 +78,10 @@ typedef enum {
  * @flags: platform config flags
  * @build: firmware build id for API version
  * @guest_count: number of active guests
+ * @bl_version_debug: Bootloader VERSION_DEBUG
+ * @bl_version_minor: Bootloader VERSION_MINOR
+ * @bl_version_major: Bootloader VERSION_MAJOR
+ * @reserved: reserved bits
  */
 struct sev_user_data_status {
 	__u8 api_major;				/* Out */
@@ -86,6 +90,10 @@ struct sev_user_data_status {
 	__u32 flags;				/* Out */
 	__u8 build;				/* Out */
 	__u32 guest_count;			/* Out */
+	__u32 bl_version_debug : 8,		/* Out */
+	 bl_version_minor : 8,			/* Out */
+	 bl_version_major : 8,			/* Out */
+	 reserved : 8;
 } __packed;
 
 #define SEV_STATUS_FLAGS_CONFIG_ES	0x0100
