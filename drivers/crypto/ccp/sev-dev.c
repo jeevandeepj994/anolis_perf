@@ -592,6 +592,71 @@ fw_err:
 	return ret;
 }
 
+static int sev_ioctl_do_download_firmware(struct sev_issue_cmd *argp)
+{
+	struct sev_data_download_firmware *data = NULL;
+	struct sev_user_data_download_firmware input;
+	int ret, order;
+	struct page *p;
+	u64 data_size;
+
+	if (copy_from_user(&input, (void __user *)argp->data, sizeof(input)))
+		return -EFAULT;
+
+	if (!input.address) {
+		argp->error = SEV_RET_INVALID_ADDRESS;
+		return -EINVAL;
+	}
+
+	if (!input.length || input.length > CSV_FW_MAX_SIZE) {
+		argp->error = SEV_RET_INVALID_LEN;
+		return -EINVAL;
+	}
+
+	/* Check if we have read access to the userspace buffer */
+	if (!access_ok(input.address, input.length))
+		return -EFAULT;
+
+	/*
+	 * CSV FW expects the physical address given to it to be 32
+	 * byte aligned. Memory allocated has structure placed at the
+	 * beginning followed by the firmware being passed to the CSV
+	 * FW. Allocate enough memory for data structure + alignment
+	 * padding + CSV FW.
+	 */
+	data_size = ALIGN(sizeof(struct sev_data_download_firmware), 32);
+
+	order = get_order(input.length + data_size);
+	p = alloc_pages(GFP_KERNEL, order);
+	if (!p)
+		return -EFAULT;
+
+	/*
+	 * Copy firmware data to a kernel allocated contiguous
+	 * memory region.
+	 */
+	data = page_address(p);
+	if (copy_from_user((void *)((uint64_t)page_address(p) + data_size),
+			   (void __user *)(input.address), input.length)) {
+		ret = -EFAULT;
+		goto fail_free_page;
+	}
+
+	data->address = __psp_pa(page_address(p) + data_size);
+	data->len = input.length;
+
+	ret = __sev_do_cmd_locked(SEV_CMD_DOWNLOAD_FIRMWARE, data, &argp->error);
+	if (ret)
+		pr_err("Failed to update CSV firmware: %#x\n", argp->error);
+	else
+		pr_info("CSV firmware update successful\n");
+
+fail_free_page:
+	__free_pages(p, order);
+
+	return ret;
+}
+
 static int sev_ioctl_do_pek_import(struct sev_issue_cmd *argp, bool writable)
 {
 	struct sev_device *sev = psp_master->sev_data;
@@ -889,6 +954,14 @@ static long sev_ioctl(struct file *file, unsigned int ioctl, unsigned long arg)
 	case SEV_USER_CMD_SHUTDOWN:
 		if (boot_cpu_data.x86_vendor == X86_VENDOR_HYGON) {
 			ret = __sev_platform_shutdown_locked(&input.error);
+		} else {
+			ret = -EINVAL;
+			goto out;
+		}
+		break;
+	case SEV_USER_CMD_DOWNLOAD_FIRMWARE:
+		if (boot_cpu_data.x86_vendor == X86_VENDOR_HYGON) {
+			ret = sev_ioctl_do_download_firmware(&input);
 		} else {
 			ret = -EINVAL;
 			goto out;
