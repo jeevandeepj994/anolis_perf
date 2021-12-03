@@ -30,6 +30,7 @@
 
 #define DEVICE_NAME		"sev"
 #define SEV_FW_FILE		"amd/sev.fw"
+#define CSV_FW_FILE		"hygon/csv.fw"
 #define SEV_FW_NAME_SIZE	64
 
 static DEFINE_MUTEX(sev_cmd_mutex);
@@ -499,6 +500,14 @@ static int sev_get_firmware(struct device *dev,
 {
 	char fw_name_specific[SEV_FW_NAME_SIZE];
 	char fw_name_subset[SEV_FW_NAME_SIZE];
+
+	if (boot_cpu_data.x86_vendor == X86_VENDOR_HYGON) {
+		/* Check for CSV FW using generic name: csv.fw */
+		if (firmware_request_nowarn(firmware, CSV_FW_FILE, dev) >= 0)
+			return 0;
+		else
+			return -ENOENT;
+	}
 
 	snprintf(fw_name_specific, sizeof(fw_name_specific),
 		 "amd/amd_sev_fam%.2xh_model%.2xh.sbin",
