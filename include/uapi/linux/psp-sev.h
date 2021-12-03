@@ -29,6 +29,8 @@ enum {
 	SEV_GET_ID,	/* This command is deprecated, use SEV_GET_ID2 */
 	SEV_GET_ID2,
 
+	SEV_USER_CMD_INIT = 101,
+
 	SEV_MAX,
 };
 

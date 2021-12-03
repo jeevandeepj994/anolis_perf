@@ -878,6 +878,14 @@ static long sev_ioctl(struct file *file, unsigned int ioctl, unsigned long arg)
 	case SEV_GET_ID2:
 		ret = sev_ioctl_do_get_id2(&input);
 		break;
+	case SEV_USER_CMD_INIT:
+		if (boot_cpu_data.x86_vendor == X86_VENDOR_HYGON) {
+			ret = __sev_platform_init_locked(&input.error);
+		} else {
+			ret = -EINVAL;
+			goto out;
+		}
+		break;
 	default:
 		ret = -EINVAL;
 		goto out;
