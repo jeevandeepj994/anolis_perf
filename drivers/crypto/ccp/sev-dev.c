@@ -886,6 +886,14 @@ static long sev_ioctl(struct file *file, unsigned int ioctl, unsigned long arg)
 			goto out;
 		}
 		break;
+	case SEV_USER_CMD_SHUTDOWN:
+		if (boot_cpu_data.x86_vendor == X86_VENDOR_HYGON) {
+			ret = __sev_platform_shutdown_locked(&input.error);
+		} else {
+			ret = -EINVAL;
+			goto out;
+		}
+		break;
 	default:
 		ret = -EINVAL;
 		goto out;
