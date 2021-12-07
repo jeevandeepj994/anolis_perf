@@ -31,6 +31,17 @@ enum sched_tunable_scaling {
 	SCHED_TUNABLESCALING_LINEAR,
 	SCHED_TUNABLESCALING_END,
 };
+
+#define NUMA_BALANCING_DISABLED		0x0
+#define NUMA_BALANCING_NORMAL		0x1
+#define NUMA_BALANCING_MEMORY_TIERING	0x2
+
+#ifdef CONFIG_NUMA_BALANCING
+extern int sysctl_numa_balancing_mode;
+#else
+#define sysctl_numa_balancing_mode	0
+#endif
+
 extern enum sched_tunable_scaling sysctl_sched_tunable_scaling;
 
 extern unsigned int sysctl_numa_balancing_scan_delay;
