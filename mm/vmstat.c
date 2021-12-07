@@ -1188,6 +1188,7 @@ const char * const vmstat_text[] = {
 	"", /* nr_indirectly_reclaimable */
 #ifdef CONFIG_NUMA_BALANCING
 	"pgpromote_success",
+	"pgpromote_candidate",
 #endif
 
 	/* enum writeback_stat_item counters */
