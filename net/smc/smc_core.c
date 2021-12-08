@@ -717,8 +717,6 @@ int smcr_link_init(struct smc_link_group *lgr, struct smc_link *lnk,
 	lnk->link_idx = link_idx;
 	lnk->smcibdev = ini->ib_dev;
 	lnk->ibport = ini->ib_port;
-	lnk->link_down_cnt_smc = 0;
-	lnk->link_down_cnt_ib = 0;
 	smc_ibdev_cnt_inc(lnk);
 	smcr_copy_dev_info_to_link(lnk);
 	lnk->path_mtu = ini->ib_dev->pattr[ini->ib_port - 1].active_mtu;
@@ -1002,20 +1000,16 @@ again:
 		read_unlock_bh(&lgr->conns_lock);
 		/* pre-fetch buffer outside of send_lock, might sleep */
 		rc = smc_cdc_get_free_slot(conn, to_lnk, &wr_buf, NULL, &pend);
-		if (rc) {
-			++to_lnk->link_down_cnt_smc;
+		if (rc)
 			goto err_out;
-		}
 		/* avoid race with smcr_tx_sndbuf_nonempty() */
 		spin_lock_bh(&conn->send_lock);
 		smc_switch_link_and_count(conn, to_lnk);
 		rc = smc_switch_cursor(smc, pend, wr_buf);
 		spin_unlock_bh(&conn->send_lock);
 		sock_put(&smc->sk);
-		if (rc) {
-			++to_lnk->link_down_cnt_ib;
+		if (rc)
 			goto err_out;
-		}
 		goto again;
 	}
 	read_unlock_bh(&lgr->conns_lock);
@@ -1599,10 +1593,8 @@ void smcr_port_err(struct smc_ib_device *smcibdev, u8 ibport)
 			struct smc_link *lnk = &lgr->lnk[i];
 
 			if (smc_link_usable(lnk) &&
-			    lnk->smcibdev == smcibdev && lnk->ibport == ibport) {
-				++lnk->link_down_cnt_ib;
+			    lnk->smcibdev == smcibdev && lnk->ibport == ibport)
 				smcr_link_down_cond_sched(lnk);
-			}
 		}
 	}
 }
