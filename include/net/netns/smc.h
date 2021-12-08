@@ -21,5 +21,6 @@ struct netns_smc {
 	unsigned int			sysctl_smcr_buf_type;
 	int				sysctl_wmem_default;
 	int				sysctl_rmem_default;
+	int				sysctl_tcp2smc;
 };
 #endif
