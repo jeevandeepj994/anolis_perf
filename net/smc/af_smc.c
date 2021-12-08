@@ -53,6 +53,7 @@
 #include "smc_tracepoint.h"
 #include "smc_sysctl.h"
 #include "smc_proc.h"
+#include "smc_conv.h"
 
 static DEFINE_MUTEX(smc_server_lgr_pending);	/* serialize link group
 						 * creation on server
@@ -3468,9 +3469,17 @@ static int __init smc_init(void)
 		goto out_ulp;
 	}
 
+	rc = smc_conv_init();
+	if (rc) {
+		pr_err("%s: smc_conv_init fails with %d\n", __func__, rc);
+		goto out_proc;
+	}
+
 	static_branch_enable(&tcp_have_smc);
 	return 0;
 
+out_proc:
+	smc_proc_exit();
 out_ulp:
 	tcp_unregister_ulp(&smc_ulp_ops);
 out_ib:
@@ -3505,6 +3514,7 @@ static void __exit smc_exit(void)
 {
 	static_branch_disable(&tcp_have_smc);
 	tcp_unregister_ulp(&smc_ulp_ops);
+	smc_conv_exit();
 	smc_proc_exit();
 	sock_unregister(PF_SMC);
 	smc_core_exit();
