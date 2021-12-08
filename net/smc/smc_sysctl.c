@@ -45,6 +45,13 @@ static struct ctl_table smc_table[] = {
 		.proc_handler   = proc_dointvec_minmax,
 		.extra1         = &min_rcvbuf,
 	},
+	{
+		.procname	= "tcp2smc",
+		.data		= &init_net.smc.sysctl_tcp2smc,
+		.maxlen		= sizeof(init_net.smc.sysctl_tcp2smc),
+		.mode		= 0644,
+		.proc_handler	= proc_dointvec,
+	},
 	{  }
 };
 
@@ -71,6 +78,7 @@ int __net_init smc_sysctl_net_init(struct net *net)
 	net->smc.sysctl_autocorking_size = SMC_AUTOCORKING_DEFAULT_SIZE;
 	net->smc.sysctl_wmem_default = 256 * 1024;
 	net->smc.sysctl_rmem_default = 384 * 1024;
+	net->smc.sysctl_tcp2smc = 0;
 
 	return 0;
 
