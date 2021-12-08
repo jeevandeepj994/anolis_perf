@@ -53,6 +53,7 @@
 #include "smc_stats.h"
 #include "smc_tracepoint.h"
 #include "smc_proc.h"
+#include "smc_conv.h"
 
 static DEFINE_MUTEX(smc_server_lgr_pending);	/* serialize link group
 						 * creation on server
@@ -2949,16 +2950,22 @@ static int __init smc_init(void)
 		goto out_sock;
 	}
 
+	rc = smc_conv_init();
+	if (rc) {
+		pr_err("%s: smc_conv_init fails with %d\n", __func__, rc);
+		goto out_proc;
+	}
+
 	rc = smc_ib_register_client();
 	if (rc) {
 		pr_err("%s: ib_register fails with %d\n", __func__, rc);
-		goto out_proc;
+		goto out_conv;
 	}
 
 	rc = tcp_register_ulp(&smc_ulp_ops);
 	if (rc) {
 		pr_err("%s: tcp_ulp_register fails with %d\n", __func__, rc);
-		goto out_proc;
+		goto out_conv;
 	}
 
 	limit = nr_free_buffer_pages() << (PAGE_SHIFT - 7);
@@ -2976,6 +2983,8 @@ static int __init smc_init(void)
 	static_branch_enable(&tcp_have_smc);
 	return 0;
 
+out_conv:
+	smc_conv_exit();
 out_proc:
 	smc_proc_exit();
 out_sock:
@@ -3004,6 +3013,7 @@ static void __exit smc_exit(void)
 {
 	static_branch_disable(&tcp_have_smc);
 	tcp_unregister_ulp(&smc_ulp_ops);
+	smc_conv_exit();
 	smc_proc_exit();
 	sock_unregister(PF_SMC);
 	smc_core_exit();
