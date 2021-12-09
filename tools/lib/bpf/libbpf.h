@@ -125,10 +125,13 @@ void bpf_program__set_ifindex(struct bpf_program *prog, __u32 ifindex);
 
 const char *bpf_program__title(struct bpf_program *prog, bool needs_copy);
 
+int bpf_program__load(struct bpf_program *prog, char *license,
+		      u32 kern_version);
 int bpf_program__fd(struct bpf_program *prog);
 int bpf_program__pin_instance(struct bpf_program *prog, const char *path,
 			      int instance);
 int bpf_program__pin(struct bpf_program *prog, const char *path);
+void bpf_program__unload(struct bpf_program *prog);
 
 struct bpf_insn;
 
@@ -290,6 +293,28 @@ enum bpf_perf_event_ret {
 	LIBBPF_PERF_EVENT_ERROR	= -1,
 	LIBBPF_PERF_EVENT_CONT	= -2,
 };
+
+/* Ring buffer APIs */
+struct ring_buffer;
+
+typedef int (*ring_buffer_sample_fn)(void *ctx, void *data, size_t size);
+
+struct ring_buffer_opts {
+	size_t sz; /* size of this struct, for forward/backward compatiblity */
+};
+
+#define ring_buffer_opts__last_field sz
+
+struct ring_buffer *
+ring_buffer__new(int map_fd, ring_buffer_sample_fn sample_cb, void *ctx,
+		 const struct ring_buffer_opts *opts);
+void ring_buffer__free(struct ring_buffer *rb);
+int ring_buffer__add(struct ring_buffer *rb, int map_fd,
+				ring_buffer_sample_fn sample_cb, void *ctx);
+int ring_buffer__poll(struct ring_buffer *rb, int timeout_ms);
+int ring_buffer__consume(struct ring_buffer *rb);
+
+/* Perf buffer APIs */
 
 typedef enum bpf_perf_event_ret (*bpf_perf_event_print_t)(void *event,
 							  void *priv);

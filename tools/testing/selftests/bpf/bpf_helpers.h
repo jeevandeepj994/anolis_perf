@@ -143,6 +143,18 @@ static unsigned long long (*bpf_skb_cgroup_id)(void *ctx) =
 	(void *) BPF_FUNC_skb_cgroup_id;
 static unsigned long long (*bpf_skb_ancestor_cgroup_id)(void *ctx, int level) =
 	(void *) BPF_FUNC_skb_ancestor_cgroup_id;
+static struct bpf_sock *(*bpf_sk_lookup_tcp)(void *ctx,
+					     struct bpf_sock_tuple *tuple,
+					     int size, unsigned int netns_id,
+					     unsigned long long flags) =
+	(void *) BPF_FUNC_sk_lookup_tcp;
+static struct bpf_sock *(*bpf_sk_lookup_udp)(void *ctx,
+					     struct bpf_sock_tuple *tuple,
+					     int size, unsigned int netns_id,
+					     unsigned long long flags) =
+	(void *) BPF_FUNC_sk_lookup_udp;
+static int (*bpf_sk_release)(struct bpf_sock *sk) =
+	(void *) BPF_FUNC_sk_release;
 
 /* llvm builtin functions that eBPF C program may use to
  * emit BPF_LD_ABS and BPF_LD_IND instructions
@@ -195,6 +207,17 @@ static int (*bpf_skb_change_head)(void *, int len, int flags) =
 	(void *) BPF_FUNC_skb_change_head;
 static int (*bpf_skb_pull_data)(void *, int len) =
 	(void *) BPF_FUNC_skb_pull_data;
+
+static long (*bpf_ringbuf_output)(void *ringbuf, void *data, __u64 size, __u64 flags) =
+	(void *) BPF_FUNC_ringbuf_output;
+static void *(*bpf_ringbuf_reserve)(void *ringbuf, __u64 size, __u64 flags) =
+	(void *) BPF_FUNC_ringbuf_reserve;
+static void (*bpf_ringbuf_submit)(void *data, __u64 flags) =
+	(void *) BPF_FUNC_ringbuf_submit;
+static void (*bpf_ringbuf_discard)(void *data, __u64 flags) =
+	(void *) BPF_FUNC_ringbuf_discard;
+static __u64 (*bpf_ringbuf_query)(void *ringbuf, __u64 flags) =
+	(void *) BPF_FUNC_ringbuf_query;
 
 /* Scan the ARCH passed in from ARCH env variable (see Makefile) */
 #if defined(__TARGET_ARCH_x86)

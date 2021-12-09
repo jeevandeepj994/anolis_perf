@@ -76,9 +76,9 @@ static int __base_pr(const char *format, ...)
 	return err;
 }
 
-static __printf(1, 2) libbpf_print_fn_t __pr_warning = __base_pr;
-static __printf(1, 2) libbpf_print_fn_t __pr_info = __base_pr;
-static __printf(1, 2) libbpf_print_fn_t __pr_debug;
+__printf(1, 2) libbpf_print_fn_t __pr_warning = __base_pr;
+__printf(1, 2) libbpf_print_fn_t __pr_info = __base_pr;
+__printf(1, 2) libbpf_print_fn_t __pr_debug;
 
 #define __pr(func, fmt, ...)	\
 do {				\
@@ -230,7 +230,7 @@ struct bpf_object {
 };
 #define obj_elf_valid(o)	((o)->efile.elf)
 
-static void bpf_program__unload(struct bpf_program *prog)
+void bpf_program__unload(struct bpf_program *prog)
 {
 	int i;
 
@@ -1377,7 +1377,7 @@ out:
 	return ret;
 }
 
-static int
+int
 bpf_program__load(struct bpf_program *prog,
 		  char *license, u32 kern_version)
 {
