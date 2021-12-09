@@ -15,10 +15,9 @@
 #include <linux/page_idle.h>
 #include <linux/slab.h>
 
-static struct damon_ctx **dbgfs_ctxs;
-static int dbgfs_nr_ctxs;
+struct damon_ctx **dbgfs_ctxs;
+int dbgfs_nr_ctxs;
 static struct dentry **dbgfs_dirs;
-static DEFINE_MUTEX(damon_dbgfs_lock);
 
 /*
  * Returns non-empty string on success, negative error code otherwise.
