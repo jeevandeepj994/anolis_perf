@@ -111,8 +111,7 @@ static void arm_spe_acpi_register_device(void)
 				return;
 			hetid = find_acpi_cpu_topology_hetero_id(cpu);
 			first = false;
-		} else if ((gsi != gicc->spe_interrupt) ||
-			   (hetid != find_acpi_cpu_topology_hetero_id(cpu))) {
+		} else if (gsi != gicc->spe_interrupt) {
 			pr_warn("ACPI: SPE must be homogeneous\n");
 			return;
 		}
