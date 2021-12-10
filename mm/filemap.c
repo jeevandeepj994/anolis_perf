@@ -42,6 +42,7 @@
 #include <linux/psi.h>
 #include <linux/ramfs.h>
 #include <linux/page_idle.h>
+#include <linux/page_dup.h>
 #include "internal.h"
 
 #define CREATE_TRACE_POINTS
@@ -247,6 +248,8 @@ static void page_cache_free_page(struct address_space *mapping,
 	freepage = mapping->a_ops->freepage;
 	if (freepage)
 		freepage(page);
+
+	dedup_page(page, false);
 
 	if (PageTransHuge(page) && !PageHuge(page)) {
 		page_ref_sub(page, thp_nr_pages(page));
@@ -821,6 +824,9 @@ int replace_page_cache_page(struct page *old, struct page *new, gfp_t gfp_mask)
 	xas_unlock_irqrestore(&xas, flags);
 	if (freepage)
 		freepage(old);
+
+	dedup_page(old, false);
+
 	put_page(old);
 
 	return 0;
@@ -2844,6 +2850,7 @@ void filemap_map_pages(struct vm_fault *vmf,
 	unsigned long max_idx;
 	XA_STATE(xas, &mapping->i_pages, start_pgoff);
 	struct page *head, *page;
+	struct page *d_page = NULL;
 	unsigned int mmap_miss = READ_ONCE(file->f_ra.mmap_miss);
 
 	rcu_read_lock();
@@ -2888,18 +2895,24 @@ void filemap_map_pages(struct vm_fault *vmf,
 		if (vmf->pte)
 			vmf->pte += xas.xa_index - last_pgoff;
 		last_pgoff = xas.xa_index;
-		if (alloc_set_pte(vmf, page))
+
+		d_page = dup_page(page, vmf->vma);
+		if (d_page)
+			put_page(head);
+
+		if (alloc_set_pte(vmf, d_page ?: page))
 			goto unlock;
 		unlock_page(head);
 		goto next;
 unlock:
 		unlock_page(head);
 skip:
-		put_page(head);
+		put_page(d_page ?: head);
 next:
 		/* Huge page is mapped? No need to proceed. */
 		if (pmd_trans_huge(*vmf->pmd))
 			break;
+		d_page = NULL;
 	}
 	rcu_read_unlock();
 	WRITE_ONCE(file->f_ra.mmap_miss, mmap_miss);
