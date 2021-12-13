@@ -385,7 +385,7 @@ struct tegra_xusb_lane *tegra_xusb_find_lane(struct tegra_xusb_padctl *padctl,
 
 	name = kasprintf(GFP_KERNEL, "%s-%u", type, index);
 	if (!name)
-		return ERR_PTR(-ENOMEM);
+		return NULL;
 
 	list_for_each_entry(lane, &padctl->lanes, list) {
 		if (strcmp(lane->soc->name, name) == 0) {
