@@ -15,7 +15,9 @@
 #include <linux/err.h>
 #include <linux/rbtree_latch.h>
 #include <linux/numa.h>
+#include <linux/mm_types.h>
 #include <linux/wait.h>
+#include <linux/mutex.h>
 
 struct bpf_verifier_env;
 struct perf_event;
@@ -52,6 +54,7 @@ struct bpf_map_ops {
 	int (*map_check_btf)(const struct bpf_map *map,
 			     const struct btf_type *key_type,
 			     const struct btf_type *value_type);
+	int (*map_mmap)(struct bpf_map *map, struct vm_area_struct *vma);
 };
 
 struct bpf_map_memory {
@@ -79,8 +82,9 @@ struct bpf_map {
 	u32 btf_value_type_id;
 	struct btf *btf;
 	struct bpf_map_memory memory;
+	char name[BPF_OBJ_NAME_LEN];
 	bool unpriv_array;
-	/* 47 bytes hole */
+	/* 31 bytes hole */
 
 	/* The 3rd and 4th cacheline with misc members to avoid false sharing
 	 * particularly with refcounting.
@@ -88,7 +92,8 @@ struct bpf_map {
 	atomic64_t refcnt ____cacheline_aligned;
 	atomic64_t usercnt;
 	struct work_struct work;
-	char name[BPF_OBJ_NAME_LEN];
+	struct mutex freeze_mutex;
+	u64 writecnt; /* writable mmap cnt; protected by freeze_mutex */
 };
 
 struct bpf_offload_dev;
@@ -159,6 +164,7 @@ enum bpf_arg_type {
 
 	ARG_PTR_TO_CTX,		/* pointer to context */
 	ARG_ANYTHING,		/* any (initialized) argument is ok */
+	ARG_PTR_TO_SOCKET,	/* pointer to bpf_sock */
 };
 
 /* type of values returned from helper functions */
@@ -167,6 +173,7 @@ enum bpf_return_type {
 	RET_VOID,			/* function doesn't return anything */
 	RET_PTR_TO_MAP_VALUE,		/* returns a pointer to map elem value */
 	RET_PTR_TO_MAP_VALUE_OR_NULL,	/* returns a pointer to map elem value or NULL */
+	RET_PTR_TO_SOCKET_OR_NULL,	/* returns a pointer to a socket or NULL */
 };
 
 /* eBPF function prototype used by verifier to allow BPF_CALLs from eBPF programs
@@ -217,6 +224,8 @@ enum bpf_reg_type {
 	PTR_TO_PACKET_META,	 /* skb->data - meta_len */
 	PTR_TO_PACKET,		 /* reg points to skb->data */
 	PTR_TO_PACKET_END,	 /* skb->data + headlen */
+	PTR_TO_SOCKET,		 /* reg points to struct bpf_sock */
+	PTR_TO_SOCKET_OR_NULL,	 /* reg points to struct bpf_sock or NULL */
 };
 
 /* The information passed from prog-specific *_is_valid_access
@@ -339,6 +348,11 @@ const struct bpf_func_proto *bpf_get_trace_printk_proto(void);
 
 typedef unsigned long (*bpf_ctx_copy_t)(void *dst, const void *src,
 					unsigned long off, unsigned long len);
+typedef u32 (*bpf_convert_ctx_access_t)(enum bpf_access_type type,
+					const struct bpf_insn *src,
+					struct bpf_insn *dst,
+					struct bpf_prog *prog,
+					u32 *target_size);
 
 u64 bpf_event_output(struct bpf_map *map, u64 flags, void *meta, u64 meta_size,
 		     void *ctx, u64 ctx_size, bpf_ctx_copy_t ctx_copy);
@@ -462,6 +476,7 @@ void bpf_map_charge_finish(struct bpf_map_memory *mem);
 void bpf_map_charge_move(struct bpf_map_memory *dst,
 			 struct bpf_map_memory *src);
 void *bpf_map_area_alloc(size_t size, int numa_node);
+void *bpf_map_area_mmapable_alloc(size_t size, int numa_node);
 void bpf_map_area_free(void *base);
 void bpf_map_init_from_attr(struct bpf_map *map, union bpf_attr *attr);
 
@@ -833,5 +848,30 @@ extern const struct bpf_func_proto bpf_get_local_storage_proto;
 /* Shared helpers among cBPF and eBPF. */
 void bpf_user_rnd_init_once(void);
 u64 bpf_user_rnd_u32(u64 r1, u64 r2, u64 r3, u64 r4, u64 r5);
+
+#if defined(CONFIG_NET)
+bool bpf_sock_is_valid_access(int off, int size, enum bpf_access_type type,
+			      struct bpf_insn_access_aux *info);
+u32 bpf_sock_convert_ctx_access(enum bpf_access_type type,
+				const struct bpf_insn *si,
+				struct bpf_insn *insn_buf,
+				struct bpf_prog *prog,
+				u32 *target_size);
+#else
+static inline bool bpf_sock_is_valid_access(int off, int size,
+					    enum bpf_access_type type,
+					    struct bpf_insn_access_aux *info)
+{
+	return false;
+}
+static inline u32 bpf_sock_convert_ctx_access(enum bpf_access_type type,
+					      const struct bpf_insn *si,
+					      struct bpf_insn *insn_buf,
+					      struct bpf_prog *prog,
+					      u32 *target_size)
+{
+	return 0;
+}
+#endif
 
 #endif /* _LINUX_BPF_H */
