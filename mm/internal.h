@@ -584,4 +584,5 @@ static inline bool is_migrate_highatomic_page(struct page *page)
 
 void setup_zone_pageset(struct zone *zone);
 extern struct page *alloc_new_node_page(struct page *page, unsigned long node);
+extern struct page *alloc_migration_target(struct page *page, unsigned long node);
 #endif	/* __MM_INTERNAL_H */
