@@ -30,7 +30,8 @@
 #include <linux/cacheinfo.h>
 #include <linux/string.h>
 #include <linux/nodemask.h>
-#include <linux/arm_mpam.h>
+#include <asm/mpam_sched.h>
+#include <arm_mpam.h>
 
 /**
  * acpi_mpam_label_cache_component_id() - Recursivly find @min_physid
@@ -253,6 +254,14 @@ int __init acpi_mpam_parse(void)
 	status = acpi_get_table(ACPI_SIG_MPAM, 0, &mpam);
 	if (ACPI_FAILURE(status))
 		return -ENOENT;
+
+	if (!strncmp(mpam->oem_id, "HISI", 4)) {
+		static_branch_enable_cpuslocked(&resctrl_enable_key);
+	} else {
+		static_branch_disable_cpuslocked(&resctrl_enable_key);
+		acpi_put_table(mpam);
+		return 0;
+	}
 
 	/* PPTT is optional, there may be no mpam cache controls */
 	acpi_get_table(ACPI_SIG_PPTT, 0, &pptt);
