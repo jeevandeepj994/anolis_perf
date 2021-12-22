@@ -450,14 +450,12 @@ static int erofs_fc_parse_param(struct fs_context *fc,
 		ctx->bootstrap_path = kstrdup(param->string, GFP_KERNEL);
 		if (!ctx->bootstrap_path)
 			return -ENOMEM;
-		infofc(fc, "RAFS bootstrap_path %s", ctx->bootstrap_path);
 		break;
 	case Opt_blob_dir_path:
 		kfree(ctx->blob_dir_path);
 		ctx->blob_dir_path = kstrdup(param->string, GFP_KERNEL);
 		if (!ctx->blob_dir_path)
 			return -ENOMEM;
-		infofc(fc, "RAFS blob_dir_path %s", ctx->blob_dir_path);
 		break;
 	case Opt_opt_creds:
 		if (!strcmp(param->string, "on")) {
