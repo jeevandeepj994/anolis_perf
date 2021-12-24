@@ -1728,6 +1728,8 @@ finish_iomap:
 
 		if (ret & VM_FAULT_ERROR)
 			copied = 0;
+		else if (ops->iomap_save_private)
+			ops->iomap_save_private(vma, &iomap);
 		/*
 		 * The fault is done by now and there's no way back (other
 		 * thread may be already happily using PTE we have installed).
