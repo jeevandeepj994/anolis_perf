@@ -120,6 +120,7 @@ int smc_cdc_msg_send(struct smc_connection *conn,
 	} else {
 		conn->tx_cdc_seq--;
 		conn->local_tx_ctrl.seqno = conn->tx_cdc_seq;
+		atomic_dec(&conn->cdc_pend_tx_wr);
 	}
 
 	return rc;
