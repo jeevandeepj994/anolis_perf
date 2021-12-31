@@ -7600,14 +7600,17 @@ static int select_idle_core(struct task_struct *p, struct sched_domain *sd, int 
 
 		for_each_cpu(cpu, cpu_smt_mask(core)) {
 			bool is_idle = true;
+			bool is_id_idle_cpu = true;
 
-			if (!id_idle_cpu(p, cpu, is_expellee, &is_idle)) {
+			is_id_idle_cpu = id_idle_cpu(p, cpu, is_expellee, &is_idle);
+			if (!is_idle)
+				idle = false;
+
+			if (!is_id_idle_cpu) {
 				id_idle = false;
 				break;
 			}
 
-			if (!is_idle)
-				idle = false;
 		}
 		cpumask_andnot(cpus, cpus, cpu_smt_mask(core));
 
