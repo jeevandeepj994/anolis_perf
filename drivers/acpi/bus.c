@@ -1244,6 +1244,7 @@ static int __init acpi_init(void)
 		acpi_kobj = NULL;
 	}
 
+	acpi_init_pcc();
 	result = acpi_bus_init();
 	if (result) {
 		kobject_put(acpi_kobj);
