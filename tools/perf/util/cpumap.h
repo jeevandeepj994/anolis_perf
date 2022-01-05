@@ -62,6 +62,4 @@ int cpu_map__build_map(struct perf_cpu_map *cpus, struct perf_cpu_map **res,
 		       void *data);
 
 int cpu_map__cpu(struct perf_cpu_map *cpus, int idx);
-bool cpu_map__has(struct perf_cpu_map *cpus, int cpu);
-
 #endif /* __PERF_CPUMAP_H */
