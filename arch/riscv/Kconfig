@@ -534,6 +534,9 @@ source "drivers/cpuidle/Kconfig"
 source "drivers/cpufreq/Kconfig"
 source "kernel/power/Kconfig"
 
+config ARCH_SUSPEND_POSSIBLE
+	def_bool y
+
 endmenu
 
 source "drivers/firmware/Kconfig"
