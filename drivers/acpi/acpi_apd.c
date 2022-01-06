@@ -163,7 +163,11 @@ static const struct apd_device_desc baba_i2c_desc = {
 	.fixed_clk_rate = 100000000,
 };
 
->>>>>>> 7a652d3d5340 (anolis: I2C: designware i2c support)
+static const struct apd_device_desc baba_spi_desc = {
+	.setup = acpi_apd_setup,
+	.fixed_clk_rate = 125000000,
+};
+
 static const struct apd_device_desc thunderx2_i2c_desc = {
 	.setup = acpi_apd_setup,
 	.fixed_clk_rate = 125000000,
@@ -248,6 +252,7 @@ static const struct acpi_device_id acpi_apd_device_ids[] = {
 	{ "HISI0173", APD_ADDR(hip08_spi_desc) },
 	{ "NXP0001", APD_ADDR(nxp_i2c_desc) },
 	{ "BABA8000", APD_ADDR(baba_i2c_desc) },
+	{ "BABA8030", APD_ADDR(baba_spi_desc)},
 #endif
 	{ }
 };
