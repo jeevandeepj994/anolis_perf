@@ -7,10 +7,10 @@
 #include <linux/dma-mapping.h>
 #include <linux/seq_file.h>
 #include <linux/debugfs.h>
-#include <linux/delay.h>
 
 #include "ycc_dev.h"
 #include "ycc_ring.h"
+#include "ycc_uio.h"
 
 #define YCC_CMD_DESC_SIZE	64
 #define YCC_RESP_DESC_SIZE	16
@@ -20,10 +20,6 @@ extern struct list_head ycc_table;
 extern struct mutex ycc_mutex;
 
 extern void ycc_resp_work_process(struct work_struct *work);
-#ifdef CONFIG_UIO
-int ycc_uio_register(struct ycc_ring *ring) { return 0; };
-void ycc_uio_unregister(struct ycc_ring *ring) { };
-#endif
 
 /*
  * Show the status of specified ring's command queue and
@@ -174,6 +170,10 @@ static int ycc_alloc_rings(struct ycc_dev *ydev)
 		ydev->rings[i].ydev = ydev;
 		ydev->rings[i].csr_vaddr = abar->vaddr + i * YCC_RING_CSR_STRIDE;
 		ydev->rings[i].csr_paddr = abar->paddr + i * YCC_RING_CSR_STRIDE;
+		ydev->rings[i].cmd_wr_ptr = 0;
+		ydev->rings[i].cmd_rd_ptr = 0;
+		ydev->rings[i].resp_wr_ptr = 0;
+		ydev->rings[i].resp_rd_ptr = 0;
 	}
 
 	return 0;
@@ -279,10 +279,7 @@ int ycc_dev_rings_init(struct ycc_dev *ydev, u32 max_desc, int user_rings)
 	int kern_rings = YCC_RINGPAIR_NUM - user_rings;
 	struct pci_dev *pdev = ydev->pdev;
 	struct ycc_ring *ring;
-	int kern_cnt;
-#ifdef CONFIG_UIO
-	int user_cnt;
-#endif
+	int kern_cnt, user_cnt;
 	int ret = 0;
 	int i;
 
@@ -303,7 +300,6 @@ int ycc_dev_rings_init(struct ycc_dev *ydev, u32 max_desc, int user_rings)
 	}
 	kern_cnt = kern_rings;
 
-#ifdef CONFIG_UIO
 	for (i = kern_rings; i < YCC_RINGPAIR_NUM; i++) {
 		ring = &ydev->rings[i];
 		ret = ycc_uio_register(ring);
@@ -312,15 +308,15 @@ int ycc_dev_rings_init(struct ycc_dev *ydev, u32 max_desc, int user_rings)
 			goto free_user_rings;
 		}
 	}
-#endif
+
 	return 0;
-#ifdef CONFIG_UIO
+
 free_user_rings:
 	for (i = 0; i < user_cnt; i++) {
 		ring = &ydev->rings[i + kern_rings];
 		ycc_uio_unregister(ring);
 	}
-#endif
+
 free_kern_rings:
 	for (i = 0; i < kern_cnt; i++) {
 		ring = &ydev->rings[i];
@@ -341,12 +337,12 @@ void ycc_dev_rings_release(struct ycc_dev *ydev, int user_rings)
 		ring = &ydev->rings[i];
 		ycc_release_ring(ring);
 	}
-#ifdef CONFIG_UIO
+
 	for (i = 0; i < user_rings; i++) {
 		ring = &ydev->rings[i + kern_rings];
 		ycc_uio_unregister(ring);
 	}
-#endif
+
 	ycc_free_rings(ydev);
 }
 
