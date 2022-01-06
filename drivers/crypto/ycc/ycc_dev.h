@@ -104,10 +104,13 @@ struct ycc_dev {
 	struct ycc_bar ycc_bars[4];
 	struct ycc_dev *assoc_dev;
 
+	int max_desc;
+	int user_rings;
 	bool is_polling;
 	unsigned long status;
 	struct workqueue_struct *dev_err_q;
 	char err_irq_name[32];
+	struct ycc_ring *rings;
 	struct work_struct work;
 	char *msi_name[48];
 	struct dentry *debug_dir;
