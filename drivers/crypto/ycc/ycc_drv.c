@@ -142,10 +142,6 @@ static int ycc_resource_setup(struct ycc_dev *ydev)
 			goto iounmap_queue_bar;
 	}
 
-#ifndef CONFIG_UIO
-	ydev->user_rings = 0;
-	user_rings = 0;
-#endif
 	ret = ycc_dev_rings_init(ydev, max_desc, user_rings);
 	if (ret) {
 		pr_err("Failed to init ycc rings\n");
@@ -499,6 +495,9 @@ static struct pci_driver ycc_driver = {
 static int __init ycc_drv_init(void)
 {
 	int ret;
+
+	if (user_rings > YCC_RINGPAIR_NUM)
+		user_rings = YCC_RINGPAIR_NUM;
 
 	ret = ycc_cdev_register();
 	if (ret)
