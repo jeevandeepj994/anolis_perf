@@ -49,6 +49,13 @@ static irqreturn_t ycc_g_err_isr(int irq, void *data)
 	return IRQ_HANDLED;
 }
 
+/*
+ * TODO: will implement when ycc ring actually work.
+ */
+void ycc_resp_work_process(struct work_struct *work)
+{
+}
+
 int ycc_enable_msix(struct ycc_dev *ydev)
 {
 	struct pci_dev *rcec_pdev = ydev->assoc_dev->pdev;

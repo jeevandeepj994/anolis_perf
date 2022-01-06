@@ -22,11 +22,16 @@
 
 #include "ycc_isr.h"
 #include "ycc_cdev.h"
+#include "ycc_ring.h"
 
 static const char ycc_name[] = "ycc";
 
+static int max_desc = 256;
+static int user_rings;
 static bool is_polling = true;
+module_param(max_desc, int, 0644);
 module_param(is_polling, bool, 0644);
+module_param(user_rings, int, 0644);
 
 LIST_HEAD(ycc_table);
 DEFINE_MUTEX(ycc_mutex);
@@ -137,11 +142,21 @@ static int ycc_resource_setup(struct ycc_dev *ydev)
 			goto iounmap_queue_bar;
 	}
 
+#ifndef CONFIG_UIO
+	ydev->user_rings = 0;
+	user_rings = 0;
+#endif
+	ret = ycc_dev_rings_init(ydev, max_desc, user_rings);
+	if (ret) {
+		pr_err("Failed to init ycc rings\n");
+		goto iounmap_queue_bar;
+	}
+
 	ret = ycc_enable_msix(ydev);
 	if (ret <= 0) {
 		pr_err("Failed to enable ycc msix, ret:%d\n", ret);
 		ret = (ret == 0) ? -EINVAL : ret;
-		goto iounmap_queue_bar;
+		goto release_rings;
 	}
 
 	ret = ycc_init_global_err(ydev);
@@ -165,12 +180,15 @@ deinit_g_err:
 	ycc_deinit_global_err(ydev);
 disable_msix:
 	ycc_disable_msix(ydev);
+release_rings:
+	ycc_dev_rings_release(ydev, user_rings);
 iounmap_queue_bar:
 	iounmap(abar->vaddr);
 iounmap_cfg_bar:
 	iounmap(cfg_bar->vaddr);
 release_mem_regions:
 	pci_release_regions(pdev);
+
 	return ret;
 }
 
@@ -179,6 +197,7 @@ static void ycc_resource_free(struct ycc_dev *ydev)
 	ycc_deinit_global_err(ydev);
 	ycc_free_irqs(ydev);
 	ycc_disable_msix(ydev);
+	ycc_dev_rings_release(ydev, ydev->user_rings);
 	iounmap(ydev->ycc_bars[YCC_SEC_CFG_BAR].vaddr);
 	iounmap(ydev->ycc_bars[YCC_NSEC_Q_BAR].vaddr);
 	pci_release_regions(ydev->pdev);
@@ -305,6 +324,8 @@ static inline int ycc_rciep_init(struct ycc_dev *ydev, struct pci_dev *pdev)
 
 	ydev->sec = false;
 	ydev->dev_name = ycc_name;
+	ydev->user_rings = user_rings;
+	ydev->max_desc = max_desc;
 	ydev->is_polling = is_polling;
 
 	idr = idr_alloc(&ycc_idr, ydev, 0, YCC_MAX_DEVICES, GFP_KERNEL);
