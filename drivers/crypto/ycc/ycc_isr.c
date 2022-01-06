@@ -9,6 +9,17 @@
 #include <linux/interrupt.h>
 
 #include "ycc_isr.h"
+#include "ycc_dev.h"
+#include "ycc_ring.h"
+
+static irqreturn_t ycc_resp_isr(int irq, void *data)
+{
+	struct ycc_ring *ring = (struct ycc_ring *)data;
+
+	schedule_work(&ring->work);
+
+	return IRQ_HANDLED;
+}
 
 static inline void ycc_clear_bme_and_wait_pending(struct pci_dev *pdev)
 {
@@ -49,11 +60,15 @@ static irqreturn_t ycc_g_err_isr(int irq, void *data)
 	return IRQ_HANDLED;
 }
 
-/*
- * TODO: will implement when ycc ring actually work.
- */
 void ycc_resp_work_process(struct work_struct *work)
 {
+	struct ycc_ring *ring = container_of(work, struct ycc_ring, work);
+
+	ycc_dequeue(ring);
+	if (ring->ydev->is_polling) {
+		udelay(100);
+		schedule_work(work);
+	}
 }
 
 int ycc_enable_msix(struct ycc_dev *ydev)
@@ -94,34 +109,89 @@ static void ycc_cleanup_global_err_workqueue(struct ycc_dev *ydev)
 		destroy_workqueue(ydev->dev_err_q);
 }
 
-/*
- * TODO: Just request irq for global err. Irq for each ring
- * will be requested when ring actually work.
- */
 int ycc_alloc_irqs(struct ycc_dev *ydev)
 {
 	struct pci_dev *rcec_pdev = ydev->assoc_dev->pdev;
 	int num = ydev->is_vf ? 1 : YCC_RINGPAIR_NUM;
+	int cpu, cpus = num_online_cpus();
+	int i, j;
 	int ret;
 
+	/* The 0-47 are rings irqs, 48 is dev error irq */
 	sprintf(ydev->err_irq_name, "ycc_dev_%d_global_err", ydev->id);
 	ret = request_irq(pci_irq_vector(rcec_pdev, num),
 			  ycc_g_err_isr, 0, ydev->err_irq_name, ydev);
-	if (ret)
+	if (ret) {
 		pr_err("Failed to alloc global irq interrupt for dev:%d\n", ydev->id);
+		goto out;
+	}
 
+	if (ydev->is_polling)
+		goto out;
+
+	for (i = 0; i < num; i++) {
+		if (ydev->rings[i].type != KERN_RING)
+			continue;
+
+		ydev->msi_name[i] = kzalloc(16, GFP_KERNEL);
+		if (!ydev->msi_name[i])
+			goto free_irq;
+		snprintf(ydev->msi_name[i], 16, "ycc_ring_%d", i);
+		ret = request_irq(pci_irq_vector(rcec_pdev, i), ycc_resp_isr,
+				  0, ydev->msi_name[i], &ydev->rings[i]);
+		if (ret) {
+			kfree(ydev->msi_name[i]);
+			goto free_irq;
+		}
+		if (!ydev->is_vf)
+			cpu = (i % YCC_RINGPAIR_NUM) % cpus;
+		else
+			cpu = smp_processor_id() % cpus;
+
+		ret = irq_set_affinity_hint(pci_irq_vector(rcec_pdev, i),
+					    get_cpu_mask(cpu));
+		if (ret) {
+			free_irq(pci_irq_vector(rcec_pdev, i), &ydev->rings[i]);
+			kfree(ydev->msi_name[i]);
+			goto free_irq;
+		}
+	}
+
+	return 0;
+
+free_irq:
+	for (j = 0; j < i; j++) {
+		if (ydev->rings[i].type != KERN_RING)
+			continue;
+
+		free_irq(pci_irq_vector(rcec_pdev, j), &ydev->rings[j]);
+		kfree(ydev->msi_name[j]);
+	}
+	free_irq(pci_irq_vector(rcec_pdev, num), ydev);
+out:
 	return ret;
 }
 
-/*
- * TODO: Same as the allocate action.
- */
 void ycc_free_irqs(struct ycc_dev *ydev)
 {
 	struct pci_dev *rcec_pdev = ydev->assoc_dev->pdev;
 	int num = ydev->is_vf ? 1 : YCC_RINGPAIR_NUM;
+	int i;
 
+	/* Free device err irq */
 	free_irq(pci_irq_vector(rcec_pdev, num), ydev);
+
+	if (ydev->is_polling)
+		return;
+
+	for (i = 0; i < num; i++) {
+		if (ydev->rings[i].type != KERN_RING)
+			continue;
+
+		irq_set_affinity_hint(pci_irq_vector(rcec_pdev, i), NULL);
+		free_irq(pci_irq_vector(rcec_pdev, i), &ydev->rings[i]);
+		kfree(ydev->msi_name[i]);
+	}
 }
 
 int ycc_init_global_err(struct ycc_dev *ydev)
