@@ -422,6 +422,8 @@ static unsigned int min_sev_asid;
 static unsigned long *sev_asid_bitmap;
 #define __sme_page_pa(x) __sme_set(page_to_pfn(x) << PAGE_SHIFT)
 
+static const char sev_vm_mnonce[] = "VM_ATTESTATION";
+
 struct enc_region {
 	struct list_head list;
 	unsigned long npages;
@@ -7098,6 +7100,71 @@ out:
 	return r;
 }
 
+static int sev_vm_attestation(struct kvm *kvm, unsigned long gpa, unsigned long len)
+{
+	struct kvm_sev_info *sev = &to_kvm_svm(kvm)->sev_info;
+	struct sev_data_attestation_report *data = NULL;
+	struct page **pages;
+	unsigned long guest_uaddr, n;
+	int ret = 0, offset, error;
+
+	if (!sev_guest(kvm) || (boot_cpu_data.x86_vendor != X86_VENDOR_HYGON))
+		return -ENOTTY;
+
+	/*
+	 * The physical address of guest must valid and page aligned, and
+	 * the length of guest memory region must be page size aligned.
+	 */
+	if (!gpa || (gpa & ~PAGE_MASK) || (len & ~PAGE_MASK)) {
+		pr_err("invalid guest address or length\n");
+		return -EFAULT;
+	}
+
+	guest_uaddr = gfn_to_hva(kvm, gpa_to_gfn(gpa));
+	pages = sev_pin_memory(kvm, guest_uaddr, len, &n, 1);
+	if (!pages)
+		return -ENOMEM;
+
+	/*
+	 * The attestation report must be copied into contiguous memory region,
+	 * lets verify that userspace memory pages are contiguous before we
+	 * issue commmand.
+	 */
+	if (get_num_contig_pages(0, pages, n) != n) {
+		ret = -EINVAL;
+		goto e_unpin_memory;
+	}
+
+	ret = -ENOMEM;
+	data = kzalloc(sizeof(*data), GFP_KERNEL);
+	if (!data)
+		goto e_unpin_memory;
+
+	/* sev_vm_attestation indicates attestation request from guest */
+	if (sizeof(sev_vm_mnonce) >= sizeof(data->mnonce)) {
+		ret = -EINVAL;
+		goto e_free;
+	}
+
+	memcpy(data->mnonce, sev_vm_mnonce, sizeof(sev_vm_mnonce));
+
+	offset = guest_uaddr & (PAGE_SIZE - 1);
+	data->address = __sme_page_pa(pages[0]) + offset;
+	data->len = len;
+
+	data->handle = sev->handle;
+	ret = sev_issue_cmd(kvm, SEV_CMD_ATTESTATION_REPORT, data, &error);
+
+	if (ret)
+		pr_err("vm attestation ret %#x, error %#x\n", ret, error);
+
+e_free:
+	kfree(data);
+e_unpin_memory:
+	sev_unpin_memory(kvm, pages, n);
+	return ret;
+}
+
 static int svm_register_enc_region(struct kvm *kvm,
 				   struct kvm_enc_region *range)
 {
@@ -7352,6 +7419,8 @@ static struct kvm_x86_ops svm_x86_ops __ro_after_init = {
 	.mem_enc_unreg_region = svm_unregister_enc_region,
 
 	.need_emulation_on_page_fault = svm_need_emulation_on_page_fault,
+
+	.vm_attestation = sev_vm_attestation,
 };
 
 static int __init svm_init(void)
