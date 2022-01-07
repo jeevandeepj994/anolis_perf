@@ -76,6 +76,13 @@ enum ycc_cmd_id {
 	YCC_CMD_GCM_DEC,
 	YCC_CMD_CCM_ENC,
 	YCC_CMD_CCM_DEC, /* 0x28 */
+
+	YCC_CMD_RSA_ENC = 0x83,
+	YCC_CMD_RSA_DEC,
+	YCC_CMD_RSA_CRT_DEC,
+	YCC_CMD_RSA_CRT_SIGN,
+	YCC_CMD_RSA_SIGN,
+	YCC_CMD_RSA_VERIFY, /* 0x88 */
 };
 
 struct ycc_crypto_ctx {
@@ -121,10 +128,47 @@ struct ycc_crypto_req {
 	};
 };
 
+#define YCC_RSA_KEY_SZ_512	64
+#define YCC_RSA_KEY_SZ_1536	192
+#define YCC_RSA_CRT_PARAMS	5
+#define YCC_RSA_E_SZ_MAX	8
+#define YCC_CMD_DATA_ALIGN_SZ	64
+#define YCC_PIN_SZ		16
+
+struct ycc_pke_ctx {
+	struct rsa_key *rsa_key;
+
+	void *priv_key_vaddr;
+	dma_addr_t priv_key_paddr;
+	void *pub_key_vaddr;
+	dma_addr_t pub_key_paddr;
+
+	unsigned int key_len;
+	unsigned int e_len;
+	bool crt_mode;
+	struct ycc_ring *ring;
+	struct crypto_akcipher *soft_tfm;
+};
+
+struct ycc_pke_req {
+	void *src_vaddr;
+	dma_addr_t src_paddr;
+	void *dst_vaddr;
+	dma_addr_t dst_paddr;
+
+	struct ycc_cmd_desc desc;
+	union {
+		struct ycc_pke_ctx *ctx;
+	};
+	struct akcipher_request *req;
+};
+
 #define YCC_DEV(ctx)		(&(ctx)->ring->ydev->pdev->dev)
 
 int ycc_sym_register(void);
 void ycc_sym_unregister(void);
 int ycc_aead_register(void);
 void ycc_aead_unregister(void);
+int ycc_pke_register(void);
+void ycc_pke_unregister(void);
 #endif
