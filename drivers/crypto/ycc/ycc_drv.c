@@ -23,6 +23,7 @@
 #include "ycc_isr.h"
 #include "ycc_cdev.h"
 #include "ycc_ring.h"
+#include "ycc_algs.h"
 
 static const char ycc_name[] = "ycc";
 
@@ -32,6 +33,8 @@ static bool is_polling = true;
 module_param(max_desc, int, 0644);
 module_param(is_polling, bool, 0644);
 module_param(user_rings, int, 0644);
+
+atomic_t ycc_algs_refcnt;
 
 LIST_HEAD(ycc_table);
 DEFINE_MUTEX(ycc_mutex);
@@ -43,6 +46,40 @@ DEFINE_MUTEX(ycc_mutex);
  */
 #define YCC_MAX_DEVICES		(98 * 4) /* Assume 4 sockets */
 static DEFINE_IDR(ycc_idr);
+
+int ycc_algorithm_register(void)
+{
+	int ret = 0;
+
+	/* No kernel rings */
+	if (user_rings == YCC_RINGPAIR_NUM)
+		return ret;
+
+	/* Only register once */
+	if (atomic_inc_return(&ycc_algs_refcnt) > 1)
+		return ret;
+
+	ret = ycc_sym_register();
+	if (ret)
+		goto err;
+
+	return 0;
+
+err:
+	atomic_dec(&ycc_algs_refcnt);
+	return ret;
+}
+
+void ycc_algorithm_unregister(void)
+{
+	if (user_rings == YCC_RINGPAIR_NUM)
+		return;
+
+	if (atomic_dec_return(&ycc_algs_refcnt))
+		return;
+
+	ycc_sym_unregister();
+}
 
 static int ycc_device_flr(struct pci_dev *pdev, struct pci_dev *rcec_pdev)
 {
@@ -288,6 +325,7 @@ static void ycc_rcec_unbind(struct ycc_dev *ydev)
 	ycc_resource_free(rciep);
 	rciep->assoc_dev = NULL;
 	rcec->assoc_dev = NULL;
+	ycc_algorithm_unregister();
 }
 
 static int ycc_dev_add(struct ycc_dev *ydev)
@@ -380,8 +418,20 @@ static int ycc_drv_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 	if (ret)
 		goto remove_debugfs;
 
+	if (test_bit(YDEV_STATUS_READY, &ydev->status)) {
+		ret = ycc_algorithm_register();
+		if (ret) {
+			pr_err("Failed to register algorithm\n");
+			clear_bit(YDEV_STATUS_READY, &ydev->status);
+			clear_bit(YDEV_STATUS_READY, &ydev->assoc_dev->status);
+			goto dev_del;
+		}
+	}
+
 	return ret;
 
+dev_del:
+	ycc_dev_del(ydev);
 remove_debugfs:
 	if (ydev->type == YCC_RCIEP) {
 		debugfs_remove_recursive(ydev->debug_dir);
@@ -498,6 +548,8 @@ static int __init ycc_drv_init(void)
 
 	if (user_rings > YCC_RINGPAIR_NUM)
 		user_rings = YCC_RINGPAIR_NUM;
+
+	atomic_set(&ycc_algs_refcnt, 0);
 
 	ret = ycc_cdev_register();
 	if (ret)

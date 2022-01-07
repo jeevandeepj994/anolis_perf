@@ -151,4 +151,7 @@ static inline void ycc_g_err_unmask(void *vaddr)
 	YCC_CSR_WR(vaddr, REG_YCC_DEV_INT_MASK, 0);
 }
 
+int ycc_algorithm_register(void);
+void ycc_algorithm_unregister(void);
+
 #endif
