@@ -86,9 +86,32 @@ struct ycc_aead_cmd {
 	u8 taglen;	/* authenc size */
 } __packed;
 
+struct ycc_rsa_enc_cmd {
+	u8 cmd_id;
+	u64 sptr:48;
+	u16 key_id;
+	u64 keyptr:48;	/* public key e+n Bytes */
+	u16 elen;	/* bits not byte */
+	u16 nlen;
+	u64 dptr:48;
+} __packed;
+
+struct ycc_rsa_dec_cmd {
+	u8 cmd_id;
+	u64 sptr:48;
+	u16 key_id;
+	u16 kek_id;
+	u64 keyptr:48;	/* private key e + pin + d + n */
+	u16 elen;	/* bits not byte */
+	u16 nlen;
+	u64 dptr:48;
+} __packed;
+
 union ycc_real_cmd {
 	struct ycc_skcipher_cmd ske_cmd;
 	struct ycc_aead_cmd aead_cmd;
+	struct ycc_rsa_enc_cmd rsa_enc_cmd;
+	struct ycc_rsa_dec_cmd rsa_dec_cmd;
 	u8 padding[32];
 };
 
