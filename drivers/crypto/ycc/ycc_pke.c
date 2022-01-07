@@ -5,6 +5,8 @@
 #include <linux/dma-mapping.h>
 #include <linux/crypto.h>
 #include <linux/mpi.h>
+
+#include "sm2signature_asn1.h"
 #include "ycc_algs.h"
 
 static int ycc_rsa_done_callback(void *ptr, u16 state)
@@ -663,6 +665,222 @@ static void ycc_rsa_exit(struct crypto_akcipher *tfm)
 	crypto_free_akcipher(ctx->soft_tfm);
 }
 
+#define MPI_NBYTES(m)	((mpi_get_nbits(m) + 7) / 8)
+
+static int ycc_sm2_done_callback(void *ptr, u16 state)
+{
+	struct ycc_pke_req *sm2_req = (struct ycc_pke_req *)ptr;
+	struct ycc_pke_ctx *ctx = sm2_req->ctx;
+	struct akcipher_request *req = sm2_req->req;
+	struct device *dev = YCC_DEV(ctx);
+
+	dma_free_coherent(dev, 128, sm2_req->src_vaddr, sm2_req->src_paddr);
+
+	if (req->base.complete)
+		req->base.complete(&req->base, state == CMD_SUCCESS ? 0 : -EBADMSG);
+	return 0;
+}
+
+struct sm2_signature_ctx {
+	MPI sig_r;
+	MPI sig_s;
+};
+
+int sm2_get_signature_r(void *context, size_t hdrlen, unsigned char tag,
+			const void *value, size_t vlen)
+{
+	struct sm2_signature_ctx *sig = context;
+
+	if (!value || !vlen)
+		return -EINVAL;
+
+	sig->sig_r = mpi_read_raw_data(value, vlen);
+	if (!sig->sig_r)
+		return -ENOMEM;
+
+	return 0;
+}
+
+int sm2_get_signature_s(void *context, size_t hdrlen, unsigned char tag,
+			const void *value, size_t vlen)
+{
+	struct sm2_signature_ctx *sig = context;
+
+	if (!value || !vlen)
+		return -EINVAL;
+
+	sig->sig_s = mpi_read_raw_data(value, vlen);
+	if (!sig->sig_s)
+		return -ENOMEM;
+
+	return 0;
+}
+
+static int ycc_sm2_verify(struct akcipher_request *req)
+{
+	struct crypto_akcipher *tfm = crypto_akcipher_reqtfm(req);
+	struct ycc_pke_req *sm2_req = akcipher_request_ctx(req);
+	struct ycc_pke_ctx *ctx = akcipher_tfm_ctx(tfm);
+	struct ycc_sm2_verify_cmd *sm2_verify_cmd;
+	struct ycc_dev *ydev = ctx->ring->ydev;
+	struct ycc_ring *ring = ctx->ring;
+	struct device *dev = YCC_DEV(ctx);
+	struct sm2_signature_ctx sig;
+	struct ycc_flags *aflags;
+	u8 buffer[80] = {0};
+	int ret;
+
+	/* Do software fallback */
+	if (!test_bit(YDEV_STATUS_READY, &ydev->status) || ctx->key_len) {
+		akcipher_request_set_tfm(req, ctx->soft_tfm);
+		ret = crypto_akcipher_verify(req);
+		akcipher_request_set_tfm(req, tfm);
+		return ret;
+	}
+
+	if (req->src_len > 72 || req->src_len < 70 || req->dst_len != 32)
+		return -EINVAL;
+
+	sm2_req->ctx = ctx;
+	sm2_req->req = req;
+
+	sg_copy_buffer(req->src, sg_nents(req->src), buffer, req->src_len, 0, 1);
+	sig.sig_r = NULL;
+	sig.sig_s = NULL;
+	ret = asn1_ber_decoder(&sm2signature_decoder, &sig, buffer, req->src_len);
+	if (ret)
+		return -EINVAL;
+
+	ret = mpi_print(GCRYMPI_FMT_USG, buffer, MPI_NBYTES(sig.sig_r),
+			(size_t *)NULL, sig.sig_r);
+	if (ret)
+		return -EINVAL;
+
+	ret = mpi_print(GCRYMPI_FMT_USG, buffer + MPI_NBYTES(sig.sig_r),
+			MPI_NBYTES(sig.sig_s), (size_t *)NULL, sig.sig_s);
+	if (ret)
+		return -EINVAL;
+
+	ret = -ENOMEM;
+	/* Alloc dma for src, as verify has no output */
+	sm2_req->src_vaddr = dma_alloc_coherent(dev, 128, &sm2_req->src_paddr,
+						GFP_ATOMIC);
+	if (!sm2_req->src_vaddr)
+		goto out;
+
+	sg_copy_buffer(req->src, sg_nents(req->src), sm2_req->src_vaddr,
+		       req->dst_len, req->src_len, 1);
+	memcpy(sm2_req->src_vaddr + 32, buffer, 64);
+
+	sm2_req->dst_vaddr = NULL;
+
+	aflags = kzalloc(sizeof(struct ycc_flags), GFP_ATOMIC);
+	if (!aflags)
+		goto free_src;
+
+	aflags->ptr = (void *)sm2_req;
+	aflags->ycc_done_callback = ycc_sm2_done_callback;
+
+	memset(&sm2_req->desc, 0, sizeof(sm2_req->desc));
+	sm2_req->desc.private_ptr = (u64)(void *)aflags;
+
+	sm2_verify_cmd         = &sm2_req->desc.cmd.sm2_verify_cmd;
+	sm2_verify_cmd->cmd_id = YCC_CMD_SM2_VERIFY;
+	sm2_verify_cmd->sptr   = sm2_req->src_paddr;
+	sm2_verify_cmd->keyptr = ctx->pub_key_paddr;
+
+	ret = ycc_enqueue(ring, (u8 *)&sm2_req->desc);
+	if (!ret)
+		return -EINPROGRESS;
+
+	kfree(aflags);
+free_src:
+	dma_free_coherent(dev, 128, sm2_req->src_vaddr, sm2_req->src_paddr);
+out:
+	return ret;
+}
+
+static unsigned int ycc_sm2_max_size(struct crypto_akcipher *tfm)
+{
+	return PAGE_SIZE;
+}
+
+static int ycc_sm2_setpubkey(struct crypto_akcipher *tfm, const void *key,
+			     unsigned int keylen)
+{
+	struct ycc_pke_ctx *ctx = akcipher_tfm_ctx(tfm);
+	struct device *dev = YCC_DEV(ctx);
+	int ret;
+
+	ret = crypto_akcipher_set_pub_key(ctx->soft_tfm, key, keylen);
+	if (ret)
+		return ret;
+
+	/* Always alloc 64 bytes for pub key */
+	ctx->pub_key_vaddr = dma_alloc_coherent(dev, 64, &ctx->pub_key_paddr,
+						GFP_KERNEL);
+	if (!ctx->pub_key_vaddr)
+		return -ENOMEM;
+
+	/*
+	 * Uncompressed key 65 bytes with 0x04 flag
+	 * Compressed key 33 bytes with 0x02 or 0x03 flag
+	 */
+	switch (keylen) {
+	case 65:
+		if (*(u8 *)key != 0x04)
+			return -EINVAL;
+		memcpy(ctx->pub_key_vaddr, key + 1, 64);
+		break;
+	case 64:
+		memcpy(ctx->pub_key_vaddr, key, 64);
+		break;
+	case 33:
+		return 0; /* TODO: use sw temporary */
+	default:
+		return -EINVAL;
+	}
+
+	return 0;
+}
+
+static int ycc_sm2_init(struct crypto_akcipher *tfm)
+{
+	struct ycc_pke_ctx *ctx = akcipher_tfm_ctx(tfm);
+	struct ycc_ring *ring;
+
+	ctx->soft_tfm = crypto_alloc_akcipher("sm2-generic", 0, 0);
+	if (IS_ERR(ctx->soft_tfm))
+		return PTR_ERR(ctx->soft_tfm);
+
+	/* Reserve enough space if soft request reqires additional space */
+	akcipher_set_reqsize(tfm, sizeof(struct ycc_pke_req) +
+			     crypto_akcipher_alg(ctx->soft_tfm)->reqsize);
+
+	ring = ycc_crypto_get_ring();
+	if (!ring) {
+		crypto_free_akcipher(ctx->soft_tfm);
+		return -ENODEV;
+	}
+
+	ctx->ring = ring;
+	return 0;
+}
+
+static void ycc_sm2_exit(struct crypto_akcipher *tfm)
+{
+	struct ycc_pke_ctx *ctx = akcipher_tfm_ctx(tfm);
+	struct device *dev = YCC_DEV(ctx);
+
+	if (ctx->ring)
+		ycc_crypto_free_ring(ctx->ring);
+
+	if (ctx->pub_key_vaddr)
+		dma_free_coherent(dev, 64, ctx->pub_key_vaddr, ctx->pub_key_paddr);
+
+	crypto_free_akcipher(ctx->soft_tfm);
+}
+
 static struct akcipher_alg ycc_rsa = {
 	.base = {
 		.cra_name = "rsa",
@@ -682,12 +900,42 @@ static struct akcipher_alg ycc_rsa = {
 	.exit = ycc_rsa_exit,
 };
 
+static struct akcipher_alg ycc_sm2 = {
+	.base = {
+		.cra_name = "sm2",
+		.cra_driver_name = "ycc-sm2",
+		.cra_priority = 1000,
+		.cra_module = THIS_MODULE,
+		.cra_ctxsize = sizeof(struct ycc_pke_ctx),
+	},
+	.verify = ycc_sm2_verify,
+	.set_pub_key = ycc_sm2_setpubkey,
+	.max_size = ycc_sm2_max_size,
+	.init = ycc_sm2_init,
+	.exit = ycc_sm2_exit,
+};
+
 int ycc_pke_register(void)
 {
-	return crypto_register_akcipher(&ycc_rsa);
+	int ret;
+
+	ret = crypto_register_akcipher(&ycc_rsa);
+	if (ret) {
+		pr_err("Failed to register rsa\n");
+		return ret;
+	}
+
+	ret = crypto_register_akcipher(&ycc_sm2);
+	if (ret) {
+		crypto_unregister_akcipher(&ycc_rsa);
+		pr_err("Failed to register sm2\n");
+	}
+
+	return ret;
 }
 
 void ycc_pke_unregister(void)
 {
 	crypto_unregister_akcipher(&ycc_rsa);
+	crypto_unregister_akcipher(&ycc_sm2);
 }

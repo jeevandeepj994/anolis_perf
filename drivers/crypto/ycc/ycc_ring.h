@@ -107,11 +107,19 @@ struct ycc_rsa_dec_cmd {
 	u64 dptr:48;
 } __packed;
 
+struct ycc_sm2_verify_cmd {
+	u8 cmd_id;
+	u64 sptr:48;
+	u16 key_id;
+	u64 keyptr:48;
+} __packed;
+
 union ycc_real_cmd {
 	struct ycc_skcipher_cmd ske_cmd;
 	struct ycc_aead_cmd aead_cmd;
 	struct ycc_rsa_enc_cmd rsa_enc_cmd;
 	struct ycc_rsa_dec_cmd rsa_dec_cmd;
+	struct ycc_sm2_verify_cmd sm2_verify_cmd;
 	u8 padding[32];
 };
 

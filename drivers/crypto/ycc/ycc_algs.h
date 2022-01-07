@@ -77,6 +77,8 @@ enum ycc_cmd_id {
 	YCC_CMD_CCM_ENC,
 	YCC_CMD_CCM_DEC, /* 0x28 */
 
+	YCC_CMD_SM2_VERIFY = 0x47,
+
 	YCC_CMD_RSA_ENC = 0x83,
 	YCC_CMD_RSA_DEC,
 	YCC_CMD_RSA_CRT_DEC,
