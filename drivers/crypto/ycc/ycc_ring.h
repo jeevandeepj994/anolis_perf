@@ -55,18 +55,26 @@ struct ycc_flags {
 	int (*ycc_done_callback)(void *ptr, u16 state);
 };
 
-
 struct ycc_resp_desc {
 	u64 private_ptr;
 	u16 state;
 	u8 reserved[6];
 };
 
+struct ycc_skcipher_cmd {
+	u8 cmd_id;
+	u8 mode;
+	u64 sptr:48;
+	u64 dptr:48;
+	u32 dlen;
+	u16 key_idx;	/* key used to decrypt kek */
+	u8 reserved[2];
+	u64 keyptr:48;
+	u8 padding;
+} __packed;
+
 union ycc_real_cmd {
-	/*
-	 * TODO: Real command will implement when
-	 * corresponding algorithm is ready
-	 */
+	struct ycc_skcipher_cmd ske_cmd;
 	u8 padding[32];
 };
 
