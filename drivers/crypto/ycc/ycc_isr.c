@@ -36,6 +36,28 @@ static inline void ycc_set_bme(struct pci_dev *pdev)
 	pci_set_master(pdev);
 }
 
+static int ycc_send_uevent(struct ycc_dev *ydev, const char *event)
+{
+	char *envp[3];
+	char *dev_id;
+	int ret;
+
+	dev_id = kasprintf(GFP_ATOMIC, "YCC_DEVID=%d", ydev->id);
+	if (!dev_id)
+		return -ENOMEM;
+
+	envp[0] = (char *)event;
+	envp[1] = dev_id;
+	envp[2] = NULL;
+
+	ret = kobject_uevent_env(&ydev->pdev->dev.kobj, KOBJ_CHANGE, envp);
+	if (ret)
+		pr_err("Failed to send uevent for ycc:%d\n", ydev->id);
+
+	kfree(dev_id);
+	return ret;
+}
+
 static void ycc_fatal_error(struct ycc_dev *ydev)
 {
 	struct ycc_ring *ring;
@@ -59,6 +81,12 @@ static void ycc_fatal_error(struct ycc_dev *ydev)
 
 		ycc_clear_ring(ring, pending_cmd);
 	}
+
+	/*
+	 * After ring had been cleared, we should notify
+	 * user space that ycc has fatal error
+	 */
+	ycc_send_uevent(ydev, "YCC_STATUS=fatal");
 }
 
 static void ycc_process_global_err(struct work_struct *work)
@@ -76,6 +104,9 @@ static void ycc_process_global_err(struct work_struct *work)
 
 	/* First disable ycc mastering, no new transactions */
 	ycc_clear_bme_and_wait_pending(ydev->pdev);
+
+	/* Notify user space ycc is in error handling */
+	ycc_send_uevent(ydev, "YCC_STATUS=stopped");
 
 	hclk_err = YCC_CSR_RD(cfg_bar->vaddr, REG_YCC_HCLK_INT_STATUS);
 	xclk_err = YCC_CSR_RD(cfg_bar->vaddr, REG_YCC_XCLK_INT_STATUS);
@@ -122,6 +153,7 @@ static void ycc_process_global_err(struct work_struct *work)
 	ycc_g_err_unmask(cfg_bar->vaddr);
 	clear_bit(YDEV_STATUS_ERR, &ydev->status);
 	set_bit(YDEV_STATUS_READY, &ydev->status);
+	ycc_send_uevent(ydev, "YCC_STATUS=ready");
 }
 
 static irqreturn_t ycc_g_err_isr(int irq, void *data)
