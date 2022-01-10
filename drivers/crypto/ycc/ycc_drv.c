@@ -24,6 +24,7 @@
 #include "ycc_cdev.h"
 #include "ycc_ring.h"
 #include "ycc_algs.h"
+#include "ycc_uio.h"
 
 static const char ycc_name[] = "ycc";
 
@@ -439,18 +440,30 @@ static int ycc_drv_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 	if (ret)
 		goto remove_debugfs;
 
+	if (ydev->type == YCC_RCIEP) {
+		/* TODO: add dev refcnt in ycc bind iommu domain */
+		ret = ycc_bind_iommu_domain(pdev, ydev->id);
+		if (ret) {
+			pr_err("Failed to bind iommu domain for ycc pci device\n");
+			goto dev_del;
+		}
+	}
+
 	if (test_bit(YDEV_STATUS_READY, &ydev->status)) {
 		ret = ycc_algorithm_register();
 		if (ret) {
 			pr_err("Failed to register algorithm\n");
 			clear_bit(YDEV_STATUS_READY, &ydev->status);
 			clear_bit(YDEV_STATUS_READY, &ydev->assoc_dev->status);
-			goto dev_del;
+			goto unbind_domain;
 		}
 	}
 
 	return ret;
 
+unbind_domain:
+	if (ydev->type == YCC_RCIEP)
+		ycc_unbind_iommu_domain(pdev, ydev->id);
 dev_del:
 	ycc_dev_del(ydev);
 remove_debugfs:
@@ -472,6 +485,7 @@ static void ycc_drv_remove(struct pci_dev *pdev)
 
 	ycc_dev_del(ydev);
 	if (ydev->type == YCC_RCIEP) {
+		ycc_unbind_iommu_domain(pdev, ydev->id);
 		debugfs_remove_recursive(ydev->debug_dir);
 		idr_remove(&ycc_idr, ydev->id);
 	}
@@ -572,15 +586,22 @@ static int __init ycc_drv_init(void)
 
 	atomic_set(&ycc_algs_refcnt, 0);
 
-	ret = ycc_cdev_register();
+	ret = ycc_udma_init();
 	if (ret)
 		goto err;
+
+	ret = ycc_cdev_register();
+	if (ret)
+		goto udma_exit;
 
 	ret = pci_register_driver(&ycc_driver);
 	if (ret)
 		goto cdev_unregister;
 
 	return 0;
+
+udma_exit:
+	ycc_udma_exit();
 cdev_unregister:
 	ycc_cdev_unregister();
 err:
@@ -591,6 +612,7 @@ static void __exit ycc_drv_exit(void)
 {
 	ycc_cdev_unregister();
 	pci_unregister_driver(&ycc_driver);
+	ycc_udma_exit();
 }
 
 module_init(ycc_drv_init);
