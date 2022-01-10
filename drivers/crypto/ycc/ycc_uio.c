@@ -8,9 +8,14 @@
 #include <linux/pci.h>
 #include <linux/uio.h>
 #include <linux/delay.h>
+#include <linux/hashtable.h>
+#include <linux/iommu.h>
+#include <linux/miscdevice.h>
+#include <linux/version.h>
 
 #include "ycc_ring.h"
 #include "ycc_dev.h"
+#include "ycc_uio.h"
 
 #define YCC_UIO_REMAP_SIZE	0x1000
 
@@ -186,4 +191,431 @@ void ycc_uio_unregister(struct ycc_ring *ring)
 	kfree(info->mem[0].name);
 	kfree(info);
 	ring->uio_info = NULL;
+}
+
+static DEFINE_MUTEX(ycc_mem_lock);
+/*
+ * Each fd corresponding 1 info list. If there're multiple
+ * fd opened, link itself
+ */
+struct ycc_udma_info_list {
+	int pid; /* process id */
+	DECLARE_HASHTABLE(udma_slot, PAGE_SHIFT);
+	struct list_head fd_list;
+	struct ycc_udma_large_info large_mem;
+};
+
+struct ycc_udma_kern_info {
+	void *virt_addr; /* mem block start address */
+	dma_addr_t dma_addr;
+	size_t size;
+	struct hlist_node udma_hlist;
+};
+
+#define YCC_UIO_DEV_NR		(2)
+
+static struct iommu_domain *ycc_domains[YCC_UIO_DEV_NR];
+static bool ycc_need_map = true;
+
+/*
+ * TODO: We don't allocate actual iommu_domain now.
+ */
+static inline int ycc_alloc_iommu_domain(void)
+{
+	if (!iommu_present(&pci_bus_type) || iommu_default_passthrough())
+		ycc_need_map = false;
+
+	return 0;
+}
+
+/*
+ * TODO: We don't free actual iommu_domain now.
+ */
+static void ycc_free_iommu_domain(void)
+{
+}
+
+int ycc_bind_iommu_domain(struct pci_dev *pdev, int id)
+{
+	struct iommu_domain *domain;
+
+	if (!ycc_need_map)
+		return 0;
+
+	if (id >= YCC_UIO_DEV_NR)
+		return -EINVAL;
+
+	domain = iommu_get_domain_for_dev(&pdev->dev);
+	ycc_domains[id] = domain;
+
+	return 0;
+}
+
+void ycc_unbind_iommu_domain(struct pci_dev *pdev, int id)
+{
+	if (!ycc_need_map)
+		return;
+
+	if (id >= YCC_UIO_DEV_NR)
+		return;
+
+	ycc_domains[id] = NULL;
+}
+
+
+#define YCC_SZ_2M	(2ULL << 20)
+#define YCC_2M_MASK	(YCC_SZ_2M - 1)
+/*
+ * Direct mapping, iova equals phys.
+ * So we don't use dma api, just phys_to_virt/virt_to_phys
+ */
+static int ycc_mem_map(void *vaddr, size_t size)
+{
+	phys_addr_t paddr;
+	dma_addr_t iova;
+	int ret = 0;
+
+	if (!ycc_need_map)
+		return 0;
+
+	paddr = virt_to_phys(vaddr);
+	iova = paddr;
+
+	if (ycc_domains[0]) {
+		ret = iommu_map(ycc_domains[0], iova, paddr, size, IOMMU_READ|IOMMU_WRITE);
+		if (ret)
+			goto out;
+	}
+
+	if (ycc_domains[1] && ycc_domains[1] != ycc_domains[0]) {
+		ret = iommu_map(ycc_domains[1], iova, paddr, size, IOMMU_READ|IOMMU_WRITE);
+		if (ret) {
+			if (ycc_domains[0])
+				iommu_unmap(ycc_domains[0], iova, size);
+
+			goto out;
+		}
+	}
+
+	if ((u64)iova & YCC_2M_MASK)
+		pr_debug("udma: iova=0x%llx, is not 2M aligned? %llx\n",
+			(u64)iova, (u64)iova & YCC_2M_MASK);
+out:
+	return ret;
+}
+
+static void ycc_mem_unmap(void *vaddr, size_t size)
+{
+	dma_addr_t iova;
+
+	if (!ycc_need_map)
+		return;
+
+	/* As we are direct mapping */
+	iova = (dma_addr_t)virt_to_phys(vaddr);
+	if (ycc_domains[0])
+		iommu_unmap(ycc_domains[0], iova, size);
+	if (ycc_domains[1] && ycc_domains[1] != ycc_domains[0])
+		iommu_unmap(ycc_domains[1], iova, size);
+}
+
+static inline int ycc_get_hash_key(dma_addr_t phys_addr)
+{
+	return (phys_addr >> 20) & ~PAGE_MASK;
+}
+
+static inline void ycc_udma_add_hash(struct ycc_udma_info_list *info_list,
+				     struct ycc_udma_kern_info *kern_info)
+{
+	int key = ycc_get_hash_key(kern_info->dma_addr);
+
+	hash_add_rcu(info_list->udma_slot, &kern_info->udma_hlist, key);
+}
+
+static inline void ycc_udma_del_hash(struct ycc_udma_kern_info *kern_info)
+{
+	hash_del_rcu(&kern_info->udma_hlist);
+}
+
+static inline struct ycc_udma_kern_info *ycc_udma_find_kern(struct ycc_udma_info_list *info_list,
+							    dma_addr_t dma_addr)
+{
+	int key = ycc_get_hash_key(dma_addr);
+	struct ycc_udma_kern_info *kern_info = NULL;
+
+	rcu_read_lock();
+	hash_for_each_possible_rcu(info_list->udma_slot, kern_info, udma_hlist, key) {
+		if (kern_info->dma_addr == dma_addr)
+			break;
+
+		kern_info = NULL;
+	}
+	rcu_read_unlock();
+
+	return kern_info;
+}
+
+#define YCC_MEGA_SHIFT 20
+#define YCC_UDMA_SIZE (2 << YCC_MEGA_SHIFT)
+#define YCC_UDMA_SIZE_MASK (~(YCC_UDMA_SIZE - 1))
+#define YCC_UDMA_ALIGN(size) ((size + YCC_UDMA_SIZE - 1) & (YCC_UDMA_SIZE_MASK))
+
+static struct ycc_udma_info *ycc_udma_mem_alloc(struct ycc_udma_info_list *info_list,
+						size_t size,
+						int node)
+{
+	struct ycc_udma_info *mem_info;
+	struct ycc_udma_kern_info *kern_info;
+
+	if (node != NUMA_NO_NODE && (node < 0 || node > MAX_NUMNODES))
+		node = 0;
+
+	kern_info = kzalloc(sizeof(struct ycc_udma_kern_info), GFP_KERNEL);
+	if (!kern_info)
+		return NULL;
+
+	/* Always allocate 2M */
+	size = YCC_UDMA_ALIGN(size);
+
+	mem_info = kzalloc_node(size, GFP_KERNEL, cpu_to_node(smp_processor_id()));
+	if (!mem_info) {
+		kfree(kern_info);
+		return NULL;
+	}
+
+	if (((u64)mem_info & YCC_2M_MASK))
+		pr_debug("ycc mem info: va:0x%llx  mask:0x%llx result:%llu\n",
+			(u64)mem_info, YCC_2M_MASK, ((u64)mem_info & YCC_2M_MASK));
+
+	if (ycc_mem_map(mem_info, size)) {
+		kfree(mem_info);
+		kfree(kern_info);
+		return NULL;
+	}
+
+	/* TODO: reuse structure for mem_info and kern_info */
+	mem_info->size = size;
+	mem_info->virt_addr = mem_info;
+	mem_info->dma_addr = virt_to_phys(mem_info->virt_addr);
+
+	kern_info->virt_addr = mem_info->virt_addr;
+	kern_info->dma_addr = mem_info->dma_addr;
+	kern_info->size = mem_info->size;
+
+	ycc_udma_add_hash(info_list, kern_info);
+	pr_debug("udma Allocated:%llx, %llx\n", (u64)kern_info->virt_addr, kern_info->dma_addr);
+
+	return mem_info;
+}
+
+static void ycc_udma_mem_large_alloc(struct ycc_udma_large_info *large_info)
+{
+	void *mem = NULL;
+
+	if (!large_info)
+		return;
+
+	mem = kzalloc_node(LARGE_ALLOC_SIZE, GFP_KERNEL, cpu_to_node(smp_processor_id()));
+	if (!mem)
+		return;
+
+	if (ycc_mem_map(mem, LARGE_ALLOC_SIZE)) {
+		kfree(mem);
+		return;
+	}
+
+	large_info->virt_addr = mem;
+	large_info->dma_addr = virt_to_phys(mem);
+}
+
+static void ycc_udma_mem_free(struct ycc_udma_info_list *info_list, dma_addr_t dma_addr)
+{
+	struct ycc_udma_kern_info *kern_info;
+
+	kern_info = ycc_udma_find_kern(info_list, dma_addr);
+	if (!kern_info)
+		return;
+	ycc_udma_del_hash(kern_info);
+	ycc_mem_unmap(kern_info->virt_addr, kern_info->size);
+	kfree(kern_info->virt_addr);
+	kfree(kern_info);
+}
+
+static void ycc_udma_mem_large_free(struct ycc_udma_large_info *large_info)
+{
+	if (!large_info)
+		return;
+
+	ycc_mem_unmap(large_info->virt_addr, LARGE_ALLOC_SIZE);
+	kfree(large_info->virt_addr);
+	memset(large_info, 0, sizeof(struct ycc_udma_large_info));
+}
+
+static int ycc_udma_open(struct inode *inode, struct file *filp)
+{
+	struct ycc_udma_info_list *info_list;
+
+	info_list = kzalloc(sizeof(struct ycc_udma_info_list), GFP_KERNEL);
+	if (!info_list)
+		return -ENOMEM;
+
+	info_list->pid = current->tgid;
+	hash_init(info_list->udma_slot);
+	filp->private_data = (void *)info_list;
+
+	return 0;
+}
+
+static int ycc_udma_release(struct inode *inode, struct file *filep)
+{
+	struct ycc_udma_info_list *info_list = (struct ycc_udma_info_list *)filep->private_data;
+	struct ycc_udma_kern_info *kern_info;
+	int bkt;
+
+	hash_for_each(info_list->udma_slot, bkt, kern_info, udma_hlist) {
+		pr_debug("releasing: %llx, %llx\n", (u64)kern_info->virt_addr, kern_info->dma_addr);
+		ycc_udma_del_hash(kern_info);
+		ycc_mem_unmap(kern_info->virt_addr, kern_info->size);
+		kfree(kern_info->virt_addr);
+		kfree(kern_info);
+	}
+
+	if ((info_list->large_mem).virt_addr)
+		ycc_udma_mem_large_free(&info_list->large_mem);
+
+	kfree(info_list);
+	filep->private_data = NULL;
+	return 0;
+}
+
+static long ycc_udma_ioctl(struct file *filep, uint cmd, ulong args)
+{
+	struct ycc_udma_info user_info, *mem_info;
+	struct ycc_udma_info_list *info_list = (struct ycc_udma_info_list *)filep->private_data;
+	int ret = 0;
+
+	mutex_lock(&ycc_mem_lock);
+	switch (cmd) {
+	case YCC_IOC_MEM_ALLOC:
+		ret = copy_from_user(&user_info, (struct ycc_udma_info *)args, sizeof(user_info));
+		if (ret) {
+			ret = -EIO;
+			goto ioctl_unlock;
+		}
+		mem_info = ycc_udma_mem_alloc(info_list, user_info.size, user_info.node);
+		if (!mem_info) {
+			ret = -ENOMEM;
+			goto ioctl_unlock;
+		}
+		ret = copy_to_user((struct ycc_udma_info *)args, mem_info, sizeof(*mem_info));
+		if (ret) {
+			ycc_udma_mem_free(info_list, mem_info->dma_addr);
+			ret = -EIO;
+			goto ioctl_unlock;
+		}
+		break;
+	case YCC_IOC_MEM_FREE:
+		ret = copy_from_user(&user_info, (struct ycc_udma_info *)args, sizeof(user_info));
+		if (ret) {
+			ret = -EIO;
+			goto ioctl_unlock;
+		}
+		ycc_udma_mem_free(info_list, user_info.dma_addr);
+		break;
+	case YCC_IOC_LARGE_MEM_ALLOC:
+		if ((info_list->large_mem).virt_addr)
+			goto ioctl_unlock;
+
+		ycc_udma_mem_large_alloc(&(info_list->large_mem));
+		if (!(info_list->large_mem).virt_addr) {
+			ret = -ENOMEM;
+			goto ioctl_unlock;
+		}
+
+		ret = copy_to_user((struct ycc_udma_large_info *)args, &(info_list->large_mem),
+				   sizeof(struct ycc_udma_large_info));
+		if (ret) {
+			ycc_udma_mem_large_free(&(info_list->large_mem));
+			ret = -EIO;
+			goto ioctl_unlock;
+		}
+		break;
+	case YCC_IOC_LARGE_MEM_FREE:
+		ycc_udma_mem_large_free(&(info_list->large_mem));
+		break;
+	default:
+		ret = -EINVAL;
+	}
+ioctl_unlock:
+	mutex_unlock(&ycc_mem_lock);
+	return ret;
+}
+
+static int ycc_udma_mmap(struct file *filep, struct vm_area_struct *vma)
+{
+	struct ycc_udma_info_list *info_list = (struct ycc_udma_info_list *)filep->private_data;
+	unsigned long vma_size = vma->vm_end - vma->vm_start;
+	u64 dma_addr = vma->vm_pgoff << PAGE_SHIFT;
+	struct ycc_udma_kern_info *kern_info;
+	int ret;
+
+	pr_debug("udma: get kern info for phys addr:%llx\n", (u64)dma_addr);
+
+	if (dma_addr == (info_list->large_mem).dma_addr)
+		goto skip_hash;
+
+	kern_info = ycc_udma_find_kern(info_list, dma_addr);
+	if (!kern_info)
+		return -ENOMEM;
+
+	if (kern_info->size < vma_size)
+		return -ENOMEM;
+
+skip_hash:
+	ret = remap_pfn_range(vma,
+			      vma->vm_start,
+			      vma->vm_pgoff,
+			      vma_size,
+			      pgprot_writecombine(vma->vm_page_prot));
+
+	return ret;
+}
+
+const struct file_operations ycc_udma_fops = {
+	.open		= ycc_udma_open,
+	.mmap		= ycc_udma_mmap,
+	.release	= ycc_udma_release,
+	.unlocked_ioctl	= ycc_udma_ioctl,
+	.compat_ioctl	= ycc_udma_ioctl,
+};
+
+struct miscdevice ycc_udma_misc = {
+	.minor		= 0,
+	.name		= "ycc_udma",
+	.fops		= &ycc_udma_fops,
+};
+
+int ycc_udma_init(void)
+{
+	int ret;
+
+	ret = ycc_alloc_iommu_domain();
+	if (ret)
+		return ret;
+
+	mutex_init(&ycc_mem_lock);
+
+	ret = misc_register(&ycc_udma_misc);
+	if (ret) {
+		pr_err("Failed to register misc devices\n");
+		ycc_free_iommu_domain();
+	}
+
+	return ret;
+}
+
+void ycc_udma_exit(void)
+{
+	ycc_free_iommu_domain();
+	misc_deregister(&ycc_udma_misc);
 }
