@@ -26,8 +26,8 @@ struct netns_smc {
 	int				sysctl_wmem_default;
 	int				sysctl_rmem_default;
 	int				sysctl_tcp2smc;
-	int				sysctl_autocorking;
 	int				sysctl_allow_different_subnet;
+	int				sysctl_autocorking;
 };
 
 #endif
