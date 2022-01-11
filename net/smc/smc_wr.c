@@ -33,7 +33,7 @@
 
 #define SMC_WR_MAX_POLL_CQE 10	/* max. # of compl. queue elements in 1 poll */
 
-#define SMC_WR_RX_HASH_BITS 4
+#define SMC_WR_RX_HASH_BITS 5
 static DEFINE_HASHTABLE(smc_wr_rx_hash, SMC_WR_RX_HASH_BITS);
 static DEFINE_SPINLOCK(smc_wr_rx_hash_lock);
 
