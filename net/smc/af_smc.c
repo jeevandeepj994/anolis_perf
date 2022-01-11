@@ -54,6 +54,7 @@
 #include "smc_tracepoint.h"
 #include "smc_proc.h"
 #include "smc_conv.h"
+#include "smc_ipi.h"
 
 static DEFINE_MUTEX(smc_server_lgr_pending);	/* serialize link group
 						 * creation on server
@@ -1003,6 +1004,7 @@ static int smc_connect_rdma(struct smc_sock *smc,
 	mutex_unlock(&smc_client_lgr_pending);
 
 	smc_copy_sock_settings_to_clc(smc);
+	smc_ipi_init_ipi(smc);
 	smc->connect_nonblock = 0;
 	if (smc->sk.sk_state == SMC_INIT)
 		smc->sk.sk_state = SMC_ACTIVE;
@@ -2065,6 +2067,7 @@ static void smc_listen_work(struct work_struct *work)
 			goto out_unlock;
 		mutex_unlock(&smc_server_lgr_pending);
 	}
+	smc_ipi_init_ipi(new_smc);
 	smc_conn_save_peer_info(new_smc, cclc);
 	smc_listen_out_connected(new_smc);
 	SMC_STAT_SERV_SUCC_INC(sock_net(newclcsock->sk), ini);
@@ -2459,6 +2462,7 @@ static __poll_t smc_poll(struct file *file, struct socket *sock,
 		return EPOLLNVAL;
 
 	smc = smc_sk(sock->sk);
+	smc->last_cpu = raw_smp_processor_id();
 	if (smc->use_fallback) {
 		/* delegate to CLC child sock */
 		mask = smc->clcsock->ops->poll(file, smc->clcsock, wait);
@@ -3028,22 +3032,28 @@ static int __init smc_init(void)
 		goto out_alloc_wqs;
 	}
 
+	rc = smc_ipi_init();
+	if (rc) {
+		pr_err("%s: smc_ipi_init fails with %d\n", __func__, rc);
+		goto out_core;
+	}
+
 	rc = smc_llc_init();
 	if (rc) {
 		pr_err("%s: smc_llc_init fails with %d\n", __func__, rc);
-		goto out_core;
+		goto out_ipi;
 	}
 
 	rc = smc_cdc_init();
 	if (rc) {
 		pr_err("%s: smc_cdc_init fails with %d\n", __func__, rc);
-		goto out_core;
+		goto out_ipi;
 	}
 
 	rc = proto_register(&smc_proto, 1);
 	if (rc) {
 		pr_err("%s: proto_register(v4) fails with %d\n", __func__, rc);
-		goto out_core;
+		goto out_ipi;
 	}
 
 	rc = proto_register(&smc_proto6, 1);
@@ -3114,6 +3124,8 @@ out_proto6:
 	proto_unregister(&smc_proto6);
 out_proto:
 	proto_unregister(&smc_proto);
+out_ipi:
+	smc_ipi_exit();
 out_core:
 	smc_core_exit();
 out_alloc_wqs:
@@ -3139,6 +3151,7 @@ static void __exit smc_exit(void)
 	smc_conv_exit();
 	smc_proc_exit();
 	sock_unregister(PF_SMC);
+	smc_ipi_exit();
 	smc_core_exit();
 	smc_ib_unregister_client();
 	destroy_workqueue(smc_close_wq);
