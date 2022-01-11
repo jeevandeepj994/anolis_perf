@@ -235,6 +235,7 @@ struct smc_connection {
 	u8			out_of_sync : 1; /* out of sync with peer */
 };
 
+#define SMC_SOCK_CORKED	0
 struct smc_sock {				/* smc sock container */
 	struct sock		sk;
 	struct socket		*clcsock;	/* internal tcp socket */
@@ -273,6 +274,7 @@ struct smc_sock {				/* smc sock container */
 						/* protects clcsock of a listen
 						 * socket
 						 * */
+	unsigned long		flags; /* %SMC_SOCK_CORKED, etc */
 };
 
 static inline struct smc_sock *smc_sk(const struct sock *sk)
