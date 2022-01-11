@@ -814,8 +814,10 @@ void smc_ib_buf_unmap_sg(struct smc_link *lnk,
 
 long smc_ib_setup_per_ibdev(struct smc_ib_device *smcibdev)
 {
-	struct ib_cq_init_attr cqattr =	{
+	struct ib_cq_init_attr scqattr =	{
 		.cqe = SMC_MAX_CQE, .comp_vector = 0 };
+	struct ib_cq_init_attr rcqattr =	{
+		.cqe = SMC_MAX_CQE, .comp_vector = 1 };
 	int cqe_size_order, smc_order;
 	long rc;
 
@@ -823,14 +825,21 @@ long smc_ib_setup_per_ibdev(struct smc_ib_device *smcibdev)
 	rc = 0;
 	if (smcibdev->initialized)
 		goto out;
+
+	/* if the device has only one comp_vectors, use comp_vector 0,
+	 * else seperate the sq and rq to different comp_vector.
+	 */
+	if (smcibdev->ibdev->num_comp_vectors <= 1)
+		rcqattr.comp_vector = 0;
+
 	/* the calculated number of cq entries fits to mlx5 cq allocation */
 	cqe_size_order = cache_line_size() == 128 ? 7 : 6;
 	smc_order = MAX_ORDER - cqe_size_order - 1;
 	if (SMC_MAX_CQE + 2 > (0x00000001 << smc_order) * PAGE_SIZE)
-		cqattr.cqe = (0x00000001 << smc_order) * PAGE_SIZE - 2;
+		scqattr.cqe = rcqattr.cqe = (0x00000001 << smc_order) * PAGE_SIZE - 2;
 	smcibdev->roce_cq_send = ib_create_cq(smcibdev->ibdev,
 					      smc_wr_tx_cq_handler, NULL,
-					      smcibdev, &cqattr);
+					      smcibdev, &scqattr);
 	rc = PTR_ERR_OR_ZERO(smcibdev->roce_cq_send);
 	if (IS_ERR(smcibdev->roce_cq_send)) {
 		smcibdev->roce_cq_send = NULL;
@@ -838,7 +847,7 @@ long smc_ib_setup_per_ibdev(struct smc_ib_device *smcibdev)
 	}
 	smcibdev->roce_cq_recv = ib_create_cq(smcibdev->ibdev,
 					      smc_wr_rx_cq_handler, NULL,
-					      smcibdev, &cqattr);
+					      smcibdev, &rcqattr);
 	rc = PTR_ERR_OR_ZERO(smcibdev->roce_cq_recv);
 	if (IS_ERR(smcibdev->roce_cq_recv)) {
 		smcibdev->roce_cq_recv = NULL;
