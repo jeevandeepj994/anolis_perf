@@ -154,9 +154,11 @@ static void _conn_show(struct seq_file *seq, struct smc_sock *smc, int protocol)
 
 		seq_printf(seq, CONN_LGR_FM, lgr->role == SMC_CLNT ? 'C' : 'S',
 			   lnk->ibname, lnk->ibport, lnk->roce_qp->qp_num,
-			   lnk->peer_qpn, lnk->wr_tx_cnt, lnk->wr_rx_cnt);
+			   lnk->peer_qpn, smc->conn.tx_cnt, smc->conn.tx_bytes,
+			   smc->conn.tx_corked_cnt, smc->conn.tx_corked_bytes);
 	} else {
-		seq_puts(seq, "-          -          -        -     -     -      -        -\n");
+		seq_puts(seq, "-          -          -            -     -     -      -"
+			"        -        -        -\n");
 	}
 }
 
@@ -170,7 +172,7 @@ static int smc_conn_show(struct seq_file *seq, void *v)
 		seq_printf(seq, sp->protocol == SMCPROTO_SMC ? CONN4_HDR : CONN6_HDR,
 			   "sl", "local_addr", "remote_addr", "is_fb", "fb_rsn", "sock",
 			   "clc_sock", "st", "inode", "lgr_id", "lgr_role", "dev", "port",
-			   "l_qp", "r_qp", "tx_cnt", "rx_cnt");
+			   "l_qp", "r_qp", "tx_P", "tx_B", "cork_P", "cork_B");
 		goto out;
 	}
 
@@ -234,6 +236,51 @@ static struct smc_proc_entry smc_proc[] = {
 #endif
 };
 
+extern struct smc_lgr_list smc_lgr_list;
+static int proc_show_links(struct seq_file *seq, void *v)
+{
+	struct smc_link_group *lgr, *lg;
+	struct smc_link *lnk;
+	int i = 0, j = 0;
+
+	seq_printf(seq, "%-9s%-6s%-6s%-5s%-7s%-6s%-7s%-7s%-7s%-4s%-4s%-6s%-6s%-6s%-6s%-6s%-7s\n",
+		   "grp", "type", "role", "idx", "gconn", "conn", "state", "qpn_l", "qpn_r",
+		   "tx", "rx", "cr-e", "cr-l", "cr-r", "cr_h", "cr_l", "flags");
+
+	spin_lock_bh(&smc_lgr_list.lock);
+	list_for_each_entry_safe(lgr, lg, &smc_lgr_list.list, list) {
+		for (i = 0; i < SMC_LINKS_PER_LGR_MAX; i++) {
+			lnk = &lgr->lnk[i];
+			if (!smc_link_usable(lnk))
+				continue;
+			for (j = 0; j < SMC_LGR_ID_SIZE; j++)
+				seq_printf(seq, "%02X", lgr->id[j]);
+			seq_printf(seq, " %-6s%-6s%-5d%-7d%-6d%-7d%-7d%-7d%-4d%-4d%-6u%-6d%-6d%-6u%-6u%-7lu\n",
+				   lgr->is_smcd ? "D" : "R", lgr->role == SMC_CLNT ? "C" : "S", i,
+				   lgr->conns_num, atomic_read(&lnk->conn_cnt), lnk->state,
+				   lnk->roce_qp ? lnk->roce_qp->qp_num : 0, lnk->peer_qpn,
+				   lnk->wr_tx_cnt, lnk->wr_rx_cnt, lnk->credits_enable,
+				   atomic_read(&lnk->local_rq_credits),
+				   atomic_read(&lnk->peer_rq_credits), lnk->local_cr_watermark_high,
+				   lnk->peer_cr_watermark_low, lnk->flags);
+		}
+	}
+	spin_unlock_bh(&smc_lgr_list.lock);
+	return 0;
+}
+
+static int proc_open_links(struct inode *inode, struct file *file)
+{
+	single_open(file, proc_show_links, NULL);
+	return 0;
+}
+
+static struct proc_ops link_file_ops = {
+.proc_open     = proc_open_links,
+.proc_read     = seq_read,
+.proc_release  = single_release,
+};
+
 static int __net_init smc_proc_dir_init(struct net *net)
 {
 	int i, rc = -ENOMEM;
@@ -250,6 +297,9 @@ static int __net_init smc_proc_dir_init(struct net *net)
 			goto err_entry;
 	}
 
+	if (!proc_create("links", 0444, net->proc_net_smc, &link_file_ops))
+		goto err_entry;
+
 	return 0;
 
 err_entry:
@@ -264,6 +314,8 @@ err:
 static void __net_exit smc_proc_dir_exit(struct net *net)
 {
 	int i;
+
+	remove_proc_entry("links", net->proc_net_smc);
 
 	for (i = 0; i < ARRAY_SIZE(smc_proc); i++)
 		remove_proc_entry(smc_proc[i].name, net->proc_net_smc);
