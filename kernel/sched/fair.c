@@ -5073,7 +5073,7 @@ update_cfs_rq_load_avg(u64 now, struct cfs_rq *cfs_rq)
 		 * sync, we are only sure that util_sum must be above or equal to
 		 *    util_avg * minimum possible divider
 		 */
-		WRITE_ONCE(sa->util_sum, max_t(u32, sa->util_sum, sa->util_avg * PELT_MIN_DIVIDER));
+		sa->util_sum = max_t(u32, sa->util_sum, sa->util_avg * PELT_MIN_DIVIDER);
 
 		r = removed_runnable;
 		sub_positive(&sa->runnable_avg, r);
