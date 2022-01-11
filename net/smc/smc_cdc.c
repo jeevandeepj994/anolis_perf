@@ -18,6 +18,7 @@
 #include "smc_tx.h"
 #include "smc_rx.h"
 #include "smc_close.h"
+#include "smc_ipi.h"
 
 /********************************** send *************************************/
 
@@ -352,10 +353,22 @@ static void smc_cdc_msg_recv_action(struct smc_sock *smc,
 		atomic_add(diff_prod, &conn->bytes_to_rcv);
 		/* guarantee 0 <= bytes_to_rcv <= rmb_desc->len */
 		smp_mb__after_atomic();
-		smc->sk.sk_data_ready(&smc->sk);
-	} else {
-		if (conn->local_rx_ctrl.prod_flags.write_blocked)
+
+		// sk_data_ready costs a lot of cpu cycles, because of RCU and
+		// llc cachemiss. Schedule this process to a certain cpu to
+		// reduce cpu cycles of current cpu and improve the performance of
+		// sk_data_ready.
+		if (smc_ipi_need_ipi(smc))
+			smc_ipi_send_ipi(smc);
+		else
 			smc->sk.sk_data_ready(&smc->sk);
+	} else {
+		if (conn->local_rx_ctrl.prod_flags.write_blocked) {
+			if (smc_ipi_need_ipi(smc))
+				smc_ipi_send_ipi(smc);
+			else
+				smc->sk.sk_data_ready(&smc->sk);
+		}
 		if (conn->local_rx_ctrl.prod_flags.urg_data_pending)
 			conn->urg_state = SMC_URG_NOTYET;
 	}

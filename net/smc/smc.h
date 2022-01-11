@@ -236,6 +236,7 @@ struct smc_connection {
 };
 
 #define SMC_SOCK_CORKED	0
+#define SMC_SOCK_IPI	1
 struct smc_sock {				/* smc sock container */
 	struct sock		sk;
 	struct socket		*clcsock;	/* internal tcp socket */
@@ -275,6 +276,9 @@ struct smc_sock {				/* smc sock container */
 						 * socket
 						 * */
 	unsigned long		flags; /* %SMC_SOCK_CORKED, etc */
+	struct list_head	ipi_list;	/* sockets to be accepted */
+	int ipi_preferred_cpu;	/* the cpu to receive the ipi process */
+	int last_cpu;	/* last cpu the connection used */
 };
 
 static inline struct smc_sock *smc_sk(const struct sock *sk)
