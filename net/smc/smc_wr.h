@@ -54,14 +54,14 @@ struct smc_wr_rx_handler {
 /* Only used by RDMA write WRs.
  * All other WRs (CDC/LLC) use smc_wr_tx_send handling WR_ID implicitly
  */
-static inline long smc_wr_tx_get_next_wr_id(struct smc_link *link)
+static inline u64 smc_wr_tx_get_next_wr_id(struct smc_link *link, u32 hi)
 {
-	return atomic_long_inc_return(&link->wr_tx_id);
+	return (u32)atomic_inc_return(&link->wr_tx_id) + ((u64)hi << 32);
 }
 
-static inline void smc_wr_tx_set_wr_id(atomic_long_t *wr_tx_id, long val)
+static inline void smc_wr_tx_set_wr_id(atomic_t *wr_tx_id, long val)
 {
-	atomic_long_set(wr_tx_id, val);
+	atomic_set(wr_tx_id, val);
 }
 
 static inline bool smc_wr_tx_link_hold(struct smc_link *link)
@@ -134,16 +134,13 @@ static inline int smc_wr_rx_credits_need_announce(struct smc_link *link)
 }
 
 /* post a new receive work request to fill a completed old work request entry */
-static inline int smc_wr_rx_post(struct smc_link *link)
+static inline int smc_wr_rx_post(struct smc_link *link, int index)
 {
 	int rc;
-	u64 wr_id, temp_wr_id;
-	u32 index;
 
-	wr_id = ++link->wr_rx_id; /* tasklet context, thus not atomic */
-	temp_wr_id = wr_id;
-	index = do_div(temp_wr_id, link->wr_rx_cnt);
-	link->wr_rx_ibs[index].wr_id = wr_id;
+	if (index >= link->wr_rx_cnt)
+		return -EINVAL;
+
 	rc = ib_post_recv(link->roce_qp, &link->wr_rx_ibs[index], NULL);
 	if (!rc)
 		smc_wr_rx_put_credits(link, 1);
