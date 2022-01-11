@@ -439,9 +439,9 @@ static void smc_cdc_rx_handler(struct ib_wc *wc, void *buf)
 	struct smc_link_group *lgr;
 	struct smc_sock *smc;
 
-	if (wc->byte_len < offsetof(struct smc_cdc_msg, reserved))
+	if (unlikely(wc->byte_len < offsetof(struct smc_cdc_msg, reserved)))
 		return; /* short message */
-	if (cdc->len != SMC_WR_TX_SIZE)
+	if (unlikely(cdc->len != SMC_WR_TX_SIZE))
 		return; /* invalid message */
 
 	if (cdc->credits)
