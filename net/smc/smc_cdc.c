@@ -52,7 +52,12 @@ static void smc_cdc_tx_handler(struct smc_wr_tx_pend_priv *pnd_snd,
 		/* If this is the last pending WR complete, push them to prevent
 		 * no one trying to push when corked.
 		 */
-		smc_tx_sndbuf_nonempty(conn);
+		if (test_and_clear_bit(SMC_SOCK_CORKED, &smc->flags) &&
+		    !delayed_work_pending(&conn->tx_work) &&
+		    smc_tx_prepared_sends(conn) > 0 &&
+		    !(conn->killed || conn->local_rx_ctrl.conn_state_flags.peer_conn_abort)) {
+			smc_tx_sndbuf_nonempty(conn);
+		}
 		if (unlikely(wq_has_sleeper(&conn->cdc_pend_tx_wq)))
 			wake_up(&conn->cdc_pend_tx_wq);
 	}
