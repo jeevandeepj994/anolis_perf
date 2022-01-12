@@ -458,13 +458,12 @@ int migrate_page_move_mapping(struct address_space *mapping,
 	expected_count += is_device_private_page(page);
 	expected_count += is_device_public_page(page);
 
-	if (page_count(page) != expected_count)
-		count_vm_events(PGMIGRATE_REFCOUNT_FAIL, hpage_nr_pages(page));
-
 	if (!mapping) {
 		/* Anonymous page without mapping */
-		if (page_count(page) != expected_count)
+		if (page_count(page) != expected_count) {
+			count_vm_events(PGMIGRATE_REFCOUNT_FAIL, hpage_nr_pages(page));
 			return -EAGAIN;
+		}
 
 		/* No turning back from here */
 		newpage->index = page->index;
@@ -488,11 +487,13 @@ int migrate_page_move_mapping(struct address_space *mapping,
 		radix_tree_deref_slot_protected(pslot,
 					&mapping->i_pages.xa_lock) != page) {
 		xa_unlock_irq(&mapping->i_pages);
+		count_vm_events(PGMIGRATE_REFCOUNT_FAIL, hpage_nr_pages(page));
 		return -EAGAIN;
 	}
 
 	if (!page_ref_freeze(page, expected_count)) {
 		xa_unlock_irq(&mapping->i_pages);
+		count_vm_events(PGMIGRATE_REFCOUNT_FAIL, hpage_nr_pages(page));
 		return -EAGAIN;
 	}
 
