@@ -20,6 +20,7 @@
 #include <linux/stat.h>
 #include <linux/clk.h>
 #include <linux/cpu.h>
+#include <linux/acpi.h>
 #include <linux/cpu_pm.h>
 #include <linux/coresight.h>
 #include <linux/coresight-pmu.h>
@@ -2295,6 +2296,7 @@ static const struct amba_id etm4_ids[] = {
 	CS_AMBA_UCI_ID(0x000cc0af, uci_id_etm4),/* Marvell ThunderX2 */
 	CS_AMBA_UCI_ID(0x000b6d01, uci_id_etm4),/* HiSilicon-Hip08 */
 	CS_AMBA_UCI_ID(0x000b6d02, uci_id_etm4),/* HiSilicon-Hip09 */
+	CS_AMBA_UCI_ID(0x000bbd49, uci_id_etm4),/* YiTian710 */
 	/*
 	 * Match all PIDs with ETM4 DEVARCH. No need for adding any of the new
 	 * CPUs to the list here.
@@ -2351,6 +2353,7 @@ static const struct of_device_id etm4_sysreg_match[] = {
 #ifdef CONFIG_ACPI
 static const struct acpi_device_id etm4x_acpi_ids[] = {
 	{"ARMHC500", 0}, /* ARM CoreSight ETM4x */
+	{ "BABA6000", 0 },
 	{}
 };
 MODULE_DEVICE_TABLE(acpi, etm4x_acpi_ids);
