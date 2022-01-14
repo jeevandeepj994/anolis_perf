@@ -1455,9 +1455,9 @@ static inline int try_split_thp(struct page *page, struct page **page2,
  * It is caller's responsibility to call putback_movable_pages() to return pages
  * to the LRU or free list only if ret != 0.
  *
- * Returns the number of {normal page, THP} that were not migrated, or an error code.
- * The number of THP splits will be considered as the number of non-migrated THP,
- * no matter how many subpages of the THP are migrated successfully.
+ * Returns the number of {normal page, THP, hugetlb} that were not migrated, or
+ * an error code. The number of THP splits will be considered as the number of
+ * non-migrated THP, no matter how many subpages of the THP are migrated successfully.
  */
 int migrate_pages(struct list_head *from, new_page_t get_new_page,
 		free_page_t put_new_page, unsigned long private,
@@ -1498,7 +1498,7 @@ retry:
 			 * during migration.
 			 */
 			is_thp = PageTransHuge(page) && !PageHuge(page);
-			nr_subpages = thp_nr_pages(page);
+			nr_subpages = compound_nr(page);
 			cond_resched();
 
 			if (PageHuge(page))
@@ -1547,7 +1547,7 @@ retry:
 				/* Hugetlb migration is unsupported */
 				if (!no_subpage_counting)
 					nr_failed++;
-				nr_failed_pages++;
+				nr_failed_pages += nr_subpages;
 				break;
 			case -ENOMEM:
 				/*
@@ -1568,7 +1568,7 @@ retry:
 
 				if (!no_subpage_counting)
 					nr_failed++;
-				nr_failed_pages++;
+				nr_failed_pages += nr_subpages;
 				goto out;
 			case -EAGAIN:
 				if (is_thp) {
@@ -1578,12 +1578,11 @@ retry:
 				retry++;
 				break;
 			case MIGRATEPAGE_SUCCESS:
+				nr_succeeded += nr_subpages;
 				if (is_thp) {
 					nr_thp_succeeded++;
-					nr_succeeded += nr_subpages;
 					break;
 				}
-				nr_succeeded++;
 				break;
 			default:
 				/*
@@ -1600,7 +1599,7 @@ retry:
 
 				if (!no_subpage_counting)
 					nr_failed++;
-				nr_failed_pages++;
+				nr_failed_pages += nr_subpages;
 				break;
 			}
 		}
