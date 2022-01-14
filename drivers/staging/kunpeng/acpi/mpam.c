@@ -255,10 +255,7 @@ int __init acpi_mpam_parse(void)
 	if (ACPI_FAILURE(status))
 		return -ENOENT;
 
-	if (!strncmp(mpam->oem_id, "HISI", 4)) {
-		static_branch_enable_cpuslocked(&resctrl_enable_key);
-	} else {
-		static_branch_disable_cpuslocked(&resctrl_enable_key);
+	if (strncmp(mpam->oem_id, "HISI", 4)) {
 		acpi_put_table(mpam);
 		return 0;
 	}
