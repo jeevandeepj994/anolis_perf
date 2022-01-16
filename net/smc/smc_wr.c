@@ -144,24 +144,25 @@ static void smc_wr_tx_tasklet_fn(struct tasklet_struct *t)
 	struct smc_ib_device *dev = from_tasklet(dev, t, send_tasklet);
 	struct ib_wc wc[SMC_WR_MAX_POLL_CQE];
 	int i = 0, rc;
-	int polled = 0;
 
 again:
-	polled++;
-	do {
+	for (;;) {
 		memset(&wc, 0, sizeof(wc));
 		rc = ib_poll_cq(dev->roce_cq_send, SMC_WR_MAX_POLL_CQE, wc);
-		if (polled == 1) {
-			ib_req_notify_cq(dev->roce_cq_send,
-					 IB_CQ_NEXT_COMP |
-					 IB_CQ_REPORT_MISSED_EVENTS);
-		}
-		if (!rc)
-			break;
 		for (i = 0; i < rc; i++)
 			smc_wr_tx_process_cqe(&wc[i]);
-	} while (rc > 0);
-	if (polled == 1)
+
+		// rc < 0 is included.
+		if (rc < SMC_WR_MAX_POLL_CQE)
+			break;
+	}
+
+	// Notify cq and waiting for next completion notification event generating,
+	// after all cqes are polled out. If return > 0 means it is possible some
+	// cqes has been added to the cq since the last poll.
+	if (ib_req_notify_cq(dev->roce_cq_send,
+			     IB_CQ_NEXT_COMP |
+			     IB_CQ_REPORT_MISSED_EVENTS) > 0)
 		goto again;
 }
 
@@ -497,24 +498,25 @@ static void smc_wr_rx_tasklet_fn(struct tasklet_struct *t)
 {
 	struct smc_ib_device *dev = from_tasklet(dev, t, recv_tasklet);
 	struct ib_wc wc[SMC_WR_MAX_POLL_CQE];
-	int polled = 0;
 	int rc;
 
 again:
-	polled++;
-	do {
+	for (;;) {
 		memset(&wc, 0, sizeof(wc));
 		rc = ib_poll_cq(dev->roce_cq_recv, SMC_WR_MAX_POLL_CQE, wc);
-		if (polled == 1) {
-			ib_req_notify_cq(dev->roce_cq_recv,
-					 IB_CQ_SOLICITED_MASK
-					 | IB_CQ_REPORT_MISSED_EVENTS);
-		}
-		if (!rc)
+		if (rc > 0)
+			smc_wr_rx_process_cqes(&wc[0], rc);
+
+		if (rc < SMC_WR_MAX_POLL_CQE)
 			break;
-		smc_wr_rx_process_cqes(&wc[0], rc);
-	} while (rc > 0);
-	if (polled == 1)
+	}
+
+	// Notify cq and waiting for next completion notification event generating,
+	// after all cqes are polled out. If return > 0 means it is possible some
+	// cqes has been added to the cq since the last poll.
+	if (ib_req_notify_cq(dev->roce_cq_recv,
+			     IB_CQ_SOLICITED_MASK |
+			     IB_CQ_REPORT_MISSED_EVENTS) > 0)
 		goto again;
 }
 
