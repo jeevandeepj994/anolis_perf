@@ -1055,14 +1055,49 @@ static bool io_match_task(struct io_kiocb *head,
 }
 
 
-static void io_sq_thread_drop_mm(void)
+static void io_sq_thread_drop_mm_files(void)
 {
+	struct files_struct *files = current->files;
 	struct mm_struct *mm = current->mm;
 
 	if (mm) {
 		kthread_unuse_mm(mm);
 		mmput(mm);
 		current->mm = NULL;
+	}
+	if (files) {
+		struct nsproxy *nsproxy = current->nsproxy;
+
+		task_lock(current);
+		current->files = NULL;
+		current->nsproxy = NULL;
+		task_unlock(current);
+		put_files_struct(files);
+		put_nsproxy(nsproxy);
+	}
+}
+
+static void __io_sq_thread_acquire_files(struct io_ring_ctx *ctx)
+{
+	if (!current->files) {
+		struct files_struct *files;
+		struct nsproxy *nsproxy;
+
+		task_lock(ctx->sqo_task);
+		files = ctx->sqo_task->files;
+		if (!files) {
+			task_unlock(ctx->sqo_task);
+			return;
+		}
+		atomic_inc(&files->count);
+		get_nsproxy(ctx->sqo_task->nsproxy);
+		nsproxy = ctx->sqo_task->nsproxy;
+		task_unlock(ctx->sqo_task);
+
+		task_lock(current);
+		current->files = files;
+		current->nsproxy = nsproxy;
+		task_unlock(current);
 	}
 }
 
@@ -1093,12 +1128,21 @@ static int __io_sq_thread_acquire_mm(struct io_ring_ctx *ctx)
 	return -EFAULT;
 }
 
-static int io_sq_thread_acquire_mm(struct io_ring_ctx *ctx,
-				   struct io_kiocb *req)
+static int io_sq_thread_acquire_mm_files(struct io_ring_ctx *ctx,
+					 struct io_kiocb *req)
 {
-	if (!(io_op_defs[req->opcode].work_flags & IO_WQ_WORK_MM))
-		return 0;
-	return __io_sq_thread_acquire_mm(ctx);
+	const struct io_op_def *def = &io_op_defs[req->opcode];
+
+	if (def->work_flags & IO_WQ_WORK_MM) {
+		int ret = __io_sq_thread_acquire_mm(ctx);
+		if (unlikely(ret))
+			return ret;
+	}
+
+	if (def->needs_file || (def->work_flags & IO_WQ_WORK_FILES))
+		__io_sq_thread_acquire_files(ctx);
+
+	return 0;
 }
 
 static void io_sq_thread_associate_blkcg(struct io_ring_ctx *ctx,
@@ -1662,7 +1706,8 @@ static void io_cqring_mark_overflow(struct io_ring_ctx *ctx)
 	if (list_empty(&ctx->cq_overflow_list)) {
 		clear_bit(0, &ctx->sq_check_overflow);
 		clear_bit(0, &ctx->cq_check_overflow);
-		ctx->rings->sq_flags &= ~IORING_SQ_CQ_OVERFLOW;
+		WRITE_ONCE(ctx->rings->sq_flags,
+			   ctx->rings->sq_flags & ~IORING_SQ_CQ_OVERFLOW);
 	}
 }
 
@@ -1766,7 +1811,8 @@ static void __io_cqring_fill_event(struct io_kiocb *req, long res,
 		if (list_empty(&ctx->cq_overflow_list)) {
 			set_bit(0, &ctx->sq_check_overflow);
 			set_bit(0, &ctx->cq_check_overflow);
-			ctx->rings->sq_flags |= IORING_SQ_CQ_OVERFLOW;
+			WRITE_ONCE(ctx->rings->sq_flags,
+				   ctx->rings->sq_flags | IORING_SQ_CQ_OVERFLOW);
 		}
 		io_clean_op(req);
 		req->result = res;
@@ -2110,14 +2156,16 @@ static void __io_req_task_submit(struct io_kiocb *req)
 	struct io_ring_ctx *ctx = req->ctx;
 
 	mutex_lock(&ctx->uring_lock);
-	if (!ctx->sqo_dead && !__io_sq_thread_acquire_mm(ctx))
+	if (!ctx->sqo_dead && !__io_sq_thread_acquire_mm(ctx)) {
+		__io_sq_thread_acquire_files(ctx);
 		__io_queue_sqe(req, NULL);
-	else
+	} else {
 		__io_req_task_cancel(req, -EFAULT);
+	}
 	mutex_unlock(&ctx->uring_lock);
 
 	if (ctx->flags & IORING_SETUP_SQPOLL)
-		io_sq_thread_drop_mm();
+		io_sq_thread_drop_mm_files();
 }
 
 static void io_req_task_submit(struct callback_head *cb)
@@ -2594,14 +2642,12 @@ static void io_complete_rw_common(struct kiocb *kiocb, long res,
 static bool io_resubmit_prep(struct io_kiocb *req, int error)
 {
 	struct iovec inline_vecs[UIO_FASTIOV], *iovec = inline_vecs;
-	ssize_t ret = -ECANCELED;
+	ssize_t ret;
 	struct iov_iter iter;
 	int rw;
 
-	if (error) {
-		ret = error;
+	if (error)
 		goto end_req;
-	}
 
 	switch (req->opcode) {
 	case IORING_OP_READV:
@@ -2665,7 +2711,7 @@ static bool io_rw_reissue(struct io_kiocb *req, long res)
 	if (!io_rw_should_reissue(req, res))
 		return false;
 
-	ret = io_sq_thread_acquire_mm(req->ctx, req);
+	ret = io_sq_thread_acquire_mm_files(req->ctx, req);
 
 	if (io_resubmit_prep(req, ret)) {
 		refcount_inc(&req->refs);
@@ -6325,13 +6371,7 @@ static struct file *io_file_get(struct io_submit_state *state,
 static int io_req_set_file(struct io_submit_state *state, struct io_kiocb *req,
 			   int fd)
 {
-	bool fixed;
-
-	fixed = (req->flags & REQ_F_FIXED_FILE) != 0;
-	if (unlikely(!fixed && io_async_submit(req->ctx)))
-		return -EBADF;
-
-	req->file = io_file_get(state, req, fd, fixed);
+	req->file = io_file_get(state, req, fd, req->flags & REQ_F_FIXED_FILE);
 	if (req->file || io_op_defs[req->opcode].needs_file_no_error)
 		return 0;
 	return -EBADF;
@@ -6708,7 +6748,7 @@ static int io_init_req(struct io_ring_ctx *ctx, struct io_kiocb *req,
 	if (unlikely(req->opcode >= IORING_OP_LAST))
 		return -EINVAL;
 
-	if (unlikely(io_sq_thread_acquire_mm(ctx, req)))
+	if (unlikely(io_sq_thread_acquire_mm_files(ctx, req)))
 		return -EFAULT;
 
 	sqe_flags = READ_ONCE(sqe->flags);
@@ -6830,14 +6870,16 @@ static inline void io_ring_set_wakeup_flag(struct io_ring_ctx *ctx)
 {
 	/* Tell userspace we may need a wakeup call */
 	spin_lock_irq(&ctx->completion_lock);
-	ctx->rings->sq_flags |= IORING_SQ_NEED_WAKEUP;
+	WRITE_ONCE(ctx->rings->sq_flags,
+		   ctx->rings->sq_flags | IORING_SQ_NEED_WAKEUP);
 	spin_unlock_irq(&ctx->completion_lock);
 }
 
 static inline void io_ring_clear_wakeup_flag(struct io_ring_ctx *ctx)
 {
 	spin_lock_irq(&ctx->completion_lock);
-	ctx->rings->sq_flags &= ~IORING_SQ_NEED_WAKEUP;
+	WRITE_ONCE(ctx->rings->sq_flags,
+		   ctx->rings->sq_flags & ~IORING_SQ_NEED_WAKEUP);
 	spin_unlock_irq(&ctx->completion_lock);
 }
 
@@ -7010,11 +7052,18 @@ out:
 static int io_sq_thread(void *data)
 {
 	struct cgroup_subsys_state *cur_css = NULL;
+	struct files_struct *old_files = current->files;
+	struct nsproxy *old_nsproxy = current->nsproxy;
 	const struct cred *old_cred = NULL;
 	struct io_sq_data *sqd = data;
 	struct io_ring_ctx *ctx;
 	u64 timeout;
 	DEFINE_WAIT(wait);
+
+	task_lock(current);
+	current->files = NULL;
+	current->nsproxy = NULL;
+	task_unlock(current);
 
 	while (!kthread_should_stop()) {
 		int ret;
@@ -7059,12 +7108,12 @@ static int io_sq_thread(void *data)
 			if (!sqt_spin && (ret > 0 || !list_empty(&ctx->iopoll_list)))
 				sqt_spin = true;
 
-			io_sq_thread_drop_mm();
+			io_sq_thread_drop_mm_files();
 		}
 
 		if (sqt_spin || !io_time_after(sqd->idle_mode_us, timeout)) {
 			io_run_task_work();
-			io_sq_thread_drop_mm();
+			io_sq_thread_drop_mm_files();
 			cond_resched();
 			if (sqt_spin)
 				timeout = io_current_time(sqd->idle_mode_us) + sqd->sq_thread_idle;
@@ -7102,12 +7151,17 @@ static int io_sq_thread(void *data)
 	}
 
 	io_run_task_work();
-	io_sq_thread_drop_mm();
+	io_sq_thread_drop_mm_files();
 
 	if (cur_css)
 		io_sq_thread_unassociate_blkcg();
 	if (old_cred)
 		revert_creds(old_cred);
+
+	task_lock(current);
+	current->files = old_files;
+	current->nsproxy = old_nsproxy;
+	task_unlock(current);
 
 	kthread_parkme();
 
@@ -9830,7 +9884,8 @@ static int io_uring_create(unsigned entries, struct io_uring_params *p,
 	p->features = IORING_FEAT_SINGLE_MMAP | IORING_FEAT_NODROP |
 			IORING_FEAT_SUBMIT_STABLE | IORING_FEAT_RW_CUR_POS |
 			IORING_FEAT_CUR_PERSONALITY | IORING_FEAT_FAST_POLL |
-			IORING_FEAT_POLL_32BITS | IORING_FEAT_EXT_ARG;
+			IORING_FEAT_POLL_32BITS | IORING_FEAT_SQPOLL_NONFIXED |
+			IORING_FEAT_EXT_ARG;
 
 	if (copy_to_user(params, p, sizeof(*p))) {
 		ret = -EFAULT;
