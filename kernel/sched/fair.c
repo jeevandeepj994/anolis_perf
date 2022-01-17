@@ -3382,6 +3382,14 @@ bool should_numa_migrate_memory(struct task_struct *p, struct page * page,
 	last_cpupid = page_cpupid_xchg_last(page, this_cpupid);
 
 	/*
+	 * The cpupid may be invalid when NUMA_BALANCING_MEMORY_TIERING
+	 * is disabled dynamically.
+	 */
+	if (!(sysctl_numa_balancing_mode & NUMA_BALANCING_MEMORY_TIERING) &&
+	    !node_is_toptier(src_nid) && !check_cpupid(last_cpupid))
+		return false;
+
+	/*
 	 * Allow first faults or private faults to migrate immediately early in
 	 * the lifetime of a task. The magic number 4 is based on waiting for
 	 * two full passes of the "multi-stage node selection" test that is
@@ -4396,9 +4404,15 @@ void task_numa_fault(int last_cpupid, int mem_node, int pages, int flags)
 	if (!p->mm)
 		return;
 
-	/* Numa faults statistics are unnecessary for the slow memory node */
-	if (sysctl_numa_balancing_mode & NUMA_BALANCING_MEMORY_TIERING &&
-	    !node_is_toptier(mem_node))
+	/*
+	 * NUMA faults statistics are unnecessary for the slow memory node.
+	 *
+	 * And, the cpupid may be invalid when NUMA_BALANCING_MEMORY_TIERING
+	 * is disabled dynamically.
+	 */
+	if (!node_is_toptier(mem_node) &&
+	    (sysctl_numa_balancing_mode & NUMA_BALANCING_MEMORY_TIERING ||
+	     !check_cpupid(last_cpupid)))
 		return;
 
 	/* Allocate buffer to track faults on a per-node basis */

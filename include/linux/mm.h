@@ -1095,6 +1095,11 @@ static inline bool __cpupid_match_pid(pid_t task_pid, int cpupid)
 	return (task_pid & LAST__PID_MASK) == cpupid_to_pid(cpupid);
 }
 
+static inline bool check_cpupid(int cpupid)
+{
+	return cpupid_to_cpu(cpupid) < nr_cpu_ids;
+}
+
 #define cpupid_match_pid(task, cpupid) __cpupid_match_pid(task->pid, cpupid)
 #ifdef LAST_CPUPID_NOT_IN_PAGE_FLAGS
 static inline int page_cpupid_xchg_last(struct page *page, int cpupid)
