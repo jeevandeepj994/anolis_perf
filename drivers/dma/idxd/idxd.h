@@ -329,6 +329,22 @@ struct idxd_device {
 	bool mdev_host_init;
 };
 
+/**
+ * IDXD batch field for SW Batch descriptor
+ * @descs: Descriptor list address
+ * @dma_descs: DMA address for descs
+ * @crs: completion record list address
+ * @dma_crs: DMA address for completion records
+ * @num: Number of descs in batch
+ */
+struct idxd_batch {
+	struct dsa_hw_desc *descs;
+	dma_addr_t dma_descs;
+	struct dsa_completion_record *crs;
+	dma_addr_t dma_crs;
+	u32 num;
+};
+
 /* IDXD software descriptor */
 struct idxd_desc {
 	union {
@@ -348,6 +364,7 @@ struct idxd_desc {
 	u16 gen;
 	int cpu;
 	struct idxd_wq *wq;
+	struct idxd_batch *batch;
 };
 
 /*
