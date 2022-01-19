@@ -38,6 +38,23 @@
 
 #define MAX_SPI_FRAMESIZE 64
 
+#define MSCP_CFG_TPM_CSN	0x34201f14
+#define TPM_VALID		0x0
+#define TPM_INVALID		0x1
+
+#define MSCP_GPIO0_DATAOUT	0x34202004
+#define GPIO_OUTPUT		0x0
+#define GPIO_INPUT		0x2
+
+#define MSCP_GPIO0_OUTENSET	0x34202010
+#define GPIO_OUTPUT_TO_TPM	0x2
+#define GPIO_OUTPUT_RESET	0x0
+
+#define REGISTER_LEN		4
+
+static bool yitian_tpm;
+module_param(yitian_tpm, bool, 0644);
+
 /*
  * TCG SPI flow control is documented in section 6.4 of the spec[1]. In short,
  * keep trying to read from the device until MISO goes high indicating the
@@ -79,8 +96,24 @@ int tpm_tis_spi_transfer(struct tpm_tis_data *data, u32 addr, u16 len,
 	struct spi_message m;
 	struct spi_transfer spi_xfer;
 	u8 transfer_len;
+	void __iomem *addr1 = NULL, *addr2 = NULL, *addr3 = NULL;
 
 	spi_bus_lock(phy->spi_device->master);
+
+	if (yitian_tpm) {
+		addr1 = ioremap(MSCP_GPIO0_DATAOUT, REGISTER_LEN);
+		addr2 = addr1 + (MSCP_GPIO0_OUTENSET - MSCP_GPIO0_DATAOUT);
+		addr3 = ioremap(MSCP_CFG_TPM_CSN, REGISTER_LEN);
+
+		if (!addr1 || !addr3) {
+			pr_err("yitian tpm register ioremap failed!\n");
+			goto exit;
+		}
+
+		writeb(GPIO_OUTPUT, addr1);
+		writeb(GPIO_OUTPUT_TO_TPM, addr2);
+		writeb(TPM_VALID, addr3);
+	}
 
 	while (len) {
 		transfer_len = min_t(u16, len, MAX_SPI_FRAMESIZE);
@@ -136,6 +169,17 @@ int tpm_tis_spi_transfer(struct tpm_tis_data *data, u32 addr, u16 len,
 	}
 
 exit:
+	if (yitian_tpm) {
+		if (addr1 && addr3) {
+			writeb(GPIO_INPUT, addr1);
+			writeb(GPIO_OUTPUT_RESET, addr2);
+			writeb(TPM_INVALID, addr3);
+		}
+
+		iounmap(addr1);
+		iounmap(addr3);
+	}
+
 	spi_bus_unlock(phy->spi_device->master);
 	return ret;
 }
@@ -284,6 +328,7 @@ MODULE_DEVICE_TABLE(of, of_tis_spi_match);
 
 static const struct acpi_device_id acpi_tis_spi_match[] = {
 	{"SMO0768", 0},
+	{"BABA8040", 0},
 	{}
 };
 MODULE_DEVICE_TABLE(acpi, acpi_tis_spi_match);
