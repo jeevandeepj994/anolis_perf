@@ -2,6 +2,7 @@
 /*
  * Copyright (C) 2017-2018 HUAWEI, Inc.
  *             https://www.huawei.com/
+ * Copyright (C) 2021, Alibaba Cloud
  */
 #include <linux/module.h>
 #include <linux/buffer_head.h>
@@ -132,7 +133,7 @@ static int erofs_init_devices(struct super_block *sb,
 	struct erofs_sb_info *sbi = EROFS_SB(sb);
 	unsigned int ondisk_extradevs;
 	erofs_off_t pos;
-	struct page *page = NULL;
+	struct erofs_buf buf = __EROFS_BUF_INITIALIZER;
 	struct erofs_device_info *dif;
 	struct erofs_deviceslot *dis;
 	void *ptr;
@@ -157,22 +158,13 @@ static int erofs_init_devices(struct super_block *sb,
 	pos = le16_to_cpu(dsb->devt_slotoff) * EROFS_DEVT_SLOT_SIZE;
 	down_read(&sbi->devs->rwsem);
 	idr_for_each_entry(&sbi->devs->tree, dif, id) {
-		erofs_blk_t blk = erofs_blknr(pos);
 		struct block_device *bdev;
 
-		if (!page || page->index != blk) {
-			if (page) {
-				kunmap(page);
-				unlock_page(page);
-				put_page(page);
-			}
-
-			page = erofs_get_meta_page(sb, blk);
-			if (IS_ERR(page)) {
-				up_read(&sbi->devs->rwsem);
-				return PTR_ERR(page);
-			}
-			ptr = kmap(page);
+		ptr = erofs_read_metabuf(&buf, sb, erofs_blknr(pos),
+					 EROFS_KMAP);
+		if (IS_ERR(ptr)) {
+			err = PTR_ERR(ptr);
+			break;
 		}
 		dis = ptr + erofs_blkoff(pos);
 
@@ -204,21 +196,12 @@ static int erofs_init_devices(struct super_block *sb,
 	while (sbi->devs->extra_devices < ondisk_extradevs) {
 		struct file *f;
 		char blob_id[sizeof(dis->u.userdata) + 1];
-		erofs_blk_t blk = erofs_blknr(pos);
 
-		if (!page || page->index != blk) {
-			if (page) {
-				kunmap(page);
-				unlock_page(page);
-				put_page(page);
-			}
-
-			page = erofs_get_meta_page(sb, blk);
-			if (IS_ERR(page)) {
-				up_read(&sbi->devs->rwsem);
-				return PTR_ERR(page);
-			}
-			ptr = kmap(page);
+		ptr = erofs_read_metabuf(&buf, sb, erofs_blknr(pos),
+					 EROFS_KMAP);
+		if (IS_ERR(ptr)) {
+			up_read(&sbi->devs->rwsem);
+			return PTR_ERR(ptr);
 		}
 		dis = ptr + erofs_blkoff(pos);
 
@@ -252,19 +235,14 @@ static int erofs_init_devices(struct super_block *sb,
 	err = 0;
 err_out:
 	up_read(&sbi->devs->rwsem);
-	if (page) {
-		kunmap(page);
-		unlock_page(page);
-		put_page(page);
-	}
+	erofs_put_metabuf(&buf);
 	return err;
 }
 
 static int erofs_read_superblock(struct super_block *sb)
 {
-	struct address_space *mapping;
 	struct erofs_sb_info *sbi;
-	struct page *page;
+	struct erofs_buf buf;
 	struct erofs_super_block *dsb;
 	unsigned int blkszbits;
 	void *data;
@@ -272,21 +250,11 @@ static int erofs_read_superblock(struct super_block *sb)
 
 	sbi = EROFS_SB(sb);
 
-	if (sbi->bootstrap) {
-		mapping = sbi->bootstrap->f_inode->i_mapping;
-		page = read_cache_page(mapping, 0,
-				(filler_t *)mapping->a_ops->readpage,
-				sbi->bootstrap);
-	} else {
-		mapping = sb->s_bdev->bd_inode->i_mapping;
-		page = read_mapping_page(mapping, 0, NULL);
-	}
-	if (IS_ERR(page)) {
+	data = erofs_read_metabuf(&buf, sb, 0, EROFS_KMAP);
+	if (IS_ERR(data)) {
 		erofs_err(sb, "cannot read erofs superblock");
-		return PTR_ERR(page);
+		return PTR_ERR(data);
 	}
-
-	data = kmap(page);
 	dsb = (struct erofs_super_block *)(data + EROFS_SUPER_OFFSET);
 
 	ret = -EINVAL;
@@ -339,8 +307,7 @@ static int erofs_read_superblock(struct super_block *sb)
 	/* handle multiple devices */
 	ret = erofs_init_devices(sb, dsb);
 out:
-	kunmap(page);
-	put_page(page);
+	erofs_put_metabuf(&buf);
 	return ret;
 }
 

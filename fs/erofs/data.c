@@ -33,49 +33,111 @@ static void erofs_readendio(struct bio *bio)
 	bio_put(bio);
 }
 
-struct page *erofs_get_meta_page(struct super_block *sb, erofs_blk_t blkaddr)
+static struct page *erofs_read_meta_page(struct super_block *sb, pgoff_t index,
+					 struct erofs_buf *buf)
 {
 	struct address_space *mapping;
 	struct page *page;
 
+	buf->mapping = NULL;
 	if (EROFS_SB(sb)->bootstrap) {
-		unsigned int            nofs_flag;
+		struct inode	*inode = EROFS_SB(sb)->bootstrap->f_inode;
+		unsigned int	nofs_flag;
 
-		mapping = EROFS_SB(sb)->bootstrap->f_inode->i_mapping;
+		mapping = inode->i_mapping;
 		nofs_flag = memalloc_nofs_save();
-		page = read_cache_page(mapping, blkaddr,
-				(filler_t *)mapping->a_ops->readpage,
-				EROFS_SB(sb)->bootstrap);
+		if (IS_DAX(inode)) {
+			page = mapping->a_ops->startpfn(mapping, index,
+					&buf->iomap);
+			if (!IS_ERR(page))
+				buf->mapping = mapping;
+		} else {
+			page = read_cache_page(mapping, index,
+					(filler_t *)mapping->a_ops->readpage,
+					EROFS_SB(sb)->bootstrap);
+		}
 		memalloc_nofs_restore(nofs_flag);
 	} else {
 		mapping = sb->s_bdev->bd_inode->i_mapping;
-		page = read_cache_page_gfp(mapping, blkaddr,
+		page = read_cache_page_gfp(mapping, index,
 				mapping_gfp_constraint(mapping, ~__GFP_FS));
 	}
-	/* should already be PageUptodate */
-	if (!IS_ERR(page))
-		lock_page(page);
 	return page;
+}
+
+void erofs_unmap_metabuf(struct erofs_buf *buf)
+{
+	if (buf->kmap_type == EROFS_KMAP)
+		kunmap(buf->page);
+	else if (buf->kmap_type == EROFS_KMAP_ATOMIC)
+		kunmap_atomic(buf->base);
+	buf->base = NULL;
+	buf->kmap_type = EROFS_NO_KMAP;
+}
+
+void erofs_put_metabuf(struct erofs_buf *buf)
+{
+	pgoff_t index;
+
+	if (!buf->page)
+		return;
+	erofs_unmap_metabuf(buf);
+
+	index = buf->page->index;
+	put_page(buf->page);
+	buf->page = NULL;
+
+	if (buf->mapping) {
+		buf->mapping->a_ops->endpfn(buf->mapping, index,
+				&buf->iomap, 0);
+		buf->mapping = NULL;
+	}
+}
+
+void *erofs_read_metabuf(struct erofs_buf *buf, struct super_block *sb,
+			erofs_blk_t blkaddr, enum erofs_kmap_type type)
+{
+	erofs_off_t offset = blknr_to_addr(blkaddr);
+	pgoff_t index = offset >> PAGE_SHIFT;
+	struct page *page = buf->page;
+
+	if (!page || page->index != index) {
+		erofs_put_metabuf(buf);
+		page = erofs_read_meta_page(sb, index, buf);
+		if (IS_ERR(page))
+			return page;
+		/* should already be PageUptodate, no need to lock page */
+		buf->page = page;
+	}
+	if (buf->kmap_type == EROFS_NO_KMAP) {
+		if (type == EROFS_KMAP)
+			buf->base = kmap(page);
+		else if (type == EROFS_KMAP_ATOMIC)
+			buf->base = kmap_atomic(page);
+		buf->kmap_type = type;
+	} else if (buf->kmap_type != type) {
+		DBG_BUGON(1);
+		return ERR_PTR(-EFAULT);
+	}
+	if (type == EROFS_NO_KMAP)
+		return NULL;
+	return buf->base + (offset & ~PAGE_MASK);
 }
 
 static int erofs_map_blocks_flatmode(struct inode *inode,
 				     struct erofs_map_blocks *map,
 				     int flags)
 {
-	int err = 0;
 	erofs_blk_t nblocks, lastblk;
 	u64 offset = map->m_la;
 	struct erofs_inode *vi = EROFS_I(inode);
 	bool tailendpacking = (vi->datalayout == EROFS_INODE_FLAT_INLINE);
 
-	trace_erofs_map_blocks_flatmode_enter(inode, map, flags);
-
-	nblocks = DIV_ROUND_UP(inode->i_size, PAGE_SIZE);
+	nblocks = DIV_ROUND_UP(inode->i_size, EROFS_BLKSIZ);
 	lastblk = nblocks - tailendpacking;
 
 	/* there is no hole in flatmode */
 	map->m_flags = EROFS_MAP_MAPPED;
-
 	if (offset < blknr_to_addr(lastblk)) {
 		map->m_pa = blknr_to_addr(vi->raw_blkaddr) + map->m_la;
 		map->m_plen = blknr_to_addr(lastblk) - offset;
@@ -87,30 +149,23 @@ static int erofs_map_blocks_flatmode(struct inode *inode,
 			vi->xattr_isize + erofs_blkoff(map->m_la);
 		map->m_plen = inode->i_size - offset;
 
-		/* inline data should be located in one meta block */
-		if (erofs_blkoff(map->m_pa) + map->m_plen > PAGE_SIZE) {
+		/* inline data should be located in the same meta block */
+		if (erofs_blkoff(map->m_pa) + map->m_plen > EROFS_BLKSIZ) {
 			erofs_err(inode->i_sb,
 				  "inline data cross block boundary @ nid %llu",
 				  vi->nid);
 			DBG_BUGON(1);
-			err = -EFSCORRUPTED;
-			goto err_out;
+			return -EFSCORRUPTED;
 		}
-
 		map->m_flags |= EROFS_MAP_META;
 	} else {
 		erofs_err(inode->i_sb,
 			  "internal error @ nid: %llu (size %llu), m_la 0x%llx",
 			  vi->nid, inode->i_size, map->m_la);
 		DBG_BUGON(1);
-		err = -EIO;
-		goto err_out;
+		return -EIO;
 	}
-
-	map->m_llen = map->m_plen;
-err_out:
-	trace_erofs_map_blocks_flatmode_exit(inode, map, flags, 0);
-	return err;
+	return 0;
 }
 
 int erofs_map_blocks(struct inode *inode,
@@ -119,12 +174,14 @@ int erofs_map_blocks(struct inode *inode,
 	struct super_block *sb = inode->i_sb;
 	struct erofs_inode *vi = EROFS_I(inode);
 	struct erofs_inode_chunk_index *idx;
-	struct page *page;
+	struct erofs_buf buf = __EROFS_BUF_INITIALIZER;
 	u64 chunknr;
 	unsigned int unit;
 	erofs_off_t pos;
+	void *kaddr;
 	int err = 0;
 
+	trace_erofs_map_blocks_enter(inode, map, flags);
 	map->m_deviceid = 0;
 	if (map->m_la >= inode->i_size) {
 		/* leave out-of-bound access unmapped */
@@ -133,8 +190,10 @@ int erofs_map_blocks(struct inode *inode,
 		goto out;
 	}
 
-	if (vi->datalayout != EROFS_INODE_CHUNK_BASED)
-		return erofs_map_blocks_flatmode(inode, map, flags);
+	if (vi->datalayout != EROFS_INODE_CHUNK_BASED) {
+		err = erofs_map_blocks_flatmode(inode, map, flags);
+		goto out;
+	}
 
 	if (vi->chunkformat & EROFS_CHUNK_FORMAT_INDEXES)
 		unit = sizeof(*idx);			/* chunk index */
@@ -145,17 +204,18 @@ int erofs_map_blocks(struct inode *inode,
 	pos = ALIGN(iloc(EROFS_SB(sb), vi->nid) + vi->inode_isize +
 		    vi->xattr_isize, unit) + unit * chunknr;
 
-	page = erofs_get_meta_page(inode->i_sb, erofs_blknr(pos));
-	if (IS_ERR(page))
-		return PTR_ERR(page);
-
+	kaddr = erofs_read_metabuf(&buf, sb, erofs_blknr(pos), EROFS_KMAP);
+	if (IS_ERR(kaddr)) {
+		err = PTR_ERR(kaddr);
+		goto out;
+	}
 	map->m_la = chunknr << vi->chunkbits;
 	map->m_plen = min_t(erofs_off_t, 1UL << vi->chunkbits,
 			    roundup(inode->i_size - map->m_la, EROFS_BLKSIZ));
 
 	/* handle block map */
 	if (!(vi->chunkformat & EROFS_CHUNK_FORMAT_INDEXES)) {
-		__le32 *blkaddr = page_address(page) + erofs_blkoff(pos);
+		__le32 *blkaddr = kaddr + erofs_blkoff(pos);
 
 		if (le32_to_cpu(*blkaddr) == EROFS_NULL_ADDR) {
 			map->m_flags = 0;
@@ -166,7 +226,7 @@ int erofs_map_blocks(struct inode *inode,
 		goto out_unlock;
 	}
 	/* parse chunk indexes */
-	idx = page_address(page) + erofs_blkoff(pos);
+	idx = kaddr + erofs_blkoff(pos);
 	switch (le32_to_cpu(idx->blkaddr)) {
 	case EROFS_NULL_ADDR:
 		map->m_flags = 0;
@@ -179,10 +239,11 @@ int erofs_map_blocks(struct inode *inode,
 		break;
 	}
 out_unlock:
-	unlock_page(page);
-	put_page(page);
+	erofs_put_metabuf(&buf);
 out:
-	map->m_llen = map->m_plen;
+	if (!err)
+		map->m_llen = map->m_plen;
+	trace_erofs_map_blocks_exit(inode, map, flags, 0);
 	return err;
 }
 
@@ -295,18 +356,16 @@ submit_bio_retry:
 		/* deal with inline page */
 		if (map.m_flags & EROFS_MAP_META) {
 			void *vsrc, *vto;
-			struct page *ipage;
+			struct erofs_buf buf = __EROFS_BUF_INITIALIZER;
 
 			DBG_BUGON(map.m_plen > PAGE_SIZE);
 
-			ipage = erofs_get_meta_page(sb, blknr);
-
-			if (IS_ERR(ipage)) {
-				err = PTR_ERR(ipage);
+			vsrc = erofs_read_metabuf(&buf, inode->i_sb,
+						  blknr, EROFS_KMAP_ATOMIC);
+			if (IS_ERR(vsrc)) {
+				err = PTR_ERR(vsrc);
 				goto err_out;
 			}
-
-			vsrc = kmap_atomic(ipage);
 			vto = kmap_atomic(page);
 			memcpy(vto, vsrc + blkoff, map.m_plen);
 			memset(vto + map.m_plen, 0, PAGE_SIZE - map.m_plen);
@@ -315,10 +374,8 @@ submit_bio_retry:
 			flush_dcache_page(page);
 
 			SetPageUptodate(page);
-			/* TODO: could we unlock the page earlier? */
-			unlock_page(ipage);
-			put_page(ipage);
 
+			erofs_put_metabuf(&buf);
 			/* imply err = 0, see erofs_map_blocks */
 			goto has_updated;
 		}

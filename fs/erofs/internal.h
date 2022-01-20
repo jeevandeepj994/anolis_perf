@@ -17,6 +17,7 @@
 #include <linux/magic.h>
 #include <linux/slab.h>
 #include <linux/vmalloc.h>
+#include <linux/iomap.h>
 #include "erofs_fs.h"
 
 /* redefine pr_fmt "erofs: " */
@@ -225,6 +226,21 @@ static inline int erofs_wait_on_workgroup_freezed(struct erofs_workgroup *grp)
 #error erofs cannot be used in this platform
 #endif
 
+enum erofs_kmap_type {
+	EROFS_NO_KMAP,		/* don't map the buffer */
+	EROFS_KMAP,		/* use kmap() to map the buffer */
+	EROFS_KMAP_ATOMIC,	/* use kmap_atomic() to map the buffer */
+};
+
+struct erofs_buf {
+	struct iomap iomap;
+	struct address_space *mapping;
+	struct page *page;
+	void *base;
+	enum erofs_kmap_type kmap_type;
+};
+#define __EROFS_BUF_INITIALIZER	((struct erofs_buf){ .page = NULL })
+
 #define ROOT_NID(sb)		((sb)->root_nid)
 
 #define erofs_blknr(addr)       ((addr) / EROFS_BLKSIZ)
@@ -361,13 +377,13 @@ enum {
 #define EROFS_MAP_FULL_MAPPED	(1 << BH_FullMapped)
 
 struct erofs_map_blocks {
+	struct erofs_buf buf;
+
 	erofs_off_t m_pa, m_la;
 	u64 m_plen, m_llen;
 
 	unsigned int m_deviceid;
 	unsigned int m_flags;
-
-	struct page *mpage;
 };
 
 /* Flags used by erofs_map_blocks_flatmode() */
@@ -401,7 +417,11 @@ struct erofs_map_dev {
 };
 
 /* data.c */
-struct page *erofs_get_meta_page(struct super_block *sb, erofs_blk_t blkaddr);
+extern const struct file_operations erofs_file_fops;
+void erofs_unmap_metabuf(struct erofs_buf *buf);
+void erofs_put_metabuf(struct erofs_buf *buf);
+void *erofs_read_metabuf(struct erofs_buf *buf, struct super_block *sb,
+			 erofs_blk_t blkaddr, enum erofs_kmap_type type);
 int erofs_map_dev(struct super_block *sb, struct erofs_map_dev *dev);
 
 /* inode.c */
