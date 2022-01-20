@@ -470,6 +470,12 @@ static int erofs_fc_parse_param(struct fs_context *fc,
 	default:
 		return -ENOPARAM;
 	}
+
+	if (ctx->blob_dir_path && !ctx->bootstrap_path) {
+		errorfc(fc, "bootstrap_path required in RAFS mode");
+		return -EINVAL;
+	}
+
 	return 0;
 }
 
@@ -864,11 +870,10 @@ static void erofs_kill_sb(struct super_block *sb)
 	erofs_free_dev_context(sbi->devs);
 	if (sbi->bootstrap)
 		filp_close(sbi->bootstrap, NULL);
-	if (sbi->blob_dir_path) {
+	if (sbi->blob_dir_path)
 		path_put(&sbi->blob_dir);
-		kfree(sbi->blob_dir_path);
-	}
 	kfree(sbi->bootstrap_path);
+	kfree(sbi->blob_dir_path);
 	erofs_fscache_unregister_fs(sb);
 	kfree(sbi->fsid);
 	kfree(sbi->domain_id);
