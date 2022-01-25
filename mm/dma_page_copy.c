@@ -5,8 +5,18 @@
 #include <linux/dmaengine.h>
 #include <linux/dma-mapping.h>
 
+#define DMA_TX_TIMEOUT 4000
+
 static bool dma_migrate_enabled __read_mostly;
 static unsigned int dma_migrate_segment = 32;
+static bool dma_migrate_polling __read_mostly = true;
+
+static void dma_async_callback(void *arg)
+{
+	struct completion *done = arg;
+
+	complete(done);
+}
 
 static int __dma_page_copy_sg(struct scatterlist *src, struct scatterlist *dst,
 			      unsigned int nents)
@@ -18,7 +28,9 @@ static int __dma_page_copy_sg(struct scatterlist *src, struct scatterlist *dst,
 	dma_cookie_t cookie;
 	enum dma_status status;
 	unsigned int nr_sgs, nr_sgd = 0;
+	unsigned long flags;
 	int err = 0;
+	DECLARE_COMPLETION_ONSTACK(done);
 
 	/* acquire DMA chan */
 	dma_cap_zero(mask);
@@ -43,12 +55,18 @@ static int __dma_page_copy_sg(struct scatterlist *src, struct scatterlist *dst,
 	}
 
 	/* prep DMA scatterlist memcpy */
+	flags = dma_migrate_polling ? 0 : DMA_PREP_INTERRUPT;
 	tx = dmaengine_prep_dma_memcpy_sg(dma_copy_chan, dst, nents,
-					src, nents, 0);
+					src, nents, flags);
 	if (!tx) {
 		pr_err("DMA dev prep copy failed\n");
 		err = -EIO;
 		goto unmap_sg;
+	}
+
+	if (!dma_migrate_polling) {
+		tx->callback = dma_async_callback;
+		tx->callback_param = &done;
 	}
 
 	/* submit DMA request */
@@ -59,9 +77,21 @@ static int __dma_page_copy_sg(struct scatterlist *src, struct scatterlist *dst,
 		goto unmap_sg;
 	}
 
-	status = dma_sync_wait(dma_copy_chan, cookie);
-	if (status != DMA_COMPLETE)
-		err = -EIO;
+	if (dma_migrate_polling) {
+		status = dma_sync_wait(dma_copy_chan, cookie);
+		if (status != DMA_COMPLETE)
+			err = -EIO;
+	} else {
+		dma_async_issue_pending(dma_copy_chan);
+		if (!wait_for_completion_timeout(&done,
+					msecs_to_jiffies(DMA_TX_TIMEOUT))) {
+			err = -EIO;
+			goto unmap_sg;
+		}
+		status = dma_async_is_tx_complete(dma_copy_chan, cookie);
+		if (status != DMA_COMPLETE)
+			err = -EIO;
+	}
 
 unmap_sg:
 	if (nr_sgs)
@@ -231,10 +261,33 @@ static struct kobj_attribute dma_migrate_segment_attr =
 	__ATTR(dma_migrate_segment, 0644, dma_migrate_segment_show,
 	       dma_migrate_segment_store);
 
+static ssize_t migrate_dma_polling_show(struct kobject *kobj,
+					struct kobj_attribute *attr, char *buf)
+{
+	return sysfs_emit(buf, "%d\n", dma_migrate_polling);
+}
+static ssize_t migrate_dma_polling_store(struct kobject *kobj,
+					struct kobj_attribute *attr,
+					const char *buf, size_t count)
+{
+	if (!strncmp(buf, "1", 1))
+		dma_migrate_polling = true;
+	else if (!strncmp(buf, "0", 1))
+		dma_migrate_polling = false;
+	else
+		return -EINVAL;
+
+	return count;
+}
+static struct kobj_attribute dma_migrate_polling_attr =
+	__ATTR(dma_migrate_polling, 0644, migrate_dma_polling_show,
+	       migrate_dma_polling_store);
+
 static struct attribute *migrate_attrs[] = {
 	&batch_migrate_enabled_attr.attr,
 	&dma_migrate_enabled_attr.attr,
 	&dma_migrate_segment_attr.attr,
+	&dma_migrate_polling_attr.attr,
 	NULL,
 };
 
