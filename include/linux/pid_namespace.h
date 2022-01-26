@@ -130,5 +130,9 @@ static inline struct task_struct *rich_container_get_scenario(void)
 	return NULL;
 }
 #endif
+static inline bool task_is_in_init_pid_ns(struct task_struct *tsk)
+{
+	return task_active_pid_ns(tsk) == &init_pid_ns;
+}
 
 #endif /* _LINUX_PID_NS_H */
