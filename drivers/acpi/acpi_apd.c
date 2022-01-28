@@ -40,7 +40,8 @@ struct apd_private_data {
 	const struct apd_device_desc *dev_desc;
 };
 
-#if defined(CONFIG_X86_AMD_PLATFORM_DEVICE) || defined(CONFIG_ARM64)
+#if defined(CONFIG_X86_AMD_PLATFORM_DEVICE) || \
+defined(CONFIG_ARM64) || defined(CONFIG_SW64)
 #define APD_ADDR(desc)	((unsigned long)&desc)
 
 static int acpi_apd_setup(struct apd_private_data *pdata)
@@ -190,6 +191,18 @@ static const struct apd_device_desc phytium_i2c_desc = {
 
 #endif /* CONFIG_ARM64 */
 
+#ifdef CONFIG_SW64
+static const struct apd_device_desc sunway_i2c_desc = {
+	.setup = acpi_apd_setup,
+	.fixed_clk_rate = 25000000,
+};
+
+static const struct apd_device_desc sunway_spi_desc = {
+	.setup = acpi_apd_setup,
+	.fixed_clk_rate = 25000000,
+};
+#endif
+
 #endif
 
 /**
@@ -260,6 +273,10 @@ static const struct acpi_device_id acpi_apd_device_ids[] = {
 	{ "NXP0001", APD_ADDR(nxp_i2c_desc) },
 	{ "BABA8000", APD_ADDR(baba_i2c_desc) },
 	{ "BABA8030", APD_ADDR(baba_spi_desc)},
+#endif
+#ifdef CONFIG_SW64
+	{ "HISI02A1", APD_ADDR(sunway_i2c_desc) },
+	{ "HISI0173", APD_ADDR(sunway_spi_desc) },
 #endif
 	{ }
 };
