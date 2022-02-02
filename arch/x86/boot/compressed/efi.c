@@ -6,8 +6,7 @@
  */
 
 #include "misc.h"
-#include <linux/efi.h>
-#include <asm/efi.h>
+#include "efi.h"
 
 /**
  * efi_get_type - Given a pointer to boot_params, determine the type of EFI environment.
