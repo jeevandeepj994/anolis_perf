@@ -3,6 +3,7 @@
 
 #include <linux/bpf.h>
 #include <bpf/bpf_helpers.h>
+#include "bpf_misc.h"
 
 char _license[] SEC("license") = "GPL";
 
@@ -51,7 +52,7 @@ static void check_elem(struct bpf_map *map)
 	}
 }
 
-SEC("fentry/__x64_sys_getpgid")
+SEC("fentry/" SYS_PREFIX "sys_getpgid")
 int inner_map(void *ctx)
 {
 	struct bpf_map *inner_map;
@@ -68,7 +69,7 @@ int inner_map(void *ctx)
 	return 0;
 }
 
-SEC("fentry/__x64_sys_getpgid")
+SEC("fentry/" SYS_PREFIX "sys_getpgid")
 int check_bloom(void *ctx)
 {
 	check_elem(&map_bloom);
