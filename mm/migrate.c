@@ -2176,7 +2176,7 @@ int migrate_misplaced_page(struct page *page, struct vm_area_struct *vma,
 	if (nr_succeeded) {
 		count_vm_numa_events(NUMA_PAGE_MIGRATE, nr_succeeded);
 		if (!node_is_toptier(page_to_nid(page)) && node_is_toptier(node))
-			mod_node_page_state(NODE_DATA(node), PGPROMOTE_SUCCESS,
+			mod_node_page_state(pgdat, PGPROMOTE_SUCCESS,
 				nr_succeeded);
 	}
 	BUG_ON(!list_empty(&migratepages));
@@ -2302,6 +2302,9 @@ int migrate_misplaced_transhuge_page(struct mm_struct *mm,
 
 	count_vm_events(PGMIGRATE_SUCCESS, HPAGE_PMD_NR);
 	count_vm_numa_events(NUMA_PAGE_MIGRATE, HPAGE_PMD_NR);
+	if (!node_is_toptier(page_to_nid(page)) && node_is_toptier(node))
+		mod_node_page_state(pgdat, PGPROMOTE_SUCCESS,
+							HPAGE_PMD_NR);
 
 	mod_node_page_state(page_pgdat(page),
 			NR_ISOLATED_ANON + page_lru,
