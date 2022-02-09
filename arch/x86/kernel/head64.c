@@ -317,15 +317,6 @@ unsigned long __head __startup_64(unsigned long physaddr,
 	return sme_get_me_mask();
 }
 
-unsigned long __startup_secondary_64(void)
-{
-	/*
-	 * Return the SME encryption mask (if SME is active) to be used as a
-	 * modifier for the initial pgdir entry programmed into CR3.
-	 */
-	return sme_get_me_mask();
-}
-
 #ifdef CONFIG_AMD_MEM_ENCRYPT
 extern bool bsp_flush_bss_decrypted_section_done;
 
