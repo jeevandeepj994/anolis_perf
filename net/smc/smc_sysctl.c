@@ -79,6 +79,15 @@ static struct ctl_table smc_table[] = {
 		.extra1		= SYSCTL_ZERO,
 		.extra2		= SYSCTL_ONE,
 	},
+	{
+		.procname       = "limit_handshake",
+		.data           = &init_net.smc.limit_smc_hs,
+		.maxlen         = sizeof(init_net.smc.limit_smc_hs),
+		.mode           = 0644,
+		.proc_handler   = proc_dointvec_minmax,
+		.extra1         = SYSCTL_ZERO,
+		.extra2         = SYSCTL_ONE,
+	},
 	{  }
 };
 
