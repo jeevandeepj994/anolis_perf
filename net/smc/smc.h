@@ -253,6 +253,7 @@ struct smc_sock {				/* smc sock container */
 						/* original error_report fct. */
 	struct smc_connection	conn;		/* smc connection */
 	struct smc_sock		*listen_smc;	/* listen parent */
+	bool			keep_clcsock;
 	struct work_struct	connect_work;	/* handle non-blocking connect*/
 	struct work_struct	tcp_listen_work;/* handle tcp socket accepts */
 	struct work_struct	smc_listen_work;/* prepare new accept socket */

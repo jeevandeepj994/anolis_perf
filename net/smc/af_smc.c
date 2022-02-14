@@ -371,6 +371,7 @@ static struct sock *smc_sock_alloc(struct net *net, struct socket *sock,
 	sk->sk_sndbuf = net->smc.sysctl_wmem_default;
 	sk->sk_rcvbuf = net->smc.sysctl_rmem_default;
 	smc = smc_sk(sk);
+	smc->keep_clcsock = 0;
 	INIT_WORK(&smc->tcp_listen_work, smc_tcp_listen_work);
 	INIT_WORK(&smc->connect_work, smc_connect_work);
 	INIT_DELAYED_WORK(&smc->conn.tx_work, smc_tx_work);
@@ -2718,7 +2719,7 @@ static int smc_shutdown(struct socket *sock, int how)
 		/* nothing more to do because peer is not involved */
 		break;
 	}
-	if (do_shutdown && smc->clcsock)
+	if (do_shutdown && smc->clcsock && !smc->keep_clcsock)
 		rc1 = kernel_sock_shutdown(smc->clcsock, how);
 	/* map sock_shutdown_cmd constants to sk_shutdown value range */
 	sk->sk_shutdown |= how + 1;
