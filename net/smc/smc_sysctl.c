@@ -124,6 +124,15 @@ static struct ctl_table smc_table[] = {
 		.extra1		= SYSCTL_ZERO,
 		.extra2		= SYSCTL_ONE,
 	},
+	{
+		.procname	= "keep_first_contact_clcsock",
+		.data		= &init_net.smc.sysctl_keep_first_contact_clcsock,
+		.maxlen		= sizeof(int),
+		.mode		= 0644,
+		.proc_handler	= proc_dointvec_minmax,
+		.extra1		= SYSCTL_ZERO,
+		.extra2		= SYSCTL_ONE,
+	},
 	{  }
 };
 
@@ -154,6 +163,7 @@ int __net_init smc_sysctl_net_init(struct net *net)
 	WRITE_ONCE(net->smc.sysctl_rmem, READ_ONCE(net->ipv4.sysctl_tcp_rmem[1]));
 	net->smc.sysctl_tcp2smc = 0;
 	net->smc.sysctl_allow_different_subnet = 1;
+	net->smc.sysctl_keep_first_contact_clcsock = 1;
 	net->smc.sysctl_disable_multiple_link = 1;
 	/* default on */
 	net->smc.sysctl_simplify_rkey_exhcange = 1;

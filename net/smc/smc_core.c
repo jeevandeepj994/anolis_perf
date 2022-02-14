@@ -917,6 +917,8 @@ static int smc_lgr_create(struct smc_sock *smc, struct smc_init_info *ini)
 		link_idx = SMC_SINGLE_LINK;
 		lnk = &lgr->lnk[link_idx];
 		smcr_link_iw_extension(&lnk->iw_conn_param, smc->clcsock->sk);
+		if (smc->keep_clcsock)
+			lnk->clcsock = smc->clcsock;
 
 		rc = smcr_link_init(lgr, lnk, link_idx, ini);
 		if (rc) {
@@ -1262,13 +1264,17 @@ static void __smcr_link_clear(struct smc_link *lnk)
 {
 	struct smc_link_group *lgr = lnk->lgr;
 	struct smc_ib_device *smcibdev;
+	struct socket *clcsock;
 
 	smc_wr_free_link_mem(lnk);
 	smc_ibdev_cnt_dec(lnk);
+	clcsock = lnk->clcsock;
 	put_device(&lnk->smcibdev->ibdev->dev);
 	smcibdev = lnk->smcibdev;
 	memset(lnk, 0, sizeof(struct smc_link));
 	lnk->state = SMC_LNK_UNUSED;
+	if (clcsock)
+		sock_release(clcsock);
 	if (!atomic_dec_return(&smcibdev->lnk_cnt))
 		wake_up(&smcibdev->lnks_deleted);
 	smc_lgr_put(lgr); /* lgr_hold in smcr_link_init() */
@@ -1946,6 +1952,9 @@ int smc_conn_create(struct smc_sock *smc, struct smc_init_info *ini)
 
 create:
 	if (ini->first_contact_local) {
+		/* keep this clcsock for QP reuse */
+		if (net->smc.sysctl_keep_first_contact_clcsock)
+			smc->keep_clcsock = true;
 		rc = smc_lgr_create(smc, ini);
 		if (rc)
 			goto out;

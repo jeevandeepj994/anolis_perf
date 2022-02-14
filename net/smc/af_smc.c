@@ -416,6 +416,7 @@ static struct sock *smc_sock_alloc(struct net *net, struct socket *sock,
 	WRITE_ONCE(sk->sk_sndbuf, READ_ONCE(net->smc.sysctl_wmem));
 	WRITE_ONCE(sk->sk_rcvbuf, READ_ONCE(net->smc.sysctl_rmem));
 	smc = smc_sk(sk);
+	smc->keep_clcsock = false;
 	for (i = 0; i < SMC_MAX_TCP_LISTEN_WORKS; i++) {
 		smc->tcp_listen_works[i].smc = smc;
 		INIT_WORK(&smc->tcp_listen_works[i].work, smc_tcp_listen_work);
@@ -1837,7 +1838,8 @@ struct sock *smc_accept_dequeue(struct sock *parent,
 			new_sk->sk_prot->unhash(new_sk);
 			down_write(&isk->clcsock_release_lock);
 			if (isk->clcsock) {
-				sock_release(isk->clcsock);
+				if (!isk->keep_clcsock)
+					sock_release(isk->clcsock);
 				isk->clcsock = NULL;
 			}
 			up_write(&isk->clcsock_release_lock);
@@ -2944,7 +2946,7 @@ static int smc_shutdown(struct socket *sock, int how)
 		/* nothing more to do because peer is not involved */
 		break;
 	}
-	if (do_shutdown && smc->clcsock)
+	if (do_shutdown && smc->clcsock && !smc->keep_clcsock)
 		rc1 = kernel_sock_shutdown(smc->clcsock, how);
 	/* map sock_shutdown_cmd constants to sk_shutdown value range */
 	sk->sk_shutdown |= how + 1;
