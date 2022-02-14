@@ -1114,6 +1114,8 @@ int smc_llc_cli_add_link(struct smc_link *link, struct smc_llc_qentry *qentry)
 		goto out_reject;
 	lnk_new = &lgr->lnk[lnk_idx];
 	lnk_new->iw_conn_param = link->iw_conn_param;
+	lnk_new->clcsock = link->clcsock;
+
 	rc = smcr_link_init(lgr, lnk_new, lnk_idx, ini);
 	if (rc)
 		goto out_reject;
@@ -1485,6 +1487,7 @@ int smc_llc_srv_add_link(struct smc_link *link,
 	}
 
 	lgr->lnk[lnk_idx].iw_conn_param = link->iw_conn_param;
+	lgr->lnk[lnk_idx].clcsock = link->clcsock;
 	rc = smcr_link_init(lgr, &lgr->lnk[lnk_idx], lnk_idx, ini);
 	if (rc)
 		goto out;

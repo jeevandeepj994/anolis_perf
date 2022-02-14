@@ -28,10 +28,12 @@ void smc_clcsock_release(struct smc_sock *smc)
 	if (smc->listen_smc && current_work() != &smc->smc_listen_work)
 		cancel_work_sync(&smc->smc_listen_work);
 	mutex_lock(&smc->clcsock_release_lock);
+	/* don't release clcsock for eRDMA */
 	if (smc->clcsock) {
 		tcp = smc->clcsock;
 		smc->clcsock = NULL;
-		sock_release(tcp);
+		if (!smc->keep_clcsock)
+			sock_release(tcp);
 	}
 	mutex_unlock(&smc->clcsock_release_lock);
 }
@@ -236,7 +238,8 @@ again:
 			/* actively shutdown clcsock before peer close it,
 			 * prevent peer from entering TIME_WAIT state.
 			 */
-			if (smc->clcsock && smc->clcsock->sk) {
+			if (smc->clcsock && smc->clcsock->sk &&
+			    !smc->keep_clcsock) {
 				rc1 = kernel_sock_shutdown(smc->clcsock,
 							   SHUT_RDWR);
 				rc = rc ? rc : rc1;
