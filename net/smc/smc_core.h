@@ -167,6 +167,7 @@ struct smc_link {
 	struct completion	llc_testlink_resp; /* wait for rx of testlink */
 	int			llc_testlink_time; /* testlink interval */
 	atomic_t		conn_cnt; /* connections on this link */
+	struct socket		*clcsock;	/* keep for eRDMA */
 };
 
 /* For now we just allow one parallel link per link group. The SMC protocol

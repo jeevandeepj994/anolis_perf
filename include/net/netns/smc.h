@@ -32,6 +32,7 @@ struct netns_smc {
 	int				sysctl_tcp2smc;
 	int				sysctl_allow_different_subnet;
 	int				sysctl_disable_multiple_link;
+	int				sysctl_keep_first_contact_clcsock;
 	/* allow simplify rkey exchange when single link */
 	unsigned int			sysctl_simplify_rkey_exhcange;
 	unsigned int			sysctl_smc_fastopen;
