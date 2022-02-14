@@ -260,6 +260,7 @@ struct smc_sock {				/* smc sock container */
 						/* original error_report fct. */
 	struct smc_connection	conn;		/* smc connection */
 	struct smc_sock		*listen_smc;	/* listen parent */
+	bool			keep_clcsock;
 	struct work_struct	connect_work;	/* handle non-blocking connect*/
 	struct smc_tcp_listen_work	tcp_listen_works[SMC_MAX_TCP_LISTEN_WORKS];
 						/* handle tcp socket accepts */
