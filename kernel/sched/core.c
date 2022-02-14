@@ -7309,7 +7309,9 @@ EXPORT_SYMBOL(__cond_resched_lock);
 
 #ifdef CONFIG_PREEMPT_DYNAMIC
 
+#ifdef CONFIG_GENERIC_ENTRY
 #include <linux/entry-common.h>
+#endif
 
 /*
  * SC:cond_resched
