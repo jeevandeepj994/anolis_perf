@@ -1041,20 +1041,8 @@ static blk_qc_t __submit_bio_noacct_mq(struct bio *bio)
 	return ret;
 }
 
-/**
- * submit_bio_noacct - re-submit a bio to the block device layer for I/O
- * @bio:  The bio describing the location in memory and on the device.
- *
- * This is a version of submit_bio() that shall only be used for I/O that is
- * resubmitted to lower level drivers by stacking block drivers.  All file
- * systems and other upper level users of the block layer should use
- * submit_bio() instead.
- */
-blk_qc_t submit_bio_noacct(struct bio *bio)
+blk_qc_t submit_bio_noacct_nocheck(struct bio *bio)
 {
-	if (!submit_bio_checks(bio))
-		return BLK_QC_T_NONE;
-
 	/*
 	 * We only want one ->submit_bio to be active at a time, else stack
 	 * usage with stacked devices could be a problem.  Use current->bio_list
@@ -1069,6 +1057,22 @@ blk_qc_t submit_bio_noacct(struct bio *bio)
 	if (!bio->bi_disk->fops->submit_bio)
 		return __submit_bio_noacct_mq(bio);
 	return __submit_bio_noacct(bio);
+}
+
+/**
+ * submit_bio_noacct - re-submit a bio to the block device layer for I/O
+ * @bio:  The bio describing the location in memory and on the device.
+ *
+ * This is a version of submit_bio() that shall only be used for I/O that is
+ * resubmitted to lower level drivers by stacking block drivers.  All file
+ * systems and other upper level users of the block layer should use
+ * submit_bio() instead.
+ */
+blk_qc_t submit_bio_noacct(struct bio *bio)
+{
+	if (!submit_bio_checks(bio))
+		return BLK_QC_T_NONE;
+	return submit_bio_noacct_nocheck(bio);
 }
 EXPORT_SYMBOL(submit_bio_noacct);
 
