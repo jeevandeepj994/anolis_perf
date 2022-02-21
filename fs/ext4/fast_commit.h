@@ -76,6 +76,7 @@ struct ext4_fc_dentry_update {
 	struct qstr fcd_name;	/* Dirent name */
 	unsigned char fcd_iname[DNAME_INLINE_LEN];	/* Dirent name string */
 	struct list_head fcd_list;
+	struct list_head fcd_dilist;
 };
 
 /*
