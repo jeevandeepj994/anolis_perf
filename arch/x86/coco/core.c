@@ -9,17 +9,15 @@
 
 #include <linux/export.h>
 #include <linux/cc_platform.h>
-#include <linux/mem_encrypt.h>
 
+#include <asm/coco.h>
 #include <asm/processor.h>
 
-static bool __maybe_unused intel_cc_platform_has(enum cc_attr attr)
+static enum cc_vendor vendor __ro_after_init;
+
+static bool intel_cc_platform_has(enum cc_attr attr)
 {
-#ifdef CONFIG_INTEL_TDX_GUEST
 	return false;
-#else
-	return false;
-#endif
 }
 
 /*
@@ -66,12 +64,20 @@ static bool amd_cc_platform_has(enum cc_attr attr)
 #endif
 }
 
-
 bool cc_platform_has(enum cc_attr attr)
 {
-	if (sme_me_mask)
+	switch (vendor) {
+	case CC_VENDOR_AMD:
 		return amd_cc_platform_has(attr);
-
-	return false;
+	case CC_VENDOR_INTEL:
+		return intel_cc_platform_has(attr);
+	default:
+		return false;
+	}
 }
 EXPORT_SYMBOL_GPL(cc_platform_has);
+
+__init void cc_set_vendor(enum cc_vendor v)
+{
+	vendor = v;
+}
