@@ -289,8 +289,11 @@ void panic(const char *fmt, ...)
 	 *
 	 * Bypass the panic_cpu check and call __crash_kexec directly.
 	 */
-	if (_crash_kexec_post_notifiers)
+	if (_crash_kexec_post_notifiers) {
+		if (console_trylock())
+			console_unlock();
 		__crash_kexec(NULL);
+	}
 
 #ifdef CONFIG_VT
 	unblank_screen();
