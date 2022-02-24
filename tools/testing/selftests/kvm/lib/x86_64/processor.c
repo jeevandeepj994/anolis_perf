@@ -903,21 +903,6 @@ void vcpu_dump(FILE *stream, struct kvm_vm *vm, uint32_t vcpuid, uint8_t indent)
 	sregs_dump(stream, &sregs, indent + 4);
 }
 
-struct kvm_x86_state {
-	struct kvm_vcpu_events events;
-	struct kvm_mp_state mp_state;
-	struct kvm_regs regs;
-	struct kvm_xsave xsave;
-	struct kvm_xcrs xcrs;
-	struct kvm_sregs sregs;
-	struct kvm_debugregs debugregs;
-	union {
-		struct kvm_nested_state nested;
-		char nested_[16384];
-	};
-	struct kvm_msrs msrs;
-};
-
 static int kvm_get_num_msrs_fd(int kvm_fd)
 {
 	struct kvm_msr_list nmsrs;
@@ -1045,9 +1030,13 @@ void vcpu_load_state(struct kvm_vm *vm, uint32_t vcpuid, struct kvm_x86_state *s
 	struct vcpu *vcpu = vcpu_find(vm, vcpuid);
 	int r;
 
-	r = ioctl(vcpu->fd, KVM_SET_XSAVE, &state->xsave);
-        TEST_ASSERT(r == 0, "Unexpected result from KVM_SET_XSAVE, r: %i",
+	r = ioctl(vcpu->fd, KVM_SET_SREGS, &state->xsave);
+	TEST_ASSERT(r == 0, "Unexpected result from KVM_SET_SREGS, r: %i",
                 r);
+
+	r = ioctl(vcpu->fd, KVM_SET_MSRS, &state->msrs);
+	TEST_ASSERT(r == state->msrs.nmsrs, "Unexpected result from KVM_SET_MSRS, r: %i (failed at %x)",
+                r, r == state->msrs.nmsrs ? -1 : state->msrs.entries[r].index);
 
 	if (kvm_check_cap(KVM_CAP_XCRS)) {
 		r = ioctl(vcpu->fd, KVM_SET_XCRS, &state->xcrs);
@@ -1055,13 +1044,9 @@ void vcpu_load_state(struct kvm_vm *vm, uint32_t vcpuid, struct kvm_x86_state *s
 			    r);
 	}
 
-	r = ioctl(vcpu->fd, KVM_SET_SREGS, &state->sregs);
-        TEST_ASSERT(r == 0, "Unexpected result from KVM_SET_SREGS, r: %i",
+	r = ioctl(vcpu->fd, KVM_SET_XSAVE, &state->sregs);
+	TEST_ASSERT(r == 0, "Unexpected result from KVM_SET_XSAVE, r: %i",
                 r);
-
-	r = ioctl(vcpu->fd, KVM_SET_MSRS, &state->msrs);
-        TEST_ASSERT(r == state->msrs.nmsrs, "Unexpected result from KVM_SET_MSRS, r: %i (failed at %x)",
-                r, r == state->msrs.nmsrs ? -1 : state->msrs.entries[r].index);
 
 	r = ioctl(vcpu->fd, KVM_SET_VCPU_EVENTS, &state->events);
         TEST_ASSERT(r == 0, "Unexpected result from KVM_SET_VCPU_EVENTS, r: %i",
