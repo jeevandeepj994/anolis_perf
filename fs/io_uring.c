@@ -569,7 +569,6 @@ enum {
 	REQ_F_TIMEOUT_BIT,
 	REQ_F_ISREG_BIT,
 	REQ_F_TIMEOUT_NOSEQ_BIT,
-	REQ_F_COMP_LOCKED_BIT,
 	REQ_F_NEED_CLEANUP_BIT,
 	REQ_F_OVERFLOW_BIT,
 	REQ_F_POLLED_BIT,
@@ -617,8 +616,6 @@ enum {
 	REQ_F_ISREG		= BIT(REQ_F_ISREG_BIT),
 	/* no timeout sequence */
 	REQ_F_TIMEOUT_NOSEQ	= BIT(REQ_F_TIMEOUT_NOSEQ_BIT),
-	/* completion under lock */
-	REQ_F_COMP_LOCKED	= BIT(REQ_F_COMP_LOCKED_BIT),
 	/* needs cleanup */
 	REQ_F_NEED_CLEANUP	= BIT(REQ_F_NEED_CLEANUP_BIT),
 	/* in overflow list */
@@ -921,7 +918,8 @@ static const struct io_op_def io_op_defs[] = {
 
 static void io_cqring_fill_event(struct io_kiocb *req, long res);
 static void io_put_req(struct io_kiocb *req);
-static void __io_double_put_req(struct io_kiocb *req);
+static void io_put_req_deferred(struct io_kiocb *req, int nr);
+static void io_double_put_req(struct io_kiocb *req);
 static struct io_kiocb *io_prep_linked_timeout(struct io_kiocb *req);
 static void __io_queue_linked_timeout(struct io_kiocb *req);
 static void io_queue_linked_timeout(struct io_kiocb *req);
@@ -1112,10 +1110,10 @@ static void io_req_work_grab_env(struct io_kiocb *req)
 	}
 }
 
-static bool io_req_clean_work(struct io_kiocb *req)
+static void io_req_clean_work(struct io_kiocb *req)
 {
 	if (!(req->flags & REQ_F_WORK_INITIALIZED))
-		return false;
+		return;
 
 	req->flags &= ~REQ_F_WORK_INITIALIZED;
 
@@ -1130,9 +1128,6 @@ static bool io_req_clean_work(struct io_kiocb *req)
 	if (req->work.fs) {
 		struct fs_struct *fs = req->work.fs;
 
-		if (req->flags & REQ_F_COMP_LOCKED)
-			return true;
-
 		spin_lock(&req->work.fs->lock);
 		if (--fs->users)
 			fs = NULL;
@@ -1140,8 +1135,6 @@ static bool io_req_clean_work(struct io_kiocb *req)
 		if (fs)
 			free_fs_struct(fs);
 	}
-
-	return false;
 }
 
 static void io_prep_async_work(struct io_kiocb *req)
@@ -1202,9 +1195,8 @@ static void io_kill_timeout(struct io_kiocb *req)
 	if (ret != -1) {
 		atomic_inc(&req->ctx->cq_timeouts);
 		list_del_init(&req->list);
-		req->flags |= REQ_F_COMP_LOCKED;
 		io_cqring_fill_event(req, 0);
-		io_put_req(req);
+		io_put_req_deferred(req, 1);
 	}
 }
 
@@ -1233,8 +1225,7 @@ static void __io_queue_deferred(struct io_ring_ctx *ctx)
 		if (link) {
 			__io_queue_linked_timeout(link);
 			/* drop submission reference */
-			link->flags |= REQ_F_COMP_LOCKED;
-			io_put_req(link);
+			io_put_req_deferred(link, 1);
 		}
 	} while (!list_empty(&ctx->defer_list));
 }
@@ -1504,7 +1495,7 @@ static inline void io_put_file(struct io_kiocb *req, struct file *file,
 	}
 }
 
-static bool io_dismantle_req(struct io_kiocb *req)
+static void io_dismantle_req(struct io_kiocb *req)
 {
 	if (req->flags & REQ_F_NEED_CLEANUP)
 		io_cleanup_req(req);
@@ -1524,17 +1515,20 @@ static bool io_dismantle_req(struct io_kiocb *req)
 		spin_unlock_irqrestore(&ctx->inflight_lock, flags);
 	}
 
-	return io_req_clean_work(req);
+	io_req_clean_work(req);
 }
 
-static void __io_free_req_finish(struct io_kiocb *req)
+static void __io_free_req(struct io_kiocb *req)
 {
+	struct io_ring_ctx *ctx = req->ctx;
+
+	io_dismantle_req(req);
 	__io_put_req_task(req);
-	percpu_ref_put(&req->ctx->refs);
 	if (likely(!io_is_fallback_req(req)))
 		kmem_cache_free(req_cachep, req);
 	else
 		clear_bit_unlock(0, (unsigned long *) &req->ctx->fallback_req);
+	percpu_ref_put(&ctx->refs);
 }
 
 struct req_batch {
@@ -1558,39 +1552,6 @@ static void io_free_req_many(struct io_ring_ctx *ctx, struct req_batch *rb)
 	rb->to_free = rb->need_iter = 0;
 }
 
-static void io_req_task_file_table_put(struct callback_head *cb)
-{
-	struct io_kiocb *req = container_of(cb, struct io_kiocb, task_work);
-	struct fs_struct *fs = req->work.fs;
-
-	spin_lock(&req->work.fs->lock);
-	if (--fs->users)
-		fs = NULL;
-	spin_unlock(&req->work.fs->lock);
-	if (fs)
-		free_fs_struct(fs);
-	req->work.fs = NULL;
-	__io_free_req_finish(req);
-}
-
-static void __io_free_req(struct io_kiocb *req)
-{
-	if (!io_dismantle_req(req)) {
-		__io_free_req_finish(req);
-	} else {
-		int ret;
-
-		init_task_work(&req->task_work, io_req_task_file_table_put);
-		ret = task_work_add(req->task, &req->task_work, TWA_SIGNAL);
-		if (unlikely(ret)) {
-			struct task_struct *tsk;
-
-			tsk = io_wq_get_task(req->ctx->io_wq);
-			task_work_add(tsk, &req->task_work, TWA_NONE);
-		}
-	}
-}
-
 static bool io_link_cancel_timeout(struct io_kiocb *req)
 {
 	struct io_ring_ctx *ctx = req->ctx;
@@ -1601,7 +1562,7 @@ static bool io_link_cancel_timeout(struct io_kiocb *req)
 		io_cqring_fill_event(req, -ECANCELED);
 		io_commit_cqring(ctx);
 		req->flags &= ~REQ_F_LINK_HEAD;
-		io_put_req(req);
+		io_put_req_deferred(req, 1);
 		return true;
 	}
 
@@ -1620,7 +1581,6 @@ static bool __io_kill_linked_timeout(struct io_kiocb *req)
 		return false;
 
 	list_del_init(&link->link_list);
-	link->flags |= REQ_F_COMP_LOCKED;
 	wake_ev = io_link_cancel_timeout(link);
 	req->flags &= ~REQ_F_LINK_TIMEOUT;
 	return wake_ev;
@@ -1629,17 +1589,12 @@ static bool __io_kill_linked_timeout(struct io_kiocb *req)
 static void io_kill_linked_timeout(struct io_kiocb *req)
 {
 	struct io_ring_ctx *ctx = req->ctx;
+	unsigned long flags;
 	bool wake_ev;
 
-	if (!(req->flags & REQ_F_COMP_LOCKED)) {
-		unsigned long flags;
-
-		spin_lock_irqsave(&ctx->completion_lock, flags);
-		wake_ev = __io_kill_linked_timeout(req);
-		spin_unlock_irqrestore(&ctx->completion_lock, flags);
-	} else {
-		wake_ev = __io_kill_linked_timeout(req);
-	}
+	spin_lock_irqsave(&ctx->completion_lock, flags);
+	wake_ev = __io_kill_linked_timeout(req);
+	spin_unlock_irqrestore(&ctx->completion_lock, flags);
 
 	if (wake_ev)
 		io_cqring_ev_posted(ctx);
@@ -1684,28 +1639,29 @@ static void __io_fail_links(struct io_kiocb *req)
 		trace_io_uring_fail_link(req, link);
 
 		io_cqring_fill_event(link, -ECANCELED);
-		link->flags |= REQ_F_COMP_LOCKED;
-		__io_double_put_req(link);
-		req->flags &= ~REQ_F_LINK_TIMEOUT;
+
+		/*
+		 * It's ok to free under spinlock as they're not linked anymore,
+		 * but avoid REQ_F_WORK_INITIALIZED because it may deadlock on
+		 * work.fs->lock.
+		 */
+		if (link->flags & REQ_F_WORK_INITIALIZED)
+			io_put_req_deferred(link, 2);
+		else
+			io_double_put_req(link);
 	}
 
 	io_commit_cqring(ctx);
-	io_cqring_ev_posted(ctx);
 }
 
 static void io_fail_links(struct io_kiocb *req)
 {
 	struct io_ring_ctx *ctx = req->ctx;
+	unsigned long flags;
 
-	if (!(req->flags & REQ_F_COMP_LOCKED)) {
-		unsigned long flags;
-
-		spin_lock_irqsave(&ctx->completion_lock, flags);
-		__io_fail_links(req);
-		spin_unlock_irqrestore(&ctx->completion_lock, flags);
-	} else {
-		__io_fail_links(req);
-	}
+	spin_lock_irqsave(&ctx->completion_lock, flags);
+	__io_fail_links(req);
+	spin_unlock_irqrestore(&ctx->completion_lock, flags);
 
 	io_cqring_ev_posted(ctx);
 }
@@ -1760,6 +1716,34 @@ static void io_put_req(struct io_kiocb *req)
 		io_free_req(req);
 }
 
+static void io_put_req_deferred_cb(struct callback_head *cb)
+{
+	struct io_kiocb *req = container_of(cb, struct io_kiocb, task_work);
+
+	io_free_req(req);
+}
+
+static void io_free_req_deferred(struct io_kiocb *req)
+{
+	int ret;
+
+	init_task_work(&req->task_work, io_put_req_deferred_cb);
+	ret = task_work_add(req->task, &req->task_work, TWA_SIGNAL);
+	if (unlikely(ret)) {
+		struct task_struct *tsk;
+
+		tsk = io_wq_get_task(req->ctx->io_wq);
+		task_work_add(tsk, &req->task_work, TWA_NONE);
+		wake_up_process(tsk);
+	}
+}
+
+static inline void io_put_req_deferred(struct io_kiocb *req, int refs)
+{
+	if (refcount_sub_and_test(refs, &req->refs))
+		io_free_req_deferred(req);
+}
+
 static struct io_wq_work *io_steal_work(struct io_kiocb *req)
 {
 	struct io_kiocb *link, *nxt = NULL;
@@ -1783,17 +1767,6 @@ static struct io_wq_work *io_steal_work(struct io_kiocb *req)
 	if (link)
 		nxt->flags |= REQ_F_QUEUE_TIMEOUT;
 	return &nxt->work;
-}
-
-/*
- * Must only be used if we don't need to care about links, usually from
- * within the completion handling itself.
- */
-static void __io_double_put_req(struct io_kiocb *req)
-{
-	/* drop both submit and complete references */
-	if (refcount_sub_and_test(2, &req->refs))
-		__io_free_req(req);
 }
 
 static void io_double_put_req(struct io_kiocb *req)
@@ -5064,8 +5037,7 @@ static bool io_poll_remove_one(struct io_kiocb *req)
 	if (do_complete) {
 		io_cqring_fill_event(req, -ECANCELED);
 		io_commit_cqring(req->ctx);
-		req->flags |= REQ_F_COMP_LOCKED;
-		io_put_req(req);
+		io_put_req_deferred(req, 1);
 	}
 
 	return do_complete;
@@ -5262,9 +5234,8 @@ static int io_timeout_cancel(struct io_ring_ctx *ctx, __u64 user_data)
 		return -EALREADY;
 
 	req_set_fail_links(req);
-	req->flags |= REQ_F_COMP_LOCKED;
 	io_cqring_fill_event(req, -ECANCELED);
-	io_put_req(req);
+	io_put_req_deferred(req, 1);
 	return 0;
 }
 
@@ -6141,9 +6112,10 @@ static enum hrtimer_restart io_link_timeout_fn(struct hrtimer *timer)
 	if (prev) {
 		req_set_fail_links(prev);
 		io_async_find_and_cancel(ctx, req, prev->user_data, -ETIME);
-		io_put_req(prev);
+		io_put_req_deferred(prev, 1);
 	} else {
-		io_req_complete(req, -ETIME);
+		io_cqring_add_event(req, -ETIME, 0);
+		io_put_req_deferred(req, 1);
 	}
 	return HRTIMER_NORESTART;
 }
