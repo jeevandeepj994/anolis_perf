@@ -81,6 +81,7 @@ DEFINE_STATIC_KEY_FALSE(kfence_short_canary);
 DEFINE_STATIC_KEY_FALSE(kfence_skip_interval);
 DEFINE_STATIC_KEY_FALSE(kfence_once_inited);
 EXPORT_SYMBOL(kfence_once_inited);
+DEFINE_STATIC_KEY_TRUE(kfence_order0_page);
 
 #define KFENCE_MAX_OBJECTS_PER_AREA (PUD_SIZE / PAGE_SIZE / 2 - 1)
 
@@ -184,6 +185,33 @@ static const struct kernel_param_ops pool_mode_param_ops = {
 	.get = param_get_pool_mode,
 };
 module_param_cb(pool_mode, &pool_mode_param_ops, &kfence_pool_node_mode, 0600);
+
+static int param_set_order0_page(const char *val, const struct kernel_param *kp)
+{
+	bool res;
+	int ret = kstrtobool(val, &res);
+
+	if (ret < 0)
+		return ret;
+
+	if (res)
+		static_branch_enable(&kfence_order0_page);
+	else
+		static_branch_disable(&kfence_order0_page);
+
+	return 0;
+}
+
+static int param_get_order0_page(char *buffer, const struct kernel_param *kp)
+{
+	return sprintf(buffer, "%d\n", static_branch_likely(&kfence_order0_page) ? 1 : 0);
+}
+
+static const struct kernel_param_ops order0_page_param_ops = {
+	.set = param_set_order0_page,
+	.get = param_get_order0_page,
+};
+module_param_cb(order0_page, &order0_page_param_ops, NULL, 0600);
 
 /*
  * The pool of pages used for guard pages and objects.
@@ -866,7 +894,9 @@ static void __start_kfence(void)
 	if (kfence_sample_interval < 0) {
 		static_branch_enable(&kfence_short_canary);
 		static_branch_enable(&kfence_skip_interval);
+#ifdef CONFIG_KFENCE_STATIC_KEYS
 		static_branch_enable(&kfence_allocation_key);
+#endif
 	} else {
 		static_branch_disable(&kfence_skip_interval);
 		queue_delayed_work(system_unbound_wq, &kfence_timer, 0);
@@ -1831,6 +1861,8 @@ void kfence_disable(void)
 	mutex_lock(&kfence_mutex);
 
 #ifdef CONFIG_KFENCE_STATIC_KEYS
+	atomic_set(&kfence_allocation_gate, 1);
+	wake_up(&allocation_wait);
 	static_branch_disable(&kfence_allocation_key);
 #endif
 
@@ -1928,6 +1960,11 @@ void *__kfence_alloc(struct kmem_cache *s, size_t size, gfp_t flags, int node)
 	if ((flags & GFP_ZONEMASK) ||
 	    (s->flags & (SLAB_CACHE_DMA | SLAB_CACHE_DMA32)))
 		return NULL;
+
+#ifdef CONFIG_SLUB
+	if (!s->kfence_enabled)
+		return NULL;
+#endif
 
 	if (static_branch_likely(&kfence_skip_interval))
 		goto alloc;
