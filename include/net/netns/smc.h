@@ -19,5 +19,7 @@ struct netns_smc {
 #endif
 	unsigned int			sysctl_autocorking_size;
 	unsigned int			sysctl_smcr_buf_type;
+	int				sysctl_wmem_default;
+	int				sysctl_rmem_default;
 };
 #endif
