@@ -18,5 +18,7 @@ struct netns_smc {
 	struct ctl_table_header		*smc_hdr;
 #endif
 	unsigned int			sysctl_autocorking_size;
+	int				sysctl_wmem_default;
+	int				sysctl_rmem_default;
 };
 #endif

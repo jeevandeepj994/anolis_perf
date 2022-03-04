@@ -16,6 +16,10 @@
 
 #include "smc.h"
 #include "smc_sysctl.h"
+#include "smc_core.h"
+
+static int min_sndbuf = SMC_BUF_MIN_SIZE;
+static int min_rcvbuf = SMC_BUF_MIN_SIZE;
 
 static struct ctl_table smc_table[] = {
 	{
@@ -24,6 +28,22 @@ static struct ctl_table smc_table[] = {
 		.maxlen         = sizeof(unsigned int),
 		.mode           = 0644,
 		.proc_handler	= proc_douintvec,
+	},
+	{
+		.procname       = "wmem_default",
+		.data           = &init_net.smc.sysctl_wmem_default,
+		.maxlen         = sizeof(init_net.smc.sysctl_wmem_default),
+		.mode           = 0644,
+		.proc_handler   = proc_dointvec_minmax,
+		.extra1         = &min_sndbuf,
+	},
+	{
+		.procname       = "rmem_default",
+		.data           = &init_net.smc.sysctl_rmem_default,
+		.maxlen         = sizeof(init_net.smc.sysctl_rmem_default),
+		.mode           = 0644,
+		.proc_handler   = proc_dointvec_minmax,
+		.extra1         = &min_rcvbuf,
 	},
 	{  }
 };
@@ -49,6 +69,8 @@ int __net_init smc_sysctl_net_init(struct net *net)
 		goto err_reg;
 
 	net->smc.sysctl_autocorking_size = SMC_AUTOCORKING_DEFAULT_SIZE;
+	net->smc.sysctl_wmem_default = 256 * 1024;
+	net->smc.sysctl_rmem_default = 384 * 1024;
 
 	return 0;
 

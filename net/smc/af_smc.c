@@ -27,6 +27,7 @@
 #include <linux/if_vlan.h>
 #include <linux/rcupdate_wait.h>
 #include <linux/ctype.h>
+#include <linux/swap.h>
 
 #include <net/sock.h>
 #include <net/tcp.h>
@@ -363,6 +364,8 @@ static struct sock *smc_sock_alloc(struct net *net, struct socket *sock,
 	sk->sk_state = SMC_INIT;
 	sk->sk_destruct = smc_destruct;
 	sk->sk_protocol = protocol;
+	sk->sk_sndbuf = net->smc.sysctl_wmem_default;
+	sk->sk_rcvbuf = net->smc.sysctl_rmem_default;
 	smc = smc_sk(sk);
 	INIT_WORK(&smc->tcp_listen_work, smc_tcp_listen_work);
 	INIT_WORK(&smc->connect_work, smc_connect_work);
@@ -3109,9 +3112,6 @@ static int __smc_create(struct net *net, struct socket *sock, int protocol,
 	} else {
 		smc->clcsock = clcsock;
 	}
-
-	smc->sk.sk_sndbuf = max(smc->clcsock->sk->sk_sndbuf, SMC_BUF_MIN_SIZE);
-	smc->sk.sk_rcvbuf = max(smc->clcsock->sk->sk_rcvbuf, SMC_BUF_MIN_SIZE);
 
 out:
 	return rc;
