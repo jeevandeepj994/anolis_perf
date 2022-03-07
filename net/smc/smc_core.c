@@ -1676,6 +1676,9 @@ void smcr_port_add(struct smc_ib_device *smcibdev, u8 ibport)
 		    lgr->type == SMC_LGR_ASYMMETRIC_PEER ||
 		    !rdma_dev_access_netns(smcibdev->ibdev, lgr->net))
 			continue;
+		if (lgr->type == SMC_LGR_SINGLE &&
+		    lgr->net->smc.sysctl_disable_multiple_link)
+			continue;
 
 		/* trigger local add link processing */
 		link = smc_llc_usable_link(lgr);
