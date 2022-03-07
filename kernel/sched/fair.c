@@ -1243,47 +1243,53 @@ static int tg_clear_counters_down(struct task_group *tg, void *data)
 	return 0;
 }
 
-static void __group_identity_flip(bool enable)
+static int __group_identity_flip(void *data)
 {
-	int cpu;
 	struct rq *rq;
 	struct rq_flags rf;
 	struct task_struct *p;
 	struct cfs_rq *cfs_rq;
 	struct sched_entity *se;
+	bool enable = (bool *)data;
+
+	rq = this_rq();
+	rq_lock(rq, &rf);
+	rq->nr_expel_immune = 0;
+
+	walk_tg_tree_from(&root_task_group, tg_clear_counters_down, tg_nop, (void *)rq);
+
+	if (!enable)
+		goto out;
+
+	list_for_each_entry(p, &rq->cfs_tasks, se.group_node) {
+		se = &p->se;
+		for_each_sched_entity(se) {
+			if (!se->on_rq)
+				break;
+			cfs_rq = cfs_rq_of(se);
+			cfs_rq->nr_tasks++;
+
+			if (cfs_rq_throttled(cfs_rq))
+				break;
+		}
+		se = &p->se;
+		hierarchy_update_nr_expel_immune(se, 1);
+	}
+
+out:
+	rq->gi_enabled = enable;
+	rq_unlock(rq, &rf);
+
+	return 0;
+}
+
+static inline void group_identity_flip(bool enable)
+{
+	int cpu;
 
 	cpus_read_lock();
 
-	for_each_online_cpu(cpu) {
-		rq = cpu_rq(cpu);
-		rq_lock_irq(rq, &rf);
-		rq->nr_expel_immune = 0;
-
-		rcu_read_lock();
-		walk_tg_tree_from(&root_task_group, tg_clear_counters_down, tg_nop, (void *)rq);
-		rcu_read_unlock();
-
-		if (!enable)
-			continue;
-
-		list_for_each_entry(p, &rq->cfs_tasks, se.group_node) {
-			se = &p->se;
-			for_each_sched_entity(se) {
-				if (!se->on_rq)
-					break;
-				cfs_rq = cfs_rq_of(se);
-				cfs_rq->nr_tasks++;
-
-				if (cfs_rq_throttled(cfs_rq))
-					break;
-			}
-			se = &p->se;
-			hierarchy_update_nr_expel_immune(se, 1);
-		}
-
-		rq->gi_enabled = enable;
-		rq_unlock_irq(rq, &rf);
-	}
+	stop_machine(__group_identity_flip, &enable, cpu_online_mask);
 
 	for_each_cpu_not(cpu, cpu_online_mask)
 		cpu_rq(cpu)->gi_enabled = enable;
@@ -1296,12 +1302,12 @@ static void __group_identity_enable(void)
 	static_branch_enable(&__group_identity_enabled);
 
 	synchronize_rcu();
-	__group_identity_flip(true);
+	group_identity_flip(true);
 }
 
 static void __group_identity_disable(void)
 {
-	__group_identity_flip(false);
+	group_identity_flip(false);
 
 	static_branch_disable(&__group_identity_enabled);
 }
