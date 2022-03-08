@@ -20,12 +20,6 @@ static inline void klp_arch_set_pc(struct ftrace_regs *fregs, unsigned long pc)
 	regs->pc = pc + 2 * AARCH64_INSN_SIZE;
 }
 
-#define klp_get_ftrace_location klp_get_ftrace_location
-static inline unsigned long klp_get_ftrace_location(unsigned long faddr)
-{
-	return faddr + AARCH64_INSN_SIZE;
-}
-
 #else
 static inline int  klp_check_compiler_support(void)
 {
@@ -34,12 +28,6 @@ static inline int  klp_check_compiler_support(void)
 
 static inline void klp_arch_set_pc(struct ftrace_regs *fregs, unsigned long pc)
 {
-}
-
-#define klp_get_ftrace_location klp_get_ftrace_location
-static inline unsigned long klp_get_ftrace_location(unsigned long faddr)
-{
-	return faddr + AARCH64_INSN_SIZE;
 }
 #endif
 
