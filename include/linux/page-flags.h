@@ -132,7 +132,7 @@ enum pageflags {
 #ifdef CONFIG_MEMORY_FAILURE
 	PG_hwpoison,		/* hardware poisoned page. Don't touch */
 #endif
-#if defined(CONFIG_IDLE_PAGE_TRACKING) && defined(CONFIG_64BIT)
+#if defined(CONFIG_PAGE_IDLE_FLAG) && defined(CONFIG_64BIT)
 	PG_young,
 	PG_idle,
 #endif
@@ -141,6 +141,9 @@ enum pageflags {
 #endif
 #ifdef CONFIG_DUPTEXT
 	PG_dup,			/* Page has NUMA replicas */
+#endif
+#ifdef CONFIG_KFENCE
+	PG_kfence,		/* Page in kfence pool */
 #endif
 	__NR_PAGEFLAGS,
 
@@ -440,7 +443,7 @@ PAGEFLAG_FALSE(HWPoison)
 #define __PG_HWPOISON 0
 #endif
 
-#if defined(CONFIG_IDLE_PAGE_TRACKING) && defined(CONFIG_64BIT)
+#if defined(CONFIG_PAGE_IDLE_FLAG) && defined(CONFIG_64BIT)
 TESTPAGEFLAG(Young, young, PF_ANY)
 SETPAGEFLAG(Young, young, PF_ANY)
 TESTCLEARFLAG(Young, young, PF_ANY)
@@ -458,6 +461,10 @@ __PAGEFLAG(Reported, reported, PF_NO_COMPOUND)
 #ifdef CONFIG_DUPTEXT
 /* PageDup() is used to track page that has NUMA replicas. */
 PAGEFLAG(Dup, dup, PF_HEAD)
+#endif
+
+#ifdef CONFIG_KFENCE
+__PAGEFLAG(Kfence, kfence, PF_ANY)
 #endif
 
 /*
@@ -710,6 +717,18 @@ PAGEFLAG_FALSE(DoubleMap)
 #endif
 
 /*
+ * Check if a page is currently marked HWPoisoned. Note that this check is
+ * best effort only and inherently racy: there is no way to synchronize with
+ * failing hardware.
+ */
+static inline bool is_page_hwpoison(struct page *page)
+{
+	if (PageHWPoison(page))
+		return true;
+	return PageHuge(page) && PageHWPoison(compound_head(page));
+}
+
+/*
  * For pages that are never mapped to userspace (and aren't PageSlab),
  * page_type may be used.  Because it is initialised to -1, we invert the
  * sense of the bit, so __SetPageFoo *clears* the bit used for PageFoo, and
@@ -773,8 +792,18 @@ PAGE_TYPE_OPS(Buddy, buddy)
  * relies on this feature is aware that re-onlining the memory block will
  * require to re-set the pages PageOffline() and not giving them to the
  * buddy via online_page_callback_t.
+ *
+ * There are drivers that mark a page PageOffline() and expect there won't be
+ * any further access to page content. PFN walkers that read content of random
+ * pages should check PageOffline() and synchronize with such drivers using
+ * page_offline_freeze()/page_offline_thaw().
  */
 PAGE_TYPE_OPS(Offline, offline)
+
+extern void page_offline_freeze(void);
+extern void page_offline_thaw(void);
+extern void page_offline_begin(void);
+extern void page_offline_end(void);
 
 /*
  * If kmemcg is enabled, the buddy allocator will set PageKmemcg() on
@@ -834,6 +863,12 @@ static inline void ClearPageSlabPfmemalloc(struct page *page)
 #define __PG_DUP		(1UL << PG_dup)
 #else
 #define __PG_DUP		0
+#endif
+
+#ifdef CONFIG_KFENCE
+#define __PG_KFENCE		(1UL << PG_kfence)
+#else
+#define __PG_KFENCE		0
 #endif
 
 /*

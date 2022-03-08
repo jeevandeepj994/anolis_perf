@@ -48,7 +48,7 @@
 #include <asm/ftrace.h>
 #include <asm/traps.h>
 #include <asm/desc.h>
-#include <asm/fpu/internal.h>
+#include <asm/fpu/api.h>
 #include <asm/cpu.h>
 #include <asm/cpu_entry_area.h>
 #include <asm/mce.h>
@@ -1082,9 +1082,10 @@ static void math_error(struct pt_regs *regs, int trapnr)
 	}
 
 	/*
-	 * Save the info for the exception handler and clear the error.
+	 * Synchronize the FPU register state to the memory register state
+	 * if necessary. This allows the exception handler to inspect it.
 	 */
-	fpu__save(fpu);
+	fpu_sync_fpstate(fpu);
 
 	task->thread.trap_nr	= trapnr;
 	task->thread.error_code = 0;
@@ -1143,48 +1144,46 @@ DEFINE_IDTENTRY(exc_spurious_interrupt_bug)
 	 */
 }
 
-static __always_inline bool handle_xfirstuse_event(struct fpu *fpu)
+static bool handle_xfd_event(struct pt_regs *regs)
 {
-	bool handled = false;
-	u64 event_mask;
+	u64 xfd_err;
+	int err;
 
-	/* Check whether the first-use detection is running. */
-	if (!static_cpu_has(X86_FEATURE_XFD) || !xfirstuse_enabled())
-		return handled;
+	if (!IS_ENABLED(CONFIG_X86_64) || !cpu_feature_enabled(X86_FEATURE_XFD))
+		return false;
 
-	rdmsrl_safe(MSR_IA32_XFD_ERR, &event_mask);
+	rdmsrl(MSR_IA32_XFD_ERR, xfd_err);
+	if (!xfd_err)
+		return false;
 
-	/* The trap event should happen to one of first-use enabled features */
-	WARN_ON(!(event_mask & xfirstuse_enabled()));
+	wrmsrl(MSR_IA32_XFD_ERR, 0);
 
-	/* If IA32_XFD_ERR is empty, the current trap has nothing to do with. */
-	if (!event_mask)
-		return handled;
+	/* Die if that happens in kernel space */
+	if (WARN_ON(!user_mode(regs)))
+		return false;
 
-	/*
-	 * The first-use event is presumed to be from userspace, so it should have
-	 * nothing to do with interrupt context.
-	 */
-	if (WARN_ON(in_interrupt()))
-		return handled;
+	local_irq_enable();
 
-	if (alloc_xstate_buffer(fpu, event_mask))
-		return handled;
+	err = xfd_enable_feature(xfd_err);
 
-	xdisable_setbits(xfirstuse_not_detected(fpu));
+	switch (err) {
+	case -EPERM:
+		force_sig_fault(SIGILL, ILL_ILLOPC, error_get_trap_addr(regs));
+		break;
+	case -EFAULT:
+		force_sig(SIGSEGV);
+		break;
+	}
 
-	/* Clear the trap record. */
-	wrmsrl_safe(MSR_IA32_XFD_ERR, 0);
-	handled = true;
-
-	return handled;
+	local_irq_disable();
+	return true;
 }
 
 DEFINE_IDTENTRY(exc_device_not_available)
 {
 	unsigned long cr0 = read_cr0();
 
-	if (handle_xfirstuse_event(&current->thread.fpu))
+	if (handle_xfd_event(regs))
 		return;
 
 #ifdef CONFIG_MATH_EMULATION

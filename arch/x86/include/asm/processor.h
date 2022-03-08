@@ -534,6 +534,15 @@ struct thread_struct {
 	unsigned int		iopl_warn:1;
 	unsigned int		sig_on_uaccess_err:1;
 
+	/*
+	 * Protection Keys Register for Userspace.  Loaded immediately on
+	 * context switch. Store it in thread_struct to avoid a lookup in
+	 * the tasks's FPU xstate buffer. This value is only valid when a
+	 * task is scheduled out. For 'current' the authoritative source of
+	 * PKRU is the hardware itself.
+	 */
+	u32			pkru;
+
 	/* Floating point and extended processor state */
 	struct fpu		fpu;
 	/*
@@ -542,8 +551,13 @@ struct thread_struct {
 	 */
 };
 
-/* Whitelist the FPU state from the task_struct for hardened usercopy. */
-extern void arch_thread_struct_whitelist(unsigned long *offset, unsigned long *size);
+extern void fpu_thread_struct_whitelist(unsigned long *offset, unsigned long *size);
+
+static inline void arch_thread_struct_whitelist(unsigned long *offset,
+						unsigned long *size)
+{
+	fpu_thread_struct_whitelist(offset, size);
+}
 
 static inline void
 native_load_sp0(unsigned long sp0)

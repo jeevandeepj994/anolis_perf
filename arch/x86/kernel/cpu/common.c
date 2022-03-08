@@ -42,7 +42,7 @@
 #include <asm/setup.h>
 #include <asm/apic.h>
 #include <asm/desc.h>
-#include <asm/fpu/internal.h>
+#include <asm/fpu/api.h>
 #include <asm/mtrr.h>
 #include <asm/hwcap2.h>
 #include <linux/numa.h>
@@ -303,6 +303,64 @@ static __always_inline void setup_smep(struct cpuinfo_x86 *c)
 		cr4_set_bits(X86_CR4_SMEP);
 }
 
+static __init int setup_disable_uintr(char *arg)
+{
+	/* No additional arguments expected */
+	if (strlen(arg))
+		return 0;
+
+	/* Do not emit a message if the feature is not present. */
+	if (!boot_cpu_has(X86_FEATURE_UINTR))
+		return 1;
+
+	setup_clear_cpu_cap(X86_FEATURE_UINTR);
+	pr_info_once("x86: 'nouintr' specified, User Interrupts support disabled\n");
+	return 1;
+}
+__setup("nouintr", setup_disable_uintr);
+
+static __always_inline void setup_uintr(struct cpuinfo_x86 *c)
+{
+	/* check the boot processor, plus compile options for UINTR. */
+	if (!cpu_feature_enabled(X86_FEATURE_UINTR))
+		goto disable_uintr;
+
+	/* checks the current processor's cpuid bits: */
+	if (!cpu_has(c, X86_FEATURE_UINTR))
+		goto disable_uintr;
+
+	/* Confirm XSAVE support for UINTR is present. */
+	if (!cpu_has_xfeatures(XFEATURE_MASK_UINTR, NULL)) {
+		pr_info_once("x86: User Interrupts (UINTR) not enabled. XSAVE support for UINTR is missing.\n");
+		goto clear_uintr_cap;
+	}	
+	
+	/*
+	 * User Interrupts currently doesn't support PTI. For processors that
+	 * support User interrupts PTI in auto mode will default to off.  Need
+	 * this check only for users who have force enabled PTI.
+	 */
+	if (boot_cpu_has(X86_FEATURE_PTI)) {
+		pr_info_once("x86: User Interrupts (UINTR) not enabled. Please disable PTI using 'nopti' kernel parameter\n");
+		goto clear_uintr_cap;
+	}
+
+	cr4_set_bits(X86_CR4_UINTR);
+	pr_info_once("x86: User Interrupts (UINTR) enabled\n");
+
+	return;
+
+clear_uintr_cap:
+	setup_clear_cpu_cap(X86_FEATURE_UINTR);
+
+disable_uintr:
+	/*
+	 * Make sure UINTR is disabled in case it was enabled in a
+	 * previous boot (e.g., via kexec).
+	 */
+	cr4_clear_bits(X86_CR4_UINTR);
+}
+
 static __init int setup_disable_smap(char *arg)
 {
 	setup_clear_cpu_cap(X86_FEATURE_SMAP);
@@ -468,27 +526,22 @@ static bool pku_disabled;
 
 static __always_inline void setup_pku(struct cpuinfo_x86 *c)
 {
-	struct pkru_state *pk;
+	if (c == &boot_cpu_data) {
+		if (pku_disabled || !cpu_feature_enabled(X86_FEATURE_PKU))
+			return;
+		/*
+		 * Setting CR4.PKE will cause the X86_FEATURE_OSPKE cpuid
+		 * bit to be set.  Enforce it.
+		 */
+		setup_force_cpu_cap(X86_FEATURE_OSPKE);
 
-	/* check the boot processor, plus compile options for PKU: */
-	if (!cpu_feature_enabled(X86_FEATURE_PKU))
+	} else if (!cpu_feature_enabled(X86_FEATURE_OSPKE)) {
 		return;
-	/* checks the actual processor's cpuid bits: */
-	if (!cpu_has(c, X86_FEATURE_PKU))
-		return;
-	if (pku_disabled)
-		return;
+	}
 
 	cr4_set_bits(X86_CR4_PKE);
-	pk = get_xsave_addr(NULL, XFEATURE_PKRU);
-	if (pk)
-		pk->pkru = init_pkru_value;
-	/*
-	 * Seting X86_CR4_PKE will cause the X86_FEATURE_OSPKE
-	 * cpuid bit to be set.  We need to ensure that we
-	 * update that bit in this CPU's "cpu_info".
-	 */
-	set_cpu_cap(c, X86_FEATURE_OSPKE);
+	/* Load the default PKRU value */
+	pkru_write_default();
 }
 
 #ifdef CONFIG_X86_INTEL_MEMORY_PROTECTION_KEYS
@@ -1597,6 +1650,9 @@ static void identify_cpu(struct cpuinfo_x86 *c)
 	setup_smap(c);
 	setup_umip(c);
 
+	/* Set up User Interrupts */
+	setup_uintr(c);
+
 	/* Enable FSGSBASE instructions if available. */
 	if (cpu_has(c, X86_FEATURE_FSGSBASE)) {
 		cr4_set_bits(X86_CR4_FSGSBASE);
@@ -1754,9 +1810,8 @@ void print_cpu_info(struct cpuinfo_x86 *c)
 }
 
 /*
- * clearcpuid= was already parsed in fpu__init_parse_early_param.
- * But we need to keep a dummy __setup around otherwise it would
- * show up as an environment variable for init.
+ * clearcpuid= was already parsed in cpu_parse_early_param().  This dummy
+ * function prevents it from becoming an environment variable for init.
  */
 static __init int setup_clearcpuid(char *arg)
 {

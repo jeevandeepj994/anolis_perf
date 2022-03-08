@@ -2,124 +2,77 @@
 
 #define _GNU_SOURCE
 #include <err.h>
-#include <elf.h>
+#include <errno.h>
 #include <pthread.h>
-#include <sched.h>
 #include <setjmp.h>
-#include <signal.h>
 #include <stdio.h>
 #include <string.h>
 #include <stdbool.h>
-#include <stdint.h>
-#include <stdlib.h>
-#include <time.h>
-#include <malloc.h>
 #include <unistd.h>
-#include <ucontext.h>
-
-#include <linux/futex.h>
-#include <linux/compiler.h>
-
-#include <sys/ipc.h>
-#include <sys/mman.h>
-#include <sys/ptrace.h>
-#include <sys/shm.h>
-#include <sys/signal.h>
-#include <sys/syscall.h>
-#include <sys/time.h>
-#include <sys/types.h>
-#include <sys/wait.h>
-#include <sys/uio.h>
-#include <sys/ucontext.h>
-
 #include <x86intrin.h>
+
+#include <sys/auxv.h>
+#include <sys/mman.h>
+#include <sys/shm.h>
+#include <sys/syscall.h>
+#include <sys/wait.h>
 
 #ifndef __x86_64__
 # error This test is 64-bit only
 #endif
 
-typedef uint8_t u8;
-typedef uint16_t u16;
-typedef uint32_t u32;
-typedef uint64_t u64;
+#define XSAVE_HDR_OFFSET	512
+#define XSAVE_HDR_SIZE		64
 
-#define PAGE_SIZE			(1 << 12)
-
-#define NUM_TILES			8
-#define TILE_SIZE			1024
-#define XSAVE_SIZE			((NUM_TILES * TILE_SIZE) + PAGE_SIZE)
-
-struct xsave_data {
-	u8 area[XSAVE_SIZE];
-} __aligned(64);
-
-/* Tile configuration associated: */
-#define MAX_TILES			16
-#define RESERVED_BYTES			14
-
-struct tile_config {
-	u8  palette_id;
-	u8  start_row;
-	u8  reserved[RESERVED_BYTES];
-	u16 colsb[MAX_TILES];
-	u8  rows[MAX_TILES];
+struct xsave_buffer {
+	union {
+		struct {
+			char legacy[XSAVE_HDR_OFFSET];
+			char header[XSAVE_HDR_SIZE];
+			char extended[0];
+		};
+		char bytes[0];
+	};
 };
 
-struct tile_data {
-	u8 data[NUM_TILES * TILE_SIZE];
-};
-
-static inline u64 __xgetbv(u32 index)
+static inline uint64_t xgetbv(uint32_t index)
 {
-	u32 eax, edx;
+	uint32_t eax, edx;
 
 	asm volatile("xgetbv;"
 		     : "=a" (eax), "=d" (edx)
 		     : "c" (index));
-	return eax + ((u64)edx << 32);
+	return eax + ((uint64_t)edx << 32);
 }
 
-static inline void __cpuid(u32 *eax, u32 *ebx, u32 *ecx, u32 *edx)
+static inline void cpuid(uint32_t *eax, uint32_t *ebx, uint32_t *ecx, uint32_t *edx)
 {
 	asm volatile("cpuid;"
 		     : "=a" (*eax), "=b" (*ebx), "=c" (*ecx), "=d" (*edx)
 		     : "0" (*eax), "2" (*ecx));
 }
 
-/* Load tile configuration */
-static inline void __ldtilecfg(void *cfg)
+static inline void xsave(struct xsave_buffer *xbuf, uint64_t rfbm)
 {
-	asm volatile(".byte 0xc4,0xe2,0x78,0x49,0x00"
-		     : : "a"(cfg));
-}
+	uint32_t rfbm_lo = rfbm;
+	uint32_t rfbm_hi = rfbm >> 32;
 
-/* Load tile data to %tmm0 register only */
-static inline void __tileloadd(void *tile)
-{
-	asm volatile(".byte 0xc4,0xe2,0x7b,0x4b,0x04,0x10"
-		     : : "a"(tile), "d"(0));
-}
-
-/* Save extended states */
-static inline void __xsave(void *buffer, u32 lo, u32 hi)
-{
 	asm volatile("xsave (%%rdi)"
-		     : : "D" (buffer), "a" (lo), "d" (hi)
+		     : : "D" (xbuf), "a" (rfbm_lo), "d" (rfbm_hi)
 		     : "memory");
 }
 
-/* Restore extended states */
-static inline void __xrstor(void *buffer, u32 lo, u32 hi)
+static inline void xrstor(struct xsave_buffer *xbuf, uint64_t rfbm)
 {
+	uint32_t rfbm_lo = rfbm;
+	uint32_t rfbm_hi = rfbm >> 32;
+
 	asm volatile("xrstor (%%rdi)"
-		     : : "D" (buffer), "a" (lo), "d" (hi));
+		     : : "D" (xbuf), "a" (rfbm_lo), "d" (rfbm_hi));
 }
 
-/* Release tile states to init values */
-static inline void __tilerelease(void)
-{
-	asm volatile(".byte 0xc4, 0xe2, 0x78, 0x49, 0xc0" ::);
-}
+/* err() exits and will not return */
+#define fatal_error(msg, ...)	err(1, "[FAIL]\t" msg, ##__VA_ARGS__)
 
 static void sethandler(int sig, void (*handler)(int, siginfo_t *, void *),
 		       int flags)
@@ -131,7 +84,7 @@ static void sethandler(int sig, void (*handler)(int, siginfo_t *, void *),
 	sa.sa_flags = SA_SIGINFO | flags;
 	sigemptyset(&sa.sa_mask);
 	if (sigaction(sig, &sa, 0))
-		err(1, "sigaction");
+		fatal_error("sigaction");
 }
 
 static void clearhandler(int sig)
@@ -142,603 +95,757 @@ static void clearhandler(int sig)
 	sa.sa_handler = SIG_DFL;
 	sigemptyset(&sa.sa_mask);
 	if (sigaction(sig, &sa, 0))
-		err(1, "sigaction");
+		fatal_error("sigaction");
 }
 
-/* Hardware info check: */
+#define XFEATURE_XTILECFG	17
+#define XFEATURE_XTILEDATA	18
+#define XFEATURE_MASK_XTILECFG	(1 << XFEATURE_XTILECFG)
+#define XFEATURE_MASK_XTILEDATA	(1 << XFEATURE_XTILEDATA)
+#define XFEATURE_MASK_XTILE	(XFEATURE_MASK_XTILECFG | XFEATURE_MASK_XTILEDATA)
 
-static jmp_buf jmpbuf;
-static bool xsave_disabled;
-
-static void handle_sigill(int sig, siginfo_t *si, void *ctx_void)
+#define CPUID_LEAF1_ECX_XSAVE_MASK	(1 << 26)
+#define CPUID_LEAF1_ECX_OSXSAVE_MASK	(1 << 27)
+static inline void check_cpuid_xsave(void)
 {
-	xsave_disabled = true;
-	siglongjmp(jmpbuf, 1);
+	uint32_t eax, ebx, ecx, edx;
+
+	/*
+	 * CPUID.1:ECX.XSAVE[bit 26] enumerates general
+	 * support for the XSAVE feature set, including
+	 * XGETBV.
+	 */
+	eax = 1;
+	ecx = 0;
+	cpuid(&eax, &ebx, &ecx, &edx);
+	if (!(ecx & CPUID_LEAF1_ECX_XSAVE_MASK))
+		fatal_error("cpuid: no CPU xsave support");
+	if (!(ecx & CPUID_LEAF1_ECX_OSXSAVE_MASK))
+		fatal_error("cpuid: no OS xsave support");
 }
 
-#define XFEATURE_XTILE_CFG      17
-#define XFEATURE_XTILE_DATA     18
-#define XFEATURE_MASK_XTILE     ((1 << XFEATURE_XTILE_DATA) | \
-				 (1 << XFEATURE_XTILE_CFG))
+static uint32_t xbuf_size;
 
-static inline bool check_xsave_supports_xtile(void)
-{
-	bool supported = false;
+static struct {
+	uint32_t xbuf_offset;
+	uint32_t size;
+} xtiledata;
 
-	sethandler(SIGILL, handle_sigill, 0);
-
-	if (!sigsetjmp(jmpbuf, 1))
-		supported = __xgetbv(0) & XFEATURE_MASK_XTILE;
-
-	clearhandler(SIGILL);
-	return supported;
-}
-
-struct xtile_hwinfo {
-	struct {
-		u16 bytes_per_tile;
-		u16 bytes_per_row;
-		u16 max_names;
-		u16 max_rows;
-	} spec;
-
-	struct {
-		u32 offset;
-		u32 size;
-	} xsave;
-};
-
-static struct xtile_hwinfo xtile;
-
-static bool __enum_xtile_config(void)
-{
-	u32 eax, ebx, ecx, edx;
-	u16 bytes_per_tile;
-	bool valid = false;
-
+#define CPUID_LEAF_XSTATE		0xd
+#define CPUID_SUBLEAF_XSTATE_USER	0x0
 #define TILE_CPUID			0x1d
-#define TILE_PALETTE_CPUID_SUBLEAVE	0x1
+#define TILE_PALETTE_ID			0x1
 
-	eax = TILE_CPUID;
-	ecx = TILE_PALETTE_CPUID_SUBLEAVE;
-
-	__cpuid(&eax, &ebx, &ecx, &edx);
-	if (!eax || !ebx || !ecx)
-		return valid;
-
-	xtile.spec.max_names = ebx >> 16;
-	if (xtile.spec.max_names < NUM_TILES)
-		return valid;
-
-	bytes_per_tile = eax >> 16;
-	if (bytes_per_tile < TILE_SIZE)
-		return valid;
-
-	xtile.spec.bytes_per_row = ebx;
-	xtile.spec.max_rows = ecx;
-	valid = true;
-
-	return valid;
-}
-
-static bool __enum_xsave_tile(void)
+static void check_cpuid_xtiledata(void)
 {
-	u32 eax, ebx, ecx, edx;
-	bool valid = false;
+	uint32_t eax, ebx, ecx, edx;
 
-#define XSTATE_CPUID			0xd
-#define XSTATE_USER_STATE_SUBLEAVE	0x0
+	eax = CPUID_LEAF_XSTATE;
+	ecx = CPUID_SUBLEAF_XSTATE_USER;
+	cpuid(&eax, &ebx, &ecx, &edx);
 
-	eax = XSTATE_CPUID;
-	ecx = XFEATURE_XTILE_DATA;
+	/*
+	 * EBX enumerates the size (in bytes) required by the XSAVE
+	 * instruction for an XSAVE area containing all the user state
+	 * components corresponding to bits currently set in XCR0.
+	 *
+	 * Stash that off so it can be used to allocate buffers later.
+	 */
+	xbuf_size = ebx;
 
-	__cpuid(&eax, &ebx, &ecx, &edx);
+	eax = CPUID_LEAF_XSTATE;
+	ecx = XFEATURE_XTILEDATA;
+
+	cpuid(&eax, &ebx, &ecx, &edx);
+	/*
+	 * eax: XTILEDATA state component size
+	 * ebx: XTILEDATA state component offset in user buffer
+	 */
 	if (!eax || !ebx)
-		return valid;
+		fatal_error("xstate cpuid: invalid tile data size/offset: %d/%d",
+				eax, ebx);
 
-	xtile.xsave.offset = ebx;
-	xtile.xsave.size = eax;
-	valid = true;
-
-	return valid;
-}
-
-static bool __check_xsave_size(void)
-{
-	u32 eax, ebx, ecx, edx;
-	bool valid = false;
-
-	eax = XSTATE_CPUID;
-	ecx = XSTATE_USER_STATE_SUBLEAVE;
-
-	__cpuid(&eax, &ebx, &ecx, &edx);
-	if (ebx && ebx <= XSAVE_SIZE)
-		valid = true;
-
-	return valid;
-}
-
-/*
- * Check the hardware-provided tile state info and cross-check it with the
- * hard-coded values: XSAVE_SIZE, NUM_TILES, and TILE_SIZE.
- */
-static int check_xtile_hwinfo(void)
-{
-	bool success = false;
-
-	if (!__check_xsave_size())
-		return success;
-
-	if (!__enum_xsave_tile())
-		return success;
-
-	if (!__enum_xtile_config())
-		return success;
-
-	if (sizeof(struct tile_data) >= xtile.xsave.size)
-		success = true;
-
-	return success;
+	xtiledata.size	      = eax;
+	xtiledata.xbuf_offset = ebx;
 }
 
 /* The helpers for managing XSAVE buffer and tile states: */
 
-/* Use the uncompacted format without 'init optimization' */
-static void save_xdata(void *data)
+struct xsave_buffer *alloc_xbuf(void)
 {
-	__xsave(data, -1, -1);
+	struct xsave_buffer *xbuf;
+
+	/* XSAVE buffer should be 64B-aligned. */
+	xbuf = aligned_alloc(64, xbuf_size);
+	if (!xbuf)
+		fatal_error("aligned_alloc()");
+	return xbuf;
 }
 
-static void restore_xdata(void *data)
+static inline void clear_xstate_header(struct xsave_buffer *buffer)
 {
-	__xrstor(data, -1, -1);
+	memset(&buffer->header, 0, sizeof(buffer->header));
 }
 
-static inline u64 __get_xsave_xstate_bv(void *data)
+static inline uint64_t get_xstatebv(struct xsave_buffer *buffer)
 {
-#define XSAVE_HDR_OFFSET	512
-	return *(u64 *)(data + XSAVE_HDR_OFFSET);
+	/* XSTATE_BV is at the beginning of the header: */
+	return *(uint64_t *)&buffer->header;
 }
 
-static void set_tilecfg(struct tile_config *cfg)
+static inline void set_xstatebv(struct xsave_buffer *buffer, uint64_t bv)
 {
+	/* XSTATE_BV is at the beginning of the header: */
+	*(uint64_t *)(&buffer->header) = bv;
+}
+
+static void set_rand_tiledata(struct xsave_buffer *xbuf)
+{
+	int *ptr = (int *)&xbuf->bytes[xtiledata.xbuf_offset];
+	int data;
 	int i;
 
-	memset(cfg, 0, sizeof(*cfg));
-	/* The first implementation has one significant palette with id 1 */
-	cfg->palette_id = 1;
-	for (i = 0; i < xtile.spec.max_names; i++) {
-		cfg->colsb[i] = xtile.spec.bytes_per_row;
-		cfg->rows[i] = xtile.spec.max_rows;
+	/*
+	 * Ensure that 'data' is never 0.  This ensures that
+	 * the registers are never in their initial configuration
+	 * and thus never tracked as being in the init state.
+	 */
+	data = rand() | 1;
+
+	for (i = 0; i < xtiledata.size / sizeof(int); i++, ptr++)
+		*ptr = data;
+}
+
+struct xsave_buffer *stashed_xsave;
+
+static void init_stashed_xsave(void)
+{
+	stashed_xsave = alloc_xbuf();
+	if (!stashed_xsave)
+		fatal_error("failed to allocate stashed_xsave\n");
+	clear_xstate_header(stashed_xsave);
+}
+
+static void free_stashed_xsave(void)
+{
+	free(stashed_xsave);
+}
+
+/* See 'struct _fpx_sw_bytes' at sigcontext.h */
+#define SW_BYTES_OFFSET		464
+/* N.B. The struct's field name varies so read from the offset. */
+#define SW_BYTES_BV_OFFSET	(SW_BYTES_OFFSET + 8)
+
+static inline struct _fpx_sw_bytes *get_fpx_sw_bytes(void *buffer)
+{
+	return (struct _fpx_sw_bytes *)(buffer + SW_BYTES_OFFSET);
+}
+
+static inline uint64_t get_fpx_sw_bytes_features(void *buffer)
+{
+	return *(uint64_t *)(buffer + SW_BYTES_BV_OFFSET);
+}
+
+/* Work around printf() being unsafe in signals: */
+#define SIGNAL_BUF_LEN 1000
+char signal_message_buffer[SIGNAL_BUF_LEN];
+void sig_print(char *msg)
+{
+	int left = SIGNAL_BUF_LEN - strlen(signal_message_buffer) - 1;
+
+	strncat(signal_message_buffer, msg, left);
+}
+
+static volatile bool noperm_signaled;
+static int noperm_errs;
+/*
+ * Signal handler for when AMX is used but
+ * permission has not been obtained.
+ */
+static void handle_noperm(int sig, siginfo_t *si, void *ctx_void)
+{
+	ucontext_t *ctx = (ucontext_t *)ctx_void;
+	void *xbuf = ctx->uc_mcontext.fpregs;
+	struct _fpx_sw_bytes *sw_bytes;
+	uint64_t features;
+
+	/* Reset the signal message buffer: */
+	signal_message_buffer[0] = '\0';
+	sig_print("\tAt SIGILL handler,\n");
+
+	if (si->si_code != ILL_ILLOPC) {
+		noperm_errs++;
+		sig_print("[FAIL]\tInvalid signal code.\n");
+	} else {
+		sig_print("[OK]\tValid signal code (ILL_ILLOPC).\n");
 	}
+
+	sw_bytes = get_fpx_sw_bytes(xbuf);
+	/*
+	 * Without permission, the signal XSAVE buffer should not
+	 * have room for AMX register state (aka. xtiledata).
+	 * Check that the size does not overlap with where xtiledata
+	 * will reside.
+	 *
+	 * This also implies that no state components *PAST*
+	 * XTILEDATA (features >=19) can be present in the buffer.
+	 */
+	if (sw_bytes->xstate_size <= xtiledata.xbuf_offset) {
+		sig_print("[OK]\tValid xstate size\n");
+	} else {
+		noperm_errs++;
+		sig_print("[FAIL]\tInvalid xstate size\n");
+	}
+
+	features = get_fpx_sw_bytes_features(xbuf);
+	/*
+	 * Without permission, the XTILEDATA feature
+	 * bit should not be set.
+	 */
+	if ((features & XFEATURE_MASK_XTILEDATA) == 0) {
+		sig_print("[OK]\tValid xstate mask\n");
+	} else {
+		noperm_errs++;
+		sig_print("[FAIL]\tInvalid xstate mask\n");
+	}
+
+	noperm_signaled = true;
+	ctx->uc_mcontext.gregs[REG_RIP] += 3; /* Skip the faulting XRSTOR */
 }
 
-static void load_tilecfg(struct tile_config *cfg)
+/* Return true if XRSTOR is successful; otherwise, false. */
+static inline bool xrstor_safe(struct xsave_buffer *xbuf, uint64_t mask)
 {
-	__ldtilecfg(cfg);
-}
+	noperm_signaled = false;
+	xrstor(xbuf, mask);
 
-static void make_tiles(void *tiles)
-{
-	u32 iterations = xtile.xsave.size / sizeof(u32);
-	static u32 value = 1;
-	u32 *ptr = tiles;
-	int i;
+	/* Print any messages produced by the signal code: */
+	printf("%s", signal_message_buffer);
+	/*
+	 * Reset the buffer to make sure any future printing
+	 * only outputs new messages:
+	 */
+	signal_message_buffer[0] = '\0';
 
-	for (i = 0, ptr = tiles; i < iterations; i++, ptr++)
-		*ptr  = value;
-	value++;
+	if (noperm_errs)
+		fatal_error("saw %d errors in noperm signal handler\n", noperm_errs);
+
+	return !noperm_signaled;
 }
 
 /*
- * Initialize the XSAVE buffer:
+ * Use XRSTOR to populate the XTILEDATA registers with
+ * random data.
  *
- * Make sure tile configuration loaded already. Load limited tile data (%tmm0 only)
- * and save all the states. XSAVE buffer is ready to complete tile data.
+ * Return true if successful; otherwise, false.
  */
-static void init_xdata(void *data)
+static inline bool load_rand_tiledata(struct xsave_buffer *xbuf)
 {
-	struct tile_data tiles;
-
-	make_tiles(&tiles);
-	__tileloadd(&tiles);
-	__xsave(data, -1, -1);
+	clear_xstate_header(xbuf);
+	set_xstatebv(xbuf, XFEATURE_MASK_XTILEDATA);
+	set_rand_tiledata(xbuf);
+	return xrstor_safe(xbuf, XFEATURE_MASK_XTILEDATA);
 }
 
-static inline void *__get_xsave_tile_data_addr(void *data)
+/* Return XTILEDATA to its initial configuration. */
+static inline void init_xtiledata(void)
 {
-	return data + xtile.xsave.offset;
+	clear_xstate_header(stashed_xsave);
+	xrstor_safe(stashed_xsave, XFEATURE_MASK_XTILEDATA);
 }
 
-static void copy_tiles_to_xdata(void *xdata, void *tiles)
-{
-	void *dst = __get_xsave_tile_data_addr(xdata);
+enum expected_result { FAIL_EXPECTED, SUCCESS_EXPECTED };
 
-	memcpy(dst, tiles, xtile.xsave.size);
+/* arch_prctl() and sigaltstack() test */
+
+#define ARCH_GET_XCOMP_PERM	0x1022
+#define ARCH_REQ_XCOMP_PERM	0x1023
+
+static void req_xtiledata_perm(void)
+{
+	syscall(SYS_arch_prctl, ARCH_REQ_XCOMP_PERM, XFEATURE_XTILEDATA);
 }
 
-static int compare_xdata_tiles(void *xdata, void *tiles)
+static void validate_req_xcomp_perm(enum expected_result exp)
 {
-	void *tile_data = __get_xsave_tile_data_addr(xdata);
+	unsigned long bitmask;
+	long rc;
 
-	if (memcmp(tile_data, tiles, xtile.xsave.size))
-		return 1;
-
-	return 0;
-}
-
-static int nerrs, errs;
-
-/* Testing tile data inheritance */
-
-static void test_tile_data_inheritance(void)
-{
-	struct xsave_data xdata;
-	struct tile_data tiles;
-	struct tile_config cfg;
-	pid_t child;
-	int status;
-
-	set_tilecfg(&cfg);
-	load_tilecfg(&cfg);
-	init_xdata(&xdata);
-
-	make_tiles(&tiles);
-	copy_tiles_to_xdata(&xdata, &tiles);
-	restore_xdata(&xdata);
-
-	errs = 0;
-
-	child = fork();
-	if (child < 0)
-		err(1, "fork");
-
-	if (child == 0) {
-		memset(&xdata, 0, sizeof(xdata));
-		save_xdata(&xdata);
-		if (compare_xdata_tiles(&xdata, &tiles)) {
-			printf("[OK]\tchild didn't inherit tile data at fork()\n");
-		} else {
-			printf("[FAIL]\tchild inherited tile data at fork()\n");
-			nerrs++;
+	rc = syscall(SYS_arch_prctl, ARCH_REQ_XCOMP_PERM, XFEATURE_XTILEDATA);
+	if (exp == FAIL_EXPECTED) {
+		if (rc) {
+			printf("[OK]\tARCH_REQ_XCOMP_PERM saw expected failure..\n");
+			return;
 		}
+
+		fatal_error("ARCH_REQ_XCOMP_PERM saw unexpected success.\n");
+	} else if (rc) {
+		fatal_error("ARCH_REQ_XCOMP_PERM saw unexpected failure.\n");
+	}
+
+	rc = syscall(SYS_arch_prctl, ARCH_GET_XCOMP_PERM, &bitmask);
+	if (rc) {
+		fatal_error("prctl(ARCH_GET_XCOMP_PERM) error: %ld", rc);
+	} else if (bitmask & XFEATURE_MASK_XTILE) {
+		printf("\tARCH_REQ_XCOMP_PERM is successful.\n");
+	}
+}
+
+static void validate_xcomp_perm(enum expected_result exp)
+{
+	bool load_success = load_rand_tiledata(stashed_xsave);
+
+	if (exp == FAIL_EXPECTED) {
+		if (load_success) {
+			noperm_errs++;
+			printf("[FAIL]\tLoad tiledata succeeded.\n");
+		} else {
+			printf("[OK]\tLoad tiledata failed.\n");
+		}
+	} else if (exp == SUCCESS_EXPECTED) {
+		if (load_success) {
+			printf("[OK]\tLoad tiledata succeeded.\n");
+		} else {
+			noperm_errs++;
+			printf("[FAIL]\tLoad tiledata failed.\n");
+		}
+	}
+}
+
+#ifndef AT_MINSIGSTKSZ
+#  define AT_MINSIGSTKSZ	51
+#endif
+
+static void *alloc_altstack(unsigned int size)
+{
+	void *altstack;
+
+	altstack = mmap(NULL, size, PROT_READ | PROT_WRITE,
+			MAP_PRIVATE | MAP_ANONYMOUS | MAP_STACK, -1, 0);
+
+	if (altstack == MAP_FAILED)
+		fatal_error("mmap() for altstack");
+
+	return altstack;
+}
+
+static void setup_altstack(void *addr, unsigned long size, enum expected_result exp)
+{
+	stack_t ss;
+	int rc;
+
+	memset(&ss, 0, sizeof(ss));
+	ss.ss_size = size;
+	ss.ss_sp = addr;
+
+	rc = sigaltstack(&ss, NULL);
+
+	if (exp == FAIL_EXPECTED) {
+		if (rc) {
+			printf("[OK]\tsigaltstack() failed.\n");
+		} else {
+			fatal_error("sigaltstack() succeeded unexpectedly.\n");
+		}
+	} else if (rc) {
+		fatal_error("sigaltstack()");
+	}
+}
+
+static void test_dynamic_sigaltstack(void)
+{
+	unsigned int small_size, enough_size;
+	unsigned long minsigstksz;
+	void *altstack;
+
+	minsigstksz = getauxval(AT_MINSIGSTKSZ);
+	printf("\tAT_MINSIGSTKSZ = %lu\n", minsigstksz);
+	/*
+	 * getauxval() itself can return 0 for failure or
+	 * success.  But, in this case, AT_MINSIGSTKSZ
+	 * will always return a >=0 value if implemented.
+	 * Just check for 0.
+	 */
+	if (minsigstksz == 0) {
+		printf("no support for AT_MINSIGSTKSZ, skipping sigaltstack tests\n");
+		return;
+	}
+
+	enough_size = minsigstksz * 2;
+
+	altstack = alloc_altstack(enough_size);
+	printf("\tAllocate memory for altstack (%u bytes).\n", enough_size);
+
+	/*
+	 * Try setup_altstack() with a size which can not fit
+	 * XTILEDATA.  ARCH_REQ_XCOMP_PERM should fail.
+	 */
+	small_size = minsigstksz - xtiledata.size;
+	printf("\tAfter sigaltstack() with small size (%u bytes).\n", small_size);
+	setup_altstack(altstack, small_size, SUCCESS_EXPECTED);
+	validate_req_xcomp_perm(FAIL_EXPECTED);
+
+	/*
+	 * Try setup_altstack() with a size derived from
+	 * AT_MINSIGSTKSZ.  It should be more than large enough
+	 * and thus ARCH_REQ_XCOMP_PERM should succeed.
+	 */
+	printf("\tAfter sigaltstack() with enough size (%u bytes).\n", enough_size);
+	setup_altstack(altstack, enough_size, SUCCESS_EXPECTED);
+	validate_req_xcomp_perm(SUCCESS_EXPECTED);
+
+	/*
+	 * Try to coerce setup_altstack() to again accept a
+	 * too-small altstack.  This ensures that big-enough
+	 * sigaltstacks can not shrink to a too-small value
+	 * once XTILEDATA permission is established.
+	 */
+	printf("\tThen, sigaltstack() with small size (%u bytes).\n", small_size);
+	setup_altstack(altstack, small_size, FAIL_EXPECTED);
+}
+
+static void test_dynamic_state(void)
+{
+	pid_t parent, child, grandchild;
+
+	parent = fork();
+	if (parent < 0) {
+		/* fork() failed */
+		fatal_error("fork");
+	} else if (parent > 0) {
+		int status;
+		/* fork() succeeded.  Now in the parent. */
+
+		wait(&status);
+		if (!WIFEXITED(status) || WEXITSTATUS(status))
+			fatal_error("arch_prctl test parent exit");
+		return;
+	}
+	/* fork() succeeded.  Now in the child . */
+
+	printf("[RUN]\tCheck ARCH_REQ_XCOMP_PERM around process fork() and sigaltack() test.\n");
+
+	printf("\tFork a child.\n");
+	child = fork();
+	if (child < 0) {
+		fatal_error("fork");
+	} else if (child > 0) {
+		int status;
+
+		wait(&status);
+		if (!WIFEXITED(status) || WEXITSTATUS(status))
+			fatal_error("arch_prctl test child exit");
 		_exit(0);
 	}
-	wait(&status);
+
+	/*
+	 * The permission request should fail without an
+	 * XTILEDATA-compatible signal stack
+	 */
+	printf("\tTest XCOMP_PERM at child.\n");
+	validate_xcomp_perm(FAIL_EXPECTED);
+
+	/*
+	 * Set up an XTILEDATA-compatible signal stack and
+	 * also obtain permission to populate XTILEDATA.
+	 */
+	printf("\tTest dynamic sigaltstack at child:\n");
+	test_dynamic_sigaltstack();
+
+	/* Ensure that XTILEDATA can be populated. */
+	printf("\tTest XCOMP_PERM again at child.\n");
+	validate_xcomp_perm(SUCCESS_EXPECTED);
+
+	printf("\tFork a grandchild.\n");
+	grandchild = fork();
+	if (grandchild < 0) {
+		/* fork() failed */
+		fatal_error("fork");
+	} else if (!grandchild) {
+		/* fork() succeeded.  Now in the (grand)child. */
+		printf("\tTest XCOMP_PERM at grandchild.\n");
+
+		/*
+		 * Ensure that the grandchild inherited
+		 * permission and a compatible sigaltstack:
+		 */
+		validate_xcomp_perm(SUCCESS_EXPECTED);
+	} else {
+		int status;
+		/* fork() succeeded.  Now in the parent. */
+
+		wait(&status);
+		if (!WIFEXITED(status) || WEXITSTATUS(status))
+			fatal_error("fork test grandchild");
+	}
+
+	_exit(0);
 }
+
+/*
+ * Save current register state and compare it to @xbuf1.'
+ *
+ * Returns false if @xbuf1 matches the registers.
+ * Returns true  if @xbuf1 differs from the registers.
+ */
+static inline bool __validate_tiledata_regs(struct xsave_buffer *xbuf1)
+{
+	struct xsave_buffer *xbuf2;
+	int ret;
+
+	xbuf2 = alloc_xbuf();
+	if (!xbuf2)
+		fatal_error("failed to allocate XSAVE buffer\n");
+
+	xsave(xbuf2, XFEATURE_MASK_XTILEDATA);
+	ret = memcmp(&xbuf1->bytes[xtiledata.xbuf_offset],
+		     &xbuf2->bytes[xtiledata.xbuf_offset],
+		     xtiledata.size);
+
+	free(xbuf2);
+
+	if (ret == 0)
+		return false;
+	return true;
+}
+
+static inline void validate_tiledata_regs_same(struct xsave_buffer *xbuf)
+{
+	int ret = __validate_tiledata_regs(xbuf);
+
+	if (ret != 0)
+		fatal_error("TILEDATA registers changed");
+}
+
+static inline void validate_tiledata_regs_changed(struct xsave_buffer *xbuf)
+{
+	int ret = __validate_tiledata_regs(xbuf);
+
+	if (ret == 0)
+		fatal_error("TILEDATA registers did not change");
+}
+
+/* tiledata inheritance test */
 
 static void test_fork(void)
 {
-	pid_t child;
-	int status;
+	pid_t child, grandchild;
 
 	child = fork();
-	if (child < 0)
-		err(1, "fork");
+	if (child < 0) {
+		/* fork() failed */
+		fatal_error("fork");
+	} else if (child > 0) {
+		/* fork() succeeded.  Now in the parent. */
+		int status;
 
-	if (child == 0) {
-		test_tile_data_inheritance();
+		wait(&status);
+		if (!WIFEXITED(status) || WEXITSTATUS(status))
+			fatal_error("fork test child");
+		return;
+	}
+	/* fork() succeeded.  Now in the child. */
+	printf("[RUN]\tCheck tile data inheritance.\n\tBefore fork(), load tiledata\n");
+
+	load_rand_tiledata(stashed_xsave);
+
+	grandchild = fork();
+	if (grandchild < 0) {
+		/* fork() failed */
+		fatal_error("fork");
+	} else if (grandchild > 0) {
+		/* fork() succeeded.  Still in the first child. */
+		int status;
+
+		wait(&status);
+		if (!WIFEXITED(status) || WEXITSTATUS(status))
+			fatal_error("fork test grand child");
 		_exit(0);
 	}
+	/* fork() succeeded.  Now in the (grand)child. */
 
-	wait(&status);
+	/*
+	 * TILEDATA registers are not preserved across fork().
+	 * Ensure that their value has changed:
+	 */
+	validate_tiledata_regs_changed(stashed_xsave);
+
+	_exit(0);
 }
 
 /* Context switching test */
 
-#define ITERATIONS			10
-#define NUM_THREADS			5
+static struct _ctxtswtest_cfg {
+	unsigned int iterations;
+	unsigned int num_threads;
+} ctxtswtest_config;
 
 struct futex_info {
-	int current;
-	int next;
-	int *futex;
+	pthread_t thread;
+	int nr;
+	pthread_mutex_t mutex;
+	struct futex_info *next;
 };
 
-static inline void command_wait(struct futex_info *info, int value)
-{
-	do {
-		sched_yield();
-	} while (syscall(SYS_futex, info->futex, FUTEX_WAIT, value, 0, 0, 0));
-}
-
-static inline void command_wake(struct futex_info *info, int value)
-{
-	do {
-		*info->futex = value;
-		while (!syscall(SYS_futex, info->futex, FUTEX_WAKE, 1, 0, 0, 0))
-			sched_yield();
-	} while (0);
-}
-
-static inline int get_iterative_value(int id)
-{
-	return ((id << 1) & ~0x1);
-}
-
-static inline int get_endpoint_value(int id)
-{
-	return ((id << 1) | 0x1);
-}
-
-static void *check_tiles(void *info)
+static void *check_tiledata(void *info)
 {
 	struct futex_info *finfo = (struct futex_info *)info;
-	struct xsave_data xdata;
-	struct tile_data tiles;
-	struct tile_config cfg;
+	struct xsave_buffer *xbuf;
 	int i;
 
-	set_tilecfg(&cfg);
-	load_tilecfg(&cfg);
-	init_xdata(&xdata);
+	xbuf = alloc_xbuf();
+	if (!xbuf)
+		fatal_error("unable to allocate XSAVE buffer");
 
-	make_tiles(&tiles);
-	copy_tiles_to_xdata(&xdata, &tiles);
-	restore_xdata(&xdata);
+	/*
+	 * Load random data into 'xbuf' and then restore
+	 * it to the tile registers themselves.
+	 */
+	load_rand_tiledata(xbuf);
+	for (i = 0; i < ctxtswtest_config.iterations; i++) {
+		pthread_mutex_lock(&finfo->mutex);
 
-	for (i = 0; i < ITERATIONS; i++) {
-		command_wait(finfo, get_iterative_value(finfo->current));
+		/*
+		 * Ensure the register values have not
+		 * diverged from those recorded in 'xbuf'.
+		 */
+		validate_tiledata_regs_same(xbuf);
 
-		memset(&xdata, 0, sizeof(xdata));
-		save_xdata(&xdata);
-		errs += compare_xdata_tiles(&xdata, &tiles);
+		/* Load new, random values into xbuf and registers */
+		load_rand_tiledata(xbuf);
 
-		make_tiles(&tiles);
-		copy_tiles_to_xdata(&xdata, &tiles);
-		restore_xdata(&xdata);
-
-		command_wake(finfo, get_iterative_value(finfo->next));
+		/*
+		 * The last thread's last unlock will be for
+		 * thread 0's mutex.  However, thread 0 will
+		 * have already exited the loop and the mutex
+		 * will already be unlocked.
+		 *
+		 * Because this is not an ERRORCHECK mutex,
+		 * that inconsistency will be silently ignored.
+		 */
+		pthread_mutex_unlock(&finfo->next->mutex);
 	}
 
-	command_wait(finfo, get_endpoint_value(finfo->current));
-	__tilerelease();
-	return NULL;
+	free(xbuf);
+	/*
+	 * Return this thread's finfo, which is
+	 * a unique value for this thread.
+	 */
+	return finfo;
 }
 
-static int create_children(int num, struct futex_info *finfo)
+static int create_threads(int num, struct futex_info *finfo)
 {
-	const int shm_id = shmget(IPC_PRIVATE, sizeof(int), IPC_CREAT | 0666);
-	int *futex = shmat(shm_id, NULL, 0);
-	pthread_t thread;
 	int i;
 
 	for (i = 0; i < num; i++) {
-		finfo[i].futex = futex;
-		finfo[i].current = i + 1;
-		finfo[i].next = (i + 2) % (num + 1);
+		int next_nr;
 
-		if (pthread_create(&thread, NULL, check_tiles, &finfo[i])) {
-			err(1, "pthread_create");
-			return 1;
-		}
+		finfo[i].nr = i;
+		/*
+		 * Thread 'i' will wait on this mutex to
+		 * be unlocked.  Lock it immediately after
+		 * initialization:
+		 */
+		pthread_mutex_init(&finfo[i].mutex, NULL);
+		pthread_mutex_lock(&finfo[i].mutex);
+
+		next_nr = (i + 1) % num;
+		finfo[i].next = &finfo[next_nr];
+
+		if (pthread_create(&finfo[i].thread, NULL, check_tiledata, &finfo[i]))
+			fatal_error("pthread_create()");
 	}
 	return 0;
+}
+
+static void affinitize_cpu0(void)
+{
+	cpu_set_t cpuset;
+
+	CPU_ZERO(&cpuset);
+	CPU_SET(0, &cpuset);
+
+	if (sched_setaffinity(0, sizeof(cpuset), &cpuset) != 0)
+		fatal_error("sched_setaffinity to CPU 0");
 }
 
 static void test_context_switch(void)
 {
 	struct futex_info *finfo;
-	cpu_set_t cpuset;
 	int i;
 
-	printf("[RUN]\t%u context switches of tile states in %d threads\n",
-	       ITERATIONS * NUM_THREADS, NUM_THREADS);
+	/* Affinitize to one CPU to force context switches */
+	affinitize_cpu0();
 
-	errs = 0;
+	req_xtiledata_perm();
 
-	CPU_ZERO(&cpuset);
-	CPU_SET(0, &cpuset);
-	if (sched_setaffinity(0, sizeof(cpuset), &cpuset) != 0)
-		err(1, "sched_setaffinity to CPU 0");
+	printf("[RUN]\tCheck tiledata context switches, %d iterations, %d threads.\n",
+	       ctxtswtest_config.iterations,
+	       ctxtswtest_config.num_threads);
 
-	finfo = malloc(sizeof(*finfo) * NUM_THREADS);
 
-	if (create_children(NUM_THREADS, finfo))
-		return;
+	finfo = malloc(sizeof(*finfo) * ctxtswtest_config.num_threads);
+	if (!finfo)
+		fatal_error("malloc()");
 
-	for (i = 0; i < ITERATIONS; i++) {
-		command_wake(finfo, get_iterative_value(1));
-		command_wait(finfo, get_iterative_value(0));
+	create_threads(ctxtswtest_config.num_threads, finfo);
+
+	/*
+	 * This thread wakes up thread 0
+	 * Thread 0 will wake up 1
+	 * Thread 1 will wake up 2
+	 * ...
+	 * the last thread will wake up 0
+	 *
+	 * ... this will repeat for the configured
+	 * number of iterations.
+	 */
+	pthread_mutex_unlock(&finfo[0].mutex);
+
+	/* Wait for all the threads to finish: */
+	for (i = 0; i < ctxtswtest_config.num_threads; i++) {
+		void *thread_retval;
+		int rc;
+
+		rc = pthread_join(finfo[i].thread, &thread_retval);
+
+		if (rc)
+			fatal_error("pthread_join() failed for thread %d err: %d\n",
+					i, rc);
+
+		if (thread_retval != &finfo[i])
+			fatal_error("unexpected thread retval for thread %d: %p\n",
+					i, thread_retval);
+
 	}
 
-	for (i = 1; i <= NUM_THREADS; i++)
-		command_wake(finfo, get_endpoint_value(i));
+	printf("[OK]\tNo incorrect case was found.\n");
 
-	if (errs) {
-		printf("[FAIL]\t%u incorrect tile states\n", errs);
-		nerrs += errs;
-		return;
-	}
-
-	printf("[OK]\tall tile states are correct\n");
-}
-
-/* Ptrace test */
-
-static inline long get_tile_state(pid_t child, struct iovec *iov)
-{
-	return ptrace(PTRACE_GETREGSET, child, (u32)NT_X86_XSTATE, iov);
-}
-
-static inline long set_tile_state(pid_t child, struct iovec *iov)
-{
-	return ptrace(PTRACE_SETREGSET, child, (u32)NT_X86_XSTATE, iov);
-}
-
-static int write_tile_state(bool load_tile, pid_t child)
-{
-	struct xsave_data xdata;
-	struct tile_data tiles;
-	struct iovec iov;
-
-	iov.iov_base = &xdata;
-	iov.iov_len = sizeof(xdata);
-
-	if (get_tile_state(child, &iov))
-		err(1, "PTRACE_GETREGSET");
-
-	make_tiles(&tiles);
-	copy_tiles_to_xdata(&xdata, &tiles);
-	if (set_tile_state(child, &iov))
-		err(1, "PTRACE_SETREGSET");
-
-	memset(&xdata, 0, sizeof(xdata));
-	if (get_tile_state(child, &iov))
-		err(1, "PTRACE_GETREGSET");
-
-	if (!load_tile)
-		memset(&tiles, 0, sizeof(tiles));
-
-	return compare_xdata_tiles(&xdata, &tiles);
-}
-
-static void test_tile_state_write(bool load_tile)
-{
-	pid_t child;
-	int status;
-
-	child = fork();
-	if (child < 0)
-		err(1, "fork");
-
-	if (child == 0) {
-		printf("[RUN]\tPtrace-induced tile state write, ");
-		printf("%s tile data loaded\n", load_tile ? "with" : "without");
-
-		if (ptrace(PTRACE_TRACEME, 0, NULL, NULL))
-			err(1, "PTRACE_TRACEME");
-
-		if (load_tile) {
-			struct tile_config cfg;
-			struct tile_data tiles;
-
-			set_tilecfg(&cfg);
-			load_tilecfg(&cfg);
-			make_tiles(&tiles);
-			/* Load only %tmm0 but inducing the #NM */
-			__tileloadd(&tiles);
-		}
-
-		raise(SIGTRAP);
-		_exit(0);
-	}
-
-	do {
-		wait(&status);
-	} while (WSTOPSIG(status) != SIGTRAP);
-
-	errs = write_tile_state(load_tile, child);
-	if (errs) {
-		nerrs++;
-		printf("[FAIL]\t%s write\n", load_tile ? "incorrect" : "unexpected");
-	} else {
-		printf("[OK]\t%s write\n", load_tile ? "correct" : "no");
-	}
-
-	ptrace(PTRACE_DETACH, child, NULL, NULL);
-	wait(&status);
-}
-
-static void test_ptrace(void)
-{
-	bool ptracee_loads_tiles;
-
-	ptracee_loads_tiles = true;
-	test_tile_state_write(ptracee_loads_tiles);
-
-	ptracee_loads_tiles = false;
-	test_tile_state_write(ptracee_loads_tiles);
-}
-
-/* Signal handling test */
-
-static int sigtrapped;
-struct tile_data sig_tiles, sighdl_tiles;
-
-static void handle_sigtrap(int sig, siginfo_t *info, void *ctx_void)
-{
-	ucontext_t *uctxt = (ucontext_t *)ctx_void;
-	struct xsave_data xdata;
-	struct tile_config cfg;
-	struct tile_data tiles;
-	u64 header;
-
-	header = __get_xsave_xstate_bv((void *)uctxt->uc_mcontext.fpregs);
-
-	if (header & (1 << XFEATURE_XTILE_DATA))
-		printf("[FAIL]\ttile data was written in sigframe\n");
-	else
-		printf("[OK]\ttile data was skipped in sigframe\n");
-
-	set_tilecfg(&cfg);
-	load_tilecfg(&cfg);
-	init_xdata(&xdata);
-
-	make_tiles(&tiles);
-	copy_tiles_to_xdata(&xdata, &tiles);
-	restore_xdata(&xdata);
-
-	save_xdata(&xdata);
-	if (compare_xdata_tiles(&xdata, &tiles))
-		err(1, "tile load file");
-
-	printf("\tsignal handler: load tile data\n");
-
-	sigtrapped = sig;
-}
-
-static void test_signal_handling(void)
-{
-	struct xsave_data xdata = { 0 };
-	struct tile_data tiles = { 0 };
-
-	sethandler(SIGTRAP, handle_sigtrap, 0);
-	sigtrapped = 0;
-
-	printf("[RUN]\tCheck tile state management in handling signal\n");
-
-	printf("\tbefore signal: initial tile data state\n");
-
-	raise(SIGTRAP);
-
-	if (sigtrapped == 0)
-		err(1, "sigtrap");
-
-	save_xdata(&xdata);
-	if (compare_xdata_tiles(&xdata, &tiles)) {
-		printf("[FAIL]\ttile data was not loaded at sigreturn\n");
-		nerrs++;
-	} else {
-		printf("[OK]\ttile data was re-initialized at sigreturn\n");
-	}
-
-	clearhandler(SIGTRAP);
+	free(finfo);
 }
 
 int main(void)
 {
 	/* Check hardware availability at first */
+	check_cpuid_xsave();
+	check_cpuid_xtiledata();
 
-	if (!check_xsave_supports_xtile()) {
-		if (xsave_disabled)
-			printf("XSAVE disabled.\n");
-		else
-			printf("Tile data not available.\n");
-		return 0;
-	}
+	init_stashed_xsave();
+	sethandler(SIGILL, handle_noperm, 0);
 
-	if (!check_xtile_hwinfo()) {
-		printf("Available tile state size is insufficient to test.\n");
-		return 0;
-	}
+	test_dynamic_state();
 
-	nerrs = 0;
+	/* Request permission for the following tests */
+	req_xtiledata_perm();
 
 	test_fork();
-	test_context_switch();
-	test_ptrace();
-	test_signal_handling();
 
-	return nerrs ? 1 : 0;
+	ctxtswtest_config.iterations = 10;
+	ctxtswtest_config.num_threads = 5;
+	test_context_switch();
+
+	clearhandler(SIGILL);
+	free_stashed_xsave();
+
+	return 0;
 }
