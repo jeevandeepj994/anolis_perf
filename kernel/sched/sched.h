@@ -1319,6 +1319,12 @@ struct rq {
 	struct task_struct	*force_idled_core_pick;
 #endif
 
+#ifdef CONFIG_SCHED_ACPU
+	u64 acpu_idle_sum;
+	u64 sibidle_sum;
+	u64 last_acpu_update_time;
+#endif
+
 	CK_KABI_RESERVE(1)
 	CK_KABI_RESERVE(2)
 	CK_KABI_RESERVE(3)
