@@ -1553,6 +1553,7 @@ enum MR_ADAPTER_TYPE {
 	THUNDERBOLT_SERIES = 2,
 	INVADER_SERIES = 3,
 	VENTURA_SERIES = 4,
+	AERO_SERIES = 5,
 };
 
 /*
@@ -1592,11 +1593,10 @@ struct megasas_register_set {
 
 	u32 	reserved_3[3];			/*00A4h*/
 
-	u32 	outbound_scratch_pad ;		/*00B0h*/
-	u32	outbound_scratch_pad_2;         /*00B4h*/
-	u32	outbound_scratch_pad_3;         /*00B8h*/
-	u32	outbound_scratch_pad_4;         /*00BCh*/
-
+	u32	outbound_scratch_pad_0;		/*00B0h*/
+	u32	outbound_scratch_pad_1;         /*00B4h*/
+	u32	outbound_scratch_pad_2;         /*00B8h*/
+	u32	outbound_scratch_pad_3;         /*00BCh*/
 
 	u32 	inbound_low_queue_port ;	/*00C0h*/
 
@@ -2390,9 +2390,9 @@ struct megasas_instance_template {
 	void (*enable_intr)(struct megasas_instance *);
 	void (*disable_intr)(struct megasas_instance *);
 
-	int (*clear_intr)(struct megasas_register_set __iomem *);
+	int (*clear_intr)(struct megasas_instance *);
 
-	u32 (*read_fw_status_reg)(struct megasas_register_set __iomem *);
+	u32 (*read_fw_status_reg)(struct megasas_instance *);
 	int (*adp_reset)(struct megasas_instance *, \
 		struct megasas_register_set __iomem *);
 	int (*check_reset)(struct megasas_instance *, \
@@ -2545,6 +2545,8 @@ int megasas_set_crash_dump_params(struct megasas_instance *instance,
 void megasas_free_host_crash_buffer(struct megasas_instance *instance);
 void megasas_fusion_crash_dump_wq(struct work_struct *work);
 
+u32 megasas_readl(struct megasas_instance *instance,
+		  const volatile void __iomem *addr);
 void megasas_return_cmd_fusion(struct megasas_instance *instance,
 	struct megasas_cmd_fusion *cmd);
 int megasas_issue_blocked_cmd(struct megasas_instance *instance,
