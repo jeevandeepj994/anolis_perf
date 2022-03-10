@@ -2157,7 +2157,11 @@ static int iscsi_iter_destroy_conn_fn(struct device *dev, void *data)
 {
 	if (!iscsi_is_conn_dev(dev))
 		return 0;
-	return iscsi_destroy_conn(iscsi_dev_to_conn(dev));
+
+	iscsi_remove_conn(iscsi_dev_to_conn(dev));
+	iscsi_put_conn(iscsi_dev_to_conn(dev));
+
+	return 0;
 }
 
 void iscsi_remove_session(struct iscsi_cls_session *session)
@@ -2313,26 +2317,17 @@ void iscsi_remove_conn(struct iscsi_cls_conn *conn)
 }
 EXPORT_SYMBOL_GPL(iscsi_remove_conn);
 
-/**
- * iscsi_destroy_conn - destroy iscsi class connection
- * @conn: iscsi cls session
- *
- * This can be called from a LLD or iscsi_transport.
- */
-int iscsi_destroy_conn(struct iscsi_cls_conn *conn)
+void iscsi_put_conn(struct iscsi_cls_conn *conn)
 {
-	unsigned long flags;
-
-	spin_lock_irqsave(&connlock, flags);
-	list_del(&conn->conn_list);
-	spin_unlock_irqrestore(&connlock, flags);
-
-	transport_unregister_device(&conn->dev);
-	ISCSI_DBG_TRANS_CONN(conn, "Completing conn destruction\n");
-	device_unregister(&conn->dev);
-	return 0;
+	put_device(&conn->dev);
 }
-EXPORT_SYMBOL_GPL(iscsi_destroy_conn);
+EXPORT_SYMBOL_GPL(iscsi_put_conn);
+
+void iscsi_get_conn(struct iscsi_cls_conn *conn)
+{
+	get_device(&conn->dev);
+}
+EXPORT_SYMBOL_GPL(iscsi_get_conn);
 
 void iscsi_put_conn(struct iscsi_cls_conn *conn)
 {
