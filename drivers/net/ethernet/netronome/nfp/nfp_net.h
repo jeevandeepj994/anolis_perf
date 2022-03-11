@@ -131,6 +131,7 @@
 
 /* Forward declarations */
 struct nfp_cpp;
+struct nfp_dev_info;
 struct nfp_eth_table_port;
 struct nfp_net;
 struct nfp_net_r_vector;
@@ -544,6 +545,7 @@ struct nfp_net_dp {
 /**
  * struct nfp_net - NFP network device structure
  * @dp:			Datapath structure
+ * @dev_info:		NFP ASIC params
  * @id:			vNIC id within the PF (0 for VFs)
  * @fw_ver:		Firmware version
  * @cap:                Capabilities advertised by the Firmware
@@ -597,6 +599,7 @@ struct nfp_net_dp {
 struct nfp_net {
 	struct nfp_net_dp dp;
 
+	const struct nfp_dev_info *dev_info;
 	struct nfp_net_fw_version fw_ver;
 
 	u32 id;
@@ -854,6 +857,7 @@ void nfp_net_get_fw_version(struct nfp_net_fw_version *fw_ver,
 
 struct nfp_net *
 nfp_net_alloc(struct pci_dev *pdev, bool needs_netdev,
+	      const struct nfp_dev_info *dev_info,
 	      unsigned int max_tx_rings, unsigned int max_rx_rings);
 void nfp_net_free(struct nfp_net *nn);
 
