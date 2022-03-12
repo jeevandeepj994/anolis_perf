@@ -4261,7 +4261,7 @@ vm_fault_t alloc_set_pte(struct vm_fault *vmf, struct page *page)
 		    !PageTransCompound(page)) {
 			if (!PageLRU(page))
 				lru_add_drain();
-			if (!PageMlocked(page)) {
+			if (PageLRU(page) && !PageMlocked(page)) {
 				mlock_vma_page(page);
 				reclaim_coldpgs_stats_mlock_refault();
 			}
