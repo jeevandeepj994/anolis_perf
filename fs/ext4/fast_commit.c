@@ -1130,15 +1130,15 @@ int ext4_fc_commit(journal_t *journal, tid_t commit_tid)
 	int reason = EXT4_FC_REASON_OK, fc_bufs_before = 0;
 	ktime_t start_time, commit_time;
 
-	trace_ext4_fc_commit_start(sb);
-
-	start_time = ktime_get();
-
 	if (!test_opt2(sb, JOURNAL_FAST_COMMIT) ||
 		(ext4_fc_is_ineligible(sb))) {
 		reason = EXT4_FC_REASON_INELIGIBLE;
 		goto out;
 	}
+
+	trace_ext4_fc_commit_start(sb);
+
+	start_time = ktime_get();
 
 restart_fc:
 	ret = jbd2_fc_begin_commit(journal, commit_tid);
