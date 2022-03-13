@@ -402,10 +402,12 @@ static int acpi_wakeup_cpu(int apicid, unsigned long start_ip)
 		cpu_relax();
 
 	/* If timed out (timeout == 0), return error */
+#if !defined(CONFIG_INTEL_TDX_FIXES)
 	if (!timeout) {
 		spin_unlock_irqrestore(&mailbox_lock, flags);
 		return -EIO;
 	}
+#endif
 
 	/*
 	 * If the CPU wakeup process is successful, store the
