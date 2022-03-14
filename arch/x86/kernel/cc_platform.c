@@ -11,11 +11,41 @@
 #include <linux/cc_platform.h>
 #include <linux/mem_encrypt.h>
 
+#include <asm/pgtable.h>
 #include <asm/processor.h>
+#include <asm/tdx.h>
 
-static bool __maybe_unused intel_cc_platform_has(enum cc_attr attr)
+#ifdef CONFIG_INTEL_TDX_GUEST
+
+unsigned int x86_disable_cc = -1;
+
+static int __init x86_cc_clear_setup(char *arg)
+{
+	get_option(&arg, &x86_disable_cc);
+
+	return 1;
+}
+__setup("x86_cc_clear=", x86_cc_clear_setup);
+
+#endif
+
+static bool intel_cc_platform_has(enum cc_attr attr)
 {
 #ifdef CONFIG_INTEL_TDX_GUEST
+	if (attr == x86_disable_cc)
+		return false;
+
+	switch (attr) {
+	case CC_ATTR_GUEST_UNROLL_STRING_IO:
+	case CC_ATTR_HOTPLUG_DISABLED:
+	case CC_ATTR_GUEST_TDX:
+	case CC_ATTR_GUEST_MEM_ENCRYPT:
+	case CC_ATTR_MEM_ENCRYPT:
+		return true;
+	default:
+		return false;
+	}
+
 	return false;
 #else
 	return false;
@@ -71,7 +101,31 @@ bool cc_platform_has(enum cc_attr attr)
 {
 	if (sme_me_mask)
 		return amd_cc_platform_has(attr);
+	else if (is_tdx_guest())
+		return intel_cc_platform_has(attr);
 
 	return false;
 }
 EXPORT_SYMBOL_GPL(cc_platform_has);
+
+pgprot_t pgprot_encrypted(pgprot_t prot)
+{
+        if (sme_me_mask)
+                return __pgprot(__sme_set(pgprot_val(prot)));
+        else if (is_tdx_guest())
+		return __pgprot(pgprot_val(prot) & ~tdx_shared_mask());
+
+        return prot;
+}
+EXPORT_SYMBOL_GPL(pgprot_encrypted);
+
+pgprot_t pgprot_decrypted(pgprot_t prot)
+{
+	if (sme_me_mask)
+		return __pgprot(__sme_clr(pgprot_val(prot)));
+	else if (is_tdx_guest())
+		return __pgprot(pgprot_val(prot) | tdx_shared_mask());
+
+	return prot;
+}
+EXPORT_SYMBOL_GPL(pgprot_decrypted);
