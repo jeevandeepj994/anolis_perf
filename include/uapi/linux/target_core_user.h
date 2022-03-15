@@ -70,6 +70,7 @@ enum tcmu_opcode {
 struct tcmu_cmd_entry_hdr {
 	__u32 len_op;
 	__u16 cmd_id;
+#define TCMU_KFLAG_ZERO_COPY  0x1
 	__u8 kflags;
 #define TCMU_UFLAG_UNKNOWN_OP 0x1
 #define TCMU_UFLAG_READ_LEN   0x2
@@ -167,5 +168,12 @@ struct tcmu_data_xfer {
 
 #define TCMU_IOCTL_CMD_COPY_TO_SGL      _IOW('T', 0xe0, struct tcmu_data_xfer)
 #define TCMU_IOCTL_CMD_COPY_FROM_SGL    _IOR('T', 0xe1, struct tcmu_data_xfer)
+#define TCMU_IOCTL_CMD_ZEROCOPY		_IOW('T', 0xe2, struct tcmu_cmd_zerocopy)
+
+struct tcmu_cmd_zerocopy {
+	struct iovec __user *iov;
+	u32 iov_cnt;
+	u16 cmd_id;
+};
 
 #endif
