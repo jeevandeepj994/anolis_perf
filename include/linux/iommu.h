@@ -384,6 +384,16 @@ static inline void iommu_set_dev_pasid_max(struct device *dev,
 	param->pasid_max = max;
 }
 
+static inline ioasid_t iommu_get_dev_pasid_max(struct device *dev)
+{
+	struct dev_iommu *param = dev->iommu;
+
+	if (WARN_ON(!param))
+		return 0;
+
+	return param->pasid_max;
+}
+
 int  iommu_device_register(struct iommu_device *iommu);
 void iommu_device_unregister(struct iommu_device *iommu);
 int  iommu_device_sysfs_add(struct iommu_device *iommu,
