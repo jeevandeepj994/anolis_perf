@@ -653,9 +653,10 @@ static struct request *nvme_nvm_alloc_request(struct request_queue *q,
 
 	nvme_nvm_rqtocmd(rqd, ns, cmd);
 
-	rq = nvme_alloc_request(q, (struct nvme_command *)cmd, 0);
+	rq = blk_mq_alloc_request(q, nvme_req_op((struct nvme_command *)cmd), 0);
 	if (IS_ERR(rq))
 		return rq;
+	nvme_init_request(rq, (struct nvme_command *)cmd);
 
 	rq->cmd_flags &= ~REQ_FAILFAST_DRIVER;
 
@@ -767,11 +768,12 @@ static int nvme_nvm_submit_user_cmd(struct request_queue *q,
 	DECLARE_COMPLETION_ONSTACK(wait);
 	int ret = 0;
 
-	rq = nvme_alloc_request(q, (struct nvme_command *)vcmd, 0);
+	rq = blk_mq_alloc_request(q, nvme_req_op((struct nvme_command *)vcmd), 0);
 	if (IS_ERR(rq)) {
 		ret = -ENOMEM;
 		goto err_cmd;
 	}
+	nvme_init_request(rq, (struct nvme_command *)vcmd);
 
 	if (timeout)
 		rq->timeout = timeout;
