@@ -149,6 +149,7 @@ struct tcmu_dev {
 	size_t mmap_pages;
 
 	struct mutex cmdr_lock;
+	struct rw_semaphore i_mmap_sem;
 	struct list_head qfull_queue;
 	struct list_head tmr_queue;
 
@@ -1770,6 +1771,7 @@ static struct se_device *tcmu_alloc_device(struct se_hba *hba, const char *name)
 	mutex_init(&udev->cmdr_lock);
 	udev->read_zc_size = 0;
 	udev->write_zc_size = 0;
+	init_rwsem(&udev->i_mmap_sem);
 
 	INIT_LIST_HEAD(&udev->node);
 	INIT_LIST_HEAD(&udev->timedout_entry);
@@ -1879,11 +1881,11 @@ static struct page *tcmu_try_get_block_page(struct tcmu_dev *udev, uint32_t dbi)
 {
 	struct page *page;
 
-	mutex_lock(&udev->cmdr_lock);
+	down_read(&udev->i_mmap_sem);
 	page = tcmu_get_block_page(udev, dbi);
 	if (likely(page)) {
 		get_page(page);
-		mutex_unlock(&udev->cmdr_lock);
+		up_read(&udev->i_mmap_sem);
 		return page;
 	}
 
@@ -1894,7 +1896,7 @@ static struct page *tcmu_try_get_block_page(struct tcmu_dev *udev, uint32_t dbi)
 	pr_err("Invalid addr to data block mapping  (dbi %u) on device %s\n",
 	       dbi, udev->name);
 	page = NULL;
-	mutex_unlock(&udev->cmdr_lock);
+	up_read(&udev->i_mmap_sem);
 
 	return page;
 }
@@ -3492,6 +3494,7 @@ static void find_free_blocks(void)
 			continue;
 		}
 
+		down_write(&udev->i_mmap_sem);
 		end = udev->dbi_max + 1;
 		block = find_last_bit(udev->data_bitmap, end);
 		if (block == udev->dbi_max) {
@@ -3499,6 +3502,7 @@ static void find_free_blocks(void)
 			 * The last bit is dbi_max, so it is not possible
 			 * reclaim any blocks.
 			 */
+			up_write(&udev->i_mmap_sem);
 			mutex_unlock(&udev->cmdr_lock);
 			continue;
 		} else if (block == end) {
@@ -3516,6 +3520,7 @@ static void find_free_blocks(void)
 
 		/* Release the block pages */
 		tcmu_blocks_release(&udev->data_blocks, start, end);
+		up_write(&udev->i_mmap_sem);
 		mutex_unlock(&udev->cmdr_lock);
 
 		total_freed += end - start;
