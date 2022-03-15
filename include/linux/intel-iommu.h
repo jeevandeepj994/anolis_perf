@@ -563,7 +563,7 @@ struct dmar_domain {
 					 * The default pasid used for non-SVM
 					 * traffic on mediated devices.
 					 */
-
+	struct xarray	pasids;		/* Tracks the PASIDs attached to this domain */
 	struct iommu_domain domain;	/* generic domain data structure for
 					   iommu core */
 };
@@ -613,6 +613,15 @@ struct intel_iommu {
 	struct dmar_drhd_unit *drhd;
 };
 
+struct pasid_info {
+	struct device_domain_info *info;
+	ioasid_t pasid;
+	atomic_t users;			/* Count the number of devices attached
+					 * with the PASID
+					 */
+	u32 flags;			/* permission and other attributes */
+};
+
 /* PCI domain-device relationship */
 struct device_domain_info {
 	struct list_head link;	/* link to domain siblings */
@@ -637,6 +646,7 @@ struct device_domain_info {
 	struct intel_iommu *iommu; /* IOMMU used by this device */
 	struct dmar_domain *domain; /* pointer to domain */
 	struct pasid_table *pasid_table; /* pasid table */
+	struct xarray pasids; /* PASIDs attached to this domain-device */
 };
 
 static inline void __iommu_flush_cache(
