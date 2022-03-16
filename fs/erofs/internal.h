@@ -278,9 +278,10 @@ struct erofs_buf {
 	struct page *page;
 	void *base;
 	enum erofs_kmap_type kmap_type;
+	bool dax;
 };
 #define __EROFS_BUF_INITIALIZER	\
-	((struct erofs_buf){ .page = NULL, .mapping = NULL })
+	((struct erofs_buf){ .page = NULL, .mapping = NULL, .dax = false })
 
 #define ROOT_NID(sb)		((sb)->root_nid)
 
@@ -463,6 +464,8 @@ struct erofs_map_dev {
 extern const struct file_operations erofs_file_fops;
 void erofs_unmap_metabuf(struct erofs_buf *buf);
 void erofs_put_metabuf(struct erofs_buf *buf);
+void *erofs_bread(struct erofs_buf *buf, struct inode *inode,
+		  erofs_blk_t blkaddr, enum erofs_kmap_type type);
 void *erofs_read_metabuf(struct erofs_buf *buf, struct super_block *sb,
 			 erofs_blk_t blkaddr, enum erofs_kmap_type type);
 int erofs_map_dev(struct super_block *sb, struct erofs_map_dev *dev);
