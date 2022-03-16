@@ -12,33 +12,17 @@
 #include <linux/blkdev.h>
 #include <trace/events/erofs.h>
 
-static struct page *erofs_read_meta_page(struct super_block *sb, pgoff_t index,
-					 struct erofs_buf *buf)
+static struct page *rafsv6_dax_readpage(struct address_space *mapping,
+		pgoff_t index, struct erofs_buf *buf)
 {
-	struct address_space *mapping;
-	struct inode *inode;
 	struct page *page;
+	unsigned int nofs_flag;
 
-	if (erofs_is_rafsv6_mode(sb))
-		inode = EROFS_SB(sb)->bootstrap->f_inode;
-	else if (erofs_is_fscache_mode(sb))
-		inode = EROFS_SB(sb)->s_fscache->inode;
-	else
-		inode = sb->s_bdev->bd_inode;
-	mapping = inode->i_mapping;
-
-	if (erofs_is_rafsv6_mode(sb) && IS_DAX(inode)) {
-		unsigned int nofs_flag;
-
-		nofs_flag = memalloc_nofs_save();
-		page = mapping->a_ops->startpfn(mapping, index, &buf->iomap);
-		if (!IS_ERR(page))
-			buf->mapping = mapping;
-		memalloc_nofs_restore(nofs_flag);
-	} else {
-		page = read_cache_page_gfp(mapping, index,
-				mapping_gfp_constraint(mapping, ~__GFP_FS));
-	}
+	nofs_flag = memalloc_nofs_save();
+	page = mapping->a_ops->startpfn(mapping, index, &buf->iomap);
+	if (!IS_ERR(page))
+		buf->mapping = mapping;
+	memalloc_nofs_restore(nofs_flag);
 	return page;
 }
 
@@ -72,16 +56,21 @@ void erofs_put_metabuf(struct erofs_buf *buf)
 	}
 }
 
-void *erofs_read_metabuf(struct erofs_buf *buf, struct super_block *sb,
-			erofs_blk_t blkaddr, enum erofs_kmap_type type)
+void *erofs_bread(struct erofs_buf *buf, struct inode *inode,
+		  erofs_blk_t blkaddr, enum erofs_kmap_type type)
 {
+	struct address_space *const mapping = inode->i_mapping;
 	erofs_off_t offset = blknr_to_addr(blkaddr);
 	pgoff_t index = offset >> PAGE_SHIFT;
 	struct page *page = buf->page;
 
 	if (!page || page->index != index) {
 		erofs_put_metabuf(buf);
-		page = erofs_read_meta_page(sb, index, buf);
+		if (buf->dax)
+			page = rafsv6_dax_readpage(mapping, index, buf);
+		else
+			page = read_cache_page_gfp(mapping, index,
+				   mapping_gfp_constraint(mapping, ~__GFP_FS));
 		if (IS_ERR(page))
 			return page;
 		/* should already be PageUptodate, no need to lock page */
@@ -100,6 +89,23 @@ void *erofs_read_metabuf(struct erofs_buf *buf, struct super_block *sb,
 	if (type == EROFS_NO_KMAP)
 		return NULL;
 	return buf->base + (offset & ~PAGE_MASK);
+}
+
+void *erofs_read_metabuf(struct erofs_buf *buf, struct super_block *sb,
+			 erofs_blk_t blkaddr, enum erofs_kmap_type type)
+{
+	if (erofs_is_rafsv6_mode(sb)) {
+		if (IS_DAX(EROFS_SB(sb)->bootstrap->f_inode))
+			buf->dax = true;
+		return erofs_bread(buf, EROFS_SB(sb)->bootstrap->f_inode,
+				   blkaddr, type);
+	}
+
+	if (erofs_is_fscache_mode(sb))
+		return erofs_bread(buf, EROFS_SB(sb)->s_fscache->inode,
+				   blkaddr, type);
+
+	return erofs_bread(buf, sb->s_bdev->bd_inode, blkaddr, type);
 }
 
 static int erofs_map_blocks_flatmode(struct inode *inode,
