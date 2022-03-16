@@ -10,20 +10,6 @@
 #include <linux/uio.h>
 #include <trace/events/erofs.h>
 
-static struct page *erofs_read_meta_page(struct super_block *sb, pgoff_t index)
-{
-	struct address_space *mapping;
-	struct page *page;
-
-	if (erofs_is_fscache_mode(sb))
-		mapping = EROFS_SB(sb)->s_fscache->inode->i_mapping;
-	else
-		mapping = sb->s_bdev->bd_inode->i_mapping;
-	page = read_cache_page_gfp(mapping, index,
-				   mapping_gfp_constraint(mapping, ~__GFP_FS));
-	return page;
-}
-
 void erofs_unmap_metabuf(struct erofs_buf *buf)
 {
 	if (buf->kmap_type == EROFS_KMAP)
@@ -43,16 +29,18 @@ void erofs_put_metabuf(struct erofs_buf *buf)
 	buf->page = NULL;
 }
 
-void *erofs_read_metabuf(struct erofs_buf *buf, struct super_block *sb,
-			erofs_blk_t blkaddr, enum erofs_kmap_type type)
+void *erofs_bread(struct erofs_buf *buf, struct inode *inode,
+		  erofs_blk_t blkaddr, enum erofs_kmap_type type)
 {
+	struct address_space *const mapping = inode->i_mapping;
 	erofs_off_t offset = blknr_to_addr(blkaddr);
 	pgoff_t index = offset >> PAGE_SHIFT;
 	struct page *page = buf->page;
 
 	if (!page || page->index != index) {
 		erofs_put_metabuf(buf);
-		page = erofs_read_meta_page(sb, index);
+		page = read_cache_page_gfp(mapping, index,
+				   mapping_gfp_constraint(mapping, ~__GFP_FS));
 		if (IS_ERR(page))
 			return page;
 		/* should already be PageUptodate, no need to lock page */
@@ -71,6 +59,16 @@ void *erofs_read_metabuf(struct erofs_buf *buf, struct super_block *sb,
 	if (type == EROFS_NO_KMAP)
 		return NULL;
 	return buf->base + (offset & ~PAGE_MASK);
+}
+
+void *erofs_read_metabuf(struct erofs_buf *buf, struct super_block *sb,
+			 erofs_blk_t blkaddr, enum erofs_kmap_type type)
+{
+	if (erofs_is_fscache_mode(sb))
+		return erofs_bread(buf, EROFS_SB(sb)->s_fscache->inode,
+				   blkaddr, type);
+
+	return erofs_bread(buf, sb->s_bdev->bd_inode, blkaddr, type);
 }
 
 static int erofs_map_blocks_flatmode(struct inode *inode,
