@@ -152,9 +152,11 @@ static int nfp_netvf_pci_probe(struct pci_dev *pdev,
 	}
 
 	nfp_net_get_fw_version(&fw_ver, ctrl_bar);
-	if (fw_ver.resv || fw_ver.class != NFP_NET_CFG_VERSION_CLASS_GENERIC) {
+	if (fw_ver.extend & NFP_NET_CFG_VERSION_RESERVED_MASK ||
+	    fw_ver.class != NFP_NET_CFG_VERSION_CLASS_GENERIC) {
 		dev_err(&pdev->dev, "Unknown Firmware ABI %d.%d.%d.%d\n",
-			fw_ver.resv, fw_ver.class, fw_ver.major, fw_ver.minor);
+			fw_ver.extend, fw_ver.class,
+			fw_ver.major, fw_ver.minor);
 		err = -EINVAL;
 		goto err_ctrl_unmap;
 	}
@@ -174,7 +176,7 @@ static int nfp_netvf_pci_probe(struct pci_dev *pdev,
 			break;
 		default:
 			dev_err(&pdev->dev, "Unsupported Firmware ABI %d.%d.%d.%d\n",
-				fw_ver.resv, fw_ver.class,
+				fw_ver.extend, fw_ver.class,
 				fw_ver.major, fw_ver.minor);
 			err = -EINVAL;
 			goto err_ctrl_unmap;
@@ -208,15 +210,14 @@ static int nfp_netvf_pci_probe(struct pci_dev *pdev,
 	rx_bar_off = nfp_qcp_queue_offset(dev_info, startq);
 
 	/* Allocate and initialise the netdev */
-	nn = nfp_net_alloc(pdev, true, dev_info, max_tx_rings, max_rx_rings);
+	nn = nfp_net_alloc(pdev, dev_info, ctrl_bar, true,
+			   max_tx_rings, max_rx_rings);
 	if (IS_ERR(nn)) {
 		err = PTR_ERR(nn);
 		goto err_ctrl_unmap;
 	}
 	vf->nn = nn;
 
-	nn->fw_ver = fw_ver;
-	nn->dp.ctrl_bar = ctrl_bar;
 	nn->dp.is_vf = 1;
 	nn->stride_tx = stride;
 	nn->stride_rx = stride;
