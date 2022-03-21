@@ -1128,9 +1128,13 @@ static int smc_connect_clc(struct smc_sock *smc,
 	rc = smc_clc_send_proposal(smc, ini);
 	if (rc)
 		return rc;
+
+	release_sock(&smc->sk);
 	/* receive SMC Accept CLC message */
-	return smc_clc_wait_msg(smc, aclc2, SMC_CLC_MAX_ACCEPT_LEN,
-				SMC_CLC_ACCEPT, CLC_WAIT_TIME);
+	rc = smc_clc_wait_msg(smc, aclc2, SMC_CLC_MAX_ACCEPT_LEN,
+			      SMC_CLC_ACCEPT, CLC_WAIT_TIME);
+	lock_sock(&smc->sk);
+	return rc;
 }
 
 void smc_fill_gid_list(struct smc_link_group *lgr,
