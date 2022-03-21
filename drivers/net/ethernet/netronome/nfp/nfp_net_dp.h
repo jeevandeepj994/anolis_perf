@@ -106,6 +106,7 @@ enum nfp_nfd_version {
 /**
  * struct nfp_dp_ops - Hooks to wrap different implementation of different dp
  * @version:			Indicate dp type
+ * @tx_min_desc_per_pkt:	Minimal TX descs needed for each packet
  * @poll:			Napi poll for normal rx/tx
  * @ctrl_poll:			Tasklet poll for ctrl rx/tx
  * @xmit:			Xmit for normal path
@@ -120,6 +121,7 @@ enum nfp_nfd_version {
  */
 struct nfp_dp_ops {
 	enum nfp_nfd_version version;
+	unsigned int tx_min_desc_per_pkt;
 
 	int (*poll)(struct napi_struct *napi, int budget);
 	void (*ctrl_poll)(unsigned long arg);
