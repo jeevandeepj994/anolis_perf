@@ -34,6 +34,7 @@ static void smc_cdc_tx_handler(struct smc_wr_tx_pend_priv *pnd_snd,
 	smc = container_of(conn, struct smc_sock, conn);
 	bh_lock_sock(&smc->sk);
 	if (!wc_status) {
+		atomic_inc(&link->cdc_comp_cnt);
 		diff = smc_curs_diff(cdcpend->conn->sndbuf_desc->len,
 				     &cdcpend->conn->tx_curs_fin,
 				     &cdcpend->cursor);
@@ -131,6 +132,7 @@ int smc_cdc_msg_send(struct smc_connection *conn,
 	if (likely(!rc)) {
 		smc_curs_copy(&conn->rx_curs_confirmed, &cfed, conn);
 		conn->local_rx_ctrl.prod_flags.cons_curs_upd_req = 0;
+		atomic_inc(&link->cdc_send_cnt);
 	} else {
 		conn->tx_cdc_seq--;
 		conn->local_tx_ctrl.seqno = conn->tx_cdc_seq;

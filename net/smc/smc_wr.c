@@ -81,12 +81,17 @@ static inline void smc_wr_tx_process_cqe(struct ib_wc *wc)
 	u32 pnd_snd_idx;
 
 	link = wc->qp->qp_context;
+	atomic_inc(&link->total_comp_cnt);
 
 	if (wc->opcode == IB_WC_REG_MR) {
-		if (wc->status)
+		if (wc->status) {
 			link->wr_reg_state = FAILED;
-		else
+			pr_warn("smc: reg mr comp failed\n");
+			atomic_inc(&link->bad_comp_cnt);
+		} else {
 			link->wr_reg_state = CONFIRMED;
+			atomic_inc(&link->reg_comp_cnt);
+		}
 		smc_wr_wakeup_reg_wait(link);
 		return;
 	}
@@ -94,8 +99,10 @@ static inline void smc_wr_tx_process_cqe(struct ib_wc *wc)
 	pnd_snd_idx = smc_wr_tx_find_pending_index(link, wc->wr_id);
 	if (pnd_snd_idx == link->wr_tx_cnt) {
 		if (link->lgr->smc_version != SMC_V2 ||
-		    link->wr_tx_v2_pend->wr_id != wc->wr_id)
+		    link->wr_tx_v2_pend->wr_id != wc->wr_id) {
+			pr_warn("smc: find pending index failed\n");
 			return;
+		}
 		link->wr_tx_v2_pend->wc_status = wc->status;
 		memcpy(&pnd_snd, link->wr_tx_v2_pend, sizeof(pnd_snd));
 		/* clear the full struct smc_wr_tx_pend including .priv */
@@ -114,11 +121,14 @@ static inline void smc_wr_tx_process_cqe(struct ib_wc *wc)
 		       sizeof(link->wr_tx_pends[pnd_snd_idx]));
 		memset(&link->wr_tx_bufs[pnd_snd_idx], 0,
 		       sizeof(link->wr_tx_bufs[pnd_snd_idx]));
-		if (!test_and_clear_bit(pnd_snd_idx, link->wr_tx_mask))
+		if (!test_and_clear_bit(pnd_snd_idx, link->wr_tx_mask)) {
+			pr_warn("smc: clear pending index bitmap failed\n");
 			return;
+		}
 	}
 
 	if (wc->status) {
+		atomic_inc(&link->bad_comp_cnt);
 		if (link->lgr->smc_version == SMC_V2) {
 			memset(link->wr_tx_v2_pend, 0,
 			       sizeof(*link->wr_tx_v2_pend));
@@ -317,6 +327,8 @@ int smc_wr_tx_send(struct smc_link *link, struct smc_wr_tx_pend_priv *priv)
 	if (rc) {
 		smc_wr_tx_put_slot(link, priv);
 		smcr_link_down_cond_sched(link);
+	} else {
+		atomic_inc(&link->total_send_cnt);
 	}
 	return rc;
 }
@@ -333,6 +345,8 @@ int smc_wr_tx_v2_send(struct smc_link *link, struct smc_wr_tx_pend_priv *priv,
 	if (rc) {
 		smc_wr_tx_put_slot(link, priv);
 		smcr_link_down_cond_sched(link);
+	} else {
+		atomic_inc(&link->total_send_cnt);
 	}
 	return rc;
 }
@@ -380,6 +394,8 @@ int smc_wr_reg_send(struct smc_link *link, struct ib_mr *mr)
 	rc = ib_post_send(link->roce_qp, &link->wr_reg.wr, NULL);
 	if (rc)
 		return rc;
+	atomic_inc(&link->reg_send_cnt);
+	atomic_inc(&link->total_send_cnt);
 
 	atomic_inc(&link->wr_reg_refcnt);
 	rc = wait_event_interruptible_timeout(link->wr_reg_wait,

@@ -772,6 +772,18 @@ int smcr_link_init(struct smc_link_group *lgr, struct smc_link *lnk,
 	smc_ibdev_cnt_inc(lnk);
 	smcr_copy_dev_info_to_link(lnk);
 	atomic_set(&lnk->conn_cnt, 0);
+
+	atomic_set(&lnk->total_send_cnt, 0);
+	atomic_set(&lnk->total_comp_cnt, 0);
+	atomic_set(&lnk->reg_send_cnt, 0);
+	atomic_set(&lnk->reg_comp_cnt, 0);
+	atomic_set(&lnk->cdc_send_cnt, 0);
+	atomic_set(&lnk->cdc_comp_cnt, 0);
+	atomic_set(&lnk->llc_send_cnt, 0);
+	atomic_set(&lnk->llc_comp_cnt, 0);
+	atomic_set(&lnk->rdma_write_cnt, 0);
+	atomic_set(&lnk->bad_comp_cnt, 0);
+
 	smc_llc_link_set_uid(lnk);
 	INIT_WORK(&lnk->link_down_wrk, smc_link_down_work);
 	if (!lnk->smcibdev->initialized) {

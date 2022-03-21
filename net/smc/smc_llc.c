@@ -389,6 +389,8 @@ static void smc_llc_tx_handler(struct smc_wr_tx_pend_priv *pend,
 			       enum ib_wc_status wc_status)
 {
 	/* future work: handle wc_status error for recovery and failover */
+	if (!wc_status)
+		atomic_inc(&link->llc_comp_cnt);
 }
 
 /**

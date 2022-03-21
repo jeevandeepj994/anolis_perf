@@ -169,6 +169,16 @@ struct smc_link {
 	atomic_t		conn_cnt; /* connections on this link */
 
 	struct socket		*clcsock;	/* keep for eRDMA */
+	atomic_t		total_send_cnt;
+	atomic_t		total_comp_cnt;
+	atomic_t		cdc_send_cnt;
+	atomic_t		cdc_comp_cnt;
+	atomic_t		llc_send_cnt;
+	atomic_t		llc_comp_cnt;
+	atomic_t		reg_send_cnt;
+	atomic_t		reg_comp_cnt;
+	atomic_t		rdma_write_cnt;
+	atomic_t		bad_comp_cnt;
 };
 
 /* For now we just allow one parallel link per link group. The SMC protocol

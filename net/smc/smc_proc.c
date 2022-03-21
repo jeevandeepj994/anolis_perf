@@ -243,9 +243,11 @@ static int proc_show_links(struct seq_file *seq, void *v)
 	struct smc_link *lnk;
 	int i = 0, j = 0;
 
-	seq_printf(seq, "%-9s%-6s%-6s%-5s%-7s%-6s%-7s%-7s%-7s%-4s%-4s%-6s%-6s%-6s%-6s%-6s%-7s\n",
+	seq_printf(seq, "%-9s%-6s%-6s%-5s%-7s%-6s%-7s%-7s%-7s%-4s%-4s%-6s%-6s%-6s%-6s%-6s%-7s%-16s%-16s%-16s%-16s%-16s%-16s%-16s%-16s%-16s%-16s\n",
 		   "grp", "type", "role", "idx", "gconn", "conn", "state", "qpn_l", "qpn_r",
-		   "tx", "rx", "cr-e", "cr-l", "cr-r", "cr_h", "cr_l", "flags");
+		   "tx", "rx", "cr-e", "cr-l", "cr-r", "cr_h", "cr_l", "flags", "total_send",
+		   "total_comp", "cdc_send", "cdc_comp", "llc_send", "llc_comp", "reg_send",
+		   "reg_comp", "bad_comp", "rdma_write");
 
 	spin_lock_bh(&smc_lgr_list.lock);
 	list_for_each_entry_safe(lgr, lg, &smc_lgr_list.list, list) {
@@ -255,14 +257,24 @@ static int proc_show_links(struct seq_file *seq, void *v)
 				continue;
 			for (j = 0; j < SMC_LGR_ID_SIZE; j++)
 				seq_printf(seq, "%02X", lgr->id[j]);
-			seq_printf(seq, " %-6s%-6s%-5d%-7d%-6d%-7d%-7d%-7d%-4d%-4d%-6u%-6d%-6d%-6u%-6u%-7lu\n",
+			seq_printf(seq, " %-6s%-6s%-5d%-7d%-6d%-7d%-7d%-7d%-4d%-4d%-6u%-6d%-6d%-6u%-6u%-7lu%-16u%-16u%-16u%-16u%-16u%-16u%-16u%-16u%-16u%-16u\n",
 				   lgr->is_smcd ? "D" : "R", lgr->role == SMC_CLNT ? "C" : "S", i,
 				   lgr->conns_num, atomic_read(&lnk->conn_cnt), lnk->state,
 				   lnk->roce_qp ? lnk->roce_qp->qp_num : 0, lnk->peer_qpn,
 				   lnk->wr_tx_cnt, lnk->wr_rx_cnt, lnk->credits_enable,
 				   atomic_read(&lnk->local_rq_credits),
 				   atomic_read(&lnk->peer_rq_credits), lnk->local_cr_watermark_high,
-				   lnk->peer_cr_watermark_low, lnk->flags);
+				   lnk->peer_cr_watermark_low, lnk->flags,
+				   atomic_read(&lnk->total_send_cnt),
+				   atomic_read(&lnk->total_comp_cnt),
+				   atomic_read(&lnk->cdc_send_cnt),
+				   atomic_read(&lnk->cdc_comp_cnt),
+				   atomic_read(&lnk->llc_send_cnt),
+				   atomic_read(&lnk->llc_comp_cnt),
+				   atomic_read(&lnk->reg_send_cnt),
+				   atomic_read(&lnk->reg_comp_cnt),
+				   atomic_read(&lnk->bad_comp_cnt),
+				   atomic_read(&lnk->rdma_write_cnt));
 		}
 	}
 	spin_unlock_bh(&smc_lgr_list.lock);
