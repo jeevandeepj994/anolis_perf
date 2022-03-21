@@ -19,6 +19,8 @@ nfp-objs := \
 	    nfp_asm.o \
 	    nfd3/dp.o \
 	    nfd3/rings.o \
+	    nfdk/dp.o \
+	    nfdk/rings.o \
 	    nfp_app.o \
 	    nfp_app_nic.o \
 	    nfp_devlink.o \
