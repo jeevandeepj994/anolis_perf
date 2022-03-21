@@ -673,7 +673,7 @@ static inline bool need_expel(int this_cpu)
 	return false;
 }
 
-static inline void __update_rq_on_expel(struct rq *rq)
+static __always_inline void __update_rq_on_expel(struct rq *rq)
 {
 	bool ret = need_expel(rq->cpu);
 
@@ -693,18 +693,16 @@ static inline void __update_rq_on_expel(struct rq *rq)
  * irq is disabled, so an underclass task is picked to run on this cpu until
  * reschedule, which will degrade the performence of highclass task.
  */
-static inline void update_rq_on_expel(struct rq *rq)
+static __always_inline void update_rq_on_expel(struct rq *rq)
 {
-	if (!sched_feat(ID_LOOSE_EXPEL))
-		goto update;
+	if (sched_feat(ID_LOOSE_EXPEL)) {
+		if (!rq->nr_under_running
+		    || !time_after(jiffies, rq->next_expel_update))
+			return;
 
-	if (!rq->nr_under_running
-	    || !time_after(jiffies, rq->next_expel_update))
-		return;
-	rq->next_expel_update = jiffies +
-		msecs_to_jiffies(sysctl_sched_expel_update_interval);
-
-update:
+		rq->next_expel_update = jiffies +
+			msecs_to_jiffies(sysctl_sched_expel_update_interval);
+	}
 	__update_rq_on_expel(rq);
 }
 
