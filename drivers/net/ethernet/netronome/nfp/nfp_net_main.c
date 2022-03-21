@@ -147,14 +147,12 @@ nfp_net_pf_alloc_vnic(struct nfp_pf *pf, bool needs_netdev,
 	n_rx_rings = readl(ctrl_bar + NFP_NET_CFG_MAX_RXRINGS);
 
 	/* Allocate and initialise the vNIC */
-	nn = nfp_net_alloc(pf->pdev, needs_netdev, pf->dev_info,
+	nn = nfp_net_alloc(pf->pdev, pf->dev_info, ctrl_bar, needs_netdev,
 			   n_tx_rings, n_rx_rings);
 	if (IS_ERR(nn))
 		return nn;
 
 	nn->app = pf->app;
-	nfp_net_get_fw_version(&nn->fw_ver, ctrl_bar);
-	nn->dp.ctrl_bar = ctrl_bar;
 	nn->tx_bar = qc_bar + tx_base * NFP_QCP_QUEUE_ADDR_SZ;
 	nn->rx_bar = qc_bar + rx_base * NFP_QCP_QUEUE_ADDR_SZ;
 	nn->dp.is_vf = 0;
@@ -700,9 +698,11 @@ int nfp_net_pci_probe(struct nfp_pf *pf)
 	}
 
 	nfp_net_get_fw_version(&fw_ver, ctrl_bar);
-	if (fw_ver.resv || fw_ver.class != NFP_NET_CFG_VERSION_CLASS_GENERIC) {
+	if (fw_ver.extend & NFP_NET_CFG_VERSION_RESERVED_MASK ||
+	    fw_ver.class != NFP_NET_CFG_VERSION_CLASS_GENERIC) {
 		nfp_err(pf->cpp, "Unknown Firmware ABI %d.%d.%d.%d\n",
-			fw_ver.resv, fw_ver.class, fw_ver.major, fw_ver.minor);
+			fw_ver.extend, fw_ver.class,
+			fw_ver.major, fw_ver.minor);
 		err = -EINVAL;
 		goto err_unmap;
 	}
@@ -718,7 +718,7 @@ int nfp_net_pci_probe(struct nfp_pf *pf)
 			break;
 		default:
 			nfp_err(pf->cpp, "Unsupported Firmware ABI %d.%d.%d.%d\n",
-				fw_ver.resv, fw_ver.class,
+				fw_ver.extend, fw_ver.class,
 				fw_ver.major, fw_ver.minor);
 			err = -EINVAL;
 			goto err_unmap;
