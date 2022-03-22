@@ -970,6 +970,8 @@ void __init tdx_early_init(void)
 	x86_platform.guest.enc_tlb_flush_required   = tdx_tlb_flush_required;
 	x86_platform.guest.enc_status_change_finish = tdx_enc_status_changed;
 
+	tdx_filter_init();
+
 	legacy_pic = &null_legacy_pic;
 
 	alloc_intr_gate(TDX_GUEST_EVENT_NOTIFY_VECTOR,

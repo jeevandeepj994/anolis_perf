@@ -40,6 +40,8 @@ struct ve_info {
 
 void __init tdx_early_init(void);
 
+void __init tdx_filter_init(void);
+
 void tdx_get_ve_info(struct ve_info *ve);
 
 bool tdx_handle_virt_exception(struct pt_regs *regs, struct ve_info *ve);
@@ -54,12 +56,20 @@ int tdx_hcall_get_quote(u64 data);
 
 extern void (*tdx_event_notify_handler)(void);
 
+bool tdx_guest_dev_authorized(struct device *dev);
+
 #else
 
 static inline void tdx_early_init(void) { };
 static inline void tdx_safe_halt(void) { };
 
 static inline bool tdx_early_handle_ve(struct pt_regs *regs) { return false; }
+
+#include <linux/device.h>
+static inline bool tdx_guest_dev_authorized(struct device *dev)
+{
+	return dev->authorized;
+}
 
 #endif /* CONFIG_INTEL_TDX_GUEST */
 
