@@ -678,8 +678,10 @@ static int kill_accessing_process(struct task_struct *p, unsigned long pfn,
 	ret = walk_page_range(0, TASK_SIZE, &hwp_walk_ops);
 	if (ret == 1 && priv.tk.addr)
 		kill_proc(&priv.tk, pfn, flags);
+	else
+		ret = 0;
 	up_read(&(p->mm->mmap_sem));
-	return ret ? -EFAULT : -EHWPOISON;
+	return ret > 0 ? -EHWPOISON : -EFAULT;
 }
 
 static const char *action_name[] = {
