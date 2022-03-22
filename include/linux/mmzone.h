@@ -216,6 +216,9 @@ enum node_stat_item {
 #ifdef CONFIG_DUPTEXT
 	NR_DUPTEXT,
 #endif
+#ifdef CONFIG_NUMA_BALANCING
+        PGPROMOTE_SUCCESS,      /* promote successfully */
+#endif
 	NR_PAGETABLE,		/* used for pagetables */
 	NR_VM_NODE_STAT_ITEMS
 };

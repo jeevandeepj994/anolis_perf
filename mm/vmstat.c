@@ -1176,6 +1176,9 @@ const char * const vmstat_text[] = {
 	"numa_local",
 	"numa_other",
 #endif
+#ifdef CONFIG_NUMA_BALANCING
+	"pgpromote_success",
+#endif
 
 	/* enum node_stat_item counters */
 	"nr_inactive_anon",
