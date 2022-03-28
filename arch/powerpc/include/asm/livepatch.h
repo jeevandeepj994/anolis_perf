@@ -7,18 +7,10 @@
 #ifndef _ASM_POWERPC_LIVEPATCH_H
 #define _ASM_POWERPC_LIVEPATCH_H
 
-#include <linux/module.h>
-#include <linux/ftrace.h>
+#include <linux/sched.h>
 #include <linux/sched/task_stack.h>
 
 #ifdef CONFIG_LIVEPATCH
-static inline void klp_arch_set_pc(struct ftrace_regs *fregs, unsigned long ip)
-{
-	struct pt_regs *regs = ftrace_get_regs(fregs);
-
-	regs->nip = ip;
-}
-
 static inline void klp_init_thread_info(struct task_struct *p)
 {
 	/* + 1 to account for STACK_END_MAGIC */

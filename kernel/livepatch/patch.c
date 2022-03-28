@@ -123,7 +123,17 @@ static void notrace klp_ftrace_handler(unsigned long ip,
 	if (func->nop)
 		goto unlock;
 
+#if defined(CONFIG_ARM64) && defined(CONFIG_LIVEPATCH)
+	/*
+	 * This is a workaround for our own commit d96aeabad9327
+	 * ("ck: arm64: add livepatch support").
+	 * It will be removed after we support DYNAMIC_FTRACE_WITH_ARGS
+	 * on arm64.
+	 */
 	klp_arch_set_pc(fregs, (unsigned long)func->new_func);
+#else
+	ftrace_instruction_pointer_set(fregs, (unsigned long)func->new_func);
+#endif
 
 unlock:
 	preempt_enable_notrace();
