@@ -366,6 +366,11 @@ static bool crng_has_old_seed(void)
 	return time_after(jiffies, READ_ONCE(base_crng.birth) + interval);
 }
 
+__init void random_enable_trust_cpu(void)
+{
+	trust_cpu = true;
+}
+
 /*
  * This function returns a ChaCha state that you may use for generating
  * random data. It also returns up to 32 bytes on its own of random data
