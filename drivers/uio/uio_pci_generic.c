@@ -31,12 +31,21 @@
 struct uio_pci_generic_dev {
 	struct uio_info info;
 	struct pci_dev *pdev;
+	atomic_t refcnt;
 };
 
 static inline struct uio_pci_generic_dev *
 to_uio_pci_generic_dev(struct uio_info *info)
 {
 	return container_of(info, struct uio_pci_generic_dev, info);
+}
+
+static int open(struct uio_info *info, struct inode *inode)
+{
+	struct uio_pci_generic_dev *gdev = to_uio_pci_generic_dev(info);
+
+	atomic_inc(&gdev->refcnt);
+	return 0;
 }
 
 static int release(struct uio_info *info, struct inode *inode)
@@ -51,7 +60,9 @@ static int release(struct uio_info *info, struct inode *inode)
 	 * Note that there's a non-zero chance doing this will wedge the device
 	 * at least until reset.
 	 */
-	pci_clear_master(gdev->pdev);
+	if (atomic_dec_and_test(&gdev->refcnt))
+		pci_clear_master(gdev->pdev);
+
 	return 0;
 }
 
@@ -94,8 +105,11 @@ static int probe(struct pci_dev *pdev,
 
 	gdev->info.name = "uio_pci_generic";
 	gdev->info.version = DRIVER_VERSION;
+	gdev->info.open = open;
 	gdev->info.release = release;
 	gdev->pdev = pdev;
+	atomic_set(&gdev->refcnt, 0);
+
 	if (pdev->irq) {
 		gdev->info.irq = pdev->irq;
 		gdev->info.irq_flags = IRQF_SHARED;
