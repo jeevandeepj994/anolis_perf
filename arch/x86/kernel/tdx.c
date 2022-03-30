@@ -144,6 +144,11 @@ phys_addr_t tdx_shared_mask(void)
 	return BIT_ULL(td_info.gpa_width - 1);
 }
 
+bool tdx_debug_enabled(void)
+{
+	return td_info.attributes & BIT(0);
+}
+
 /* TDX guest event notification handler */
 DEFINE_IDTENTRY_SYSVEC(sysvec_tdx_event_notify)
 {
@@ -623,6 +628,14 @@ static bool tdx_handle_io(struct pt_regs *regs, u32 exit_qual)
 	port = VE_GET_PORT_NUM(exit_qual);
 	mask = GENMASK(BITS_PER_BYTE * size, 0);
 
+	if (!tdx_allowed_port(port)) {
+		if (in) {
+			regs->ax &= ~mask;
+			regs->ax |= (UINT_MAX & mask);
+		}
+		return true;
+	}
+
 	/*
 	 * Emulate the I/O read/write via hypercall. More info about
 	 * ABI can be found in TDX Guest-Host-Communication Interface
@@ -808,6 +821,8 @@ void __init tdx_early_init(void)
 	 * Adjust physical mask to only cover valid GPA bits.
 	 */
 	physical_mask &= GENMASK_ULL(td_info.gpa_width - 2, 0);
+
+	tdx_filter_init();
 
 	swiotlb_force = SWIOTLB_FORCE;
 

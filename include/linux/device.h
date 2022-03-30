@@ -456,7 +456,7 @@ struct dev_msi_info {
  * @removable:  Whether the device can be removed from the system. This
  *              should be set by the subsystem / bus driver that discovered
  *              the device.
- *
+ * @authorized:  Whether the device is authorized to bind to a driver.
  * @offline_disabled: If set, the device is permanently online.
  * @offline:	Set after successful invocation of bus type's .offline().
  * @of_node_reused: Set if the device-tree node is shared with an ancestor
@@ -569,6 +569,7 @@ struct device {
 
 	enum device_removable	removable;
 
+	bool			authorized:1;
 	bool			offline_disabled:1;
 	bool			offline:1;
 	bool			of_node_reused:1;
@@ -965,6 +966,8 @@ int devtmpfs_mount(void);
 static inline int devtmpfs_mount(void) { return 0; }
 #endif
 
+extern bool dev_default_authorization;
+
 /* drivers/base/power/shutdown.c */
 void device_shutdown(void);
 
@@ -993,5 +996,16 @@ extern long sysfs_deprecated;
 #else
 #define sysfs_deprecated 0
 #endif
+
+#ifndef __ASSEMBLY__
+#ifdef CONFIG_ARCH_HAS_CC_PLATFORM
+bool cc_guest_dev_authorized(struct device *dev);
+#else
+static inline bool cc_guest_dev_authorized(struct device *dev)
+{
+	return dev->authorized;
+}
+#endif /* CONFIG_ARCH_HAS_CC_PLATFORM */
+#endif /* __ASSEMBLY__ */
 
 #endif /* _DEVICE_H_ */
