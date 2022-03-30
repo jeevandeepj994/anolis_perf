@@ -259,7 +259,7 @@ config ARCH_RV64I
 	select HAVE_FTRACE_MCOUNT_RECORD
 	select HAVE_FUNCTION_GRAPH_TRACER
 	select HAVE_FUNCTION_TRACER
-	select SWIOTLB if MMU
+	select SWIOTLB if RISCV_SWIOTLB
 
 endchoice
 
@@ -347,6 +347,11 @@ config RISCV_ISA_C
 	   Linux binary.
 
 	   If you don't know what to do here, say Y.
+
+config RISCV_SWIOTLB
+	bool "Enable SWIOTLB"
+	depends on MMU
+	default y
 
 menu "supported PMU type"
 	depends on PERF_EVENTS
