@@ -136,7 +136,8 @@ struct tcmu_dev {
 #define TCMU_DEV_BIT_OPEN 0
 #define TCMU_DEV_BIT_BROKEN 1
 #define TCMU_DEV_BIT_BLOCKED 2
-#define TCMU_DEV_BIT_BYPASS_DATA_AREA 3
+#define TCMU_DEV_BIT_READ_BYPASS_DATA_AREA 3
+#define TCMU_DEV_BIT_WRITE_BYPASS_DATA_AREA 4
 	unsigned long flags;
 
 	struct uio_info uio_info;
@@ -168,6 +169,8 @@ struct tcmu_dev {
 	uint32_t zc_dbi_max;
 	uint32_t zc_dbi_thresh;
 	unsigned long *zc_data_bitmap;
+	uint32_t read_zc_size;
+	uint32_t write_zc_size;
 
 	struct idr commands;
 
@@ -213,6 +216,7 @@ struct tcmu_cmd {
 #define TCMU_CMD_BIT_EXPIRED 0
 #define TCMU_CMD_BIT_INFLIGHT 1
 #define TCMU_CMD_BIT_ZEROCOPY 2
+#define TCMU_CMD_BIT_BYPASS_DATA_AREA 3
 	unsigned long flags;
 
 	struct mutex cmd_lock;
@@ -661,11 +665,67 @@ static inline uint32_t tcmu_cmd_get_block_cnt(struct tcmu_cmd *tcmu_cmd)
 	return data_length / DATA_BLOCK_SIZE;
 }
 
+static void tcmu_set_cmd_bypass_data_area(struct tcmu_cmd *tcmu_cmd)
+{
+	struct tcmu_dev *udev = tcmu_cmd->tcmu_dev;
+	struct se_cmd *se_cmd = tcmu_cmd->se_cmd;
+
+	/*
+	 * Zero copy is map sg pages to userspace, and bypass data area
+	 * is copy data between sg pages and userspace buffer, so they
+	 * are completely different.
+	 */
+	if (test_bit(TCMU_CMD_BIT_ZEROCOPY, &tcmu_cmd->flags))
+		return;
+
+	if (se_cmd->data_direction == DMA_FROM_DEVICE &&
+	    test_bit(TCMU_DEV_BIT_READ_BYPASS_DATA_AREA, &udev->flags))
+		set_bit(TCMU_CMD_BIT_BYPASS_DATA_AREA, &tcmu_cmd->flags);
+
+	if (se_cmd->data_direction == DMA_TO_DEVICE &&
+	    test_bit(TCMU_DEV_BIT_WRITE_BYPASS_DATA_AREA, &udev->flags))
+		set_bit(TCMU_CMD_BIT_BYPASS_DATA_AREA, &tcmu_cmd->flags);
+}
+
+static void tcmu_set_cmd_do_zero_copy(struct tcmu_cmd *tcmu_cmd)
+{
+	struct tcmu_dev *udev = tcmu_cmd->tcmu_dev;
+	struct se_cmd *se_cmd = tcmu_cmd->se_cmd;
+	struct scatterlist *data_sg = se_cmd->t_data_sg, *sg;
+	unsigned int data_nents = se_cmd->t_data_nents;
+	int i;
+
+	if ((se_cmd->se_cmd_flags & SCF_BIDI) || !se_cmd->data_length ||
+	    !IS_ALIGNED(se_cmd->data_length, PAGE_SIZE))
+		return;
+
+	if ((se_cmd->data_direction == DMA_FROM_DEVICE) &&
+	    (!udev->read_zc_size ||
+	     se_cmd->data_length < (udev->read_zc_size << 10)))
+		return;
+
+	if ((se_cmd->data_direction == DMA_TO_DEVICE) &&
+	    (!udev->write_zc_size ||
+	     se_cmd->data_length < (udev->write_zc_size << 10)))
+		return;
+
+	/* Now, check every sg pages is aligned. */
+	for_each_sg(data_sg, sg, data_nents, i) {
+		if ((sg->offset && !IS_ALIGNED(sg->offset, PAGE_SIZE)) ||
+		    !IS_ALIGNED(sg->length, PAGE_SIZE))
+			break;
+	}
+	if (i == data_nents)
+		set_bit(TCMU_CMD_BIT_ZEROCOPY, &tcmu_cmd->flags);
+}
+
 static struct tcmu_cmd *tcmu_alloc_cmd(struct se_cmd *se_cmd)
 {
 	struct se_device *se_dev = se_cmd->se_dev;
 	struct tcmu_dev *udev = TCMU_DEV(se_dev);
 	struct tcmu_cmd *tcmu_cmd;
+	bool zero_copy;
+	bool bypass_data_area;
 
 	tcmu_cmd = kmem_cache_zalloc(tcmu_cmd_cache, GFP_KERNEL);
 	if (!tcmu_cmd)
@@ -676,8 +736,13 @@ static struct tcmu_cmd *tcmu_alloc_cmd(struct se_cmd *se_cmd)
 	tcmu_cmd->tcmu_dev = udev;
 	mutex_init(&tcmu_cmd->cmd_lock);
 
+	tcmu_set_cmd_do_zero_copy(tcmu_cmd);
+	tcmu_set_cmd_bypass_data_area(tcmu_cmd);
+
+	zero_copy = test_bit(TCMU_CMD_BIT_ZEROCOPY, &tcmu_cmd->flags);
+	bypass_data_area = test_bit(TCMU_CMD_BIT_BYPASS_DATA_AREA, &tcmu_cmd->flags);
 	tcmu_cmd_reset_dbi_cur(tcmu_cmd);
-	if (!test_bit(TCMU_DEV_BIT_BYPASS_DATA_AREA, &udev->flags)) {
+	if (zero_copy || !bypass_data_area) {
 		tcmu_cmd->dbi_cnt = tcmu_cmd_get_block_cnt(tcmu_cmd);
 		tcmu_cmd->dbi = kcalloc(tcmu_cmd->dbi_cnt, sizeof(uint32_t),
 					GFP_KERNEL);
@@ -942,7 +1007,7 @@ static bool is_ring_space_avail(struct tcmu_dev *udev, struct tcmu_cmd *cmd,
 		return false;
 	}
 
-	if (!cmd->dbi_cnt)
+	if (test_bit(TCMU_CMD_BIT_BYPASS_DATA_AREA, &cmd->flags))
 		return true;
 
 	if (zero_copy) {
@@ -1078,7 +1143,8 @@ static int queue_cmd_ring(struct tcmu_cmd *tcmu_cmd, sense_reason_t *scsi_err)
 	uint64_t cdb_off;
 	bool copy_to_data_area;
 	size_t data_length = tcmu_cmd_get_data_length(tcmu_cmd);
-	bool zero_copy = false;
+	bool zero_copy = test_bit(TCMU_CMD_BIT_ZEROCOPY, &tcmu_cmd->flags);
+	bool bypass_data_area = test_bit(TCMU_CMD_BIT_BYPASS_DATA_AREA, &tcmu_cmd->flags);
 
 	*scsi_err = TCM_NO_SENSE;
 
@@ -1121,21 +1187,6 @@ static int queue_cmd_ring(struct tcmu_cmd *tcmu_cmd, sense_reason_t *scsi_err)
 		return -1;
 	}
 
-	if (!(se_cmd->se_cmd_flags & SCF_BIDI) && se_cmd->data_length &&
-	    IS_ALIGNED(se_cmd->data_length, PAGE_SIZE)) {
-		struct scatterlist *data_sg = se_cmd->t_data_sg, *sg;
-		unsigned int data_nents = se_cmd->t_data_nents;
-		int i;
-
-		for_each_sg(data_sg, sg, data_nents, i) {
-			if ((sg->offset && !IS_ALIGNED(sg->offset, PAGE_SIZE)) ||
-			    !IS_ALIGNED(sg->length, PAGE_SIZE))
-				break;
-		}
-		if (i == data_nents)
-			zero_copy = true;
-	}
-
 	if (!is_ring_space_avail(udev, tcmu_cmd, command_size, data_length, zero_copy)) {
 		/*
 		 * Don't leave commands partially setup because the unmap
@@ -1176,7 +1227,7 @@ static int queue_cmd_ring(struct tcmu_cmd *tcmu_cmd, sense_reason_t *scsi_err)
 	copy_to_data_area = (se_cmd->data_direction == DMA_TO_DEVICE
 		|| se_cmd->se_cmd_flags & SCF_BIDI) && (!zero_copy);
 
-	if (!test_bit(TCMU_DEV_BIT_BYPASS_DATA_AREA, &udev->flags)) {
+	if (zero_copy || !bypass_data_area) {
 		scatter_data_area(udev, tcmu_cmd, se_cmd->t_data_sg,
 				se_cmd->t_data_nents, &iov, &iov_cnt,
 				copy_to_data_area);
@@ -1185,8 +1236,7 @@ static int queue_cmd_ring(struct tcmu_cmd *tcmu_cmd, sense_reason_t *scsi_err)
 
 	/* Handle BIDI commands */
 	iov_cnt = 0;
-	if ((se_cmd->se_cmd_flags & SCF_BIDI)
-		&& !test_bit(TCMU_DEV_BIT_BYPASS_DATA_AREA, &udev->flags)) {
+	if ((se_cmd->se_cmd_flags & SCF_BIDI) && !bypass_data_area) {
 		iov++;
 		scatter_data_area(udev, tcmu_cmd, se_cmd->t_bidi_data_sg,
 				  se_cmd->t_bidi_data_nents, &iov, &iov_cnt,
@@ -1213,8 +1263,11 @@ static int queue_cmd_ring(struct tcmu_cmd *tcmu_cmd, sense_reason_t *scsi_err)
 			tiov++;
 		}
 		entry->hdr.kflags |= TCMU_KFLAG_ZERO_COPY;
-		set_bit(TCMU_CMD_BIT_ZEROCOPY, &tcmu_cmd->flags);
 	}
+
+	if (bypass_data_area)
+		entry->hdr.kflags |= TCMU_KFLAG_BYPASS_DATA_AREA;
+
 	/*
 	 * Recalaulate the command's base size and size according
 	 * to the actual needs
@@ -1314,20 +1367,25 @@ static void tcmu_handle_completion(struct tcmu_cmd *cmd, struct tcmu_cmd_entry *
 		else
 			se_cmd->se_cmd_flags |= SCF_TREAT_READ_AS_NORMAL;
 	}
-	if (!test_bit(TCMU_DEV_BIT_BYPASS_DATA_AREA, &udev->flags)) {
-		if (test_bit(TCMU_CMD_BIT_ZEROCOPY, &cmd->flags)) {
-			tcmu_cmd_zerocopy_unmap(cmd);
-		} else if (se_cmd->se_cmd_flags & SCF_BIDI) {
-			/* Get Data-In buffer before clean up */
-			gather_data_area(udev, cmd, true, read_len);
-		} else if (se_cmd->data_direction == DMA_FROM_DEVICE) {
-			gather_data_area(udev, cmd, false, read_len);
-		} else if (se_cmd->data_direction == DMA_TO_DEVICE) {
-			/* TODO: */
-		} else if (se_cmd->data_direction != DMA_NONE) {
-			pr_warn("TCMU: data direction was %d!\n",
-				se_cmd->data_direction);
-		}
+
+	if (test_bit(TCMU_CMD_BIT_ZEROCOPY, &cmd->flags)) {
+		tcmu_cmd_zerocopy_unmap(cmd);
+		goto done;
+	}
+
+	if (test_bit(TCMU_CMD_BIT_BYPASS_DATA_AREA, &cmd->flags))
+		goto done;
+
+	if (se_cmd->se_cmd_flags & SCF_BIDI) {
+		/* Get Data-In buffer before clean up */
+		gather_data_area(udev, cmd, true, read_len);
+	} else if (se_cmd->data_direction == DMA_FROM_DEVICE) {
+		gather_data_area(udev, cmd, false, read_len);
+	} else if (se_cmd->data_direction == DMA_TO_DEVICE) {
+		/* TODO: */
+	} else if (se_cmd->data_direction != DMA_NONE) {
+		pr_warn("TCMU: data direction was %d!\n",
+			se_cmd->data_direction);
 	}
 
 done:
@@ -1548,6 +1606,8 @@ static struct se_device *tcmu_alloc_device(struct se_hba *hba, const char *name)
 	udev->zc_max_blocks = ZC_DATA_BLOCK_BITS_DEF;
 	mutex_init(&udev->cmdr_lock);
 	init_rwsem(&udev->i_mmap_sem);
+	udev->read_zc_size = 0;
+	udev->write_zc_size = 0;
 
 	INIT_LIST_HEAD(&udev->node);
 	INIT_LIST_HEAD(&udev->timedout_entry);
@@ -1986,9 +2046,6 @@ static long tcmu_copy_data(struct tcmu_dev *udev,
 	struct tcmu_cmd *tcmu_cmd;
 	long ret;
 
-	if (!test_bit(TCMU_DEV_BIT_BYPASS_DATA_AREA, &udev->flags))
-		return -EINVAL;
-
 	if (copy_from_user(&xfer, uxfer, sizeof(xfer)))
 		return -EFAULT;
 
@@ -2000,6 +2057,11 @@ static long tcmu_copy_data(struct tcmu_dev *udev,
 	}
 
 	mutex_lock(&tcmu_cmd->cmd_lock);
+	if (!test_bit(TCMU_CMD_BIT_BYPASS_DATA_AREA, &tcmu_cmd->flags)) {
+		ret = -EINVAL;
+		goto out;
+	}
+
 	if (test_bit(TCMU_CMD_BIT_EXPIRED, &tcmu_cmd->flags)) {
 		pr_err("Command is expired, cmd_id:%d\n", xfer.cmd_id);
 		ret = -EFAULT;
@@ -3003,20 +3065,20 @@ static ssize_t tcmu_reset_ring_store(struct config_item *item, const char *page,
 }
 CONFIGFS_ATTR_WO(tcmu_, reset_ring);
 
-static ssize_t tcmu_bypass_data_area_show(struct config_item *item, char *page)
+static ssize_t tcmu_read_bypass_data_area_show(struct config_item *item, char *page)
 {
 	struct se_dev_attrib *da = container_of(to_config_group(item),
 						struct se_dev_attrib, da_group);
 	struct tcmu_dev *udev = TCMU_DEV(da->da_dev);
 
-	if (test_bit(TCMU_DEV_BIT_BYPASS_DATA_AREA, &udev->flags))
+	if (test_bit(TCMU_DEV_BIT_READ_BYPASS_DATA_AREA, &udev->flags))
 		return snprintf(page, PAGE_SIZE, "%s\n", "true");
 	else
 		return snprintf(page, PAGE_SIZE, "%s\n", "false");
 }
 
-static ssize_t tcmu_bypass_data_area_store(struct config_item *item, const char *page,
-					    size_t count)
+static ssize_t tcmu_read_bypass_data_area_store(struct config_item *item, const char *page,
+						size_t count)
 {
 	struct se_dev_attrib *da = container_of(to_config_group(item),
 						struct se_dev_attrib, da_group);
@@ -3029,13 +3091,103 @@ static ssize_t tcmu_bypass_data_area_store(struct config_item *item, const char 
 		return ret;
 
 	if (bypass_data_area)
-		set_bit(TCMU_DEV_BIT_BYPASS_DATA_AREA, &udev->flags);
+		set_bit(TCMU_DEV_BIT_READ_BYPASS_DATA_AREA, &udev->flags);
 	else
-		clear_bit(TCMU_DEV_BIT_BYPASS_DATA_AREA, &udev->flags);
+		clear_bit(TCMU_DEV_BIT_READ_BYPASS_DATA_AREA, &udev->flags);
 
 	return count;
 }
-CONFIGFS_ATTR(tcmu_, bypass_data_area);
+CONFIGFS_ATTR(tcmu_, read_bypass_data_area);
+
+static ssize_t tcmu_write_bypass_data_area_show(struct config_item *item, char *page)
+{
+	struct se_dev_attrib *da = container_of(to_config_group(item),
+						struct se_dev_attrib, da_group);
+	struct tcmu_dev *udev = TCMU_DEV(da->da_dev);
+
+	if (test_bit(TCMU_DEV_BIT_WRITE_BYPASS_DATA_AREA, &udev->flags))
+		return snprintf(page, PAGE_SIZE, "%s\n", "true");
+	else
+		return snprintf(page, PAGE_SIZE, "%s\n", "false");
+}
+
+static ssize_t tcmu_write_bypass_data_area_store(struct config_item *item, const char *page,
+						size_t count)
+{
+	struct se_dev_attrib *da = container_of(to_config_group(item),
+						struct se_dev_attrib, da_group);
+	struct tcmu_dev *udev = TCMU_DEV(da->da_dev);
+	bool bypass_data_area;
+	int ret;
+
+	ret = strtobool(page, &bypass_data_area);
+	if (ret < 0)
+		return ret;
+
+	if (bypass_data_area)
+		set_bit(TCMU_DEV_BIT_WRITE_BYPASS_DATA_AREA, &udev->flags);
+	else
+		clear_bit(TCMU_DEV_BIT_WRITE_BYPASS_DATA_AREA, &udev->flags);
+
+	return count;
+}
+CONFIGFS_ATTR(tcmu_, write_bypass_data_area);
+
+static ssize_t tcmu_read_zc_size_show(struct config_item *item, char *page)
+{
+	struct se_dev_attrib *da = container_of(to_config_group(item),
+						struct se_dev_attrib, da_group);
+	struct tcmu_dev *udev = TCMU_DEV(da->da_dev);
+
+	return snprintf(page, PAGE_SIZE, "%ukb\n", udev->read_zc_size);
+}
+
+static ssize_t tcmu_read_zc_size_store(struct config_item *item, const char *page,
+					size_t count)
+{
+	struct se_dev_attrib *da = container_of(to_config_group(item),
+						struct se_dev_attrib, da_group);
+	struct tcmu_dev *udev = TCMU_DEV(da->da_dev);
+	uint32_t read_zc_size;
+	int ret;
+
+	ret = kstrtou32(page, 0, &read_zc_size);
+	if (ret < 0)
+		return ret;
+
+	udev->read_zc_size = read_zc_size;
+
+	return count;
+}
+CONFIGFS_ATTR(tcmu_, read_zc_size);
+
+static ssize_t tcmu_write_zc_size_show(struct config_item *item, char *page)
+{
+	struct se_dev_attrib *da = container_of(to_config_group(item),
+						struct se_dev_attrib, da_group);
+	struct tcmu_dev *udev = TCMU_DEV(da->da_dev);
+
+	return snprintf(page, PAGE_SIZE, "%ukb\n", udev->write_zc_size);
+}
+
+static ssize_t tcmu_write_zc_size_store(struct config_item *item, const char *page,
+					size_t count)
+{
+	struct se_dev_attrib *da = container_of(to_config_group(item),
+						struct se_dev_attrib, da_group);
+	struct tcmu_dev *udev = TCMU_DEV(da->da_dev);
+	uint32_t write_zc_size;
+	int ret;
+
+	ret = kstrtou32(page, 0, &write_zc_size);
+	if (ret < 0)
+		return ret;
+
+	udev->write_zc_size = write_zc_size;
+
+	return count;
+}
+CONFIGFS_ATTR(tcmu_, write_zc_size);
 
 static struct configfs_attribute *tcmu_attrib_attrs[] = {
 	&tcmu_attr_cmd_time_out,
@@ -3046,7 +3198,10 @@ static struct configfs_attribute *tcmu_attrib_attrs[] = {
 	&tcmu_attr_dev_size,
 	&tcmu_attr_emulate_write_cache,
 	&tcmu_attr_nl_reply_supported,
-	&tcmu_attr_bypass_data_area,
+	&tcmu_attr_read_bypass_data_area,
+	&tcmu_attr_write_bypass_data_area,
+	&tcmu_attr_read_zc_size,
+	&tcmu_attr_write_zc_size,
 	NULL,
 };
 
