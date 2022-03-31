@@ -299,13 +299,9 @@ static int __smc_release(struct smc_sock *smc)
 	sk->sk_prot->unhash(sk);
 
 	if (sk->sk_state == SMC_CLOSED) {
-		if (smc->clcsock) {
-			release_sock(sk);
-			smc_clcsock_release(smc);
-			lock_sock(sk);
-		}
-		if (!smc->use_fallback)
-			smc_conn_free(&smc->conn);
+		sock_hold(sk);
+		if (!queue_work(smc_hs_wq, &smc->free_work))
+			sock_put(sk);
 	}
 
 	return rc;
@@ -367,6 +363,30 @@ static void smc_destruct(struct sock *sk)
 	sk_refcnt_debug_dec(sk);
 }
 
+static void smc_free_work(struct work_struct *work)
+{
+	struct sock *sk;
+	struct smc_sock *smc = container_of(work, struct smc_sock,
+						    free_work);
+
+	sk = &smc->sk;
+
+	lock_sock(sk);
+	if (sk->sk_state == SMC_CLOSED) {
+		if (smc->clcsock) {
+			release_sock(sk);
+			smc_clcsock_release(smc);
+			lock_sock(sk);
+		}
+
+		if (!smc->use_fallback)
+			smc_conn_free(&smc->conn);
+	}
+	release_sock(sk);
+
+	sock_put(sk); /* before queue */
+}
+
 static struct sock *smc_sock_alloc(struct net *net, struct socket *sock,
 				   int protocol)
 {
@@ -387,6 +407,7 @@ static struct sock *smc_sock_alloc(struct net *net, struct socket *sock,
 	WRITE_ONCE(sk->sk_rcvbuf, READ_ONCE(net->smc.sysctl_rmem));
 	smc = smc_sk(sk);
 	INIT_WORK(&smc->tcp_listen_work, smc_tcp_listen_work);
+	INIT_WORK(&smc->free_work, smc_free_work);
 	INIT_WORK(&smc->connect_work, smc_connect_work);
 	INIT_DELAYED_WORK(&smc->conn.tx_work, smc_tx_work);
 	INIT_LIST_HEAD(&smc->accept_q);
