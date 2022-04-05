@@ -81,6 +81,7 @@ struct thread_info {
 #define TIF_SYSCALL_AUDIT	7	/* syscall auditing */
 #define TIF_SECCOMP		8	/* syscall secure computing */
 #define TIF_UPROBE		10      /* uprobe breakpoint or singlestep */
+#define TIF_32BIT		11      /* compat-mode 32bit process */
 
 #define _TIF_SYSCALL_TRACE	(1 << TIF_SYSCALL_TRACE)
 #define _TIF_NOTIFY_RESUME	(1 << TIF_NOTIFY_RESUME)
