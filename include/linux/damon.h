@@ -271,6 +271,7 @@ struct damon_ctx {
 	struct timespec64 last_primitive_update;
 
 /* public: */
+	int need_flush;
 	struct task_struct *kdamond;
 	bool kdamond_stop;
 	struct mutex kdamond_lock;
