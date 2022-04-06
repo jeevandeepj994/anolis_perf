@@ -15,6 +15,8 @@
 #include <asm/vmx.h>
 #include <asm/insn.h>
 #include <asm/insn-eval.h>
+#include <linux/pci.h>
+#include <linux/nmi.h>
 
 #define CREATE_TRACE_POINTS
 #include <asm/trace/tdx.h>
@@ -811,6 +813,19 @@ void __init tdx_early_init(void)
 	tdx_guest_detected = true;
 
 	setup_force_cpu_cap(X86_FEATURE_TDX_GUEST);
+	setup_clear_cpu_cap(X86_FEATURE_MCE);
+	setup_clear_cpu_cap(X86_FEATURE_MTRR);
+	setup_clear_cpu_cap(X86_FEATURE_APERFMPERF);
+	setup_clear_cpu_cap(X86_FEATURE_TME);
+	setup_clear_cpu_cap(X86_FEATURE_CQM_LLC);
+
+	/*
+	 * The only secure (mononotonous) timer inside a TD guest
+	 * is the TSC. The TDX module does various checks on the TSC.
+	 * There are no other reliable fall back options. Also checking
+	 * against jiffies is very unreliable. So force the TSC reliable.
+	 */
+	setup_force_cpu_cap(X86_FEATURE_TSC_RELIABLE);
 
 	tdx_get_info();
 
@@ -828,11 +843,28 @@ void __init tdx_early_init(void)
 
 	legacy_pic = &null_legacy_pic;
 
+	/*
+	 * Disable NMI watchdog because of the risk of false positives
+	 * and also can increase overhead in the TDX module.
+	 * This is already done for KVM, but covers other hypervisors
+	 * here.
+	 */
+	hardlockup_detector_disable();
+
+	/*
+	 * Make sure there is a panic if something goes wrong,
+	 * just in case it's some kind of host attack.
+	 */
+	panic_on_oops = 1;
+
 	alloc_intr_gate(TDX_GUEST_EVENT_NOTIFY_VECTOR,
 			asm_sysvec_tdx_event_notify);
 
 	if (tdx_hcall_set_notify_intr(TDX_GUEST_EVENT_NOTIFY_VECTOR))
 		pr_warn("Setting event notification interrupt failed\n");
+
+	pci_disable_early();
+	pci_disable_mmconf();
 
 	pr_info("Guest detected\n");
 }
