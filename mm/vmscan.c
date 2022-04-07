@@ -119,6 +119,9 @@ struct scan_control {
 	/* The file pages on the current node are dangerously low */
 	unsigned int file_is_tiny:1;
 
+	/* The file pages on the current node are not allowed to reclaim */
+	unsigned int file_is_reserved:1;
+
 	/* Allocation order */
 	s8 order;
 
@@ -185,6 +188,8 @@ int vm_swappiness = 60;
  * zones.
  */
 unsigned long vm_total_pages;
+/* The min page cache should be reserved in the system */
+unsigned long sysctl_min_cache_kbytes;
 
 static LIST_HEAD(shrinker_list);
 static DECLARE_RWSEM(shrinker_rwsem);
@@ -2325,7 +2330,7 @@ static void get_scan_count(struct lruvec *lruvec, struct scan_control *sc,
 	/*
 	 * If the system is almost out of file pages, force-scan anon.
 	 */
-	if (sc->file_is_tiny) {
+	if (sc->file_is_tiny && (vm_swappiness != -1)) {
 		scan_balance = SCAN_ANON;
 		goto out;
 	}
@@ -2402,6 +2407,9 @@ out:
 		case SCAN_ANON:
 			/* Scan one type exclusively */
 			if ((scan_balance == SCAN_FILE) != file) {
+				size = 0;
+				scan = 0;
+			} else if (sc->file_is_reserved && file) {
 				size = 0;
 				scan = 0;
 			}
@@ -2755,9 +2763,11 @@ again:
 	 * thrashing file LRU becomes infinitely more attractive than
 	 * anon pages.  Try to detect this based on file LRU size.
 	 */
-	if (!cgroup_reclaim(sc) && vm_swappiness != -1) {
+	if (!cgroup_reclaim(sc)) {
 		unsigned long total_high_wmark = 0;
+		unsigned long total_min_wmark = 0;
 		unsigned long free, anon;
+		unsigned long min_cache_kbytes;
 		int z;
 
 		free = sum_zone_node_page_state(pgdat->node_id, NR_FREE_PAGES);
@@ -2770,6 +2780,7 @@ again:
 				continue;
 
 			total_high_wmark += high_wmark_pages(zone);
+			total_min_wmark += min_wmark_pages(zone);
 		}
 
 		/*
@@ -2783,6 +2794,17 @@ again:
 			file + free <= total_high_wmark &&
 			!(sc->may_deactivate & DEACTIVATE_ANON) &&
 			anon >> sc->priority;
+
+		/*
+		 * Reserve a specified amount of page caches in case of thrashing.
+		 * OOM killer is preferred when the system page cache is below the
+		 * given watermark.
+		 */
+		min_cache_kbytes = READ_ONCE(sysctl_min_cache_kbytes);
+		if (min_cache_kbytes) {
+			sc->file_is_reserved = (sc->may_deactivate & DEACTIVATE_FILE) &&
+					file <= min(total_min_wmark, pgdat->min_cache_pages);
+		}
 	}
 
 	shrink_node_memcgs(pgdat, sc);
