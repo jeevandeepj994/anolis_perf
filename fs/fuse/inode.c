@@ -1413,10 +1413,38 @@ err:
 	return err;
 }
 
+static struct dentry *fuse_try_mount(struct file_system_type *fs_type,
+				     int flags, void *raw_data)
+{
+	struct fuse_mount_data d;
+	struct dentry *root;
+	char *opts;
+
+	opts = kstrdup(raw_data, GFP_KERNEL);
+	if (!opts)
+		return ERR_PTR(-ENOMEM);
+
+	root = ERR_PTR(-EINVAL);
+	if (!parse_fuse_opt(opts, &d, 0, current_user_ns(), 0))
+		goto out;
+
+	/* placeholder for following initialization for root */
+	root = NULL;
+out:
+	kfree(opts);
+	return root;
+}
+
 static struct dentry *fuse_mount(struct file_system_type *fs_type,
 		       int flags, const char *dev_name,
 		       void *raw_data)
 {
+	struct dentry *dentry;
+
+	dentry = fuse_try_mount(fs_type, flags, raw_data);
+	if (dentry)
+		return dentry;
+
 	return mount_nodev(fs_type, flags, raw_data, fuse_fill_super);
 }
 
