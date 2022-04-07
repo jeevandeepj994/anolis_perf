@@ -1456,6 +1456,8 @@ unsigned long default_huge_page_size(void)
 
 static void set_test_type(const char *type)
 {
+	int features = UFFD_FEATURE_PAGEFAULT_FLAG_WP;
+
 	if (!strcmp(type, "anon")) {
 		test_type = TEST_ANON;
 		uffd_test_ops = &anon_uffd_test_ops;
@@ -1490,6 +1492,19 @@ static void set_test_type(const char *type)
 		fprintf(stderr, "Impossible to run this test\n");
 		exit(2);
 	}
+
+	/*
+	 * Whether we can test certain features depends not just on test type,
+	 * but also on whether or not this particular kernel supports the
+	 * feature.
+	 */
+	userfaultfd_open(&features);
+
+	test_uffdio_wp = test_uffdio_wp &&
+		(features & UFFD_FEATURE_PAGEFAULT_FLAG_WP);
+
+	close(uffd);
+	uffd = -1;
 }
 
 static void sigalrm(int sig)
