@@ -1551,10 +1551,12 @@ static int fuse_fill_super(struct super_block *sb, struct fs_context *fsc)
 
 	/*
 	 * Require mount to happen from the same user namespace which
-	 * opened /dev/fuse to prevent potential attacks.
+	 * opened /dev/fuse to prevent potential attacks.  While for
+	 * virtual fuse, the mount is always bound to init_user_ns.
 	 */
-	if ((file->f_op != &fuse_dev_operations) ||
-	    (file->f_cred->user_ns != sb->s_user_ns))
+	if (!is_virtfuse_device(file) &&
+	    ((file->f_op != &fuse_dev_operations) ||
+	     (file->f_cred->user_ns != sb->s_user_ns)))
 		goto err_fput;
 	ctx->fudptr = &file->private_data;
 
@@ -1623,6 +1625,7 @@ static int fuse_get_tree(struct fs_context *fc)
 	struct fuse_dev *fud;
 	struct super_block *sb;
 	struct file *file;
+	bool is_virtfuse;
 	int err;
 
 	if (!ctx->fd_present || !ctx->rootmode_present ||
@@ -1647,14 +1650,18 @@ static int fuse_get_tree(struct fs_context *fc)
 	 * Allow creating a fuse mount with an already initialized fuse
 	 * connection
 	 */
+	is_virtfuse = is_virtfuse_device(file);
 	fud = READ_ONCE(file->private_data);
-	if (file->f_op == &fuse_dev_operations && fud) {
+	if ((file->f_op == &fuse_dev_operations || is_virtfuse) && fud) {
 		fc->sget_key = fud->fc;
 		sb = sget_fc(fc, fuse_test_super, fuse_set_no_super);
 		err = PTR_ERR_OR_ZERO(sb);
 		if (!IS_ERR(sb))
 			fc->root = dget(sb->s_root);
 	} else {
+		/* bind sb to init_user_ns for virtfuse */
+		if (is_virtfuse)
+			fc->global = true;
 		err = get_tree_nodev(fc, fuse_fill_super);
 	}
 
