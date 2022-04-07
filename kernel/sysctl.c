@@ -3256,6 +3256,14 @@ static struct ctl_table vm_table[] = {
 		.extra1		= SYSCTL_ZERO,
 	},
 #endif
+	{
+		.procname	= "min_cache_kbytes",
+		.data		= &sysctl_min_cache_kbytes,
+		.maxlen		= sizeof(sysctl_min_cache_kbytes),
+		.mode		= 0644,
+		.proc_handler	= sysctl_min_cache_kbytes_sysctl_handler,
+		.extra1		= &zero_ul,
+	},
 #ifdef CONFIG_NUMA
 	{
 		.procname	= "zone_reclaim_mode",
