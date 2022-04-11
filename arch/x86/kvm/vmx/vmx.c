@@ -7026,9 +7026,10 @@ static void atomic_switch_perf_msrs(struct vcpu_vmx *vmx)
 {
 	int i, nr_msrs;
 	struct perf_guest_switch_msr *msrs;
+	struct kvm_pmu *pmu = vcpu_to_pmu(&vmx->vcpu);
 
-	msrs = perf_guest_get_msrs(&nr_msrs);
-
+	/* Note, nr_msrs may be garbage if perf_guest_get_msrs() returns NULL. */
+	msrs = perf_guest_get_msrs(&nr_msrs, (void *)pmu);
 	if (!msrs)
 		return;
 
