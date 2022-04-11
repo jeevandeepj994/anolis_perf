@@ -340,6 +340,7 @@ static void intel_pmu_refresh(struct kvm_vcpu *vcpu)
 	if (!pmu->version)
 		return;
 
+	vcpu->arch.ia32_misc_enable_msr |= MSR_IA32_MISC_ENABLE_EMON;
 	perf_get_x86_pmu_capability(&x86_pmu);
 	if (guest_cpuid_has(vcpu, X86_FEATURE_PDCM))
 		vcpu->arch.perf_capabilities = vmx_get_perf_capabilities();
