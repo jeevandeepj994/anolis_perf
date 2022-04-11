@@ -4045,26 +4045,26 @@ static int intel_pmu_hw_config(struct perf_event *event)
 }
 
 #ifdef CONFIG_RETPOLINE
-static struct perf_guest_switch_msr *core_guest_get_msrs(int *nr);
-static struct perf_guest_switch_msr *intel_guest_get_msrs(int *nr);
+static struct perf_guest_switch_msr *core_guest_get_msrs(int *nr, void *data);
+static struct perf_guest_switch_msr *intel_guest_get_msrs(int *nr, void *data);
 #endif
 
-struct perf_guest_switch_msr *perf_guest_get_msrs(int *nr)
+struct perf_guest_switch_msr *perf_guest_get_msrs(int *nr, void *data)
 {
 #ifdef CONFIG_RETPOLINE
 	if (x86_pmu.guest_get_msrs == intel_guest_get_msrs)
-		return intel_guest_get_msrs(nr);
+		return intel_guest_get_msrs(nr, data);
 	else if (x86_pmu.guest_get_msrs == core_guest_get_msrs)
-		return core_guest_get_msrs(nr);
+		return core_guest_get_msrs(nr, data);
 #endif
 	if (x86_pmu.guest_get_msrs)
-		return x86_pmu.guest_get_msrs(nr);
+		return x86_pmu.guest_get_msrs(nr, data);
 	*nr = 0;
 	return NULL;
 }
 EXPORT_SYMBOL_GPL(perf_guest_get_msrs);
 
-static struct perf_guest_switch_msr *intel_guest_get_msrs(int *nr)
+static struct perf_guest_switch_msr *intel_guest_get_msrs(int *nr, void *data)
 {
 	struct cpu_hw_events *cpuc = this_cpu_ptr(&cpu_hw_events);
 	struct perf_guest_switch_msr *arr = cpuc->guest_switch_msrs;
@@ -4097,7 +4097,7 @@ static struct perf_guest_switch_msr *intel_guest_get_msrs(int *nr)
 	return arr;
 }
 
-static struct perf_guest_switch_msr *core_guest_get_msrs(int *nr)
+static struct perf_guest_switch_msr *core_guest_get_msrs(int *nr, void *data)
 {
 	struct cpu_hw_events *cpuc = this_cpu_ptr(&cpu_hw_events);
 	struct perf_guest_switch_msr *arr = cpuc->guest_switch_msrs;
