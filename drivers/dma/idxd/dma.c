@@ -399,6 +399,7 @@ int idxd_register_dma_device(struct idxd_device *idxd)
 	idxd_dma->dma_parms.max_segment_size = HPAGE_PMD_SIZE;
 	dma->dev->dma_parms = &idxd_dma->dma_parms;
 
+	dma_cap_set(DMA_INTERRUPT, dma->cap_mask);
 	dma_cap_set(DMA_PRIVATE, dma->cap_mask);
 	dma->device_release = idxd_dma_release;
 
