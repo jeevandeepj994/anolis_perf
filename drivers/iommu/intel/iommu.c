@@ -349,6 +349,7 @@ int intel_iommu_sm;
 
 /* == 0 --> use FL for IOVA (default), != 0 --> use SL for IOVA */
 static int default_iova;
+#define slad_supported(iommu)	(ecap_slts(iommu->ecap) && ecap_slads(iommu->ecap))
 
 int intel_iommu_enabled = 0;
 EXPORT_SYMBOL_GPL(intel_iommu_enabled);
@@ -5763,6 +5764,24 @@ static inline bool scalable_mode_support(void)
 	rcu_read_lock();
 	for_each_active_iommu(iommu, drhd) {
 		if (!sm_supported(iommu)) {
+			ret = false;
+			break;
+		}
+	}
+	rcu_read_unlock();
+
+	return ret;
+}
+
+static inline bool slad_support(void)
+{
+	struct dmar_drhd_unit *drhd;
+	struct intel_iommu *iommu;
+	bool ret = true;
+
+	rcu_read_lock();
+	for_each_active_iommu(iommu, drhd) {
+		if (!sm_supported(iommu) || !slad_supported(iommu)) {
 			ret = false;
 			break;
 		}
