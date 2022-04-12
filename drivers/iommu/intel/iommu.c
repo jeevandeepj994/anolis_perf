@@ -347,6 +347,9 @@ int intel_iommu_sm = 1;
 int intel_iommu_sm;
 #endif /* CONFIG_INTEL_IOMMU_SCALABLE_MODE_DEFAULT_ON */
 
+/* == 0 --> use FL for IOVA (default), != 0 --> use SL for IOVA */
+static int default_iova;
+
 int intel_iommu_enabled = 0;
 EXPORT_SYMBOL_GPL(intel_iommu_enabled);
 
@@ -463,6 +466,9 @@ static int __init intel_iommu_setup(char *str)
 		} else if (!strncmp(str, "nobounce", 8)) {
 			pr_info("Intel-IOMMU: No bounce buffer. This could expose security risks of DMA attacks\n");
 			intel_no_bounce = 1;
+		} else if (!strncmp(str, "iova_sl", 7)) {
+			pr_info("Intel-IOMMU: default SL IOVA enabled\n");
+			default_iova = 1;
 		}
 
 		str += strcspn(str, ",");
@@ -1875,6 +1881,10 @@ static bool first_level_by_default(void)
 	struct dmar_drhd_unit *drhd;
 	struct intel_iommu *iommu;
 	static int first_level_support = -1;
+
+	/* Change IOVA mapping to SL instead of FL */
+	if (default_iova)
+		return false;
 
 	if (likely(first_level_support != -1))
 		return first_level_support;
