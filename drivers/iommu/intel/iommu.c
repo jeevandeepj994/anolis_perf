@@ -6155,6 +6155,16 @@ intel_iommu_aux_get_pasid(struct iommu_domain *domain, struct device *dev)
 			dmar_domain->default_pasid : -EINVAL;
 }
 
+int domain_get_pasid(struct iommu_domain *domain, struct device *dev)
+{
+	struct dmar_domain *dmar_domain = to_dmar_domain(domain);
+
+	if (is_aux_domain(dev, domain))
+		return intel_iommu_aux_get_pasid(domain, dev);
+
+	return dmar_domain->default_pasid;
+}
+
 static bool intel_iommu_is_attach_deferred(struct iommu_domain *domain,
 					   struct device *dev)
 {
@@ -6209,6 +6219,60 @@ static bool risky_device(struct pci_dev *pdev)
 	return false;
 }
 
+static int __setup_slade(struct iommu_domain *domain,
+			 struct device_domain_info *info, bool enable)
+{
+	u32 pasid;
+	int ret = 0;
+
+	pasid = domain_get_pasid(domain, info->dev);
+
+	spin_lock(&info->iommu->lock);
+	ret = intel_pasid_setup_slade(info->dev, pasid, enable);
+	spin_unlock(&info->iommu->lock);
+
+	return ret;
+}
+
+static int intel_iommu_set_hwdbm(struct iommu_domain *domain, bool enable,
+				 unsigned long iova, size_t size)
+{
+	struct dmar_domain *dmar_domain = to_dmar_domain(domain);
+	struct device_domain_info *info;
+	struct subdev_domain_info *sinfo;
+	unsigned long flags;
+	int ret = 0;
+
+	if (domain_use_first_level(dmar_domain)) {
+		/* FL supports A/D bits by default. */
+		return 0;
+	}
+
+	if (!slad_support()) {
+		pr_err("Don't support SLAD\n");
+		return -EINVAL;
+	}
+
+	spin_lock_irqsave(&device_domain_lock, flags);
+	list_for_each_entry(info, &dmar_domain->devices, link) {
+		ret = __setup_slade(domain, info, enable);
+		if (ret)
+			goto out;
+	}
+
+	list_for_each_entry(sinfo, &dmar_domain->subdevices, link_domain) {
+		info = get_domain_info(sinfo->pdev);
+		ret = __setup_slade(domain, info, enable);
+		if (ret)
+			break;
+	}
+
+out:
+	spin_unlock_irqrestore(&device_domain_lock, flags);
+
+	return ret;
+}
+
 const struct iommu_ops intel_iommu_ops = {
 	.capable		= intel_iommu_capable,
 	.domain_alloc		= intel_iommu_domain_alloc,
@@ -6245,6 +6309,7 @@ const struct iommu_ops intel_iommu_ops = {
 	.sva_get_pasid		= intel_svm_get_pasid,
 	.page_response		= intel_svm_page_response,
 #endif
+	.set_hwdbm		= intel_iommu_set_hwdbm,
 };
 
 static void quirk_iommu_igfx(struct pci_dev *dev)
