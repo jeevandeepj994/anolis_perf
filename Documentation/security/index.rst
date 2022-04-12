@@ -16,3 +16,4 @@ Security Documentation
    siphash
    tpm/index
    digsig
+   secrets/index
