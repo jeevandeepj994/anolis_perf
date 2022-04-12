@@ -6239,7 +6239,7 @@ static int __setup_slade(struct iommu_domain *domain,
 	pasid = domain_get_pasid(domain, info->dev);
 
 	spin_lock(&info->iommu->lock);
-	ret = intel_pasid_setup_slade(info->dev, pasid, enable);
+	ret = intel_pasid_setup_slade(info->dev, to_dmar_domain(domain), pasid, enable);
 	spin_unlock(&info->iommu->lock);
 
 	return ret;

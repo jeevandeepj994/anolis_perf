@@ -889,13 +889,14 @@ int intel_pasid_setup_nested(struct intel_iommu *iommu, struct device *dev,
  * field in PASID entry for scalable mode pasid table.
  *
  * @dev:     Device to be set up for translation
+ * @domain:  Domain info for setting up slad enabling
  * @pasid:   PASID to be programmed in the device PASID table
  * @value:   Value set to the entry
  */
-int intel_pasid_setup_slade(struct device *dev, u32 pasid, bool value)
+int intel_pasid_setup_slade(struct device *dev, struct dmar_domain *domain,
+			    u32 pasid, bool value)
 {
 	struct device_domain_info *info = get_domain_info(dev);
-	struct dmar_domain *domain;
 	struct intel_iommu *iommu;
 	struct pasid_entry *pte;
 	u16 did;
@@ -903,7 +904,6 @@ int intel_pasid_setup_slade(struct device *dev, u32 pasid, bool value)
 	if (!info || !info->iommu)
 		return -ENODEV;
 
-	domain = info->domain;
 	iommu = info->iommu;
 	did = domain->iommu_did[iommu->seq_id];
 
