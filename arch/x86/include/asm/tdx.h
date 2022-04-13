@@ -48,6 +48,8 @@ bool tdx_allowed_port(short int port);
 
 int tdx_mcall_tdreport(u64 data, u64 reportdata);
 
+int tdx_mcall_rtmr_extend(u64 data, u64 rmtr);
+
 int tdx_hcall_get_quote(u64 data);
 
 extern void (*tdx_event_notify_handler)(void);
@@ -55,6 +57,30 @@ extern void (*tdx_event_notify_handler)(void);
 bool tdx_guest_dev_authorized(struct device *dev);
 
 bool tdx_filter_enabled(void);
+
+/* Update the trace point symbolic printing too */
+enum tdx_fuzz_loc {
+	TDX_FUZZ_MSR_READ,
+	TDX_FUZZ_MMIO_READ,
+	TDX_FUZZ_PORT_IN,
+	TDX_FUZZ_CPUID1,
+	TDX_FUZZ_CPUID2,
+	TDX_FUZZ_CPUID3,
+	TDX_FUZZ_CPUID4,
+	TDX_FUZZ_MSR_READ_ERR,
+	TDX_FUZZ_MSR_WRITE_ERR,
+	TDX_FUZZ_MAP_ERR,
+	TDX_FUZZ_PORT_IN_ERR,
+	TDX_FUZZ_MAX
+};
+
+#ifdef CONFIG_TDX_FUZZ
+u64 tdx_fuzz(u64 var, enum tdx_fuzz_loc loc);
+bool tdx_fuzz_err(enum tdx_fuzz_loc loc);
+#else
+static inline u64 tdx_fuzz(u64 var, enum tdx_fuzz_loc loc) { return var; }
+static inline bool tdx_fuzz_err(enum tdx_fuzz_loc loc) { return false; }
+#endif
 
 #else
 

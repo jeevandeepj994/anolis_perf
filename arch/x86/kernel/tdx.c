@@ -6,7 +6,9 @@
 
 #include <linux/cpufeature.h>
 #include <linux/swiotlb.h>
+#include <linux/io.h>
 #include <asm/tdx.h>
+#include <asm/cmdline.h>
 #include <asm/i8259.h>
 #include <asm/apic.h>
 #include <asm/idtentry.h>
@@ -17,12 +19,14 @@
 #include <asm/insn-eval.h>
 #include <linux/pci.h>
 #include <linux/nmi.h>
+#include <linux/random.h>
 
 #define CREATE_TRACE_POINTS
 #include <asm/trace/tdx.h>
 
 /* TDX module Call Leaf IDs */
 #define TDX_GET_INFO			1
+#define TDX_RMTR_EXTEND			2
 #define TDX_GET_VEINFO			3
 #define TDX_GET_REPORT			4
 #define TDX_ACCEPT_PAGE			6
@@ -143,11 +147,18 @@ EXPORT_SYMBOL_GPL(tdx_kvm_hypercall);
  */
 phys_addr_t tdx_shared_mask(void)
 {
+#ifdef CONFIG_INTEL_TDX_KVM_SDV
+	return 0;
+#else
 	return BIT_ULL(td_info.gpa_width - 1);
+#endif
 }
 
 bool tdx_debug_enabled(void)
 {
+#ifdef CONFIG_INTEL_TDX_KVM_SDV
+	return true;
+#endif
 	return td_info.attributes & BIT(0);
 }
 
@@ -214,6 +225,34 @@ int tdx_mcall_tdreport(u64 data, u64 reportdata)
 	return -EIO;
 }
 EXPORT_SYMBOL_GPL(tdx_mcall_tdreport);
+
+/*
+ * tdx_mcall_rtmr_extend() - Extend a TDX measurement register
+ *
+ * @data	: Physical address of 96B aligned data.
+ * @rtmr	: RTMR number
+ *
+ * return 0 on success or failure error number.
+ */
+int tdx_mcall_rtmr_extend(u64 data, u64 rtmr)
+{
+	u64 ret;
+
+	if (!data || !cc_platform_has(CC_ATTR_GUEST_TDX))
+		return -EINVAL;
+
+	ret = __trace_tdx_module_call(TDX_RMTR_EXTEND, data, rtmr, 0, 0, NULL);
+
+	if (ret == TDCALL_SUCCESS)
+		return 0;
+	else if (TDCALL_RETURN_CODE(ret) == TDCALL_INVALID_OPERAND)
+		return -EINVAL;
+	else if (TDCALL_RETURN_CODE(ret) == TDCALL_OPERAND_BUSY)
+		return -EBUSY;
+
+	return -EIO;
+}
+EXPORT_SYMBOL_GPL(tdx_mcall_rtmr_extend);
 
 /*
  * tdx_hcall_get_quote() - Generate TDQUOTE using TDREPORT_STRUCT.
@@ -303,6 +342,8 @@ static void tdx_get_info(void)
 	if (ret)
 		panic("TDINFO TDCALL failed (Buggy TDX module!)\n");
 
+	/* Not fuzzed because this comes from the trusted TDX module */
+
 	td_info.gpa_width = out.rcx & GENMASK(5, 0);
 	td_info.attributes = out.rdx;
 }
@@ -355,7 +396,7 @@ int tdx_hcall_request_gpa_type(phys_addr_t start, phys_addr_t end, bool enc)
 	 */
 	ret = _trace_tdx_hypercall(TDVMCALL_MAP_GPA, start, end - start,
 				   0, 0, NULL);
-	if (ret)
+	if (ret || tdx_fuzz_err(TDX_FUZZ_MAP_ERR))
 		ret = -EIO;
 
 	if (ret || !enc)
@@ -445,22 +486,50 @@ void __cpuidle tdx_safe_halt(void)
 static bool tdx_read_msr(unsigned int msr, u64 *val)
 {
 	struct tdx_hypercall_output out;
+	u64 ret;
 
 	/*
 	 * Emulate the MSR read via hypercall. More info about ABI
 	 * can be found in TDX Guest-Host-Communication Interface
 	 * (GHCI), sec titled "TDG.VP.VMCALL<Instruction.RDMSR>".
 	 */
-	if (_trace_tdx_hypercall(EXIT_REASON_MSR_READ, msr, 0, 0, 0, &out))
+	ret = _trace_tdx_hypercall(EXIT_REASON_MSR_READ, msr, 0, 0, 0, &out);
+	if (ret || tdx_fuzz_err(TDX_FUZZ_MSR_READ_ERR))
 		return false;
 
-	*val = out.r11;
+	/* Should filter the MSRs to only fuzz host controlled */
+	*val = tdx_fuzz(out.r11, TDX_FUZZ_MSR_READ);
 
 	return true;
 }
 
-static bool tdx_write_msr(unsigned int msr, unsigned int low,
-			       unsigned int high)
+/*
+ * TDX has context switched MSRs and emulated MSRs. The emulated MSRs
+ * normally trigger a #VE, but that is expensive, which can be avoided
+ * by doing a direct TDCALL. Unfortunately, this cannot be done for all
+ * because some MSRs are "context switched" and need WRMSR.
+ *
+ * The list for this is unfortunately quite long. To avoid maintaining
+ * very long switch statements just do a fast path for the few critical
+ * MSRs that need TDCALL, currently only TSC_DEADLINE.
+ *
+ * More can be added as needed.
+ *
+ * The others will be handled by the #VE handler as needed.
+ * See 18.1 "MSR virtualization" in the TDX Module EAS
+ */
+static bool tdx_fast_tdcall_path_msr(unsigned int msr)
+{
+	switch (msr) {
+	case MSR_IA32_TSC_DEADLINE:
+		return true;
+	default:
+		return false;
+	}
+}
+
+static bool __tdx_write_msr(unsigned int msr, unsigned int low,
+			    unsigned int high)
 {
 	u64 ret;
 
@@ -472,7 +541,15 @@ static bool tdx_write_msr(unsigned int msr, unsigned int low,
 	ret = _trace_tdx_hypercall(EXIT_REASON_MSR_WRITE, msr,
 				   (u64)high << 32 | low, 0, 0, NULL);
 
-	return ret ? false : true;
+	return ret || tdx_fuzz_err(TDX_FUZZ_MSR_WRITE_ERR) ? false : true;
+}
+
+static void notrace tdx_write_msr(unsigned int msr, u32 low, u32 high)
+{
+	if (tdx_fast_tdcall_path_msr(msr))
+		__tdx_write_msr(msr, low, high);
+	else
+		native_write_msr(msr, low, high);
 }
 
 static bool tdx_handle_cpuid(struct pt_regs *regs)
@@ -493,10 +570,10 @@ static bool tdx_handle_cpuid(struct pt_regs *regs)
 	 * EAX, EBX, ECX, EDX registers after the CPUID instruction execution.
 	 * So copy the register contents back to pt_regs.
 	 */
-	regs->ax = out.r12;
-	regs->bx = out.r13;
-	regs->cx = out.r14;
-	regs->dx = out.r15;
+	regs->ax = tdx_fuzz(out.r12, TDX_FUZZ_CPUID1);
+	regs->bx = tdx_fuzz(out.r13, TDX_FUZZ_CPUID2);
+	regs->cx = tdx_fuzz(out.r14, TDX_FUZZ_CPUID3);
+	regs->dx = tdx_fuzz(out.r15, TDX_FUZZ_CPUID4);
 
 	return true;
 }
@@ -512,7 +589,7 @@ static bool tdx_mmio(int size, bool write, unsigned long addr,
 	if (err)
 		return true;
 
-	*val = out.r11;
+	*val = tdx_fuzz(out.r11, TDX_FUZZ_MMIO_READ);
 	return false;
 }
 
@@ -607,6 +684,97 @@ static int tdx_handle_mmio(struct pt_regs *regs, struct ve_info *ve)
 	return insn.length;
 }
 
+static unsigned long tdx_virt_mmio(int size, bool write, unsigned long vaddr,
+				   unsigned long *val)
+{
+	pte_t *pte;
+	int level;
+
+	pte = lookup_address(vaddr, &level);
+	if (!pte)
+		return -EIO;
+
+	return tdx_mmio(size, write,
+			(pte_pfn(*pte) << PAGE_SHIFT) +
+			(vaddr & ~page_level_mask(level)),
+			val);
+}
+
+static unsigned char tdx_mmio_readb(void __iomem *addr)
+{
+	unsigned long val;
+
+	if (tdx_virt_mmio(1, false, (unsigned long)addr, &val))
+		return 0xff;
+	return val;
+}
+
+static unsigned short tdx_mmio_readw(void __iomem *addr)
+{
+	unsigned long val;
+
+	if (tdx_virt_mmio(2, false, (unsigned long)addr, &val))
+		return 0xffff;
+	return val;
+}
+
+static unsigned int tdx_mmio_readl(void __iomem *addr)
+{
+	unsigned long val;
+
+	if (tdx_virt_mmio(4, false, (unsigned long)addr, &val))
+		return 0xffffffff;
+	return val;
+}
+
+static unsigned long tdx_mmio_readq(void __iomem *addr)
+{
+	unsigned long val;
+
+	if (tdx_virt_mmio(8, false, (unsigned long)addr, &val))
+		return 0xffffffffffffffff;
+	return val;
+}
+
+static void tdx_mmio_writeb(unsigned char v, void __iomem *addr)
+{
+	unsigned long val = v;
+
+	tdx_virt_mmio(1, true, (unsigned long)addr, &val);
+}
+
+static void tdx_mmio_writew(unsigned short v, void __iomem *addr)
+{
+	unsigned long val = v;
+
+	tdx_virt_mmio(2, true, (unsigned long)addr, &val);
+}
+
+static void tdx_mmio_writel(unsigned int v, void __iomem *addr)
+{
+	unsigned long val = v;
+
+	tdx_virt_mmio(4, true, (unsigned long)addr, &val);
+}
+
+static void tdx_mmio_writeq(unsigned long v, void __iomem *addr)
+{
+	unsigned long val = v;
+
+	tdx_virt_mmio(8, true, (unsigned long)addr, &val);
+}
+
+static const struct iomap_mmio tdx_iomap_mmio = {
+	.ireadb  = tdx_mmio_readb,
+	.ireadw  = tdx_mmio_readw,
+	.ireadl  = tdx_mmio_readl,
+	.ireadq  = tdx_mmio_readq,
+	.iwriteb = tdx_mmio_writeb,
+	.iwritew = tdx_mmio_writew,
+	.iwritel = tdx_mmio_writel,
+	.iwriteq = tdx_mmio_writeq,
+};
+
 /*
  * Emulate I/O using hypercall.
  *
@@ -649,7 +817,8 @@ static bool tdx_handle_io(struct pt_regs *regs, u32 exit_qual)
 		return !ret;
 
 	regs->ax &= ~mask;
-	regs->ax |= ret ? UINT_MAX : out.r11 & mask;
+	regs->ax |= tdx_fuzz(ret || tdx_fuzz_err(TDX_FUZZ_PORT_IN_ERR) ?
+			     UINT_MAX : out.r11, TDX_FUZZ_PORT_IN) & mask;
 
 	return !ret;
 }
@@ -691,6 +860,7 @@ bool tdx_get_ve_info(struct ve_info *ve)
 	ve->instr_len   = lower_32_bits(out.r10);
 	ve->instr_info  = upper_32_bits(out.r10);
 
+	/* Not fuzzed because it comes from the trusted TDX module */
 	return true;
 }
 
@@ -741,7 +911,7 @@ static bool tdx_virt_exception_kernel(struct pt_regs *regs, struct ve_info *ve)
 		}
 		break;
 	case EXIT_REASON_MSR_WRITE:
-		ret = tdx_write_msr(regs->cx, regs->ax, regs->dx);
+		ret = __tdx_write_msr(regs->cx, regs->ax, regs->dx);
 		break;
 	case EXIT_REASON_CPUID:
 		ret = tdx_handle_cpuid(regs);
@@ -790,8 +960,20 @@ bool tdx_handle_virt_exception(struct pt_regs *regs, struct ve_info *ve)
 		ret = tdx_virt_exception_kernel(regs, ve);
 
 	/* After successful #VE handling, move the IP */
-	if (ret)
+	if (ret) {
+		if (regs->flags & X86_EFLAGS_TF) {
+			/*
+			 * Single-stepping through an emulated instruction is
+			 * two-fold: handling the #VE and raising a #DB. The
+			 * former is taken care of above; this tells the #VE
+			 * trap handler to do the latter. #DB is raised after
+			 * the instruction has been executed; the IP also needs
+			 * to be advanced in this case.
+			 */
+			ret = false;
+		}
 		regs->ip += ve->instr_len;
+	}
 
 	return ret;
 }
@@ -805,10 +987,14 @@ void __init tdx_early_init(void)
 {
 	u32 eax, sig[3];
 
-	cpuid_count(TDX_CPUID_LEAF_ID, 0, &eax, &sig[0], &sig[2],  &sig[1]);
+	if (cmdline_find_option_bool(boot_command_line, "force_tdx_guest")) {
+		pr_info("Force enabling TDX Guest feature\n");
+	} else {
+		cpuid_count(TDX_CPUID_LEAF_ID, 0, &eax, &sig[0], &sig[2],  &sig[1]);
 
-	if (memcmp(TDX_IDENT, sig, 12))
-		return;
+		if (memcmp(TDX_IDENT, sig, 12))
+			return;
+	}
 
 	tdx_guest_detected = true;
 
@@ -841,6 +1027,8 @@ void __init tdx_early_init(void)
 
 	swiotlb_force = SWIOTLB_FORCE;
 
+	pv_ops.cpu.write_msr = tdx_write_msr;
+
 	legacy_pic = &null_legacy_pic;
 
 	/*
@@ -850,6 +1038,16 @@ void __init tdx_early_init(void)
 	 * here.
 	 */
 	hardlockup_detector_disable();
+
+	/*
+	 * In TDX relying on environmental noise like interrupt
+	 * timing alone is dubious, because it can be directly
+	 * controlled by a untrusted hypervisor. Make sure to
+	 * mix in the CPU hardware random number generator too.
+	 */
+	random_enable_trust_cpu();
+
+	iomap_mmio = &tdx_iomap_mmio;
 
 	/*
 	 * Make sure there is a panic if something goes wrong,

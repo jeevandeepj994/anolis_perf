@@ -23,6 +23,7 @@ CFLAGS_REMOVE_head64.o = -pg
 CFLAGS_REMOVE_sev.o = -pg
 CFLAGS_REMOVE_cc_platform.o = -pg
 CFLAGS_REMOVE_tdx.o = -pg
+CFLAGS_REMOVE_tdx-tests.o = -pg
 endif
 
 KASAN_SANITIZE_head$(BITS).o				:= n
@@ -33,6 +34,7 @@ KASAN_SANITIZE_paravirt.o				:= n
 KASAN_SANITIZE_sev.o					:= n
 KASAN_SANITIZE_cc_platform.o				:= n
 KASAN_SANITIZE_tdx.o					:= n
+KASAN_SANITIZE_tdx-fuzz.o				:= n
 
 # With some compiler versions the generated code results in boot hangs, caused
 # by several compilation units. To be safe, disable all instrumentation.
@@ -57,6 +59,7 @@ CFLAGS_tdx.o		+= -fno-stack-protector
 CFLAGS_irq.o := -I $(srctree)/$(src)/../include/asm/trace
 
 obj-y			:= process_$(BITS).o signal.o
+obj-$(CONFIG_INTEL_TDX_GUEST)			+= tdx-tests.o
 obj-$(CONFIG_COMPAT)	+= signal_compat.o
 obj-y			+= traps.o idt.o irq.o irq_$(BITS).o dumpstack_$(BITS).o
 obj-y			+= time.o ioport.o dumpstack.o nmi.o
@@ -134,6 +137,7 @@ obj-$(CONFIG_X86_PMEM_LEGACY_DEVICE) += pmem.o
 
 obj-$(CONFIG_JAILHOUSE_GUEST)	+= jailhouse.o
 obj-$(CONFIG_INTEL_TDX_GUEST)	+= tdcall.o tdx.o tdx-filter.o
+obj-$(CONFIG_TDX_FUZZ)		+= tdx-fuzz.o
 
 obj-$(CONFIG_EISA)		+= eisa.o
 obj-$(CONFIG_PCSPKR_PLATFORM)	+= pcspeaker.o
