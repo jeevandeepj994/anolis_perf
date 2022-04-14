@@ -18,8 +18,10 @@ struct xsk_map {
 
 int xsk_map_inc(struct xsk_map *map)
 {
-	bpf_map_inc(&map->map);
-	return 0;
+	struct bpf_map *m = &map->map;
+
+	m = bpf_map_inc(m, false);
+	return IS_ERR(m) ? PTR_ERR(m) : 0;
 }
 
 void xsk_map_put(struct xsk_map *map)
