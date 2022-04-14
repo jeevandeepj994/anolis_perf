@@ -538,9 +538,9 @@ static struct bpf_map *trie_alloc(union bpf_attr *attr)
 		goto out_err;
 	}
 
-	trie->map.memory.pages = round_up(cost, PAGE_SIZE) >> PAGE_SHIFT;
+	trie->map.pages = round_up(cost, PAGE_SIZE) >> PAGE_SHIFT;
 
-	ret = bpf_map_precharge_memlock(trie->map.memory.pages);
+	ret = bpf_map_precharge_memlock(trie->map.pages);
 	if (ret)
 		goto out_err;
 
