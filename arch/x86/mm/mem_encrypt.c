@@ -13,6 +13,7 @@
 #include <linux/cc_platform.h>
 #include <linux/mem_encrypt.h>
 #include <linux/virtio_config.h>
+#include <asm/csv_command.h>
 
 /* Override for DMA direct allocation check - ARCH_HAS_FORCE_DMA_UNENCRYPTED */
 bool force_dma_unencrypted(struct device *dev)
@@ -70,6 +71,9 @@ static void print_mem_encrypt_feature_info(void)
 		pr_cont(" SEV-ES");
 
 	pr_cont("\n");
+
+	if (csv_active())
+		pr_info("HYGON Secure Virtualization features active: CSV\n");
 }
 
 /* Architecture __weak replacement functions */
