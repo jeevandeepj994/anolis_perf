@@ -1689,7 +1689,8 @@ static struct bpf_map *sock_map_alloc(union bpf_attr *attr)
 	if (cost >= U32_MAX - PAGE_SIZE)
 		goto free_stab;
 
-	err = bpf_map_charge_init(&stab->map.memory, cost);
+	err = bpf_map_charge_init(&stab->map.memory,
+				  round_up(cost, PAGE_SIZE) >> PAGE_SHIFT);
 	if (err)
 		goto free_stab;
 
@@ -2214,7 +2215,8 @@ static struct bpf_map *sock_hash_alloc(union bpf_attr *attr)
 	if (cost >= U32_MAX - PAGE_SIZE)
 		goto free_htab;
 
-	err = bpf_map_charge_init(&htab->map.memory, cost);
+	err = bpf_map_charge_init(&htab->map.memory,
+				  round_up(cost, PAGE_SIZE) >> PAGE_SHIFT);
 	if (err)
 		goto free_htab;
 
