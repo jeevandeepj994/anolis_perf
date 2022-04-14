@@ -2049,4 +2049,21 @@ struct kvm_stats_desc {
 /* Available with KVM_CAP_XSAVE2 */
 #define KVM_GET_XSAVE2		  _IOR(KVMIO,  0xcf, struct kvm_xsave)
 
+/* CSV command */
+enum csv_cmd_id {
+	KVM_CSV_NR_MIN = 0xc0,
+
+	KVM_CSV_INIT = KVM_CSV_NR_MIN,
+	KVM_CSV_LAUNCH_ENCRYPT_DATA,
+	KVM_CSV_LAUNCH_ENCRYPT_VMCB,
+
+	KVM_CSV_NR_MAX,
+};
+
+struct kvm_csv_launch_encrypt_data {
+	__u64 gpa;
+	__u64 uaddr;
+	__u32 len;
+};
+
 #endif /* __LINUX_KVM_H */
