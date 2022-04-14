@@ -104,9 +104,10 @@ static struct bpf_map *xsk_map_alloc(union bpf_attr *attr)
 	if (cost >= U32_MAX - PAGE_SIZE)
 		goto free_m;
 
+	m->map.memory.pages = round_up(cost, PAGE_SIZE) >> PAGE_SHIFT;
+
 	/* Notice returns -EPERM on if map size is larger than memlock limit */
-	err = bpf_map_charge_init(&m->map.memory,
-				  round_up(cost, PAGE_SIZE) >> PAGE_SHIFT);
+	err = bpf_map_precharge_memlock(m->map.memory.pages);
 	if (err)
 		goto free_m;
 
@@ -114,7 +115,7 @@ static struct bpf_map *xsk_map_alloc(union bpf_attr *attr)
 
 	m->flush_list = alloc_percpu(struct list_head);
 	if (!m->flush_list)
-		goto free_charge;
+		goto free_m;
 
 	for_each_possible_cpu(cpu)
 		INIT_LIST_HEAD(per_cpu_ptr(m->flush_list, cpu));
@@ -128,8 +129,6 @@ static struct bpf_map *xsk_map_alloc(union bpf_attr *attr)
 
 free_percpu:
 	free_percpu(m->flush_list);
-free_charge:
-	bpf_map_charge_finish(&m->map.memory);
 free_m:
 	kfree(m);
 	return ERR_PTR(err);

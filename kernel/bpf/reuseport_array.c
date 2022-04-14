@@ -151,7 +151,6 @@ static struct bpf_map *reuseport_array_alloc(union bpf_attr *attr)
 {
 	int err, numa_node = bpf_map_attr_numa_node(attr);
 	struct reuseport_array *array;
-	struct bpf_map_memory mem;
 	u64 cost, array_size;
 
 	if (!capable(CAP_SYS_ADMIN))
@@ -166,20 +165,18 @@ static struct bpf_map *reuseport_array_alloc(union bpf_attr *attr)
 		return ERR_PTR(-ENOMEM);
 	cost = round_up(cost, PAGE_SIZE) >> PAGE_SHIFT;
 
-	err = bpf_map_charge_init(&mem, cost);
+	err = bpf_map_precharge_memlock(cost);
 	if (err)
 		return ERR_PTR(err);
 
 	/* allocate all map elements and zero-initialize them */
 	array = bpf_map_area_alloc(array_size, numa_node);
-	if (!array) {
-		bpf_map_charge_finish(&mem);
+	if (!array)
 		return ERR_PTR(-ENOMEM);
-	}
 
 	/* copy mandatory map attributes */
 	bpf_map_init_from_attr(&array->map, attr);
-	bpf_map_charge_move(&array->map.memory, &mem);
+	array->map.memory.pages = cost;
 
 	return &array->map;
 }
