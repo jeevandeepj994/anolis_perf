@@ -38,7 +38,6 @@ enum bpf_reg_liveness {
 	REG_LIVE_NONE = 0, /* reg hasn't been read or written this branch */
 	REG_LIVE_READ, /* reg was read, so we're sensitive to initial value */
 	REG_LIVE_WRITTEN, /* reg was written first, screening off later reads */
-	REG_LIVE_DONE = 4, /* liveness won't be updating this register anymore */
 };
 
 struct bpf_reg_state {
@@ -53,8 +52,6 @@ struct bpf_reg_state {
 		 */
 		struct bpf_map *map_ptr;
 
-		u32 mem_size; /* for PTR_TO_MEM | PTR_TO_MEM_OR_NULL */
-
 		/* Max size from any of the above. */
 		unsigned long raw;
 	};
@@ -64,10 +61,6 @@ struct bpf_reg_state {
 	 * offset, so they can share range knowledge.
 	 * For PTR_TO_MAP_VALUE_OR_NULL this is used to share which map value we
 	 * came from, when one is tested for != NULL.
-	 * For PTR_TO_MEM_OR_NULL this is used to identify memory allocation
-	 * for the purpose of tracking that it's freed.
-	 * For PTR_TO_SOCKET this is used to share which pointers retain the
-	 * same reference to the socket, to determine proper reference freeing.
 	 */
 	u32 id;
 	/* For scalar types (SCALAR_VALUE), this represents our knowledge of
@@ -114,17 +107,6 @@ struct bpf_stack_state {
 	u8 slot_type[BPF_REG_SIZE];
 };
 
-struct bpf_reference_state {
-	/* Track each reference created with a unique id, even if the same
-	 * instruction creates the reference multiple times (eg, via CALL).
-	 */
-	int id;
-	/* Instruction where the allocation of this reference occurred. This
-	 * is used purely to inform the user of a reference leak.
-	 */
-	int insn_idx;
-};
-
 /* state of the program:
  * type of all registers and stack info
  */
@@ -142,9 +124,7 @@ struct bpf_func_state {
 	 */
 	u32 subprogno;
 
-	/* The following fields should be last. See copy_func_state() */
-	int acquired_refs;
-	struct bpf_reference_state *refs;
+	/* should be second to last. See copy_func_state() */
 	int allocated_stack;
 	struct bpf_stack_state *stack;
 };
@@ -166,53 +146,6 @@ struct bpf_verifier_state {
 	/* call stack tracking */
 	struct bpf_func_state *frame[MAX_CALL_FRAMES];
 	struct bpf_verifier_state *parent;
-	/*
-	 * 'branches' field is the number of branches left to explore:
-	 * 0 - all possible paths from this state reached bpf_exit or
-	 * were safely pruned
-	 * 1 - at least one path is being explored.
-	 * This state hasn't reached bpf_exit
-	 * 2 - at least two paths are being explored.
-	 * This state is an immediate parent of two children.
-	 * One is fallthrough branch with branches==1 and another
-	 * state is pushed into stack (to be explored later) also with
-	 * branches==1. The parent of this state has branches==1.
-	 * The verifier state tree connected via 'parent' pointer looks like:
-	 * 1
-	 * 1
-	 * 2 -> 1 (first 'if' pushed into stack)
-	 * 1
-	 * 2 -> 1 (second 'if' pushed into stack)
-	 * 1
-	 * 1
-	 * 1 bpf_exit.
-	 *
-	 * Once do_check() reaches bpf_exit, it calls update_branch_counts()
-	 * and the verifier state tree will look:
-	 * 1
-	 * 1
-	 * 2 -> 1 (first 'if' pushed into stack)
-	 * 1
-	 * 1 -> 1 (second 'if' pushed into stack)
-	 * 0
-	 * 0
-	 * 0 bpf_exit.
-	 * After pop_stack() the do_check() will resume at second 'if'.
-	 *
-	 * If is_state_visited() sees a state with branches > 0 it means
-	 * there is a loop. If such state is exactly equal to the current state
-	 * it's an infinite loop. Note states_equal() checks for states
-	 * equvalency, so two states being 'states_equal' does not mean
-	 * infinite loop. The exact comparison is provided by
-	 * states_maybe_looping() function. It's a stronger pre-check and
-	 * much faster than states_equal().
-	 *
-	 * This algorithm may not find all possible infinite loops or
-	 * loop iteration count may be too high.
-	 * In such cases BPF_COMPLEXITY_LIMIT_INSNS limit kicks in.
-	 */
-	u32 branches;
-	u32 insn_idx;
 	u32 curframe;
 	bool speculative;
 
@@ -228,22 +161,10 @@ struct bpf_verifier_state {
 	u32 jmp_history_cnt;
 };
 
-#define bpf_get_spilled_reg(slot, frame)				\
-	(((slot < frame->allocated_stack / BPF_REG_SIZE) &&		\
-	  (frame->stack[slot].slot_type[0] == STACK_SPILL))		\
-	 ? &frame->stack[slot].spilled_ptr : NULL)
-
-/* Iterate over 'frame', setting 'reg' to either NULL or a spilled register. */
-#define bpf_for_each_spilled_reg(iter, frame, reg)			\
-	for (iter = 0, reg = bpf_get_spilled_reg(iter, frame);		\
-	     iter < frame->allocated_stack / BPF_REG_SIZE;		\
-	     iter++, reg = bpf_get_spilled_reg(iter, frame))
-
 /* linked list of verifier states used to prune search */
 struct bpf_verifier_state_list {
 	struct bpf_verifier_state state;
 	struct bpf_verifier_state_list *next;
-	int miss_cnt, hit_cnt;
 };
 
 /* Possible states for alu_state member. */
@@ -266,7 +187,6 @@ struct bpf_insn_aux_data {
 	bool seen; /* this insn was processed by the verifier */
 	bool sanitize_stack_spill; /* subject to Spectre v4 sanitation */
 	u8 alu_state; /* used in combination with alu_limit */
-	bool prune_point;
 };
 
 #define MAX_USED_MAPS 64 /* max number of maps accessed by one eBPF program */
@@ -285,12 +205,6 @@ static inline bool bpf_verifier_log_full(const struct bpf_verifier_log *log)
 {
 	return log->len_used >= log->len_total - 1;
 }
-
-#define BPF_LOG_LEVEL1	1
-#define BPF_LOG_LEVEL2	2
-#define BPF_LOG_STATS	4
-#define BPF_LOG_LEVEL	(BPF_LOG_LEVEL1 | BPF_LOG_LEVEL2)
-#define BPF_LOG_MASK	(BPF_LOG_LEVEL | BPF_LOG_STATS)
 
 static inline bool bpf_verifier_log_needed(const struct bpf_verifier_log *log)
 {
@@ -317,7 +231,6 @@ struct bpf_verifier_env {
 	bool strict_alignment;		/* perform strict pointer alignment checks */
 	struct bpf_verifier_state *cur_state; /* current verifier state */
 	struct bpf_verifier_state_list **explored_states; /* search pruning optimization */
-	struct bpf_verifier_state_list *free_list;
 	struct bpf_map *used_maps[MAX_USED_MAPS]; /* array of map's used by eBPF program */
 	u32 used_map_cnt;		/* number of used maps */
 	u32 id_gen;			/* used to generate unique reg IDs */
@@ -329,23 +242,6 @@ struct bpf_verifier_env {
 	struct bpf_subprog_info subprog_info[BPF_MAX_SUBPROGS + 1];
 	struct bpf_id_pair idmap_scratch[BPF_ID_MAP_SIZE];
 	u32 subprog_cnt;
-	/* number of instructions analyzed by the verifier */
-	u32 prev_insn_processed, insn_processed;
-	/* number of jmps, calls, exits analyzed so far */
-	u32 prev_jmps_processed, jmps_processed;
-	/* total verification time */
-	u64 verification_time;
-	/* maximum number of verifier states kept in 'branching' instructions */
-	u32 max_states_per_insn;
-	/* total number of allocated verifier states */
-	u32 total_states;
-	/* some states are freed during program analysis.
-	 * this is peak number of states. this number dominates kernel
-	 * memory consumption during verification
-	 */
-	u32 peak_states;
-	/* longest register parentage chain walked for liveness marking */
-	u32 longest_mark_read_walk;
 };
 
 __printf(2, 0) void bpf_verifier_vlog(struct bpf_verifier_log *log,
@@ -353,16 +249,11 @@ __printf(2, 0) void bpf_verifier_vlog(struct bpf_verifier_log *log,
 __printf(2, 3) void bpf_verifier_log_write(struct bpf_verifier_env *env,
 					   const char *fmt, ...);
 
-static inline struct bpf_func_state *cur_func(struct bpf_verifier_env *env)
+static inline struct bpf_reg_state *cur_regs(struct bpf_verifier_env *env)
 {
 	struct bpf_verifier_state *cur = env->cur_state;
 
-	return cur->frame[cur->curframe];
-}
-
-static inline struct bpf_reg_state *cur_regs(struct bpf_verifier_env *env)
-{
-	return cur_func(env)->regs;
+	return cur->frame[cur->curframe]->regs;
 }
 
 int bpf_prog_offload_verifier_prep(struct bpf_verifier_env *env);

@@ -32,7 +32,6 @@
 #include <linux/ctype.h>
 #include <linux/btf.h>
 #include <linux/nospec.h>
-#include <linux/poll.h>
 
 #define IS_FD_ARRAY(map) ((map)->map_type == BPF_MAP_TYPE_PROG_ARRAY || \
 			   (map)->map_type == BPF_MAP_TYPE_PERF_EVENT_ARRAY || \
@@ -136,46 +135,23 @@ static struct bpf_map *find_and_alloc_map(union bpf_attr *attr)
 	return map;
 }
 
-static void *__bpf_map_area_alloc(size_t size, int numa_node, bool mmapable)
+void *bpf_map_area_alloc(size_t size, int numa_node)
 {
-	/* We really just want to fail instead of triggering OOM killer
-	 * under memory pressure, therefore we set __GFP_NORETRY to kmalloc,
-	 * which is used for lower order allocation requests.
-	 *
-	 * It has been observed that higher order allocation requests done by
-	 * vmalloc with __GFP_NORETRY being set might fail due to not trying
-	 * to reclaim memory from the page cache, thus we set
-	 * __GFP_RETRY_MAYFAIL to avoid such situations.
+	/* We definitely need __GFP_NORETRY, so OOM killer doesn't
+	 * trigger under memory pressure as we really just want to
+	 * fail instead.
 	 */
-
-	const gfp_t flags = __GFP_NOWARN | __GFP_ZERO;
+	const gfp_t flags = __GFP_NOWARN | __GFP_NORETRY | __GFP_ZERO;
 	void *area;
 
-	/* kmalloc()'ed memory can't be mmap()'ed */
-	if (!mmapable && size <= (PAGE_SIZE << PAGE_ALLOC_COSTLY_ORDER)) {
-		area = kmalloc_node(size, GFP_USER | __GFP_NORETRY | flags,
-				    numa_node);
+	if (size <= (PAGE_SIZE << PAGE_ALLOC_COSTLY_ORDER)) {
+		area = kmalloc_node(size, GFP_USER | flags, numa_node);
 		if (area != NULL)
 			return area;
 	}
-	if (mmapable) {
-		BUG_ON(!PAGE_ALIGNED(size));
-		return vmalloc_user_node_flags(size, numa_node, GFP_KERNEL |
-					       __GFP_RETRY_MAYFAIL | flags);
-	}
-	return __vmalloc_node_flags_caller(size, numa_node,
-					   GFP_KERNEL | __GFP_RETRY_MAYFAIL |
-					   flags, __builtin_return_address(0));
-}
 
-void *bpf_map_area_alloc(size_t size, int numa_node)
-{
-	return __bpf_map_area_alloc(size, numa_node, false);
-}
-
-void *bpf_map_area_mmapable_alloc(size_t size, int numa_node)
-{
-	return __bpf_map_area_alloc(size, numa_node, true);
+	return __vmalloc_node_flags_caller(size, numa_node, GFP_KERNEL | flags,
+					   __builtin_return_address(0));
 }
 
 void bpf_map_area_free(void *area)
@@ -193,6 +169,19 @@ void bpf_map_init_from_attr(struct bpf_map *map, union bpf_attr *attr)
 	map->numa_node = bpf_map_attr_numa_node(attr);
 }
 
+int bpf_map_precharge_memlock(u32 pages)
+{
+	struct user_struct *user = get_current_user();
+	unsigned long memlock_limit, cur;
+
+	memlock_limit = rlimit(RLIMIT_MEMLOCK) >> PAGE_SHIFT;
+	cur = atomic_long_read(&user->locked_vm);
+	free_uid(user);
+	if (cur + pages > memlock_limit)
+		return -EPERM;
+	return 0;
+}
+
 static int bpf_charge_memlock(struct user_struct *user, u32 pages)
 {
 	unsigned long memlock_limit = rlimit(RLIMIT_MEMLOCK) >> PAGE_SHIFT;
@@ -206,62 +195,45 @@ static int bpf_charge_memlock(struct user_struct *user, u32 pages)
 
 static void bpf_uncharge_memlock(struct user_struct *user, u32 pages)
 {
-	if (user)
-		atomic_long_sub(pages, &user->locked_vm);
+	atomic_long_sub(pages, &user->locked_vm);
 }
 
-int bpf_map_charge_init(struct bpf_map_memory *mem, size_t size)
+static int bpf_map_init_memlock(struct bpf_map *map)
 {
-	u32 pages = round_up(size, PAGE_SIZE) >> PAGE_SHIFT;
-	struct user_struct *user;
+	struct user_struct *user = get_current_user();
 	int ret;
 
-	if (size >= U32_MAX - PAGE_SIZE)
-		return -E2BIG;
-
-	user = get_current_user();
-	ret = bpf_charge_memlock(user, pages);
+	ret = bpf_charge_memlock(user, map->pages);
 	if (ret) {
 		free_uid(user);
 		return ret;
 	}
-
-	mem->pages = pages;
-	mem->user = user;
-
-	return 0;
+	map->user = user;
+	return ret;
 }
 
-void bpf_map_charge_finish(struct bpf_map_memory *mem)
+static void bpf_map_release_memlock(struct bpf_map *map)
 {
-	bpf_uncharge_memlock(mem->user, mem->pages);
-	free_uid(mem->user);
-}
-
-void bpf_map_charge_move(struct bpf_map_memory *dst,
-			 struct bpf_map_memory *src)
-{
-	*dst = *src;
-
-	/* Make sure src will not be used for the redundant uncharging. */
-	memset(src, 0, sizeof(struct bpf_map_memory));
+	struct user_struct *user = map->user;
+	bpf_uncharge_memlock(user, map->pages);
+	free_uid(user);
 }
 
 int bpf_map_charge_memlock(struct bpf_map *map, u32 pages)
 {
 	int ret;
 
-	ret = bpf_charge_memlock(map->memory.user, pages);
+	ret = bpf_charge_memlock(map->user, pages);
 	if (ret)
 		return ret;
-	map->memory.pages += pages;
+	map->pages += pages;
 	return ret;
 }
 
 void bpf_map_uncharge_memlock(struct bpf_map *map, u32 pages)
 {
-	bpf_uncharge_memlock(map->memory.user, pages);
-	map->memory.pages -= pages;
+	bpf_uncharge_memlock(map->user, pages);
+	map->pages -= pages;
 }
 
 static int bpf_map_alloc_id(struct bpf_map *map)
@@ -312,18 +284,16 @@ void bpf_map_free_id(struct bpf_map *map, bool do_idr_lock)
 static void bpf_map_free_deferred(struct work_struct *work)
 {
 	struct bpf_map *map = container_of(work, struct bpf_map, work);
-	struct bpf_map_memory mem;
 
-	bpf_map_charge_move(&mem, &map->memory);
+	bpf_map_release_memlock(map);
 	security_bpf_map_free(map);
 	/* implementation dependent freeing */
 	map->ops->map_free(map);
-	bpf_map_charge_finish(&mem);
 }
 
 static void bpf_map_put_uref(struct bpf_map *map)
 {
-	if (atomic64_dec_and_test(&map->usercnt)) {
+	if (atomic_dec_and_test(&map->usercnt)) {
 		if (map->ops->map_release_uref)
 			map->ops->map_release_uref(map);
 	}
@@ -334,7 +304,7 @@ static void bpf_map_put_uref(struct bpf_map *map)
  */
 static void __bpf_map_put(struct bpf_map *map, bool do_idr_lock)
 {
-	if (atomic64_dec_and_test(&map->refcnt)) {
+	if (atomic_dec_and_test(&map->refcnt)) {
 		/* bpf_map_free_id() must be called first */
 		bpf_map_free_id(map, do_idr_lock);
 		btf_put(map->btf);
@@ -393,7 +363,7 @@ static void bpf_map_show_fdinfo(struct seq_file *m, struct file *filp)
 		   map->value_size,
 		   map->max_entries,
 		   map->map_flags,
-		   map->memory.pages * 1ULL << PAGE_SHIFT,
+		   map->pages * 1ULL << PAGE_SHIFT,
 		   map->id);
 
 	if (owner_prog_type) {
@@ -423,79 +393,6 @@ static ssize_t bpf_dummy_write(struct file *filp, const char __user *buf,
 	return -EINVAL;
 }
 
-/* called for any extra memory-mapped regions (except initial) */
-static void bpf_map_mmap_open(struct vm_area_struct *vma)
-{
-	struct bpf_map *map = vma->vm_file->private_data;
-
-	bpf_map_inc_with_uref(map);
-
-	if (vma->vm_flags & VM_WRITE) {
-		mutex_lock(&map->freeze_mutex);
-		map->writecnt++;
-		mutex_unlock(&map->freeze_mutex);
-	}
-}
-
-/* called for all unmapped memory region (including initial) */
-static void bpf_map_mmap_close(struct vm_area_struct *vma)
-{
-	struct bpf_map *map = vma->vm_file->private_data;
-
-	if (vma->vm_flags & VM_WRITE) {
-		mutex_lock(&map->freeze_mutex);
-		map->writecnt--;
-		mutex_unlock(&map->freeze_mutex);
-	}
-
-	bpf_map_put_with_uref(map);
-}
-
-static const struct vm_operations_struct bpf_map_default_vmops = {
-	.open		= bpf_map_mmap_open,
-	.close		= bpf_map_mmap_close,
-};
-
-static int bpf_map_mmap(struct file *filp, struct vm_area_struct *vma)
-{
-	struct bpf_map *map = filp->private_data;
-	int err;
-
-	if (!map->ops->map_mmap)
-		return -ENOTSUPP;
-
-	if (!(vma->vm_flags & VM_SHARED))
-		return -EINVAL;
-
-	mutex_lock(&map->freeze_mutex);
-
-	/* set default open/close callbacks */
-	vma->vm_ops = &bpf_map_default_vmops;
-	vma->vm_private_data = map;
-
-	err = map->ops->map_mmap(map, vma);
-	if (err)
-		goto out;
-
-	bpf_map_inc_with_uref(map);
-
-	if (vma->vm_flags & VM_WRITE)
-		map->writecnt++;
-out:
-	mutex_unlock(&map->freeze_mutex);
-	return err;
-}
-
-static __poll_t bpf_map_poll(struct file *filp, struct poll_table_struct *pts)
-{
-	struct bpf_map *map = filp->private_data;
-
-	if (map->ops->map_poll)
-		return map->ops->map_poll(map, filp, pts);
-
-	return EPOLLERR;
-}
-
 const struct file_operations bpf_map_fops = {
 #ifdef CONFIG_PROC_FS
 	.show_fdinfo	= bpf_map_show_fdinfo,
@@ -503,8 +400,6 @@ const struct file_operations bpf_map_fops = {
 	.release	= bpf_map_release,
 	.read		= bpf_dummy_read,
 	.write		= bpf_dummy_write,
-	.mmap		= bpf_map_mmap,
-	.poll		= bpf_map_poll,
 };
 
 int bpf_map_new_fd(struct bpf_map *map, int flags)
@@ -594,7 +489,6 @@ static int map_check_btf(const struct bpf_map *map, const struct btf *btf,
 static int map_create(union bpf_attr *attr)
 {
 	int numa_node = bpf_map_attr_numa_node(attr);
-	struct bpf_map_memory mem;
 	struct bpf_map *map;
 	int f_flags;
 	int err;
@@ -619,31 +513,30 @@ static int map_create(union bpf_attr *attr)
 
 	err = bpf_obj_name_cpy(map->name, attr->map_name);
 	if (err)
-		goto free_map;
+		goto free_map_nouncharge;
 
-	atomic64_set(&map->refcnt, 1);
-	atomic64_set(&map->usercnt, 1);
-	mutex_init(&map->freeze_mutex);
+	atomic_set(&map->refcnt, 1);
+	atomic_set(&map->usercnt, 1);
 
 	if (attr->btf_key_type_id || attr->btf_value_type_id) {
 		struct btf *btf;
 
 		if (!attr->btf_key_type_id || !attr->btf_value_type_id) {
 			err = -EINVAL;
-			goto free_map;
+			goto free_map_nouncharge;
 		}
 
 		btf = btf_get_by_fd(attr->btf_fd);
 		if (IS_ERR(btf)) {
 			err = PTR_ERR(btf);
-			goto free_map;
+			goto free_map_nouncharge;
 		}
 
 		err = map_check_btf(map, btf, attr->btf_key_type_id,
 				    attr->btf_value_type_id);
 		if (err) {
 			btf_put(btf);
-			goto free_map;
+			goto free_map_nouncharge;
 		}
 
 		map->btf = btf;
@@ -653,11 +546,15 @@ static int map_create(union bpf_attr *attr)
 
 	err = security_bpf_map_alloc(map);
 	if (err)
-		goto free_map;
+		goto free_map_nouncharge;
+
+	err = bpf_map_init_memlock(map);
+	if (err)
+		goto free_map_sec;
 
 	err = bpf_map_alloc_id(map);
 	if (err)
-		goto free_map_sec;
+		goto free_map;
 
 	err = bpf_map_new_fd(map, f_flags);
 	if (err < 0) {
@@ -673,13 +570,13 @@ static int map_create(union bpf_attr *attr)
 
 	return err;
 
+free_map:
+	bpf_map_release_memlock(map);
 free_map_sec:
 	security_bpf_map_free(map);
-free_map:
+free_map_nouncharge:
 	btf_put(map->btf);
-	bpf_map_charge_move(&mem, &map->memory);
 	map->ops->map_free(map);
-	bpf_map_charge_finish(&mem);
 	return err;
 }
 
@@ -698,18 +595,20 @@ struct bpf_map *__bpf_map_get(struct fd f)
 	return f.file->private_data;
 }
 
-void bpf_map_inc(struct bpf_map *map)
+/* prog's and map's refcnt limit */
+#define BPF_MAX_REFCNT 32768
+
+struct bpf_map *bpf_map_inc(struct bpf_map *map, bool uref)
 {
-	atomic64_inc(&map->refcnt);
+	if (atomic_inc_return(&map->refcnt) > BPF_MAX_REFCNT) {
+		atomic_dec(&map->refcnt);
+		return ERR_PTR(-EBUSY);
+	}
+	if (uref)
+		atomic_inc(&map->usercnt);
+	return map;
 }
 EXPORT_SYMBOL_GPL(bpf_map_inc);
-
-void bpf_map_inc_with_uref(struct bpf_map *map)
-{
-	atomic64_inc(&map->refcnt);
-	atomic64_inc(&map->usercnt);
-}
-EXPORT_SYMBOL_GPL(bpf_map_inc_with_uref);
 
 struct bpf_map *bpf_map_get_with_uref(u32 ufd)
 {
@@ -720,35 +619,33 @@ struct bpf_map *bpf_map_get_with_uref(u32 ufd)
 	if (IS_ERR(map))
 		return map;
 
-	bpf_map_inc_with_uref(map);
+	map = bpf_map_inc(map, true);
 	fdput(f);
 
 	return map;
 }
 
 /* map_idr_lock should have been held */
-static struct bpf_map *__bpf_map_inc_not_zero(struct bpf_map *map, bool uref)
+static struct bpf_map *bpf_map_inc_not_zero(struct bpf_map *map,
+					    bool uref)
 {
 	int refold;
 
-	refold = atomic64_fetch_add_unless(&map->refcnt, 1, 0);
+	refold = atomic_fetch_add_unless(&map->refcnt, 1, 0);
+
+	if (refold >= BPF_MAX_REFCNT) {
+		__bpf_map_put(map, false);
+		return ERR_PTR(-EBUSY);
+	}
+
 	if (!refold)
 		return ERR_PTR(-ENOENT);
+
 	if (uref)
-		atomic64_inc(&map->usercnt);
+		atomic_inc(&map->usercnt);
 
 	return map;
 }
-
-struct bpf_map *bpf_map_inc_not_zero(struct bpf_map *map)
-{
-	spin_lock_bh(&map_idr_lock);
-	map = __bpf_map_inc_not_zero(map, false);
-	spin_unlock_bh(&map_idr_lock);
-
-	return map;
-}
-EXPORT_SYMBOL_GPL(bpf_map_inc_not_zero);
 
 int __weak bpf_stackmap_copy(struct bpf_map *map, void *key, void *value)
 {
@@ -1227,7 +1124,7 @@ static void __bpf_prog_put_rcu(struct rcu_head *rcu)
 
 static void __bpf_prog_put(struct bpf_prog *prog, bool do_idr_lock)
 {
-	if (atomic64_dec_and_test(&prog->aux->refcnt)) {
+	if (atomic_dec_and_test(&prog->aux->refcnt)) {
 		/* bpf_prog_free_id() must be called first */
 		bpf_prog_free_id(prog, do_idr_lock);
 		bpf_prog_kallsyms_del_all(prog);
@@ -1304,9 +1201,13 @@ static struct bpf_prog *____bpf_prog_get(struct fd f)
 	return f.file->private_data;
 }
 
-void bpf_prog_add(struct bpf_prog *prog, int i)
+struct bpf_prog *bpf_prog_add(struct bpf_prog *prog, int i)
 {
-	atomic64_add(i, &prog->aux->refcnt);
+	if (atomic_add_return(i, &prog->aux->refcnt) > BPF_MAX_REFCNT) {
+		atomic_sub(i, &prog->aux->refcnt);
+		return ERR_PTR(-EBUSY);
+	}
+	return prog;
 }
 EXPORT_SYMBOL_GPL(bpf_prog_add);
 
@@ -1317,13 +1218,13 @@ void bpf_prog_sub(struct bpf_prog *prog, int i)
 	 * path holds a reference to the program, thus atomic_sub() can
 	 * be safely used in such cases!
 	 */
-	WARN_ON(atomic64_sub_return(i, &prog->aux->refcnt) == 0);
+	WARN_ON(atomic_sub_return(i, &prog->aux->refcnt) == 0);
 }
 EXPORT_SYMBOL_GPL(bpf_prog_sub);
 
-void bpf_prog_inc(struct bpf_prog *prog)
+struct bpf_prog *bpf_prog_inc(struct bpf_prog *prog)
 {
-	atomic64_inc(&prog->aux->refcnt);
+	return bpf_prog_add(prog, 1);
 }
 EXPORT_SYMBOL_GPL(bpf_prog_inc);
 
@@ -1332,7 +1233,12 @@ struct bpf_prog *bpf_prog_inc_not_zero(struct bpf_prog *prog)
 {
 	int refold;
 
-	refold = atomic64_fetch_add_unless(&prog->aux->refcnt, 1, 0);
+	refold = atomic_fetch_add_unless(&prog->aux->refcnt, 1, 0);
+
+	if (refold >= BPF_MAX_REFCNT) {
+		__bpf_prog_put(prog, false);
+		return ERR_PTR(-EBUSY);
+	}
 
 	if (!refold)
 		return ERR_PTR(-ENOENT);
@@ -1370,7 +1276,7 @@ static struct bpf_prog *__bpf_prog_get(u32 ufd, enum bpf_prog_type *attach_type,
 		goto out;
 	}
 
-	bpf_prog_inc(prog);
+	prog = bpf_prog_inc(prog);
 out:
 	fdput(f);
 	return prog;
@@ -1516,7 +1422,7 @@ static int bpf_prog_load(union bpf_attr *attr)
 	prog->orig_prog = NULL;
 	prog->jited = 0;
 
-	atomic64_set(&prog->aux->refcnt, 1);
+	atomic_set(&prog->aux->refcnt, 1);
 	prog->gpl_compatible = is_gpl ? 1 : 0;
 
 	if (bpf_prog_is_dev_bound(prog->aux)) {
@@ -1971,7 +1877,7 @@ static int bpf_map_get_fd_by_id(const union bpf_attr *attr)
 	spin_lock_bh(&map_idr_lock);
 	map = idr_find(&map_idr, id);
 	if (map)
-		map = __bpf_map_inc_not_zero(map, true);
+		map = bpf_map_inc_not_zero(map, true);
 	else
 		map = ERR_PTR(-ENOENT);
 	spin_unlock_bh(&map_idr_lock);
