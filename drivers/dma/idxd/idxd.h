@@ -138,6 +138,7 @@ enum idxd_wq_type {
 	IDXD_WQT_NONE = 0,
 	IDXD_WQT_KERNEL,
 	IDXD_WQT_USER,
+	IDXD_WQT_MDEV,
 };
 
 struct idxd_cdev {
@@ -419,6 +420,11 @@ extern struct device_type iax_device_type;
 extern struct device_type idxd_wq_device_type;
 extern struct device_type idxd_engine_device_type;
 extern struct device_type idxd_group_device_type;
+
+static inline bool is_idxd_wq_mdev(struct idxd_wq *wq)
+{
+	return (wq->type == IDXD_WQT_MDEV);
+}
 
 static inline bool is_dsa_dev(struct idxd_dev *idxd_dev)
 {
