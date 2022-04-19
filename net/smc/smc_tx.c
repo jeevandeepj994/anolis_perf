@@ -150,11 +150,27 @@ static bool smc_tx_should_cork(struct smc_sock *smc, struct msghdr *msg)
 	if (prepared_send > min(64 * 1024, conn->sndbuf_desc->len >> 1))
 		return false;
 
-	if (!sock_net(&smc->sk)->smc.sysctl_autocorking)
+	if (!sock_net(&smc->sk)->smc.sysctl_autocorking &&
+	    !(msg->msg_flags & MSG_MORE))
 		return false;
 
 	/* All the other conditions should cork */
 	return true;
+}
+
+/* It is possible TX completion already happened before we set corked flag,
+ * double check wheather to send directly or still to cork.
+ */
+static bool smc_tx_cork_confirm(struct smc_sock *smc, struct msghdr *msg)
+{
+	struct smc_connection *conn = &smc->conn;
+
+	if (atomic_read(&conn->cdc_pend_tx_wr) != 0 ||
+	    delayed_work_pending(&conn->tx_work)) {
+		return true;
+	}
+
+	return false;
 }
 
 /* sndbuf producer: main API called by socket layer.
@@ -207,7 +223,8 @@ int smc_tx_sendmsg(struct smc_sock *smc, struct msghdr *msg, size_t len)
 		 * we should send them out before wait
 		 */
 		if (!atomic_read(&conn->sndbuf_space) &&
-		    atomic_read(&conn->peer_rmbe_space) > 0)
+		    atomic_read(&conn->peer_rmbe_space) > 0 &&
+		    smc_tx_prepared_sends(conn) > 0)
 			smc_tx_sndbuf_nonempty(conn);
 
 		if (!atomic_read(&conn->sndbuf_space) || conn->urg_tx_pend) {
@@ -269,20 +286,26 @@ int smc_tx_sendmsg(struct smc_sock *smc, struct msghdr *msg, size_t len)
 		 */
 		if ((msg->msg_flags & MSG_OOB) && !send_remaining)
 			conn->urg_tx_pend = true;
+
 		if (smc_tx_should_cork(smc, msg)) {
 			/* for a corked socket defer the RDMA writes if there
 			 * is still sufficient sndbuf_space available
 			 */
-			conn->tx_corked_bytes += copylen;
-			++conn->tx_corked_cnt;
-		} else {
-			conn->tx_bytes += copylen;
-			++conn->tx_cnt;
-			if (delayed_work_pending(&conn->tx_work))
-				cancel_delayed_work(&conn->tx_work);
-			smc_tx_sndbuf_nonempty(conn);
+			set_bit(SMC_SOCK_CORKED, &smc->flags);
+			if (smc_tx_cork_confirm(smc, msg)) {
+				conn->tx_corked_bytes += copylen;
+				++conn->tx_corked_cnt;
+				continue;
+			}
 		}
 
+		clear_bit(SMC_SOCK_CORKED, &smc->flags);
+		conn->tx_bytes += copylen;
+		++conn->tx_cnt;
+		if (delayed_work_pending(&conn->tx_work))
+			cancel_delayed_work(&conn->tx_work);
+
+		smc_tx_sndbuf_nonempty(conn);
 		trace_smc_tx_sendmsg(smc, copylen);
 	} /* while (msg_data_left(msg)) */
 
@@ -324,7 +347,7 @@ static int smc_tx_rdma_write(struct smc_connection *conn, int peer_rmbe_offset,
 	struct smc_link *link = conn->lnk;
 	int rc;
 
-	rdma_wr->wr.wr_id = smc_wr_tx_get_next_wr_id(link);
+	rdma_wr->wr.wr_id = smc_wr_tx_get_next_wr_id(link, ~0U);
 	rdma_wr->wr.num_sge = num_sges;
 	rdma_wr->remote_addr =
 		lgr->rtokens[conn->rtoken_idx][link->link_idx].dma_addr +
@@ -617,11 +640,11 @@ int smc_tx_sndbuf_nonempty(struct smc_connection *conn)
 	int rc = 0;
 	struct smc_sock *smc = container_of(conn, struct smc_sock, conn);
 
+again:
 	/* Only let one to push to prevent wasting of CPU and CDC slot */
 	if (atomic_inc_return(&conn->tx_pushing) > 1)
 		return 0;
 
-again:
 	atomic_set(&conn->tx_pushing, 1);
 
 	/* No data in the send queue */
@@ -657,7 +680,8 @@ out:
 	 * If so, we need to try push again to prevent those data in the
 	 * send queue may never been pushed out
 	 */
-	if (unlikely(!atomic_dec_and_test(&conn->tx_pushing)))
+	if (atomic_fetch_and(0, &conn->tx_pushing) > 1 &&
+	    smc_tx_prepared_sends(conn) > 0)
 		goto again;
 
 	return rc;

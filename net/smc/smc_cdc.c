@@ -18,6 +18,7 @@
 #include "smc_tx.h"
 #include "smc_rx.h"
 #include "smc_close.h"
+#include "smc_ipi.h"
 
 /********************************** send *************************************/
 
@@ -52,7 +53,12 @@ static void smc_cdc_tx_handler(struct smc_wr_tx_pend_priv *pnd_snd,
 		/* If this is the last pending WR complete, push them to prevent
 		 * no one trying to push when corked.
 		 */
-		smc_tx_sndbuf_nonempty(conn);
+		if (test_and_clear_bit(SMC_SOCK_CORKED, &smc->flags) &&
+		    !delayed_work_pending(&conn->tx_work) &&
+		    smc_tx_prepared_sends(conn) > 0 &&
+		    !(conn->killed || conn->local_rx_ctrl.conn_state_flags.peer_conn_abort)) {
+			smc_tx_sndbuf_nonempty(conn);
+		}
 		if (unlikely(wq_has_sleeper(&conn->cdc_pend_tx_wq)))
 			wake_up(&conn->cdc_pend_tx_wq);
 	}
@@ -106,25 +112,30 @@ int smc_cdc_msg_send(struct smc_connection *conn,
 		     struct smc_cdc_tx_pend *pend)
 {
 	struct smc_link *link = conn->lnk;
+	struct smc_cdc_msg *cdc_msg = (struct smc_cdc_msg *)wr_buf;
 	union smc_host_cursor cfed;
+	u8 saved_credits = 0;
 	int rc;
 
 	smc_cdc_add_pending_send(conn, pend);
 
 	conn->tx_cdc_seq++;
 	conn->local_tx_ctrl.seqno = conn->tx_cdc_seq;
-	smc_host_msg_to_cdc((struct smc_cdc_msg *)wr_buf, conn, &cfed);
+	smc_host_msg_to_cdc(cdc_msg, conn, &cfed);
+	saved_credits = (u8)smc_wr_rx_get_credits(link);
+	cdc_msg->credits = saved_credits;
 
 	atomic_inc(&conn->cdc_pend_tx_wr);
 	smp_mb__after_atomic(); /* Make sure cdc_pend_tx_wr added before post */
 
 	rc = smc_wr_tx_send(link, (struct smc_wr_tx_pend_priv *)pend);
-	if (!rc) {
+	if (likely(!rc)) {
 		smc_curs_copy(&conn->rx_curs_confirmed, &cfed, conn);
 		conn->local_rx_ctrl.prod_flags.cons_curs_upd_req = 0;
 	} else {
 		conn->tx_cdc_seq--;
 		conn->local_tx_ctrl.seqno = conn->tx_cdc_seq;
+		smc_wr_rx_put_credits(link, saved_credits);
 		atomic_dec(&conn->cdc_pend_tx_wr);
 	}
 
@@ -343,10 +354,22 @@ static void smc_cdc_msg_recv_action(struct smc_sock *smc,
 		atomic_add(diff_prod, &conn->bytes_to_rcv);
 		/* guarantee 0 <= bytes_to_rcv <= rmb_desc->len */
 		smp_mb__after_atomic();
-		smc->sk.sk_data_ready(&smc->sk);
-	} else {
-		if (conn->local_rx_ctrl.prod_flags.write_blocked)
+
+		// sk_data_ready costs a lot of cpu cycles, because of RCU and
+		// llc cachemiss. Schedule this process to a certain cpu to
+		// reduce cpu cycles of current cpu and improve the performance of
+		// sk_data_ready.
+		if (smc_ipi_need_ipi(smc))
+			smc_ipi_send_ipi(smc);
+		else
 			smc->sk.sk_data_ready(&smc->sk);
+	} else {
+		if (conn->local_rx_ctrl.prod_flags.write_blocked) {
+			if (smc_ipi_need_ipi(smc))
+				smc_ipi_send_ipi(smc);
+			else
+				smc->sk.sk_data_ready(&smc->sk);
+		}
 		if (conn->local_rx_ctrl.prod_flags.urg_data_pending)
 			conn->urg_state = SMC_URG_NOTYET;
 	}
@@ -430,10 +453,13 @@ static void smc_cdc_rx_handler(struct ib_wc *wc, void *buf)
 	struct smc_link_group *lgr;
 	struct smc_sock *smc;
 
-	if (wc->byte_len < offsetof(struct smc_cdc_msg, reserved))
+	if (unlikely(wc->byte_len < offsetof(struct smc_cdc_msg, reserved)))
 		return; /* short message */
-	if (cdc->len != SMC_WR_TX_SIZE)
+	if (unlikely(cdc->len != SMC_WR_TX_SIZE))
 		return; /* invalid message */
+
+	if (cdc->credits)
+		smc_wr_tx_put_credits(link, cdc->credits, true);
 
 	/* lookup connection */
 	lgr = smc_get_lgr(link);

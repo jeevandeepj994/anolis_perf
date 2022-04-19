@@ -21,7 +21,12 @@
 #include "smc.h"
 #include "smc_ib.h"
 
-#define SMC_RMBS_PER_LGR_MAX	255	/* max. # of RMBs per link group */
+#define SMC_RMBS_PER_LGR_MAX	32	/* max. # of RMBs per link group. Correspondingly,
+					 * SMC_WR_BUF_CNT should not be less than 2 *
+					 * SMC_RMBS_PER_LGR_MAX, since every connection at
+					 * least has two rq/sq credits in average, otherwise
+					 * may result in waiting for credits in sending process.
+					 */
 
 struct smc_lgr_list {			/* list of link group definition */
 	struct list_head	list;
@@ -80,6 +85,8 @@ struct smc_rdma_wr {				/* work requests per message
 
 #define SMC_LGR_ID_SIZE		4
 
+#define SMC_LINKFLAG_ANNOUNCE_PENDING	0
+
 struct smc_link {
 	struct iw_ext_conn_param	iw_conn_param;
 	struct smc_ib_device	*smcibdev;	/* ib-device */
@@ -103,7 +110,7 @@ struct smc_link {
 	struct smc_wr_tx_pend	*wr_tx_v2_pend;	/* WR send v2 waiting for CQE */
 	dma_addr_t		wr_tx_dma_addr;	/* DMA address of wr_tx_bufs */
 	dma_addr_t		wr_tx_v2_dma_addr; /* DMA address of v2 tx buf*/
-	atomic_long_t		wr_tx_id;	/* seq # of last sent WR */
+	atomic_t		wr_tx_id;	/* seq # of last sent WR */
 	unsigned long		*wr_tx_mask;	/* bit mask of used indexes */
 	u32			wr_tx_cnt;	/* number of WR send buffers */
 	wait_queue_head_t	wr_tx_wait;	/* wait for free WR send buf */
@@ -115,7 +122,6 @@ struct smc_link {
 	/* above three vectors have wr_rx_cnt elements and use the same index */
 	dma_addr_t		wr_rx_dma_addr;	/* DMA address of wr_rx_bufs */
 	dma_addr_t		wr_rx_v2_dma_addr; /* DMA address of v2 rx buf*/
-	u64			wr_rx_id;	/* seq # of last recv WR */
 	u32			wr_rx_cnt;	/* number of WR recv buffers */
 	unsigned long		wr_rx_tstamp;	/* jiffies when last buf rx */
 
@@ -123,6 +129,14 @@ struct smc_link {
 	wait_queue_head_t	wr_reg_wait;	/* wait for wr_reg result */
 	atomic_t		wr_reg_refcnt;	/* reg refs to link */
 	enum smc_wr_reg_state	wr_reg_state;	/* state of wr_reg request */
+
+	atomic_t	peer_rq_credits;	/* credits for peer rq flowctrl */
+	atomic_t	local_rq_credits;	/* credits for local rq flowctrl */
+	u8		credits_enable;		/* credits enable flag, set when negotiation */
+	u8		local_cr_watermark_high;	/* local rq credits watermark */
+	u8		peer_cr_watermark_low;	/* peer rq credits watermark */
+	struct work_struct	credits_announce_work;	/* work for credits announcement */
+	unsigned long	flags;	/* link flags, SMC_LINKFLAG_ANNOUNCE_PENDING .etc */
 
 	u8			gid[SMC_GID_SIZE];/* gid matching used vlan id*/
 	u8			sgid_index;	/* gid index for vlan id      */
