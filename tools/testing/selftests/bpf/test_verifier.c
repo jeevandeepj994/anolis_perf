@@ -956,43 +956,13 @@ static struct bpf_test tests[] = {
 			BPF_STX_MEM(BPF_DW, BPF_REG_10, BPF_REG_1, -8),
 			/* mess up with R1 pointer on stack */
 			BPF_ST_MEM(BPF_B, BPF_REG_10, -7, 0x23),
-			/* fill back into R0 is fine for priv.
-			 * R0 now becomes SCALAR_VALUE.
-			 */
+			/* fill back into R0 should fail */
 			BPF_LDX_MEM(BPF_DW, BPF_REG_0, BPF_REG_10, -8),
-			/* Load from R0 should fail. */
-			BPF_LDX_MEM(BPF_DW, BPF_REG_0, BPF_REG_0, 8),
 			BPF_EXIT_INSN(),
 		},
 		.errstr_unpriv = "attempt to corrupt spilled",
-		.errstr = "R0 invalid mem access 'inv",
+		.errstr = "corrupted spill",
 		.result = REJECT,
-	},
-	{
-		"check corrupted spill/fill, LSB",
-		.insns = {
-			BPF_STX_MEM(BPF_DW, BPF_REG_10, BPF_REG_1, -8),
-			BPF_ST_MEM(BPF_H, BPF_REG_10, -8, 0xcafe),
-			BPF_LDX_MEM(BPF_DW, BPF_REG_0, BPF_REG_10, -8),
-			BPF_EXIT_INSN(),
-		},
-		.errstr_unpriv = "attempt to corrupt spilled",
-		.result_unpriv = REJECT,
-		.result = ACCEPT,
-		.retval = POINTER_VALUE,
-	},
-	{
-		"check corrupted spill/fill, MSB",
-		.insns = {
-			BPF_STX_MEM(BPF_DW, BPF_REG_10, BPF_REG_1, -8),
-			BPF_ST_MEM(BPF_W, BPF_REG_10, -4, 0x12345678),
-			BPF_LDX_MEM(BPF_DW, BPF_REG_0, BPF_REG_10, -8),
-			BPF_EXIT_INSN(),
-		},
-		.errstr_unpriv = "attempt to corrupt spilled",
-		.result_unpriv = REJECT,
-		.result = ACCEPT,
-		.retval = POINTER_VALUE,
 	},
 	{
 		"invalid src register in STX",
@@ -3875,8 +3845,7 @@ static struct bpf_test tests[] = {
 				    offsetof(struct __sk_buff, data)),
 			BPF_LDX_MEM(BPF_W, BPF_REG_3, BPF_REG_1,
 				    offsetof(struct __sk_buff, data_end)),
-			BPF_LDX_MEM(BPF_W, BPF_REG_0, BPF_REG_1,
-			    offsetof(struct __sk_buff, mark)),
+			BPF_MOV64_IMM(BPF_REG_0, 0xffffffff),
 			BPF_STX_MEM(BPF_DW, BPF_REG_10, BPF_REG_0, -8),
 			BPF_LDX_MEM(BPF_DW, BPF_REG_0, BPF_REG_10, -8),
 			BPF_ALU64_IMM(BPF_AND, BPF_REG_0, 0xffff),
@@ -6542,9 +6511,9 @@ static struct bpf_test tests[] = {
 	{
 		"helper access to variable memory: stack, bitwise AND, zero included",
 		.insns = {
-			BPF_LDX_MEM(BPF_DW, BPF_REG_2, BPF_REG_1, 8),
 			BPF_MOV64_REG(BPF_REG_1, BPF_REG_10),
 			BPF_ALU64_IMM(BPF_ADD, BPF_REG_1, -64),
+			BPF_MOV64_IMM(BPF_REG_2, 16),
 			BPF_STX_MEM(BPF_DW, BPF_REG_1, BPF_REG_2, -128),
 			BPF_LDX_MEM(BPF_DW, BPF_REG_2, BPF_REG_1, -128),
 			BPF_ALU64_IMM(BPF_AND, BPF_REG_2, 64),
@@ -6559,9 +6528,9 @@ static struct bpf_test tests[] = {
 	{
 		"helper access to variable memory: stack, bitwise AND + JMP, wrong max",
 		.insns = {
-			BPF_LDX_MEM(BPF_DW, BPF_REG_2, BPF_REG_1, 8),
 			BPF_MOV64_REG(BPF_REG_1, BPF_REG_10),
 			BPF_ALU64_IMM(BPF_ADD, BPF_REG_1, -64),
+			BPF_MOV64_IMM(BPF_REG_2, 16),
 			BPF_STX_MEM(BPF_DW, BPF_REG_1, BPF_REG_2, -128),
 			BPF_LDX_MEM(BPF_DW, BPF_REG_2, BPF_REG_1, -128),
 			BPF_ALU64_IMM(BPF_AND, BPF_REG_2, 65),
@@ -6635,9 +6604,9 @@ static struct bpf_test tests[] = {
 	{
 		"helper access to variable memory: stack, JMP, bounds + offset",
 		.insns = {
-			BPF_LDX_MEM(BPF_DW, BPF_REG_2, BPF_REG_1, 8),
 			BPF_MOV64_REG(BPF_REG_1, BPF_REG_10),
 			BPF_ALU64_IMM(BPF_ADD, BPF_REG_1, -64),
+			BPF_MOV64_IMM(BPF_REG_2, 16),
 			BPF_STX_MEM(BPF_DW, BPF_REG_1, BPF_REG_2, -128),
 			BPF_LDX_MEM(BPF_DW, BPF_REG_2, BPF_REG_1, -128),
 			BPF_JMP_IMM(BPF_JGT, BPF_REG_2, 64, 5),
@@ -6656,9 +6625,9 @@ static struct bpf_test tests[] = {
 	{
 		"helper access to variable memory: stack, JMP, wrong max",
 		.insns = {
-			BPF_LDX_MEM(BPF_DW, BPF_REG_2, BPF_REG_1, 8),
 			BPF_MOV64_REG(BPF_REG_1, BPF_REG_10),
 			BPF_ALU64_IMM(BPF_ADD, BPF_REG_1, -64),
+			BPF_MOV64_IMM(BPF_REG_2, 16),
 			BPF_STX_MEM(BPF_DW, BPF_REG_1, BPF_REG_2, -128),
 			BPF_LDX_MEM(BPF_DW, BPF_REG_2, BPF_REG_1, -128),
 			BPF_JMP_IMM(BPF_JGT, BPF_REG_2, 65, 4),
@@ -6676,9 +6645,9 @@ static struct bpf_test tests[] = {
 	{
 		"helper access to variable memory: stack, JMP, no max check",
 		.insns = {
-			BPF_LDX_MEM(BPF_DW, BPF_REG_2, BPF_REG_1, 8),
 			BPF_MOV64_REG(BPF_REG_1, BPF_REG_10),
 			BPF_ALU64_IMM(BPF_ADD, BPF_REG_1, -64),
+			BPF_MOV64_IMM(BPF_REG_2, 16),
 			BPF_STX_MEM(BPF_DW, BPF_REG_1, BPF_REG_2, -128),
 			BPF_LDX_MEM(BPF_DW, BPF_REG_2, BPF_REG_1, -128),
 			BPF_MOV64_IMM(BPF_REG_4, 0),
@@ -6696,9 +6665,9 @@ static struct bpf_test tests[] = {
 	{
 		"helper access to variable memory: stack, JMP, no min check",
 		.insns = {
-			BPF_LDX_MEM(BPF_DW, BPF_REG_2, BPF_REG_1, 8),
 			BPF_MOV64_REG(BPF_REG_1, BPF_REG_10),
 			BPF_ALU64_IMM(BPF_ADD, BPF_REG_1, -64),
+			BPF_MOV64_IMM(BPF_REG_2, 16),
 			BPF_STX_MEM(BPF_DW, BPF_REG_1, BPF_REG_2, -128),
 			BPF_LDX_MEM(BPF_DW, BPF_REG_2, BPF_REG_1, -128),
 			BPF_JMP_IMM(BPF_JGT, BPF_REG_2, 64, 3),
@@ -6714,9 +6683,9 @@ static struct bpf_test tests[] = {
 	{
 		"helper access to variable memory: stack, JMP (signed), no min check",
 		.insns = {
-			BPF_LDX_MEM(BPF_DW, BPF_REG_2, BPF_REG_1, 8),
 			BPF_MOV64_REG(BPF_REG_1, BPF_REG_10),
 			BPF_ALU64_IMM(BPF_ADD, BPF_REG_1, -64),
+			BPF_MOV64_IMM(BPF_REG_2, 16),
 			BPF_STX_MEM(BPF_DW, BPF_REG_1, BPF_REG_2, -128),
 			BPF_LDX_MEM(BPF_DW, BPF_REG_2, BPF_REG_1, -128),
 			BPF_JMP_IMM(BPF_JSGT, BPF_REG_2, 64, 3),
@@ -6758,7 +6727,6 @@ static struct bpf_test tests[] = {
 	{
 		"helper access to variable memory: map, JMP, wrong max",
 		.insns = {
-			BPF_LDX_MEM(BPF_DW, BPF_REG_6, BPF_REG_1, 8),
 			BPF_MOV64_REG(BPF_REG_2, BPF_REG_10),
 			BPF_ALU64_IMM(BPF_ADD, BPF_REG_2, -8),
 			BPF_ST_MEM(BPF_DW, BPF_REG_2, 0, 0),
@@ -6766,7 +6734,7 @@ static struct bpf_test tests[] = {
 			BPF_EMIT_CALL(BPF_FUNC_map_lookup_elem),
 			BPF_JMP_IMM(BPF_JEQ, BPF_REG_0, 0, 10),
 			BPF_MOV64_REG(BPF_REG_1, BPF_REG_0),
-			BPF_MOV64_REG(BPF_REG_2, BPF_REG_6),
+			BPF_MOV64_IMM(BPF_REG_2, sizeof(struct test_val)),
 			BPF_STX_MEM(BPF_DW, BPF_REG_10, BPF_REG_2, -128),
 			BPF_LDX_MEM(BPF_DW, BPF_REG_2, BPF_REG_10, -128),
 			BPF_JMP_IMM(BPF_JSGT, BPF_REG_2,
@@ -6778,7 +6746,7 @@ static struct bpf_test tests[] = {
 			BPF_MOV64_IMM(BPF_REG_0, 0),
 			BPF_EXIT_INSN(),
 		},
-		.fixup_map2 = { 4 },
+		.fixup_map2 = { 3 },
 		.errstr = "invalid access to map value, value_size=48 off=0 size=49",
 		.result = REJECT,
 		.prog_type = BPF_PROG_TYPE_TRACEPOINT,
@@ -6813,7 +6781,6 @@ static struct bpf_test tests[] = {
 	{
 		"helper access to variable memory: map adjusted, JMP, wrong max",
 		.insns = {
-			BPF_LDX_MEM(BPF_DW, BPF_REG_6, BPF_REG_1, 8),
 			BPF_MOV64_REG(BPF_REG_2, BPF_REG_10),
 			BPF_ALU64_IMM(BPF_ADD, BPF_REG_2, -8),
 			BPF_ST_MEM(BPF_DW, BPF_REG_2, 0, 0),
@@ -6822,7 +6789,7 @@ static struct bpf_test tests[] = {
 			BPF_JMP_IMM(BPF_JEQ, BPF_REG_0, 0, 11),
 			BPF_MOV64_REG(BPF_REG_1, BPF_REG_0),
 			BPF_ALU64_IMM(BPF_ADD, BPF_REG_1, 20),
-			BPF_MOV64_REG(BPF_REG_2, BPF_REG_6),
+			BPF_MOV64_IMM(BPF_REG_2, sizeof(struct test_val)),
 			BPF_STX_MEM(BPF_DW, BPF_REG_10, BPF_REG_2, -128),
 			BPF_LDX_MEM(BPF_DW, BPF_REG_2, BPF_REG_10, -128),
 			BPF_JMP_IMM(BPF_JSGT, BPF_REG_2,
@@ -6834,7 +6801,7 @@ static struct bpf_test tests[] = {
 			BPF_MOV64_IMM(BPF_REG_0, 0),
 			BPF_EXIT_INSN(),
 		},
-		.fixup_map2 = { 4 },
+		.fixup_map2 = { 3 },
 		.errstr = "R1 min value is outside of the array range",
 		.result = REJECT,
 		.prog_type = BPF_PROG_TYPE_TRACEPOINT,
@@ -6856,8 +6823,8 @@ static struct bpf_test tests[] = {
 	{
 		"helper access to variable memory: size > 0 not allowed on NULL (ARG_PTR_TO_MEM_OR_NULL)",
 		.insns = {
-			BPF_LDX_MEM(BPF_W, BPF_REG_2, BPF_REG_1, 0),
 			BPF_MOV64_IMM(BPF_REG_1, 0),
+			BPF_MOV64_IMM(BPF_REG_2, 1),
 			BPF_STX_MEM(BPF_DW, BPF_REG_10, BPF_REG_2, -128),
 			BPF_LDX_MEM(BPF_DW, BPF_REG_2, BPF_REG_10, -128),
 			BPF_ALU64_IMM(BPF_AND, BPF_REG_2, 64),
@@ -7083,7 +7050,6 @@ static struct bpf_test tests[] = {
 	{
 		"helper access to variable memory: 8 bytes leak",
 		.insns = {
-			BPF_LDX_MEM(BPF_DW, BPF_REG_2, BPF_REG_1, 8),
 			BPF_MOV64_REG(BPF_REG_1, BPF_REG_10),
 			BPF_ALU64_IMM(BPF_ADD, BPF_REG_1, -64),
 			BPF_MOV64_IMM(BPF_REG_0, 0),
@@ -7094,6 +7060,7 @@ static struct bpf_test tests[] = {
 			BPF_STX_MEM(BPF_DW, BPF_REG_10, BPF_REG_0, -24),
 			BPF_STX_MEM(BPF_DW, BPF_REG_10, BPF_REG_0, -16),
 			BPF_STX_MEM(BPF_DW, BPF_REG_10, BPF_REG_0, -8),
+			BPF_MOV64_IMM(BPF_REG_2, 1),
 			BPF_STX_MEM(BPF_DW, BPF_REG_10, BPF_REG_2, -128),
 			BPF_LDX_MEM(BPF_DW, BPF_REG_2, BPF_REG_10, -128),
 			BPF_ALU64_IMM(BPF_AND, BPF_REG_2, 63),
@@ -8478,7 +8445,7 @@ static struct bpf_test tests[] = {
 		.prog_type = BPF_PROG_TYPE_LWT_IN,
 	},
 	{
-		"indirect variable-offset stack access, out of bound",
+		"indirect variable-offset stack access",
 		.insns = {
 			/* Fill the top 8 bytes of the stack */
 			BPF_ST_MEM(BPF_DW, BPF_REG_10, -8, 0),
@@ -8499,83 +8466,8 @@ static struct bpf_test tests[] = {
 			BPF_EXIT_INSN(),
 		},
 		.fixup_map1 = { 5 },
-		.errstr = "invalid stack type R2 var_off",
+		.errstr = "variable stack read R2",
 		.result = REJECT,
-		.prog_type = BPF_PROG_TYPE_LWT_IN,
-	},
-	{
-		"indirect variable-offset stack access, max_off+size > max_initialized",
-		.insns = {
-		/* Fill only the second from top 8 bytes of the stack. */
-		BPF_ST_MEM(BPF_DW, BPF_REG_10, -16, 0),
-		/* Get an unknown value. */
-		BPF_LDX_MEM(BPF_W, BPF_REG_2, BPF_REG_1, 0),
-		/* Make it small and 4-byte aligned. */
-		BPF_ALU64_IMM(BPF_AND, BPF_REG_2, 4),
-		BPF_ALU64_IMM(BPF_SUB, BPF_REG_2, 16),
-		/* Add it to fp.  We now have either fp-12 or fp-16, but we don't know
-		 * which. fp-12 size 8 is partially uninitialized stack.
-		 */
-		BPF_ALU64_REG(BPF_ADD, BPF_REG_2, BPF_REG_10),
-		/* Dereference it indirectly. */
-		BPF_LD_MAP_FD(BPF_REG_1, 0),
-		BPF_EMIT_CALL(BPF_FUNC_map_lookup_elem),
-		BPF_MOV64_IMM(BPF_REG_0, 0),
-		BPF_EXIT_INSN(),
-		},
-		.fixup_map1 = { 5 },
-		.errstr = "invalid indirect read from stack var_off",
-		.result = REJECT,
-		.prog_type = BPF_PROG_TYPE_LWT_IN,
-	},
-	{
-		"indirect variable-offset stack access, min_off < min_initialized",
-		.insns = {
-		/* Fill only the top 8 bytes of the stack. */
-		BPF_ST_MEM(BPF_DW, BPF_REG_10, -8, 0),
-		/* Get an unknown value */
-		BPF_LDX_MEM(BPF_W, BPF_REG_2, BPF_REG_1, 0),
-		/* Make it small and 4-byte aligned. */
-		BPF_ALU64_IMM(BPF_AND, BPF_REG_2, 4),
-		BPF_ALU64_IMM(BPF_SUB, BPF_REG_2, 16),
-		/* Add it to fp.  We now have either fp-12 or fp-16, but we don't know
-		 * which. fp-16 size 8 is partially uninitialized stack.
-		 */
-		BPF_ALU64_REG(BPF_ADD, BPF_REG_2, BPF_REG_10),
-		/* Dereference it indirectly. */
-		BPF_LD_MAP_FD(BPF_REG_1, 0),
-		BPF_EMIT_CALL(BPF_FUNC_map_lookup_elem),
-		BPF_MOV64_IMM(BPF_REG_0, 0),
-		BPF_EXIT_INSN(),
-		},
-		.fixup_map1 = { 5 },
-		.errstr = "invalid indirect read from stack var_off",
-		.result = REJECT,
-		.prog_type = BPF_PROG_TYPE_LWT_IN,
-	},
-	{
-		"indirect variable-offset stack access, ok",
-		.insns = {
-		/* Fill the top 16 bytes of the stack. */
-		BPF_ST_MEM(BPF_DW, BPF_REG_10, -16, 0),
-		BPF_ST_MEM(BPF_DW, BPF_REG_10, -8, 0),
-		/* Get an unknown value. */
-		BPF_LDX_MEM(BPF_W, BPF_REG_2, BPF_REG_1, 0),
-		/* Make it small and 4-byte aligned. */
-		BPF_ALU64_IMM(BPF_AND, BPF_REG_2, 4),
-		BPF_ALU64_IMM(BPF_SUB, BPF_REG_2, 16),
-		/* Add it to fp.  We now have either fp-12 or fp-16, we don't know
-		 * which, but either way it points to initialized stack.
-		 */
-		BPF_ALU64_REG(BPF_ADD, BPF_REG_2, BPF_REG_10),
-		/* Dereference it indirectly. */
-		BPF_LD_MAP_FD(BPF_REG_1, 0),
-		BPF_EMIT_CALL(BPF_FUNC_map_lookup_elem),
-		BPF_MOV64_IMM(BPF_REG_0, 0),
-		BPF_EXIT_INSN(),
-		},
-		.fixup_map1 = { 6 },
-		.result = ACCEPT,
 		.prog_type = BPF_PROG_TYPE_LWT_IN,
 	},
 	{
