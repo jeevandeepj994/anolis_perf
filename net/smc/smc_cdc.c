@@ -31,6 +31,10 @@ static void smc_cdc_tx_handler(struct smc_wr_tx_pend_priv *pnd_snd,
 	struct smc_sock *smc;
 	int diff;
 
+	if (!conn)
+		/* already dismissed */
+		return;
+
 	smc = container_of(conn, struct smc_sock, conn);
 	bh_lock_sock(&smc->sk);
 	if (!wc_status) {
@@ -47,17 +51,6 @@ static void smc_cdc_tx_handler(struct smc_wr_tx_pend_priv *pnd_snd,
 			      conn);
 		conn->tx_cdc_seq_fin = cdcpend->ctrl_seq;
 	}
-
-	if (atomic_dec_and_test(&conn->cdc_pend_tx_wr)) {
-		/* If this is the last pending WR complete, push them to prevent
-		 * no one trying to push when corked.
-		 */
-		smc_tx_sndbuf_nonempty(conn);
-		if (unlikely(wq_has_sleeper(&conn->cdc_pend_tx_wq)))
-			wake_up(&conn->cdc_pend_tx_wq);
-	}
-	WARN_ON(atomic_read(&conn->cdc_pend_tx_wr) < 0);
-
 	smc_tx_sndbuf_nonfull(smc);
 	bh_unlock_sock(&smc->sk);
 }
@@ -114,10 +107,6 @@ int smc_cdc_msg_send(struct smc_connection *conn,
 	conn->tx_cdc_seq++;
 	conn->local_tx_ctrl.seqno = conn->tx_cdc_seq;
 	smc_host_msg_to_cdc((struct smc_cdc_msg *)wr_buf, conn, &cfed);
-
-	atomic_inc(&conn->cdc_pend_tx_wr);
-	smp_mb__after_atomic(); /* Make sure cdc_pend_tx_wr added before post */
-
 	rc = smc_wr_tx_send(link, (struct smc_wr_tx_pend_priv *)pend);
 	if (!rc) {
 		smc_curs_copy(&conn->rx_curs_confirmed, &cfed, conn);
@@ -125,7 +114,6 @@ int smc_cdc_msg_send(struct smc_connection *conn,
 	} else {
 		conn->tx_cdc_seq--;
 		conn->local_tx_ctrl.seqno = conn->tx_cdc_seq;
-		atomic_dec(&conn->cdc_pend_tx_wr);
 	}
 
 	return rc;
@@ -148,18 +136,7 @@ int smcr_cdc_msg_send_validation(struct smc_connection *conn,
 	peer->token = htonl(local->token);
 	peer->prod_flags.failover_validation = 1;
 
-	/* We need to set pend->conn here to make sure smc_cdc_tx_handler()
-	 * can handle properly
-	 */
-	smc_cdc_add_pending_send(conn, pend);
-
-	atomic_inc(&conn->cdc_pend_tx_wr);
-	smp_mb__after_atomic(); /* Make sure cdc_pend_tx_wr added before post */
-
 	rc = smc_wr_tx_send(link, (struct smc_wr_tx_pend_priv *)pend);
-	if (unlikely(rc))
-		atomic_dec(&conn->cdc_pend_tx_wr);
-
 	return rc;
 }
 
@@ -173,11 +150,9 @@ static int smcr_cdc_get_slot_and_msg_send(struct smc_connection *conn)
 
 again:
 	link = conn->lnk;
-	if (!smc_wr_tx_link_hold(link))
-		return -ENOLINK;
 	rc = smc_cdc_get_free_slot(conn, link, &wr_buf, NULL, &pend);
 	if (rc)
-		goto put_out;
+		return rc;
 
 	spin_lock_bh(&conn->send_lock);
 	if (link != conn->lnk) {
@@ -185,7 +160,6 @@ again:
 		spin_unlock_bh(&conn->send_lock);
 		smc_wr_tx_put_slot(link,
 				   (struct smc_wr_tx_pend_priv *)pend);
-		smc_wr_tx_link_put(link);
 		if (again)
 			return -ENOLINK;
 		again = true;
@@ -193,8 +167,6 @@ again:
 	}
 	rc = smc_cdc_msg_send(conn, wr_buf, pend);
 	spin_unlock_bh(&conn->send_lock);
-put_out:
-	smc_wr_tx_link_put(link);
 	return rc;
 }
 
@@ -216,9 +188,31 @@ int smc_cdc_get_slot_and_msg_send(struct smc_connection *conn)
 	return rc;
 }
 
-void smc_cdc_wait_pend_tx_wr(struct smc_connection *conn)
+static bool smc_cdc_tx_filter(struct smc_wr_tx_pend_priv *tx_pend,
+			      unsigned long data)
 {
-	wait_event(conn->cdc_pend_tx_wq, !atomic_read(&conn->cdc_pend_tx_wr));
+	struct smc_connection *conn = (struct smc_connection *)data;
+	struct smc_cdc_tx_pend *cdc_pend =
+		(struct smc_cdc_tx_pend *)tx_pend;
+
+	return cdc_pend->conn == conn;
+}
+
+static void smc_cdc_tx_dismisser(struct smc_wr_tx_pend_priv *tx_pend)
+{
+	struct smc_cdc_tx_pend *cdc_pend =
+		(struct smc_cdc_tx_pend *)tx_pend;
+
+	cdc_pend->conn = NULL;
+}
+
+void smc_cdc_tx_dismiss_slots(struct smc_connection *conn)
+{
+	struct smc_link *link = conn->lnk;
+
+	smc_wr_tx_dismiss_slots(link, SMC_CDC_MSG_TYPE,
+				smc_cdc_tx_filter, smc_cdc_tx_dismisser,
+				(unsigned long)conn);
 }
 
 /* Send a SMC-D CDC header.
@@ -395,9 +389,9 @@ static void smc_cdc_msg_recv(struct smc_sock *smc, struct smc_cdc_msg *cdc)
  * Context:
  * - tasklet context
  */
-static void smcd_cdc_rx_tsklet(struct tasklet_struct *t)
+static void smcd_cdc_rx_tsklet(unsigned long data)
 {
-	struct smc_connection *conn = from_tasklet(conn, t, rx_tsklet);
+	struct smc_connection *conn = (struct smc_connection *)data;
 	struct smcd_cdc_msg *data_cdc;
 	struct smcd_cdc_msg cdc;
 	struct smc_sock *smc;
@@ -417,7 +411,7 @@ static void smcd_cdc_rx_tsklet(struct tasklet_struct *t)
  */
 void smcd_cdc_rx_init(struct smc_connection *conn)
 {
-	tasklet_setup(&conn->rx_tsklet, smcd_cdc_rx_tsklet);
+	tasklet_init(&conn->rx_tsklet, smcd_cdc_rx_tsklet, (unsigned long)conn);
 }
 
 /***************************** init, exit, misc ******************************/
