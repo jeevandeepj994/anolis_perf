@@ -27,10 +27,9 @@
 #include "smc_close.h"
 #include "smc_ism.h"
 #include "smc_tx.h"
-#include "smc_stats.h"
-#include "smc_tracepoint.h"
 
 #define SMC_TX_WORK_DELAY	0
+#define SMC_TX_CORK_DELAY	(HZ >> 2)	/* 250 ms */
 
 /***************************** sndbuf producer *******************************/
 
@@ -46,8 +45,6 @@ static void smc_tx_write_space(struct sock *sk)
 
 	/* similar to sk_stream_write_space */
 	if (atomic_read(&smc->conn.sndbuf_space) && sock) {
-		if (test_bit(SOCK_NOSPACE, &sock->flags))
-			SMC_STAT_RMB_TX_FULL(smc, !smc->conn.lnk);
 		clear_bit(SOCK_NOSPACE, &sock->flags);
 		rcu_read_lock();
 		wq = rcu_dereference(sk->sk_wq);
@@ -124,37 +121,11 @@ static int smc_tx_wait(struct smc_sock *smc, int flags)
 	return rc;
 }
 
-/* Strategy: Nagle algorithm
- *  1. The first message should never cork
- *  2. If we have any inflight messages, wait for the first
- *     message back
- *  3. The total corked message should not exceed min(64k, sendbuf/2)
- */
-static bool smc_tx_should_cork(struct smc_sock *smc, struct msghdr *msg)
+static bool smc_tx_is_corked(struct smc_sock *smc)
 {
-	struct smc_connection *conn = &smc->conn;
-	int prepared_send;
+	struct tcp_sock *tp = tcp_sk(smc->clcsock->sk);
 
-	/* First request && no more message should always pass */
-	if (atomic_read(&conn->cdc_pend_tx_wr) == 0 &&
-	    !(msg->msg_flags & MSG_MORE))
-		return false;
-
-	/* If We have enough data in the send queue that have not been
-	 * pushed, send immediately.
-	 * Note, here we only care about the prepared_sends, but not
-	 * sendbuf_space because sendbuf_space has nothing to do with
-	 * corked data size.
-	 */
-	prepared_send = smc_tx_prepared_sends(conn);
-	if (prepared_send > min(64 * 1024, conn->sndbuf_desc->len >> 1))
-		return false;
-
-	if (!sock_net(&smc->sk)->smc.sysctl_autocorking)
-		return false;
-
-	/* All the other conditions should cork */
-	return true;
+	return (tp->nonagle & TCP_NAGLE_CORK) ? true : false;
 }
 
 /* sndbuf producer: main API called by socket layer.
@@ -180,19 +151,9 @@ int smc_tx_sendmsg(struct smc_sock *smc, struct msghdr *msg, size_t len)
 		goto out_err;
 	}
 
-	if (sk->sk_state == SMC_INIT)
-		return -ENOTCONN;
-
-	if (len > conn->sndbuf_desc->len)
-		SMC_STAT_RMB_TX_SIZE_SMALL(smc, !conn->lnk);
-
-	if (len > conn->peer_rmbe_size)
-		SMC_STAT_RMB_TX_PEER_SIZE_SMALL(smc, !conn->lnk);
-
-	if (msg->msg_flags & MSG_OOB)
-		SMC_STAT_INC(smc, urg_data_cnt);
-
 	while (msg_data_left(msg)) {
+		if (sk->sk_state == SMC_INIT)
+			return -ENOTCONN;
 		if (smc->sk.sk_shutdown & SEND_SHUTDOWN ||
 		    (smc->sk.sk_err == ECONNABORTED) ||
 		    conn->killed)
@@ -203,20 +164,12 @@ int smc_tx_sendmsg(struct smc_sock *smc, struct msghdr *msg, size_t len)
 		if (msg->msg_flags & MSG_OOB)
 			conn->local_tx_ctrl.prod_flags.urg_data_pending = 1;
 
-		/* If our send queue is full but peer have RMBE space,
-		 * we should send them out before wait
-		 */
-		if (!atomic_read(&conn->sndbuf_space) &&
-		    atomic_read(&conn->peer_rmbe_space) > 0)
-			smc_tx_sndbuf_nonempty(conn);
-
 		if (!atomic_read(&conn->sndbuf_space) || conn->urg_tx_pend) {
+			if (send_done)
+				return send_done;
 			rc = smc_tx_wait(smc, msg->msg_flags);
-			if (rc) {
-				if (send_done)
-					return send_done;
+			if (rc)
 				goto out_err;
-			}
 			continue;
 		}
 
@@ -269,21 +222,16 @@ int smc_tx_sendmsg(struct smc_sock *smc, struct msghdr *msg, size_t len)
 		 */
 		if ((msg->msg_flags & MSG_OOB) && !send_remaining)
 			conn->urg_tx_pend = true;
-		if (smc_tx_should_cork(smc, msg)) {
+		if ((msg->msg_flags & MSG_MORE || smc_tx_is_corked(smc)) &&
+		    (atomic_read(&conn->sndbuf_space) >
+						(conn->sndbuf_desc->len >> 1)))
 			/* for a corked socket defer the RDMA writes if there
 			 * is still sufficient sndbuf_space available
 			 */
-			conn->tx_corked_bytes += copylen;
-			++conn->tx_corked_cnt;
-		} else {
-			conn->tx_bytes += copylen;
-			++conn->tx_cnt;
-			if (delayed_work_pending(&conn->tx_work))
-				cancel_delayed_work(&conn->tx_work);
+			queue_delayed_work(conn->lgr->tx_wq, &conn->tx_work,
+					   SMC_TX_CORK_DELAY);
+		else
 			smc_tx_sndbuf_nonempty(conn);
-		}
-
-		trace_smc_tx_sendmsg(smc, copylen);
 	} /* while (msg_data_left(msg)) */
 
 	return send_done;
@@ -471,12 +419,8 @@ static int smc_tx_rdma_writes(struct smc_connection *conn,
 	/* destination: RMBE */
 	/* cf. snd_wnd */
 	rmbespace = atomic_read(&conn->peer_rmbe_space);
-	if (rmbespace <= 0) {
-		struct smc_sock *smc = container_of(conn, struct smc_sock,
-						    conn);
-		SMC_STAT_RMB_TX_PEER_FULL(smc, !conn->lnk);
+	if (rmbespace <= 0)
 		return 0;
-	}
 	smc_curs_copy(&prod, &conn->local_tx_ctrl.prod, conn);
 	smc_curs_copy(&cons, &conn->local_rx_ctrl.cons, conn);
 
@@ -544,11 +488,8 @@ static int smcr_tx_sndbuf_nonempty(struct smc_connection *conn)
 	struct smc_wr_buf *wr_buf;
 	int rc;
 
-	if (!link || !smc_wr_tx_link_hold(link))
-		return -ENOLINK;
 	rc = smc_cdc_get_free_slot(conn, link, &wr_buf, &wr_rdma_buf, &pend);
 	if (rc < 0) {
-		smc_wr_tx_link_put(link);
 		if (rc == -EBUSY) {
 			struct smc_sock *smc =
 				container_of(conn, struct smc_sock, conn);
@@ -589,7 +530,6 @@ static int smcr_tx_sndbuf_nonempty(struct smc_connection *conn)
 
 out_unlock:
 	spin_unlock_bh(&conn->send_lock);
-	smc_wr_tx_link_put(link);
 	return rc;
 }
 
@@ -614,31 +554,11 @@ static int smcd_tx_sndbuf_nonempty(struct smc_connection *conn)
 
 int smc_tx_sndbuf_nonempty(struct smc_connection *conn)
 {
-	int rc = 0;
-	struct smc_sock *smc = container_of(conn, struct smc_sock, conn);
-
-	/* Only let one to push to prevent wasting of CPU and CDC slot */
-	if (atomic_inc_return(&conn->tx_pushing) > 1)
-		return 0;
-
-again:
-	atomic_set(&conn->tx_pushing, 1);
-
-	/* No data in the send queue */
-	if (unlikely(smc_tx_prepared_sends(conn) <= 0))
-		goto out;
-
-	/* Peer don't have RMBE space */
-	if (unlikely(atomic_read(&conn->peer_rmbe_space) <= 0)) {
-		SMC_STAT_RMB_TX_PEER_FULL(smc, !conn->lnk);
-		goto out;
-	}
+	int rc;
 
 	if (conn->killed ||
-	    conn->local_rx_ctrl.conn_state_flags.peer_conn_abort) {
-		rc = -EPIPE;    /* connection being aborted */
-		goto out;
-	}
+	    conn->local_rx_ctrl.conn_state_flags.peer_conn_abort)
+		return -EPIPE;	/* connection being aborted */
 	if (conn->lgr->is_smcd)
 		rc = smcd_tx_sndbuf_nonempty(conn);
 	else
@@ -650,16 +570,6 @@ again:
 						    conn);
 		smc_close_wake_tx_prepared(smc);
 	}
-
-out:
-	/* We need to check whether someone else have added some data into
-	 * the send queue and tried to push but failed when we are pushing.
-	 * If so, we need to try push again to prevent those data in the
-	 * send queue may never been pushed out
-	 */
-	if (unlikely(!atomic_dec_and_test(&conn->tx_pushing)))
-		goto again;
-
 	return rc;
 }
 

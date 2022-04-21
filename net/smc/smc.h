@@ -21,9 +21,16 @@
 #define SMC_V1		1		/* SMC version V1 */
 #define SMC_V2		2		/* SMC version V2 */
 #define SMC_RELEASE	0
+
+#define SMCPROTO_SMC		0	/* SMC protocol, IPv4 */
+#define SMCPROTO_SMC6		1	/* SMC protocol, IPv6 */
+
 #define SMC_MAX_ISM_DEVS	8	/* max # of proposed non-native ISM
 					 * devices
 					 */
+
+#define SMC_MAX_HOSTNAME_LEN	32
+#define SMC_MAX_EID_LEN		32
 
 extern struct proto smc_proto;
 extern struct proto smc_proto6;
@@ -52,20 +59,7 @@ enum smc_state {		/* possible states of an SMC socket */
 struct smc_link_group;
 
 struct smc_wr_rx_hdr {	/* common prefix part of LLC and CDC to demultiplex */
-	union {
-		u8 type;
-#if defined(__BIG_ENDIAN_BITFIELD)
-		struct {
-			u8 llc_version:4,
-			   llc_type:4;
-		};
-#elif defined(__LITTLE_ENDIAN_BITFIELD)
-		struct {
-			u8 llc_type:4,
-			   llc_version:4;
-		};
-#endif
-	};
+	u8			type;
 } __aligned(1);
 
 struct smc_cdc_conn_state_flags {
@@ -135,12 +129,6 @@ enum smc_urg_state {
 	SMC_URG_READ	= 3,			/* data was already read */
 };
 
-struct smc_mark_wake_up {
-	bool woken;
-	void *key;
-	wait_queue_entry_t wait_entry;
-};
-
 struct smc_connection {
 	struct rb_node		alert_node;
 	struct smc_link_group	*lgr;		/* link group of connection */
@@ -182,13 +170,6 @@ struct smc_connection {
 	u16			tx_cdc_seq;	/* sequence # for CDC send */
 	u16			tx_cdc_seq_fin;	/* sequence # - tx completed */
 	spinlock_t		send_lock;	/* protect wr_sends */
-	atomic_t		cdc_pend_tx_wr; /* number of pending tx CDC wqe
-						 * - inc when post wqe,
-						 * - dec on polled tx cqe
-						 */
-	wait_queue_head_t	cdc_pend_tx_wq; /* wakeup on no cdc_pend_tx_wr*/
-	atomic_t		tx_pushing;     /* nr_threads trying tx push */
-
 	struct delayed_work	tx_work;	/* retry of smc_cdc_msg_send */
 	u32			tx_off;		/* base offset in peer rmb */
 
@@ -223,29 +204,16 @@ struct smc_connection {
 	u8			rx_off;		/* receive offset:
 						 * 0 for SMC-R, 32 for SMC-D
 						 */
-	u64			rx_cnt;		/* rx counter */
-	u64			tx_cnt;		/* tx counter */
-	u64			tx_corked_cnt;	/* tx counter with MSG_MORE flag or corked */
-	u64			rx_bytes;	/* rx size */
-	u64			tx_bytes;	/* tx size */
-	u64			tx_corked_bytes;/* tx size with MSG_MORE flag or corked */
 	u64			peer_token;	/* SMC-D token of peer */
 	u8			killed : 1;	/* abnormal termination */
-	u8			freed : 1;	/* normal termiation */
 	u8			out_of_sync : 1; /* out of sync with peer */
 };
 
 struct smc_sock {				/* smc sock container */
 	struct sock		sk;
 	struct socket		*clcsock;	/* internal tcp socket */
-	void			(*clcsk_state_change)(struct sock *sk);
-						/* original stat_change fct. */
 	void			(*clcsk_data_ready)(struct sock *sk);
 						/* original data_ready fct. **/
-	void			(*clcsk_write_space)(struct sock *sk);
-						/* original write_space fct. */
-	void			(*clcsk_error_report)(struct sock *sk);
-						/* original error_report fct. */
 	struct smc_connection	conn;		/* smc connection */
 	struct smc_sock		*listen_smc;	/* listen parent */
 	struct work_struct	connect_work;	/* handle non-blocking connect*/
@@ -280,7 +248,6 @@ static inline struct smc_sock *smc_sk(const struct sock *sk)
 	return (struct smc_sock *)sk;
 }
 
-extern struct workqueue_struct	*smc_tcp_ls_wq;	/* wq for tcp listen work */
 extern struct workqueue_struct	*smc_hs_wq;	/* wq for handshake work */
 extern struct workqueue_struct	*smc_close_wq;	/* wq for close work */
 
@@ -322,17 +289,7 @@ static inline bool using_ipsec(struct smc_sock *smc)
 }
 #endif
 
-struct smc_gidlist;
-
 struct sock *smc_accept_dequeue(struct sock *parent, struct socket *new_sock);
 void smc_close_non_accepted(struct sock *sk);
-void smc_fill_gid_list(struct smc_link_group *lgr,
-		       struct smc_gidlist *gidlist,
-		       struct smc_ib_device *known_dev, u8 *known_gid);
-
-#ifdef CONFIG_SYSCTL
-int smc_sysctl_init(void);
-void smc_sysctl_exit(void);
-#endif
 
 #endif	/* __SMC_H */
