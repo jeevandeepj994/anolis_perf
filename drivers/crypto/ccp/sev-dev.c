@@ -23,6 +23,7 @@
 #include <linux/gfp.h>
 #include <linux/cpufeature.h>
 #include <linux/fs.h>
+#include <linux/psp-csv.h>
 
 #include <asm/smp.h>
 
@@ -122,6 +123,19 @@ static int sev_wait_cmd_ioc(struct sev_device *sev,
 
 static int sev_cmd_buffer_len(int cmd)
 {
+	if (boot_cpu_data.x86_vendor == X86_VENDOR_HYGON) {
+		switch (cmd) {
+		case CSV_CMD_LAUNCH_ENCRYPT_DATA:
+			return sizeof(struct csv_data_launch_encrypt_data);
+		case CSV_CMD_LAUNCH_ENCRYPT_VMCB:
+			return sizeof(struct csv_data_launch_encrypt_vmcb);
+		case CSV_CMD_UPDATE_NPT:
+			return sizeof(struct csv_data_update_npt);
+		default:
+			break;
+		}
+	}
+
 	switch (cmd) {
 	case SEV_CMD_INIT:			return sizeof(struct sev_data_init);
 	case SEV_CMD_INIT_EX:                   return sizeof(struct sev_data_init_ex);

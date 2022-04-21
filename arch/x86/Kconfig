@@ -2024,6 +2024,14 @@ config EFI_MIXED
 
 	   If unsure, say N.
 
+config HYGON_CSV
+	bool "Hygon secure virtualization CSV support"
+	default n
+	depends on CPU_SUP_HYGON && AMD_MEM_ENCRYPT
+	help
+	  Say yes to enable support for the Hygon secure virtualization
+	  on hygon processor.
+
 source "kernel/Kconfig.hz"
 
 config KEXEC

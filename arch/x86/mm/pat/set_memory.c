@@ -33,6 +33,7 @@
 #include <asm/hyperv-tlfs.h>
 #include <asm/mshyperv.h>
 #include <asm/tdx.h>
+#include <asm/csv_command.h>
 
 #include "../mm_internal.h"
 
@@ -2054,6 +2055,9 @@ static int __set_memory_enc_pgtable(unsigned long addr, int numpages, bool enc)
 	 * as above.
 	 */
 	cpa_flush(&cpa, 0);
+
+	if (csv_active())
+		csv_memory_enc_dec(addr, numpages, enc);
 
 	/*
 	 * Notify hypervisor that a given memory range is mapped encrypted
