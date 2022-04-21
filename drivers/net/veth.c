@@ -201,6 +201,15 @@ static netdev_tx_t veth_xmit(struct sk_buff *skb, struct net_device *dev)
 			skb_record_rx_queue(skb, rxq);
 	}
 
+#ifdef CONFIG_CGROUP_NET_CLASSID
+	if (sysctl_skb_classid_forward) {
+		struct sock *sk = skb_to_full_sk(skb);
+
+		skb->cgroup_classid = sk ?
+			sock_cgroup_classid(&sk->sk_cgrp_data) : 0;
+	}
+#endif
+
 	if (likely(veth_forward_skb(rcv, skb, rq, rcv_xdp) == NET_RX_SUCCESS)) {
 		struct pcpu_vstats *stats = this_cpu_ptr(dev->vstats);
 
