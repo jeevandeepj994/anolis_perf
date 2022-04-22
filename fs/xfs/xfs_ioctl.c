@@ -2355,6 +2355,35 @@ xfs_file_ioctl(
 		return error;
 	}
 
+	case XFS_IOC_ATOMIC_WRITE_SET: {
+		uint32_t in;
+		static const int enable = 1;
+
+		if (!S_ISREG(inode->i_mode))
+			return -EINVAL;
+		if (!xfs_sb_version_hasreflink(&mp->m_sb))
+			return -EOPNOTSUPP;
+
+		if (get_user(in, (uint32_t __user *)arg))
+			return -EFAULT;
+		if (in != enable)
+			return -EINVAL;
+
+		if (!i_size_read(inode) || !inode->i_blocks) {
+			/* set atomic write only after file is newly created */
+			ip->i_d.di_flags2 |= XFS_DIFLAG2_DIO_ATOMIC_WRITE;
+			ip->i_d.di_flags |= XFS_DIFLAG_EXTSIZE;
+			ip->i_d.di_extsize = XFS_ATOMIC_WRITE_EXTSZ_HINT;
+
+			return 0;
+		}
+
+		/* just return if previously already set */
+		if (ip->i_d.di_flags2 & XFS_DIFLAG2_DIO_ATOMIC_WRITE)
+			return 0;
+
+		return -EOPNOTSUPP;
+	}
 	default:
 		return -ENOTTY;
 	}

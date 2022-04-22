@@ -467,6 +467,8 @@ extern struct kmem_zone	*xfs_inode_zone;
 
 /* The default CoW extent size hint. */
 #define XFS_DEFAULT_COWEXTSZ_HINT 32
+/* atomic write file extent size (16k) */
+#define XFS_ATOMIC_WRITE_EXTSZ_HINT 4
 
 int xfs_iunlink_init(struct xfs_perag *pag);
 void xfs_iunlink_destroy(struct xfs_perag *pag);
