@@ -60,6 +60,8 @@ static long tdx_guest_ioctl(struct file *file, unsigned int cmd,
 	switch (cmd) {
 	case TDX_CMD_GET_REPORT0:
 		return tdx_get_report0((struct tdx_report_req __user *)arg);
+	case TDX_CMD_GET_QUOTE:
+		return tdx_get_quote((void __user *)arg);
 	default:
 		return -ENOTTY;
 	}
@@ -85,10 +87,25 @@ MODULE_DEVICE_TABLE(x86cpu, tdx_guest_ids);
 
 static int __init tdx_guest_init(void)
 {
+	int ret;
+
 	if (!x86_match_cpu(tdx_guest_ids))
 		return -ENODEV;
 
-	return misc_register(&tdx_misc_dev);
+	ret = misc_register(&tdx_misc_dev);
+	if (ret) {
+		pr_err("misc device registration failed\n");
+		return ret;
+	}
+
+	ret = tdx_attest_init(&tdx_misc_dev);
+	if (ret) {
+		pr_err("tdx_attest_init failed\n");
+		misc_deregister(&tdx_misc_dev);
+		return ret;
+	}
+
+	return 0;
 }
 module_init(tdx_guest_init);
 
