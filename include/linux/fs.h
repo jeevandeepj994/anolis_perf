@@ -721,8 +721,14 @@ struct inode {
 
 	void			*i_private; /* fs or device private pointer */
 
+#ifdef CONFIG_KIDLED
+#ifdef CONFIG_ARCH_HISI
+	unsigned long age;
+#else
+	unsigned short age;
+#endif
+#endif
 	CK_HOTFIX_RESERVE(1)
-	CK_HOTFIX_RESERVE(2)
 } __randomize_layout;
 
 static inline unsigned int i_blocksize(const struct inode *node)
