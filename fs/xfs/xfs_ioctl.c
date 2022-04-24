@@ -2068,6 +2068,28 @@ xfs_fs_eofblocks_from_user(
 	return 0;
 }
 
+static int
+xfs_ioc_set_atomic_write(
+	struct xfs_inode	*ip)
+{
+	struct xfs_trans	*tp;
+	int			error;
+
+	tp = xfs_ioctl_setattr_get_trans(ip);
+	if (IS_ERR(tp)) {
+		error = PTR_ERR(tp);
+		goto out;
+	}
+
+	ip->i_d.di_flags2 |= XFS_DIFLAG2_DIO_ATOMIC_WRITE;
+	ip->i_d.di_flags |= XFS_DIFLAG_EXTSIZE;
+	ip->i_d.di_extsize = XFS_ATOMIC_WRITE_EXTSZ_HINT;
+
+	error = xfs_trans_commit(tp);
+out:
+	return error;
+}
+
 /*
  * Note: some of the ioctl's return positive numbers as a
  * byte count indicating success, such as readlink_by_handle.
@@ -2371,11 +2393,8 @@ xfs_file_ioctl(
 
 		if (!i_size_read(inode) || !inode->i_blocks) {
 			/* set atomic write only after file is newly created */
-			ip->i_d.di_flags2 |= XFS_DIFLAG2_DIO_ATOMIC_WRITE;
-			ip->i_d.di_flags |= XFS_DIFLAG_EXTSIZE;
-			ip->i_d.di_extsize = XFS_ATOMIC_WRITE_EXTSZ_HINT;
-
-			return 0;
+			xfs_info(mp, "set atomic write for inode %lld", ip->i_ino);
+			return xfs_ioc_set_atomic_write(ip);
 		}
 
 		/* just return if previously already set */
