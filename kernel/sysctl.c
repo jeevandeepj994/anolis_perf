@@ -2071,6 +2071,15 @@ static struct ctl_table kern_table[] = {
 		.mode		= 0644,
 		.proc_handler	= proc_dointvec,
 	},
+	{
+		.procname	= "userns_max_level",
+		.data		= &userns_max_level,
+		.maxlen		= sizeof(int),
+		.mode		= 0644,
+		.proc_handler	= proc_dointvec_minmax,
+		.extra1		= SYSCTL_ZERO,
+		.extra2		= &userns_max_level_max,
+	},
 #endif
 #ifdef CONFIG_PROC_SYSCTL
 	{
