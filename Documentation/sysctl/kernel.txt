@@ -96,6 +96,7 @@ show up in /proc/sys/kernel:
 - threads-max
 - unknown_nmi_panic
 - unprivileged_userns_clone
+- userns_max_level
 - watchdog
 - watchdog_thresh
 - version
@@ -1060,6 +1061,14 @@ namespace. When the value is non-zero, unprivileged users are not allowd
 to unshare a new user namespace. Privileged users (with CAP_SYS_ADMIN)
 are not affected and are always capable of unsharing a new user
 namespace.
+
+==============================================================
+
+userns_max_level:
+
+This value indicates the maximum nested level of user namespace. The
+valid configuration values are 0-33. When configured to zero, user
+namespace is effectively disabled.
 
 ==============================================================
 
