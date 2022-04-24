@@ -95,6 +95,7 @@ show up in /proc/sys/kernel:
 - tainted
 - threads-max
 - unknown_nmi_panic
+- unprivileged_userns_clone
 - watchdog
 - watchdog_thresh
 - version
@@ -1049,6 +1050,16 @@ that time, kernel debugging information is displayed on console.
 
 NMI switch that most IA32 servers have fires unknown NMI up, for
 example.  If a system hangs up, try pressing the NMI switch.
+
+==============================================================
+
+unprivileged_userns_clone:
+
+This value controls if unprivileged users could unshare a new user
+namespace. When the value is non-zero, unprivileged users are not allowd
+to unshare a new user namespace. Privileged users (with CAP_SYS_ADMIN)
+are not affected and are always capable of unsharing a new user
+namespace.
 
 ==============================================================
 
