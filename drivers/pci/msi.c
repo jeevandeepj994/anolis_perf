@@ -608,7 +608,7 @@ static void __iomem *msix_map_region(struct pci_dev *dev, unsigned nr_entries)
 	return ioremap(phys_addr, nr_entries * PCI_MSIX_ENTRY_SIZE);
 }
 
-static int msix_setup_entries(struct pci_dev *dev, void __iomem *base,
+static int msix_setup_entries(struct pci_dev *dev,
 			      struct msix_entry *entries, int nvec,
 			      struct irq_affinity *affd)
 {
@@ -625,7 +625,7 @@ static int msix_setup_entries(struct pci_dev *dev, void __iomem *base,
 		entry = alloc_msi_entry(&dev->dev, 1, curmsk);
 		if (!entry) {
 			if (!i)
-				iounmap(base);
+				iounmap(dev->msix_table_base);
 			else
 				free_msi_irqs(dev);
 			/* No enough memory. Don't try again */
@@ -645,7 +645,7 @@ static int msix_setup_entries(struct pci_dev *dev, void __iomem *base,
 			entry->msi_attrib.entry_nr >= vec_count;
 
 		entry->msi_attrib.default_irq	= dev->irq;
-		entry->mask_base		= base;
+		entry->mask_base		= dev->msix_table_base;
 
 		addr = pci_msix_desc_addr(entry);
 		if (addr)
@@ -700,7 +700,6 @@ static int msix_capability_init(struct pci_dev *dev, struct msix_entry *entries,
 				int nvec, struct irq_affinity *affd)
 {
 	const struct attribute_group **groups;
-	void __iomem *base;
 	int ret, tsize;
 	u16 control;
 
@@ -715,13 +714,13 @@ static int msix_capability_init(struct pci_dev *dev, struct msix_entry *entries,
 	pci_read_config_word(dev, dev->msix_cap + PCI_MSIX_FLAGS, &control);
 	/* Request & Map MSI-X table region */
 	tsize = msix_table_size(control);
-	base = msix_map_region(dev, tsize);
-	if (!base) {
+	dev->msix_table_base = msix_map_region(dev, tsize);
+	if (!dev->msix_table_base) {
 		ret = -ENOMEM;
 		goto out_disable;
 	}
 
-	ret = msix_setup_entries(dev, base, entries, nvec, affd);
+	ret = msix_setup_entries(dev, entries, nvec, affd);
 	if (ret)
 		goto out_disable;
 
@@ -756,7 +755,7 @@ static int msix_capability_init(struct pci_dev *dev, struct msix_entry *entries,
 	 * which takes the MSI-X mask bits into account even
 	 * when MSI-X is disabled, which prevents MSI delivery.
 	 */
-	msix_mask_all(base, tsize);
+	msix_mask_all(dev->msix_table_base, tsize);
 	pci_msix_clear_and_set_ctrl(dev, PCI_MSIX_FLAGS_MASKALL, 0);
 
 	pcibios_free_irq(dev);
