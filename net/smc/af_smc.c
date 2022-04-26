@@ -1858,8 +1858,11 @@ static void smc_listen_out(struct smc_sock *new_smc)
 	struct smc_sock *lsmc = new_smc->listen_smc;
 	struct sock *newsmcsk = &new_smc->sk;
 
-	if (tcp_sk(new_smc->clcsock->sk)->syn_smc)
+	mutex_lock(&new_smc->clcsock_release_lock);
+	if (new_smc->clcsock && new_smc->clcsock->sk &&
+	    tcp_sk(new_smc->clcsock->sk)->syn_smc)
 		atomic_dec(&lsmc->queued_smc_hs);
+	mutex_unlock(&new_smc->clcsock_release_lock);
 
 	if (lsmc->sk.sk_state == SMC_LISTEN) {
 		lock_sock_nested(&lsmc->sk, SINGLE_DEPTH_NESTING);
