@@ -87,6 +87,11 @@ static inline struct page *dup_page(struct page *page, struct vm_area_struct *vm
 	return NULL;
 }
 
+/*
+ * NOTE This does not guarantee that the master page exists when
+ * dup_page_master returns. Caller should first verify and get a
+ * reference of the master page.
+ */
 static inline struct page *dup_page_master(struct page *page)
 {
 	if (page_dup_any(page))
