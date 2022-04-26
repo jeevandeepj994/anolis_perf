@@ -754,7 +754,13 @@ struct io_kiocb {
 		struct callback_head	task_work;
 	};
 	/* for polled requests, i.e. IORING_OP_POLL_ADD and async armed poll */
-	struct hlist_node		hash_node;
+	union {
+		struct hlist_node	hash_node;
+		struct {
+			u64		extra1;
+			u64		extra2;
+		};
+	};
 	struct async_poll		*apoll;
 	struct io_wq_work		work;
 };
