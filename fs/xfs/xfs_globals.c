@@ -43,4 +43,5 @@ struct xfs_globals xfs_globals = {
 #ifdef DEBUG
 	.pwork_threads		=	-1,	/* automatic thread detection */
 #endif
+	.atomic_write		=	1,	/* atomic write */
 };
