@@ -10270,7 +10270,8 @@ static long io_uring_setup(u32 entries, struct io_uring_params __user *params)
 			IORING_SETUP_SQ_AFF | IORING_SETUP_CQSIZE |
 			IORING_SETUP_CLAMP | IORING_SETUP_ATTACH_WQ |
 			IORING_SETUP_R_DISABLED | IORING_SETUP_SQE128 |
-			IORING_SETUP_SQPOLL_PERCPU | IORING_SETUP_IDLE_US))
+			IORING_SETUP_CQE32 | IORING_SETUP_SQPOLL_PERCPU |
+			IORING_SETUP_IDLE_US))
 		return -EINVAL;
 
 	return  io_uring_create(entries, &p, params);
