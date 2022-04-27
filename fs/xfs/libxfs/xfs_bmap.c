@@ -5111,7 +5111,7 @@ xfs_atomic_staging_add(
 	xfs_agnumber_t	agno = XFS_FSB_TO_AGNO(mp, del->br_startblock);
 	struct xfs_perag *pag;
 	struct xfs_atomic_staging *as, *new;
-	int error;
+	int error = 0;
 
 	pag = xfs_perag_get(mp, agno);
 	if (atomic_read(&pag->atomic_staging_count) >=
@@ -5153,7 +5153,6 @@ xfs_atomic_staging_add(
 	pag->atomic_staging = new;
 	atomic_inc(&pag->atomic_staging_count);
 	spin_unlock(&pag->atomic_staging_lock);
-	error = 0;
 out:
 	xfs_perag_put(pag);
 	return error;
