@@ -292,4 +292,10 @@ int	xfs_bmapi_remap(struct xfs_trans *tp, struct xfs_inode *ip,
 		xfs_fileoff_t bno, xfs_filblks_t len, xfs_fsblock_t startblock,
 		int flags);
 
+void
+xfs_atomic_staging_add_post(
+	struct xfs_trans	*tp,
+	xfs_agnumber_t		agno,
+	struct xfs_atomic_staging *new);
+
 #endif	/* __XFS_BMAP_H__ */
