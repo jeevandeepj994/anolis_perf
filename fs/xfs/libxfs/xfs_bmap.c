@@ -5102,6 +5102,42 @@ xfs_bmap_del_extent_cow(
 
 #define XFS_MAX_ATOMIC_STAGING_COUNT		48
 
+void
+xfs_atomic_staging_add_post(
+	struct xfs_trans	*tp,
+	xfs_agnumber_t		agno,
+	struct xfs_atomic_staging *new)
+{
+	struct xfs_mount *mp = tp->t_mountp;
+	struct xfs_perag *pag;
+	struct xfs_atomic_staging *as;
+
+	pag = xfs_perag_get(mp, agno);
+	spin_lock(&pag->atomic_staging_lock);
+	/* extent merging */
+	for (as = pag->atomic_staging; as; as = as->next) {
+		if (new->agbno == as->agbno + as->aglen) {
+			as->aglen += new->aglen;
+			spin_unlock(&pag->atomic_staging_lock);
+			kfree(new);
+			goto out;
+		}
+		if (new->agbno + new->aglen == as->agbno) {
+			as->agbno = new->agbno;
+			as->aglen += new->aglen;
+			spin_unlock(&pag->atomic_staging_lock);
+			kfree(new);
+			goto out;
+		}
+	}
+	new->next = pag->atomic_staging;
+	pag->atomic_staging = new;
+	atomic_inc(&pag->atomic_staging_count);
+	spin_unlock(&pag->atomic_staging_lock);
+out:
+	xfs_perag_put(pag);
+}
+
 static int
 xfs_atomic_staging_add(
 	struct xfs_trans	*tp,
@@ -5126,33 +5162,12 @@ xfs_atomic_staging_add(
 		goto out;
 	}
 
-	xfs_refcount_alloc_cow_extent(tp,
-			del->br_startblock, del->br_blockcount);
 	new->agbno = XFS_FSB_TO_AGBNO(mp, del->br_startblock);
 	new->aglen = del->br_blockcount;
 	new->next_offset = -1;
 	new->agino = NULLAGINO;
-	spin_lock(&pag->atomic_staging_lock);
-	/* extent merging */
-	for (as = pag->atomic_staging; as; as = as->next) {
-		if (new->agbno == as->agbno + as->aglen) {
-			as->aglen += new->aglen;
-			spin_unlock(&pag->atomic_staging_lock);
-			kfree(new);
-			goto out;
-		}
-		if (new->agbno + new->aglen == as->agbno) {
-			as->agbno = new->agbno;
-			as->aglen += new->aglen;
-			spin_unlock(&pag->atomic_staging_lock);
-			kfree(new);
-			goto out;
-		}
-	}
-	new->next = pag->atomic_staging;
-	pag->atomic_staging = new;
-	atomic_inc(&pag->atomic_staging_count);
-	spin_unlock(&pag->atomic_staging_lock);
+	xfs_refcount_alloc_atomic_staging(tp,
+			del->br_startblock, del->br_blockcount, new);
 out:
 	xfs_perag_put(pag);
 	return error;

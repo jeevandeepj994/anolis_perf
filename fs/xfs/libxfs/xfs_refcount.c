@@ -1232,7 +1232,8 @@ __xfs_refcount_add(
 	struct xfs_trans		*tp,
 	enum xfs_refcount_intent_type	type,
 	xfs_fsblock_t			startblock,
-	xfs_extlen_t			blockcount)
+	xfs_extlen_t			blockcount,
+	struct xfs_atomic_staging	*as)
 {
 	struct xfs_refcount_intent	*ri;
 
@@ -1247,6 +1248,7 @@ __xfs_refcount_add(
 	ri->ri_type = type;
 	ri->ri_startblock = startblock;
 	ri->ri_blockcount = blockcount;
+	ri->ri_as = as;
 
 	xfs_defer_add(tp, XFS_DEFER_OPS_TYPE_REFCOUNT, &ri->ri_list);
 }
@@ -1263,7 +1265,7 @@ xfs_refcount_increase_extent(
 		return;
 
 	__xfs_refcount_add(tp, XFS_REFCOUNT_INCREASE, PREV->br_startblock,
-			PREV->br_blockcount);
+			PREV->br_blockcount, NULL);
 }
 
 /*
@@ -1278,7 +1280,7 @@ xfs_refcount_decrease_extent(
 		return;
 
 	__xfs_refcount_add(tp, XFS_REFCOUNT_DECREASE, PREV->br_startblock,
-			PREV->br_blockcount);
+			PREV->br_blockcount, NULL);
 }
 
 /*
@@ -1626,7 +1628,27 @@ xfs_refcount_alloc_cow_extent(
 	if (!xfs_sb_version_hasreflink(&mp->m_sb))
 		return;
 
-	__xfs_refcount_add(tp, XFS_REFCOUNT_ALLOC_COW, fsb, len);
+	__xfs_refcount_add(tp, XFS_REFCOUNT_ALLOC_COW, fsb, len, NULL);
+
+	/* Add rmap entry */
+	xfs_rmap_alloc_extent(tp, XFS_FSB_TO_AGNO(mp, fsb),
+			XFS_FSB_TO_AGBNO(mp, fsb), len, XFS_RMAP_OWN_COW);
+}
+
+void
+xfs_refcount_alloc_atomic_staging(
+	struct xfs_trans		*tp,
+	xfs_fsblock_t			fsb,
+	xfs_extlen_t			len,
+	struct xfs_atomic_staging	*as)
+{
+	struct xfs_mount		*mp = tp->t_mountp;
+
+	if (!xfs_sb_version_hasreflink(&mp->m_sb))
+		return;
+
+	/* XXX: do we need to update rmap beforehead? IMO it's unnecessary */
+	__xfs_refcount_add(tp, XFS_REFCOUNT_ALLOC_COW, fsb, len, as);
 
 	/* Add rmap entry */
 	xfs_rmap_alloc_extent(tp, XFS_FSB_TO_AGNO(mp, fsb),
@@ -1648,7 +1670,7 @@ xfs_refcount_free_cow_extent(
 	/* Remove rmap entry */
 	xfs_rmap_free_extent(tp, XFS_FSB_TO_AGNO(mp, fsb),
 			XFS_FSB_TO_AGBNO(mp, fsb), len, XFS_RMAP_OWN_COW);
-	__xfs_refcount_add(tp, XFS_REFCOUNT_FREE_COW, fsb, len);
+	__xfs_refcount_add(tp, XFS_REFCOUNT_FREE_COW, fsb, len, NULL);
 }
 
 struct xfs_refcount_recovery {

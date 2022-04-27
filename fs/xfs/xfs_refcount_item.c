@@ -20,6 +20,7 @@
 #include "xfs_error.h"
 #include "xfs_log_priv.h"
 #include "xfs_log_recover.h"
+#include "xfs_bmap.h"
 
 kmem_zone_t	*xfs_cui_zone;
 kmem_zone_t	*xfs_cud_zone;
@@ -384,6 +385,10 @@ xfs_refcount_update_finish_item(
 		refc->ri_blockcount = new_aglen;
 		return -EAGAIN;
 	}
+	if (refc->ri_as)
+		xfs_atomic_staging_add_post(tp,
+				XFS_FSB_TO_AGNO(tp->t_mountp, refc->ri_startblock),
+				refc->ri_as);
 	kmem_free(refc);
 	return error;
 }
