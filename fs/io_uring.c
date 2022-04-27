@@ -1232,17 +1232,15 @@ static void __io_queue_deferred(struct io_ring_ctx *ctx)
 
 static void io_flush_timeouts(struct io_ring_ctx *ctx)
 {
-	while (!list_empty(&ctx->timeout_list)) {
-		struct io_kiocb *req = list_first_entry(&ctx->timeout_list,
-							struct io_kiocb, list);
+	struct io_kiocb *req, *tmp;
 
+	list_for_each_entry_safe(req, tmp, &ctx->timeout_list, list) {
 		if (req->flags & REQ_F_TIMEOUT_NOSEQ)
 			break;
 		if (req->timeout.target_seq != ctx->cached_cq_tail
 					- atomic_read(&ctx->cq_timeouts))
 			break;
 
-		list_del_init(&req->list);
 		io_kill_timeout(req);
 	}
 }
@@ -5306,6 +5304,8 @@ static int io_timeout_prep(struct io_kiocb *req, const struct io_uring_sqe *sqe,
 
 	if (get_timespec64(&data->ts, u64_to_user_ptr(sqe->addr)))
 		return -EFAULT;
+
+	INIT_LIST_HEAD(&req->list);
 
 	if (flags & IORING_TIMEOUT_ABS)
 		data->mode = HRTIMER_MODE_ABS;
