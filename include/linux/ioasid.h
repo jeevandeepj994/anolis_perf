@@ -134,6 +134,7 @@ void ioasid_set_for_each_ioasid(struct ioasid_set *sdata,
 				void *data);
 int ioasid_register_notifier_mm(struct mm_struct *mm, struct notifier_block *nb);
 void ioasid_unregister_notifier_mm(struct mm_struct *mm, struct notifier_block *nb);
+bool ioasid_queue_work(struct work_struct *work);
 static inline bool pasid_valid(ioasid_t ioasid)
 {
 	return ioasid != INVALID_IOASID;
