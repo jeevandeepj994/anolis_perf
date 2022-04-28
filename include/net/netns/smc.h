@@ -19,15 +19,17 @@ struct netns_smc {
 	/* protect fback_rsn */
 	struct mutex			mutex_fback_rsn;
 	struct smc_stats_rsn		*fback_rsn;
+	int				limit_smc_hs;	/* constraint on handshake */
 	struct smc_convert		smc_conv;
 #ifdef CONFIG_SYSCTL
 	struct ctl_table_header		*smc_hdr;
 #endif
+	unsigned int			sysctl_autocorking_size;
 	int				sysctl_wmem_default;
 	int				sysctl_rmem_default;
 	int				sysctl_tcp2smc;
 	int				sysctl_allow_different_subnet;
-	int				sysctl_autocorking;
+	int				sysctl_keep_first_contact_clcsock;
+	int				sysctl_disable_multiple_link;
 };
-
 #endif

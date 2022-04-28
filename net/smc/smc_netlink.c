@@ -113,6 +113,21 @@ static const struct genl_ops smc_gen_nl_ops[] = {
 		.doit = smc_nl_disable_seid,
 	},
 	{
+		.cmd = SMC_NETLINK_DUMP_HS_LIMITATION,
+		/* can be retrieved by unprivileged users */
+		.dumpit = smc_nl_dump_hs_limitation,
+	},
+	{
+		.cmd = SMC_NETLINK_ENABLE_HS_LIMITATION,
+		.flags = GENL_ADMIN_PERM,
+		.doit = smc_nl_enable_hs_limitation,
+	},
+	{
+		.cmd = SMC_NETLINK_DISABLE_HS_LIMITATION,
+		.flags = GENL_ADMIN_PERM,
+		.doit = smc_nl_disable_hs_limitation,
+	},
+	{
 		.cmd = SMC_NETLINK_ADD_TCP2SMC_WLIST,
 		/* can be retrieved by unprivileged users */
 		.doit = smc_nl_add_tcp2smc_wlist,

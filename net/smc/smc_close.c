@@ -28,10 +28,12 @@ void smc_clcsock_release(struct smc_sock *smc)
 	if (smc->listen_smc && current_work() != &smc->smc_listen_work)
 		cancel_work_sync(&smc->smc_listen_work);
 	mutex_lock(&smc->clcsock_release_lock);
+	/* don't release clcsock for eRDMA */
 	if (smc->clcsock) {
 		tcp = smc->clcsock;
 		smc->clcsock = NULL;
-		sock_release(tcp);
+		if (!smc->keep_clcsock)
+			sock_release(tcp);
 	}
 	mutex_unlock(&smc->clcsock_release_lock);
 }
@@ -56,6 +58,9 @@ static void smc_close_stream_wait(struct smc_sock *smc, long timeout)
 
 	if (!smc_tx_prepared_sends(&smc->conn))
 		return;
+
+	/* Send out corked data remaining in sndbuf */
+	smc_tx_pending(&smc->conn);
 
 	smc->wait_close_tx_prepared = 1;
 	add_wait_queue(sk_sleep(sk), &wait);
@@ -211,8 +216,11 @@ again:
 		sk->sk_state = SMC_CLOSED;
 		sk->sk_state_change(sk); /* wake up accept */
 		if (smc->clcsock && smc->clcsock->sk) {
-			smc->clcsock->sk->sk_data_ready = smc->clcsk_data_ready;
+			write_lock_bh(&smc->clcsock->sk->sk_callback_lock);
+			smc_clcsock_restore_cb(&smc->clcsock->sk->sk_data_ready,
+					       &smc->clcsk_data_ready);
 			smc->clcsock->sk->sk_user_data = NULL;
+			write_unlock_bh(&smc->clcsock->sk->sk_callback_lock);
 			rc = kernel_sock_shutdown(smc->clcsock, SHUT_RDWR);
 		}
 		smc_close_cleanup_listen(sk);
@@ -233,7 +241,8 @@ again:
 			/* actively shutdown clcsock before peer close it,
 			 * prevent peer from entering TIME_WAIT state.
 			 */
-			if (smc->clcsock && smc->clcsock->sk) {
+			if (smc->clcsock && smc->clcsock->sk &&
+			    !smc->keep_clcsock) {
 				rc1 = kernel_sock_shutdown(smc->clcsock,
 							   SHUT_RDWR);
 				rc = rc ? rc : rc1;

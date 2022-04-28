@@ -21,7 +21,12 @@
 #include "smc.h"
 #include "smc_ib.h"
 
-#define SMC_RMBS_PER_LGR_MAX	255	/* max. # of RMBs per link group */
+#define SMC_RMBS_PER_LGR_MAX	32	/* max. # of RMBs per link group. Correspondingly,
+					 * SMC_WR_BUF_CNT should not be less than 2 *
+					 * SMC_RMBS_PER_LGR_MAX, since every connection at
+					 * least has two rq/sq credits in average, otherwise
+					 * may result in waiting for credits in sending process.
+					 */
 
 struct smc_lgr_list {			/* list of link group definition */
 	struct list_head	list;
@@ -80,6 +85,8 @@ struct smc_rdma_wr {				/* work requests per message
 
 #define SMC_LGR_ID_SIZE		4
 
+#define SMC_LINKFLAG_ANNOUNCE_PENDING	0
+
 struct smc_link {
 	struct iw_ext_conn_param	iw_conn_param;
 	struct smc_ib_device	*smcibdev;	/* ib-device */
@@ -87,6 +94,8 @@ struct smc_link {
 	struct ib_pd		*roce_pd;	/* IB protection domain,
 						 * unique for every RoCE QP
 						 */
+	struct smc_ib_cq	*smcibcq_recv;	/* cq for recv */
+	struct smc_ib_cq	*smcibcq_send;	/* cq for send */
 	struct ib_qp		*roce_qp;	/* IB queue pair */
 	struct ib_qp_attr	qp_attr;	/* IB queue pair attributes */
 
@@ -124,6 +133,14 @@ struct smc_link {
 	atomic_t		wr_reg_refcnt;	/* reg refs to link */
 	enum smc_wr_reg_state	wr_reg_state;	/* state of wr_reg request */
 
+	atomic_t	peer_rq_credits;	/* credits for peer rq flowctrl */
+	atomic_t	local_rq_credits;	/* credits for local rq flowctrl */
+	u8		credits_enable;		/* credits enable flag, set when negotiation */
+	u8		local_cr_watermark_high;	/* local rq credits watermark */
+	u8		peer_cr_watermark_low;	/* peer rq credits watermark */
+	struct work_struct	credits_announce_work;	/* work for credits announcement */
+	unsigned long	flags;	/* link flags, SMC_LINKFLAG_ANNOUNCE_PENDING .etc */
+
 	u8			gid[SMC_GID_SIZE];/* gid matching used vlan id*/
 	u8			sgid_index;	/* gid index for vlan id      */
 	u32			peer_qpn;	/* QP number of peer */
@@ -150,6 +167,18 @@ struct smc_link {
 	struct completion	llc_testlink_resp; /* wait for rx of testlink */
 	int			llc_testlink_time; /* testlink interval */
 	atomic_t		conn_cnt; /* connections on this link */
+
+	struct socket		*clcsock;	/* keep for eRDMA */
+	atomic_t		total_send_cnt;
+	atomic_t		total_comp_cnt;
+	atomic_t		cdc_send_cnt;
+	atomic_t		cdc_comp_cnt;
+	atomic_t		llc_send_cnt;
+	atomic_t		llc_comp_cnt;
+	atomic_t		reg_send_cnt;
+	atomic_t		reg_comp_cnt;
+	atomic_t		rdma_write_cnt;
+	atomic_t		bad_comp_cnt;
 };
 
 /* For now we just allow one parallel link per link group. The SMC protocol
@@ -413,6 +442,11 @@ static inline struct smc_connection *smc_lgr_find_conn(
 	return res;
 }
 
+static inline bool smc_conn_lgr_valid(struct smc_connection *conn)
+{
+	return conn->lgr && conn->alert_token_local;
+}
+
 /*
  * Returns true if the specified link is usable.
  *
@@ -489,7 +523,7 @@ static inline void smc_set_pci_values(struct pci_dev *pci_dev,
 struct smc_sock;
 struct smc_clc_msg_accept_confirm;
 
-void smc_lgr_cleanup_early(struct smc_connection *conn);
+void smc_lgr_cleanup_early(struct smc_link_group *lgr);
 void smc_lgr_terminate_sched(struct smc_link_group *lgr);
 void smc_lgr_hold(struct smc_link_group *lgr);
 void smc_lgr_put(struct smc_link_group *lgr);

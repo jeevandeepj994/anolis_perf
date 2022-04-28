@@ -81,12 +81,17 @@ static inline void smc_wr_tx_process_cqe(struct ib_wc *wc)
 	u32 pnd_snd_idx;
 
 	link = wc->qp->qp_context;
+	atomic_inc(&link->total_comp_cnt);
 
 	if (wc->opcode == IB_WC_REG_MR) {
-		if (wc->status)
+		if (wc->status) {
 			link->wr_reg_state = FAILED;
-		else
+			pr_warn("smc: reg mr comp failed\n");
+			atomic_inc(&link->bad_comp_cnt);
+		} else {
 			link->wr_reg_state = CONFIRMED;
+			atomic_inc(&link->reg_comp_cnt);
+		}
 		smc_wr_wakeup_reg_wait(link);
 		return;
 	}
@@ -94,8 +99,10 @@ static inline void smc_wr_tx_process_cqe(struct ib_wc *wc)
 	pnd_snd_idx = smc_wr_tx_find_pending_index(link, wc->wr_id);
 	if (pnd_snd_idx == link->wr_tx_cnt) {
 		if (link->lgr->smc_version != SMC_V2 ||
-		    link->wr_tx_v2_pend->wr_id != wc->wr_id)
+		    link->wr_tx_v2_pend->wr_id != wc->wr_id) {
+			pr_warn("smc: find pending index failed\n");
 			return;
+		}
 		link->wr_tx_v2_pend->wc_status = wc->status;
 		memcpy(&pnd_snd, link->wr_tx_v2_pend, sizeof(pnd_snd));
 		/* clear the full struct smc_wr_tx_pend including .priv */
@@ -114,11 +121,14 @@ static inline void smc_wr_tx_process_cqe(struct ib_wc *wc)
 		       sizeof(link->wr_tx_pends[pnd_snd_idx]));
 		memset(&link->wr_tx_bufs[pnd_snd_idx], 0,
 		       sizeof(link->wr_tx_bufs[pnd_snd_idx]));
-		if (!test_and_clear_bit(pnd_snd_idx, link->wr_tx_mask))
+		if (!test_and_clear_bit(pnd_snd_idx, link->wr_tx_mask)) {
+			pr_warn("smc: clear pending index bitmap failed\n");
 			return;
+		}
 	}
 
 	if (wc->status) {
+		atomic_inc(&link->bad_comp_cnt);
 		if (link->lgr->smc_version == SMC_V2) {
 			memset(link->wr_tx_v2_pend, 0,
 			       sizeof(*link->wr_tx_v2_pend));
@@ -130,40 +140,44 @@ static inline void smc_wr_tx_process_cqe(struct ib_wc *wc)
 	}
 	if (pnd_snd.handler)
 		pnd_snd.handler(&pnd_snd.priv, link, wc->status);
-	wake_up(&link->wr_tx_wait);
+	if (wq_has_sleeper(&link->wr_tx_wait))
+		wake_up(&link->wr_tx_wait);
 }
 
 static void smc_wr_tx_tasklet_fn(struct tasklet_struct *t)
 {
-	struct smc_ib_device *dev = from_tasklet(dev, t, send_tasklet);
+	struct smc_ib_cq *smcibcq = from_tasklet(smcibcq, t, tasklet);
 	struct ib_wc wc[SMC_WR_MAX_POLL_CQE];
-	int i = 0, rc;
-	int polled = 0;
+	int i, rc;
 
 again:
-	polled++;
 	do {
 		memset(&wc, 0, sizeof(wc));
-		rc = ib_poll_cq(dev->roce_cq_send, SMC_WR_MAX_POLL_CQE, wc);
-		if (polled == 1) {
-			ib_req_notify_cq(dev->roce_cq_send,
-					 IB_CQ_NEXT_COMP |
-					 IB_CQ_REPORT_MISSED_EVENTS);
-		}
-		if (!rc)
-			break;
+		rc = ib_poll_cq(smcibcq->ib_cq, SMC_WR_MAX_POLL_CQE, wc);
 		for (i = 0; i < rc; i++)
 			smc_wr_tx_process_cqe(&wc[i]);
+		if (rc < SMC_WR_MAX_POLL_CQE)
+			/* If < SMC_WR_MAX_POLL_CQE, the CQ should have been
+			 * drained, no need to poll again.
+			 */
+			break;
 	} while (rc > 0);
-	if (polled == 1)
+
+	/* With IB_CQ_REPORT_MISSED_EVENTS, if ib_req_notify_cq() returns 0,
+	 * then it is safe to wait for the next event; else we must poll the
+	 * CQ again to make sure we won't miss any event.
+	 */
+	if (ib_req_notify_cq(smcibcq->ib_cq,
+			     IB_CQ_NEXT_COMP |
+			     IB_CQ_REPORT_MISSED_EVENTS) > 0)
 		goto again;
 }
 
 void smc_wr_tx_cq_handler(struct ib_cq *ib_cq, void *cq_context)
 {
-	struct smc_ib_device *dev = (struct smc_ib_device *)cq_context;
+	struct smc_ib_cq *smcibcq = (struct smc_ib_cq *)cq_context;
 
-	tasklet_schedule(&dev->send_tasklet);
+	tasklet_schedule(&smcibcq->tasklet);
 }
 
 /*---------------------------- request submission ---------------------------*/
@@ -173,11 +187,16 @@ static inline int smc_wr_tx_get_free_slot_index(struct smc_link *link, u32 *idx)
 	*idx = link->wr_tx_cnt;
 	if (!smc_link_sendable(link))
 		return -ENOLINK;
+
+	if (!smc_wr_tx_get_credit(link))
+		return -EBUSY;
+
 	for_each_clear_bit(*idx, link->wr_tx_mask, link->wr_tx_cnt) {
 		if (!test_and_set_bit(*idx, link->wr_tx_mask))
 			return 0;
 	}
 	*idx = link->wr_tx_cnt;
+	smc_wr_tx_put_credits(link, 1, false);
 	return -EBUSY;
 }
 
@@ -283,7 +302,7 @@ int smc_wr_tx_put_slot(struct smc_link *link,
 		memset(&link->wr_tx_bufs[idx], 0,
 		       sizeof(link->wr_tx_bufs[idx]));
 		test_and_clear_bit(idx, link->wr_tx_mask);
-		wake_up(&link->wr_tx_wait);
+		smc_wr_tx_put_credits(link, 1, true);
 		return 1;
 	} else if (link->lgr->smc_version == SMC_V2 &&
 		   pend->idx == link->wr_tx_cnt) {
@@ -311,6 +330,8 @@ int smc_wr_tx_send(struct smc_link *link, struct smc_wr_tx_pend_priv *priv)
 	if (rc) {
 		smc_wr_tx_put_slot(link, priv);
 		smcr_link_down_cond_sched(link);
+	} else {
+		atomic_inc(&link->total_send_cnt);
 	}
 	return rc;
 }
@@ -321,12 +342,14 @@ int smc_wr_tx_v2_send(struct smc_link *link, struct smc_wr_tx_pend_priv *priv,
 	int rc;
 
 	link->wr_tx_v2_ib->sg_list[0].length = len;
-	ib_req_notify_cq(link->smcibdev->roce_cq_send,
+	ib_req_notify_cq(link->smcibcq_send->ib_cq,
 			 IB_CQ_NEXT_COMP | IB_CQ_REPORT_MISSED_EVENTS);
 	rc = ib_post_send(link->roce_qp, link->wr_tx_v2_ib, NULL);
 	if (rc) {
 		smc_wr_tx_put_slot(link, priv);
 		smcr_link_down_cond_sched(link);
+	} else {
+		atomic_inc(&link->total_send_cnt);
 	}
 	return rc;
 }
@@ -365,7 +388,7 @@ int smc_wr_reg_send(struct smc_link *link, struct ib_mr *mr)
 {
 	int rc;
 
-	ib_req_notify_cq(link->smcibdev->roce_cq_send,
+	ib_req_notify_cq(link->smcibcq_send->ib_cq,
 			 IB_CQ_NEXT_COMP | IB_CQ_REPORT_MISSED_EVENTS);
 	link->wr_reg_state = POSTED;
 	link->wr_reg.wr.wr_id = (u64)(uintptr_t)mr;
@@ -374,6 +397,8 @@ int smc_wr_reg_send(struct smc_link *link, struct ib_mr *mr)
 	rc = ib_post_send(link->roce_qp, &link->wr_reg.wr, NULL);
 	if (rc)
 		return rc;
+	atomic_inc(&link->reg_send_cnt);
+	atomic_inc(&link->total_send_cnt);
 
 	atomic_inc(&link->wr_reg_refcnt);
 	rc = wait_event_interruptible_timeout(link->wr_reg_wait,
@@ -469,39 +494,49 @@ static inline void smc_wr_rx_process_cqes(struct ib_wc wc[], int num)
 				break;
 			}
 		}
+
+		if (smc_wr_rx_credits_need_announce(link) &&
+		    !test_bit(SMC_LINKFLAG_ANNOUNCE_PENDING, &link->flags)) {
+			set_bit(SMC_LINKFLAG_ANNOUNCE_PENDING, &link->flags);
+			schedule_work(&link->credits_announce_work);
+		}
 	}
 }
 
 static void smc_wr_rx_tasklet_fn(struct tasklet_struct *t)
 {
-	struct smc_ib_device *dev = from_tasklet(dev, t, recv_tasklet);
+	struct smc_ib_cq *smcibcq = from_tasklet(smcibcq, t, tasklet);
 	struct ib_wc wc[SMC_WR_MAX_POLL_CQE];
-	int polled = 0;
 	int rc;
 
 again:
-	polled++;
 	do {
 		memset(&wc, 0, sizeof(wc));
-		rc = ib_poll_cq(dev->roce_cq_recv, SMC_WR_MAX_POLL_CQE, wc);
-		if (polled == 1) {
-			ib_req_notify_cq(dev->roce_cq_recv,
-					 IB_CQ_SOLICITED_MASK
-					 | IB_CQ_REPORT_MISSED_EVENTS);
-		}
-		if (!rc)
+		rc = ib_poll_cq(smcibcq->ib_cq, SMC_WR_MAX_POLL_CQE, wc);
+		if (rc > 0)
+			smc_wr_rx_process_cqes(&wc[0], rc);
+		if (rc < SMC_WR_MAX_POLL_CQE)
+			/* If < SMC_WR_MAX_POLL_CQE, the CQ should have been
+			 * drained, no need to poll again.
+			 */
 			break;
-		smc_wr_rx_process_cqes(&wc[0], rc);
 	} while (rc > 0);
-	if (polled == 1)
+
+	/* With IB_CQ_REPORT_MISSED_EVENTS, if ib_req_notify_cq() returns 0,
+	 * then it is safe to wait for the next event; else we must poll the
+	 * CQ again to make sure we won't miss any event.
+	 */
+	if (ib_req_notify_cq(smcibcq->ib_cq,
+			     IB_CQ_NEXT_COMP |
+			     IB_CQ_REPORT_MISSED_EVENTS) > 0)
 		goto again;
 }
 
 void smc_wr_rx_cq_handler(struct ib_cq *ib_cq, void *cq_context)
 {
-	struct smc_ib_device *dev = (struct smc_ib_device *)cq_context;
+	struct smc_ib_cq *smcibcq = (struct smc_ib_cq *)cq_context;
 
-	tasklet_schedule(&dev->recv_tasklet);
+	tasklet_schedule(&smcibcq->tasklet);
 }
 
 int smc_wr_rx_post_init(struct smc_link *link)
@@ -511,6 +546,8 @@ int smc_wr_rx_post_init(struct smc_link *link)
 
 	for (i = 0; i < link->wr_rx_cnt; i++)
 		rc = smc_wr_rx_post(link);
+	// credits have already been announced to peer
+	atomic_set(&link->local_rq_credits, 0);
 	return rc;
 }
 
@@ -545,7 +582,7 @@ void smc_wr_remember_qp_attr(struct smc_link *lnk)
 
 	lnk->wr_tx_cnt = min_t(size_t, SMC_WR_BUF_CNT,
 			       lnk->qp_attr.cap.max_send_wr);
-	lnk->wr_rx_cnt = min_t(size_t, SMC_WR_BUF_CNT * 3,
+	lnk->wr_rx_cnt = min_t(size_t, SMC_WR_BUF_CNT,
 			       lnk->qp_attr.cap.max_recv_wr);
 }
 
@@ -734,7 +771,7 @@ int smc_wr_alloc_link_mem(struct smc_link *link)
 	link->wr_tx_bufs = kcalloc(SMC_WR_BUF_CNT, SMC_WR_BUF_SIZE, GFP_KERNEL);
 	if (!link->wr_tx_bufs)
 		goto no_mem;
-	link->wr_rx_bufs = kcalloc(SMC_WR_BUF_CNT * 3, SMC_WR_BUF_SIZE,
+	link->wr_rx_bufs = kcalloc(SMC_WR_BUF_CNT, SMC_WR_BUF_SIZE,
 				   GFP_KERNEL);
 	if (!link->wr_rx_bufs)
 		goto no_mem_wr_tx_bufs;
@@ -742,7 +779,7 @@ int smc_wr_alloc_link_mem(struct smc_link *link)
 				  GFP_KERNEL);
 	if (!link->wr_tx_ibs)
 		goto no_mem_wr_rx_bufs;
-	link->wr_rx_ibs = kcalloc(SMC_WR_BUF_CNT * 3,
+	link->wr_rx_ibs = kcalloc(SMC_WR_BUF_CNT,
 				  sizeof(link->wr_rx_ibs[0]),
 				  GFP_KERNEL);
 	if (!link->wr_rx_ibs)
@@ -761,7 +798,7 @@ int smc_wr_alloc_link_mem(struct smc_link *link)
 				   GFP_KERNEL);
 	if (!link->wr_tx_sges)
 		goto no_mem_wr_tx_rdma_sges;
-	link->wr_rx_sges = kcalloc(SMC_WR_BUF_CNT * 3,
+	link->wr_rx_sges = kcalloc(SMC_WR_BUF_CNT,
 				   sizeof(link->wr_rx_sges[0]) * sges_per_buf,
 				   GFP_KERNEL);
 	if (!link->wr_rx_sges)
@@ -828,14 +865,24 @@ no_mem:
 
 void smc_wr_remove_dev(struct smc_ib_device *smcibdev)
 {
-	tasklet_kill(&smcibdev->recv_tasklet);
-	tasklet_kill(&smcibdev->send_tasklet);
+	int i;
+
+	for (i = 0; i < smcibdev->num_cq_peer; i++) {
+		tasklet_kill(&smcibdev->smcibcq_send[i].tasklet);
+		tasklet_kill(&smcibdev->smcibcq_recv[i].tasklet);
+	}
 }
 
 void smc_wr_add_dev(struct smc_ib_device *smcibdev)
 {
-	tasklet_setup(&smcibdev->recv_tasklet, smc_wr_rx_tasklet_fn);
-	tasklet_setup(&smcibdev->send_tasklet, smc_wr_tx_tasklet_fn);
+	int i;
+
+	for (i = 0; i < smcibdev->num_cq_peer; i++) {
+		tasklet_setup(&smcibdev->smcibcq_send[i].tasklet,
+			      smc_wr_tx_tasklet_fn);
+		tasklet_setup(&smcibdev->smcibcq_recv[i].tasklet,
+			      smc_wr_rx_tasklet_fn);
+	}
 }
 
 int smc_wr_create_link(struct smc_link *lnk)
@@ -884,6 +931,11 @@ int smc_wr_create_link(struct smc_link *lnk)
 	atomic_set(&lnk->wr_tx_refcnt, 0);
 	init_waitqueue_head(&lnk->wr_reg_wait);
 	atomic_set(&lnk->wr_reg_refcnt, 0);
+	atomic_set(&lnk->peer_rq_credits, 0);
+	atomic_set(&lnk->local_rq_credits, 0);
+	lnk->flags = 0;
+	lnk->local_cr_watermark_high = max(lnk->wr_rx_cnt / 3, 1U);
+	lnk->peer_cr_watermark_low = 0;
 	return rc;
 
 dma_unmap:

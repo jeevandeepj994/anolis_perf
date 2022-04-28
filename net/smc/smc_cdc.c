@@ -34,6 +34,7 @@ static void smc_cdc_tx_handler(struct smc_wr_tx_pend_priv *pnd_snd,
 	smc = container_of(conn, struct smc_sock, conn);
 	bh_lock_sock(&smc->sk);
 	if (!wc_status) {
+		atomic_inc(&link->cdc_comp_cnt);
 		diff = smc_curs_diff(cdcpend->conn->sndbuf_desc->len,
 				     &cdcpend->conn->tx_curs_fin,
 				     &cdcpend->cursor);
@@ -49,10 +50,15 @@ static void smc_cdc_tx_handler(struct smc_wr_tx_pend_priv *pnd_snd,
 	}
 
 	if (atomic_dec_and_test(&conn->cdc_pend_tx_wr)) {
-		/* If this is the last pending WR complete, push them to prevent
-		 * no one trying to push when corked.
+		/* If user owns the sock_lock, mark the connection need sending.
+		 * User context will later try to send when it release sock_lock
+		 * in smc_release_cb()
 		 */
-		smc_tx_sndbuf_nonempty(conn);
+		if (sock_owned_by_user(&smc->sk))
+			conn->tx_in_release_sock = true;
+		else
+			smc_tx_pending(conn);
+
 		if (unlikely(wq_has_sleeper(&conn->cdc_pend_tx_wq)))
 			wake_up(&conn->cdc_pend_tx_wq);
 	}
@@ -106,25 +112,31 @@ int smc_cdc_msg_send(struct smc_connection *conn,
 		     struct smc_cdc_tx_pend *pend)
 {
 	struct smc_link *link = conn->lnk;
+	struct smc_cdc_msg *cdc_msg = (struct smc_cdc_msg *)wr_buf;
 	union smc_host_cursor cfed;
+	u8 saved_credits = 0;
 	int rc;
 
 	smc_cdc_add_pending_send(conn, pend);
 
 	conn->tx_cdc_seq++;
 	conn->local_tx_ctrl.seqno = conn->tx_cdc_seq;
-	smc_host_msg_to_cdc((struct smc_cdc_msg *)wr_buf, conn, &cfed);
+	smc_host_msg_to_cdc(cdc_msg, conn, &cfed);
+	saved_credits = (u8)smc_wr_rx_get_credits(link);
+	cdc_msg->credits = saved_credits;
 
 	atomic_inc(&conn->cdc_pend_tx_wr);
 	smp_mb__after_atomic(); /* Make sure cdc_pend_tx_wr added before post */
 
 	rc = smc_wr_tx_send(link, (struct smc_wr_tx_pend_priv *)pend);
-	if (!rc) {
+	if (likely(!rc)) {
 		smc_curs_copy(&conn->rx_curs_confirmed, &cfed, conn);
 		conn->local_rx_ctrl.prod_flags.cons_curs_upd_req = 0;
+		atomic_inc(&link->cdc_send_cnt);
 	} else {
 		conn->tx_cdc_seq--;
 		conn->local_tx_ctrl.seqno = conn->tx_cdc_seq;
+		smc_wr_rx_put_credits(link, saved_credits);
 		atomic_dec(&conn->cdc_pend_tx_wr);
 	}
 
@@ -202,7 +214,8 @@ int smc_cdc_get_slot_and_msg_send(struct smc_connection *conn)
 {
 	int rc;
 
-	if (!conn->lgr || (conn->lgr->is_smcd && conn->lgr->peer_shutdown))
+	if (!smc_conn_lgr_valid(conn) ||
+	    (conn->lgr->is_smcd && conn->lgr->peer_shutdown))
 		return -EPIPE;
 
 	if (conn->lgr->is_smcd) {
@@ -354,8 +367,12 @@ static void smc_cdc_msg_recv_action(struct smc_sock *smc,
 	/* trigger sndbuf consumer: RDMA write into peer RMBE and CDC */
 	if ((diff_cons && smc_tx_prepared_sends(conn)) ||
 	    conn->local_rx_ctrl.prod_flags.cons_curs_upd_req ||
-	    conn->local_rx_ctrl.prod_flags.urg_data_pending)
-		smc_tx_sndbuf_nonempty(conn);
+	    conn->local_rx_ctrl.prod_flags.urg_data_pending) {
+		if (!sock_owned_by_user(&smc->sk))
+			smc_tx_pending(conn);
+		else
+			conn->tx_in_release_sock = true;
+	}
 
 	if (diff_cons && conn->urg_tx_pend &&
 	    atomic_read(&conn->peer_rmbe_space) == conn->peer_rmbe_size) {
@@ -434,6 +451,9 @@ static void smc_cdc_rx_handler(struct ib_wc *wc, void *buf)
 		return; /* short message */
 	if (cdc->len != SMC_WR_TX_SIZE)
 		return; /* invalid message */
+
+	if (cdc->credits)
+		smc_wr_tx_put_credits(link, cdc->credits, true);
 
 	/* lookup connection */
 	lgr = smc_get_lgr(link);

@@ -1,17 +1,34 @@
 // SPDX-License-Identifier: GPL-2.0
+/*
+ *  Shared Memory Communications over RDMA (SMC-R) and RoCE
+ *
+ *  smc_sysctl.c: sysctl interface to SMC subsystem.
+ *
+ *  Copyright (c) 2022, Alibaba Inc.
+ *
+ *  Author: Tony Lu <tonylu@linux.alibaba.com>
+ *
+ */
 
-#include <linux/module.h>
 #include <linux/init.h>
 #include <linux/sysctl.h>
-#include <net/sock.h>
 #include <net/net_namespace.h>
 
+#include "smc.h"
+#include "smc_sysctl.h"
 #include "smc_core.h"
 
 static int min_sndbuf = SMC_BUF_MIN_SIZE;
 static int min_rcvbuf = SMC_BUF_MIN_SIZE;
 
 static struct ctl_table smc_table[] = {
+	{
+		.procname       = "autocorking_size",
+		.data           = &init_net.smc.sysctl_autocorking_size,
+		.maxlen         = sizeof(unsigned int),
+		.mode           = 0644,
+		.proc_handler	= proc_douintvec,
+	},
 	{
 		.procname       = "wmem_default",
 		.data           = &init_net.smc.sysctl_wmem_default,
@@ -45,8 +62,26 @@ static struct ctl_table smc_table[] = {
 		.extra2		= SYSCTL_ONE,
 	},
 	{
-		.procname	= "autocorking",
-		.data		= &init_net.smc.sysctl_autocorking,
+		.procname       = "limit_handshake",
+		.data           = &init_net.smc.limit_smc_hs,
+		.maxlen         = sizeof(init_net.smc.limit_smc_hs),
+		.mode           = 0644,
+		.proc_handler   = proc_dointvec_minmax,
+		.extra1         = SYSCTL_ZERO,
+		.extra2         = SYSCTL_ONE,
+	},
+	{
+		.procname	= "keep_first_contact_clcsock",
+		.data		= &init_net.smc.sysctl_keep_first_contact_clcsock,
+		.maxlen		= sizeof(int),
+		.mode		= 0644,
+		.proc_handler	= proc_dointvec_minmax,
+		.extra1		= SYSCTL_ZERO,
+		.extra2		= SYSCTL_ONE,
+	},
+	{
+		.procname	= "disable_multiple_link",
+		.data		= &init_net.smc.sysctl_disable_multiple_link,
 		.maxlen		= sizeof(int),
 		.mode		= 0644,
 		.proc_handler	= proc_dointvec_minmax,
@@ -56,7 +91,7 @@ static struct ctl_table smc_table[] = {
 	{  }
 };
 
-static __net_init int smc_sysctl_init_net(struct net *net)
+int __net_init smc_sysctl_net_init(struct net *net)
 {
 	struct ctl_table *table;
 
@@ -76,6 +111,14 @@ static __net_init int smc_sysctl_init_net(struct net *net)
 	if (!net->smc.smc_hdr)
 		goto err_reg;
 
+	net->smc.sysctl_autocorking_size = SMC_AUTOCORKING_DEFAULT_SIZE;
+	net->smc.sysctl_wmem_default = 256 * 1024;
+	net->smc.sysctl_rmem_default = 384 * 1024;
+	net->smc.sysctl_tcp2smc = 0;
+	net->smc.sysctl_allow_different_subnet = 1;
+	net->smc.sysctl_keep_first_contact_clcsock = 1;
+	net->smc.sysctl_disable_multiple_link = 1;
+
 	return 0;
 
 err_reg:
@@ -85,22 +128,12 @@ err_alloc:
 	return -ENOMEM;
 }
 
-static __net_exit void smc_sysctl_exit_net(struct net *net)
+void __net_exit smc_sysctl_net_exit(struct net *net)
 {
+	struct ctl_table *table;
+
+	table = net->smc.smc_hdr->ctl_table_arg;
 	unregister_net_sysctl_table(net->smc.smc_hdr);
-}
-
-static struct pernet_operations smc_sysctl_ops __net_initdata = {
-	.init = smc_sysctl_init_net,
-	.exit = smc_sysctl_exit_net,
-};
-
-int __init smc_sysctl_init(void)
-{
-	return register_pernet_subsys(&smc_sysctl_ops);
-}
-
-void smc_sysctl_exit(void)
-{
-	unregister_pernet_subsys(&smc_sysctl_ops);
+	if (!net_eq(net, &init_net))
+		kfree(table);
 }
