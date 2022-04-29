@@ -237,6 +237,7 @@ struct x86_emulate_ops {
 	int (*set_xcr)(struct x86_emulate_ctxt *ctxt, u32 index, u64 xcr);
 };
 
+typedef u32 __attribute__((vector_size(64))) sz512_t;
 typedef u32 __attribute__((vector_size(16))) sse128_t;
 
 /* Type, address-of, and value of an instruction's operand. */
@@ -262,6 +263,7 @@ struct operand {
 		u64 val64;
 		char valptr[sizeof(sse128_t)];
 		sse128_t vec_val;
+		char valptr512[sizeof(sz512_t)];
 		u64 mm_val;
 		void *data;
 	};
