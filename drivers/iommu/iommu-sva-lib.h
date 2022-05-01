@@ -8,6 +8,7 @@
 #include <linux/ioasid.h>
 #include <linux/mm_types.h>
 
+void iommu_sva_init(void);
 int iommu_sva_alloc_pasid(struct mm_struct *mm, ioasid_t min, ioasid_t max);
 void iommu_sva_free_pasid(struct mm_struct *mm);
 struct mm_struct *iommu_sva_find(ioasid_t pasid);
