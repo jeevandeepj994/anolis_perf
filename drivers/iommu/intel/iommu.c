@@ -173,7 +173,7 @@ static struct intel_iommu **g_iommus;
 
 static void __init check_tylersburg_isoch(void);
 static int rwbf_quirk;
-
+static struct dmar_satc_unit *dmar_find_matched_satc_unit(struct pci_dev *dev);
 /*
  * set to 1 to panic kernel if can't successfully enable VT-d
  * (used when kernel is launched w/ TXT)
@@ -3163,6 +3163,13 @@ static bool device_is_rmrr_locked(struct device *dev)
 	return true;
 }
 
+static bool device_has_satc(struct device *dev)
+{
+	struct pci_dev *pdev = to_pci_dev(dev);
+
+	return dmar_find_matched_satc_unit(pdev) != NULL;
+}
+
 /*
  * Return the required default domain type for a specific device.
  *
@@ -3191,6 +3198,11 @@ static int device_def_domain_type(struct device *dev)
 
 		if ((iommu_identity_mapping & IDENTMAP_GFX) && IS_GFX_DEVICE(pdev))
 			return IOMMU_DOMAIN_IDENTITY;
+
+		if (device_has_satc(dev)) {
+			dev_info(dev, "Use identity domain for SATC devices");
+			return IOMMU_DOMAIN_IDENTITY;
+		}
 	}
 
 	return 0;
