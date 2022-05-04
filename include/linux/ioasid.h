@@ -32,6 +32,10 @@ struct ioasid_allocator_ops {
 #define DECLARE_IOASID_SET(name) struct ioasid_set name = { 0 }
 
 #if IS_ENABLED(CONFIG_IOASID)
+void ioasid_install_capacity(ioasid_t total);
+int ioasid_reserve_capacity(ioasid_t nr_ioasid);
+int ioasid_cancel_capacity(ioasid_t nr_ioasid);
+
 ioasid_t ioasid_alloc(struct ioasid_set *set, ioasid_t min, ioasid_t max,
 		      void *private);
 void ioasid_get(ioasid_t ioasid);
@@ -48,6 +52,20 @@ static inline bool pasid_valid(ioasid_t ioasid)
 }
 
 #else /* !CONFIG_IOASID */
+static inline void ioasid_install_capacity(ioasid_t total)
+{
+}
+
+static inline int ioasid_reserve_capacity(ioasid_t nr_ioasid)
+{
+	return -ENOSPC;
+}
+
+static inline int ioasid_cancel_capacity(ioasid_t nr_ioasid)
+{
+	return -EINVAL;
+}
+
 static inline ioasid_t ioasid_alloc(struct ioasid_set *set, ioasid_t min,
 				    ioasid_t max, void *private)
 {
