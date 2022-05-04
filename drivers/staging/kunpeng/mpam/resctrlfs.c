@@ -294,7 +294,7 @@ out_destroy:
 static void mkdir_mondata_all_prepare_clean(struct resctrl_group *prgrp)
 {
 	if (prgrp->type == RDTCTRL_GROUP && prgrp->closid.intpartid)
-		closid_free(prgrp->closid.intpartid);
+		kunpeng_closid_free(prgrp->closid.intpartid);
 	rmid_free(prgrp->mon.rmid);
 }
 
@@ -435,7 +435,7 @@ out_info:
 out_schema:
 	schemata_list_destroy();
 out:
-	rdt_last_cmd_clear();
+	kunpeng_rdt_last_cmd_clear();
 	mutex_unlock(&resctrl_group_mutex);
 	cpus_read_unlock();
 
@@ -721,10 +721,10 @@ static int mkdir_resctrl_prepare(struct kernfs_node *parent_kn,
 	int ret;
 
 	prdtgrp = resctrl_group_kn_lock_live(prgrp_kn);
-	rdt_last_cmd_clear();
+	kunpeng_rdt_last_cmd_clear();
 	if (!prdtgrp) {
 		ret = -ENODEV;
-		rdt_last_cmd_puts("directory was removed\n");
+		kunpeng_rdt_last_cmd_puts("directory was removed\n");
 		goto out_unlock;
 	}
 
@@ -732,7 +732,7 @@ static int mkdir_resctrl_prepare(struct kernfs_node *parent_kn,
 	rdtgrp = kzalloc(sizeof(*rdtgrp), GFP_KERNEL);
 	if (!rdtgrp) {
 		ret = -ENOSPC;
-		rdt_last_cmd_puts("kernel out of memory\n");
+		kunpeng_rdt_last_cmd_puts("kernel out of memory\n");
 		goto out_unlock;
 	}
 	*r = rdtgrp;
@@ -748,7 +748,7 @@ static int mkdir_resctrl_prepare(struct kernfs_node *parent_kn,
 	if (rdtgrp->type == RDTCTRL_GROUP) {
 		ret = closid_alloc();
 		if (ret < 0) {
-			rdt_last_cmd_puts("out of CLOSIDs\n");
+			kunpeng_rdt_last_cmd_puts("out of CLOSIDs\n");
 			goto out_unlock;
 		}
 		rdtgrp->closid.intpartid = ret;
@@ -756,7 +756,7 @@ static int mkdir_resctrl_prepare(struct kernfs_node *parent_kn,
 
 	ret = find_rdtgrp_allocable_rmid(rdtgrp);
 	if (ret < 0) {
-		rdt_last_cmd_puts("out of RMIDs\n");
+		kunpeng_rdt_last_cmd_puts("out of RMIDs\n");
 		goto out_free_closid;
 	}
 	rdtgrp->mon.rmid = ret;
@@ -767,7 +767,7 @@ static int mkdir_resctrl_prepare(struct kernfs_node *parent_kn,
 	kn = kernfs_create_dir(parent_kn, name, mode, rdtgrp);
 	if (IS_ERR(kn)) {
 		ret = PTR_ERR(kn);
-		rdt_last_cmd_puts("kernfs create error\n");
+		kunpeng_rdt_last_cmd_puts("kernfs create error\n");
 		goto out_free_rmid;
 	}
 	rdtgrp->kn = kn;
@@ -782,14 +782,14 @@ static int mkdir_resctrl_prepare(struct kernfs_node *parent_kn,
 
 	ret = resctrl_group_kn_set_ugid(kn);
 	if (ret) {
-		rdt_last_cmd_puts("kernfs perm error\n");
+		kunpeng_rdt_last_cmd_puts("kernfs perm error\n");
 		goto out_destroy;
 	}
 
 	files = RFTYPE_BASE | BIT(RF_CTRLSHIFT + rtype);
 	ret = resctrl_group_add_files(kn, files);
 	if (ret) {
-		rdt_last_cmd_puts("kernfs fill error\n");
+		kunpeng_rdt_last_cmd_puts("kernfs fill error\n");
 		goto out_destroy;
 	}
 
@@ -801,7 +801,7 @@ static int mkdir_resctrl_prepare(struct kernfs_node *parent_kn,
 
 		ret = mkdir_mondata_all(kn, rdtgrp, &rdtgrp->mon.mon_data_kn);
 		if (ret) {
-			rdt_last_cmd_puts("kernfs subdir error\n");
+			kunpeng_rdt_last_cmd_puts("kernfs subdir error\n");
 			goto out_prepare_clean;
 		}
 	}
@@ -822,7 +822,7 @@ out_free_rmid:
 	kfree(rdtgrp);
 out_free_closid:
 	if (rdtgrp->type == RDTCTRL_GROUP)
-		closid_free(rdtgrp->closid.intpartid);
+		kunpeng_closid_free(rdtgrp->closid.intpartid);
 out_unlock:
 	resctrl_group_kn_unlock(prgrp_kn);
 	return ret;
@@ -901,7 +901,7 @@ static int resctrl_group_mkdir_ctrl_mon(struct kernfs_node *parent_kn,
 		 */
 		ret = mongroup_create_dir(kn, NULL, "mon_groups", NULL);
 		if (ret) {
-			rdt_last_cmd_puts("kernfs subdir error\n");
+			kunpeng_rdt_last_cmd_puts("kernfs subdir error\n");
 			goto out_list_del;
 		}
 	}
@@ -1033,7 +1033,7 @@ static void resctrl_group_rm_ctrl(struct resctrl_group *rdtgrp, cpumask_var_t tm
 	update_closid_rmid(tmpmask, NULL);
 
 	rdtgrp->flags |= RDT_DELETED;
-	closid_free(rdtgrp->closid.intpartid);
+	kunpeng_closid_free(rdtgrp->closid.intpartid);
 	rmid_free(rdtgrp->mon.rmid);
 
 	/*

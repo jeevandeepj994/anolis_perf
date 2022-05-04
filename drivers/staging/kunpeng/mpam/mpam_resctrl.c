@@ -57,7 +57,7 @@ DEFINE_PER_CPU(struct intel_pqr_state, pqr_state);
  * Used to store the max resource name width and max resource data width
  * to display the schemata in a tabular format
  */
-int max_name_width, max_data_width;
+int kunpeng_max_name_width, kunpeng_max_data_width;
 
 /*
  * Global boolean for rdt_alloc which is true if any
@@ -306,7 +306,7 @@ parse_cache(char *buf, struct resctrl_resource *r,
 	struct raw_resctrl_resource *rr = r->res;
 
 	if (cfg->have_new_ctrl) {
-		rdt_last_cmd_printf("duplicate domain\n");
+		kunpeng_rdt_last_cmd_printf("duplicate domain\n");
 		return -EINVAL;
 	}
 
@@ -331,7 +331,7 @@ parse_bw(char *buf, struct resctrl_resource *r,
 	struct raw_resctrl_resource *rr = r->res;
 
 	if (cfg->have_new_ctrl) {
-		rdt_last_cmd_printf("duplicate domain\n");
+		kunpeng_rdt_last_cmd_printf("duplicate domain\n");
 		return -EINVAL;
 	}
 
@@ -1031,7 +1031,7 @@ int closid_alloc(void)
 	return pos;
 }
 
-void closid_free(int closid)
+void kunpeng_closid_free(int closid)
 {
 	u32 times, flag;
 
@@ -1054,15 +1054,15 @@ static __init void mpam_init_padding(void)
 		r = &res->resctrl_res;
 
 		cl = strlen(r->name);
-		if (cl > max_name_width)
-			max_name_width = cl;
+		if (cl > kunpeng_max_name_width)
+			kunpeng_max_name_width = cl;
 
 		rr = r->res;
 		if (!rr)
 			continue;
 		cl = rr->data_width;
-		if (cl > max_data_width)
-			max_data_width = cl;
+		if (cl > kunpeng_max_data_width)
+			kunpeng_max_data_width = cl;
 	}
 }
 
@@ -1283,7 +1283,7 @@ int __resctrl_group_move_task(struct task_struct *tsk,
 		 */
 		atomic_dec(&rdtgrp->waitcount);
 		kfree(callback);
-		rdt_last_cmd_puts("task exited\n");
+		kunpeng_rdt_last_cmd_puts("task exited\n");
 	} else {
 		/*
 		 * For ctrl_mon groups move both closid and rmid.
@@ -1298,7 +1298,7 @@ int __resctrl_group_move_task(struct task_struct *tsk,
 				tsk->closid = resctrl_navie_closid(rdtgrp->closid);
 				tsk->rmid = resctrl_navie_rmid(rdtgrp->mon.rmid);
 			} else {
-				rdt_last_cmd_puts("Can't move task to different control group\n");
+				kunpeng_rdt_last_cmd_puts("Can't move task to different control group\n");
 				ret = -EINVAL;
 			}
 		}
@@ -1380,7 +1380,7 @@ int cpus_ctrl_write(struct rdtgroup *rdtgrp, cpumask_var_t newmask,
 	if (cpumask_weight(tmpmask)) {
 		/* Can't drop from default group */
 		if (rdtgrp == &resctrl_group_default) {
-			rdt_last_cmd_puts("Can't drop CPUs from default group\n");
+			kunpeng_rdt_last_cmd_puts("Can't drop CPUs from default group\n");
 			return -EINVAL;
 		}
 
@@ -1433,7 +1433,7 @@ int cpus_mon_write(struct rdtgroup *rdtgrp, cpumask_var_t newmask,
 	/* Check whether cpus belong to parent ctrl group */
 	cpumask_andnot(tmpmask, newmask, &prgrp->cpu_mask);
 	if (cpumask_weight(tmpmask)) {
-		rdt_last_cmd_puts("can only add CPUs to mongroup that belong to parent\n");
+		kunpeng_rdt_last_cmd_puts("can only add CPUs to mongroup that belong to parent\n");
 		return -EINVAL;
 	}
 
@@ -1490,10 +1490,10 @@ static ssize_t resctrl_group_cpus_write(struct kernfs_open_file *of,
 	}
 
 	rdtgrp = resctrl_group_kn_lock_live(of->kn);
-	rdt_last_cmd_clear();
+	kunpeng_rdt_last_cmd_clear();
 	if (!rdtgrp) {
 		ret = -ENOENT;
-		rdt_last_cmd_puts("directory was removed\n");
+		kunpeng_rdt_last_cmd_puts("directory was removed\n");
 		goto unlock;
 	}
 
@@ -1503,7 +1503,7 @@ static ssize_t resctrl_group_cpus_write(struct kernfs_open_file *of,
 		ret = cpumask_parse(buf, newmask);
 
 	if (ret) {
-		rdt_last_cmd_puts("bad cpu list/mask\n");
+		kunpeng_rdt_last_cmd_puts("bad cpu list/mask\n");
 		goto unlock;
 	}
 
@@ -1511,7 +1511,7 @@ static ssize_t resctrl_group_cpus_write(struct kernfs_open_file *of,
 	cpumask_andnot(tmpmask, newmask, cpu_online_mask);
 	if (cpumask_weight(tmpmask)) {
 		ret = -EINVAL;
-		rdt_last_cmd_puts("can only assign online cpus\n");
+		kunpeng_rdt_last_cmd_puts("can only assign online cpus\n");
 		goto unlock;
 	}
 
@@ -1546,7 +1546,7 @@ static int resctrl_group_task_write_permission(struct task_struct *task,
 	if (!uid_eq(cred->euid, GLOBAL_ROOT_UID) &&
 	    !uid_eq(cred->euid, tcred->uid) &&
 	    !uid_eq(cred->euid, tcred->suid)) {
-		rdt_last_cmd_printf("No permission to move task %d\n", task->pid);
+		kunpeng_rdt_last_cmd_printf("No permission to move task %d\n", task->pid);
 		ret = -EPERM;
 	}
 
@@ -1565,7 +1565,7 @@ static int resctrl_group_move_task(pid_t pid, struct rdtgroup *rdtgrp,
 		tsk = find_task_by_vpid(pid);
 		if (!tsk) {
 			rcu_read_unlock();
-			rdt_last_cmd_printf("No task %d\n", pid);
+			kunpeng_rdt_last_cmd_printf("No task %d\n", pid);
 			return -ESRCH;
 		}
 	} else {
@@ -1586,19 +1586,19 @@ static int resctrl_group_move_task(pid_t pid, struct rdtgroup *rdtgrp,
 static struct seq_buf last_cmd_status;
 static char last_cmd_status_buf[512];
 
-void rdt_last_cmd_clear(void)
+void kunpeng_rdt_last_cmd_clear(void)
 {
 	lockdep_assert_held(&resctrl_group_mutex);
 	seq_buf_clear(&last_cmd_status);
 }
 
-void rdt_last_cmd_puts(const char *s)
+void kunpeng_rdt_last_cmd_puts(const char *s)
 {
 	lockdep_assert_held(&resctrl_group_mutex);
 	seq_buf_puts(&last_cmd_status, s);
 }
 
-void rdt_last_cmd_printf(const char *fmt, ...)
+void kunpeng_rdt_last_cmd_printf(const char *fmt, ...)
 {
 	va_list ap;
 
@@ -1743,7 +1743,7 @@ static ssize_t resctrl_group_tasks_write(struct kernfs_open_file *of,
 	if (kstrtoint(strstrip(buf), 0, &pid) || pid < 0)
 		return -EINVAL;
 	rdtgrp = resctrl_group_kn_lock_live(of->kn);
-	rdt_last_cmd_clear();
+	kunpeng_rdt_last_cmd_clear();
 
 	if (rdtgrp)
 		ret = resctrl_group_move_task(pid, rdtgrp, of);
@@ -1948,11 +1948,11 @@ struct rdt_domain *mpam_find_domain(struct resctrl_resource *r, int id,
 	return NULL;
 }
 
-enum mpam_enable_type __read_mostly mpam_enabled;
+enum mpam_enable_type __read_mostly kunpeng_mpam_enabled;
 static int __init mpam_setup(char *str)
 {
 	if (!strcmp(str, "=acpi"))
-		mpam_enabled = MPAM_ENABLE_ACPI;
+		kunpeng_mpam_enabled = MPAM_ENABLE_ACPI;
 
 	return 1;
 }

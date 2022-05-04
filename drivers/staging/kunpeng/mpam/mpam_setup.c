@@ -188,7 +188,7 @@ static void mpam_resctrl_pick_caches(void)
 
 	mpam_class_list_lock_held();
 
-	list_for_each_entry(class, &mpam_classes, classes_list) {
+	list_for_each_entry(class, &kunpeng_mpam_classes, classes_list) {
 		if (class->type != MPAM_CLASS_CACHE)
 			continue;
 
@@ -237,7 +237,7 @@ static void mpam_resctrl_pick_mba(void)
 	else
 		resctrl_llc = 0;
 
-	list_for_each_entry(class, &mpam_classes, classes_list) {
+	list_for_each_entry(class, &kunpeng_mpam_classes, classes_list) {
 		if (class->type == MPAM_CLASS_UNKNOWN)
 			continue;
 
@@ -566,7 +566,7 @@ static int mpam_resctrl_resource_init(struct mpam_resctrl_res *res)
 }
 
 /* Called with the mpam classes lock held */
-int mpam_resctrl_setup(void)
+int kunpeng_mpam_resctrl_setup(void)
 {
 	int rc;
 	struct mpam_resctrl_res *res;
