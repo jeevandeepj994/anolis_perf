@@ -116,7 +116,7 @@ struct resctrl_resource;
 DECLARE_STATIC_KEY_FALSE(resctrl_enable_key);
 DECLARE_STATIC_KEY_FALSE(resctrl_mon_enable_key);
 
-extern int max_name_width, max_data_width;
+extern int kunpeng_max_name_width, kunpeng_max_data_width;
 
 #define RESCTRL_SHOW_DOM_MAX_NUM 8
 
@@ -150,7 +150,7 @@ struct rdt_domain *mpam_find_domain(struct resctrl_resource *r, int id,
 extern bool rdt_alloc_capable;
 extern bool rdt_mon_capable;
 
-extern struct list_head mpam_classes;
+extern struct list_head kunpeng_mpam_classes;
 
 #define MAX_MBA_BW  100u
 #define GRAN_MBA_BW 2u
@@ -324,7 +324,7 @@ int mpam_resctrl_cpu_online(unsigned int cpu);
 
 int mpam_resctrl_cpu_offline(unsigned int cpu);
 
-int mpam_resctrl_setup(void);
+int kunpeng_mpam_resctrl_setup(void);
 
 struct raw_resctrl_resource *
 mpam_get_raw_resctrl_resource(u32 level);

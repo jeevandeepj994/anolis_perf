@@ -390,7 +390,7 @@ void rmid_free(int rmid);
 
 int resctrl_id_init(void);
 int closid_alloc(void);
-void closid_free(int closid);
+void kunpeng_closid_free(int closid);
 
 void update_cpu_closid_rmid(void *info);
 void update_closid_rmid(const struct cpumask *cpu_mask,
@@ -404,9 +404,9 @@ extern bool rdt_mon_capable;
 /* rdtgroup.flags */
 #define	RDT_DELETED		BIT(0)
 
-void rdt_last_cmd_clear(void);
-void rdt_last_cmd_puts(const char *s);
-void rdt_last_cmd_printf(const char *fmt, ...);
+void kunpeng_rdt_last_cmd_clear(void);
+void kunpeng_rdt_last_cmd_puts(const char *s);
+void kunpeng_rdt_last_cmd_printf(const char *fmt, ...);
 
 void resctrl_resource_reset(void);
 

@@ -63,7 +63,7 @@ enum mpam_enable_type {
 	MPAM_ENABLE_ACPI,
 };
 
-extern enum mpam_enable_type mpam_enabled;
+extern enum mpam_enable_type kunpeng_mpam_enabled;
 
 #define MPAM_IRQ_MODE_LEVEL    0x1
 #define MPAM_IRQ_FLAGS_MASK    0x7f

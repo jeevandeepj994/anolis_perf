@@ -92,7 +92,7 @@ static int acpi_mpam_label_memory_component_id(u8 proximity_domain,
 	return 0;
 }
 
-static int __init acpi_mpam_parse_memory(struct acpi_mpam_header *h)
+static int __init kunpeng_acpi_mpam_parse_memory(struct acpi_mpam_header *h)
 {
 	int ret;
 	u32 component_id;
@@ -118,7 +118,7 @@ static int __init acpi_mpam_parse_memory(struct acpi_mpam_header *h)
 		node->header.error_interrupt, node->header.error_interrupt_flags);
 }
 
-static int __init acpi_mpam_parse_cache(struct acpi_mpam_header *h,
+static int __init kunpeng_acpi_mpam_parse_cache(struct acpi_mpam_header *h,
 						struct acpi_table_header *pptt)
 {
 	int ret = 0;
@@ -186,8 +186,8 @@ static int __init acpi_mpam_parse_cache(struct acpi_mpam_header *h,
 		node->header.error_interrupt, node->header.error_interrupt_flags);
 }
 
-static int __init acpi_mpam_parse_table(struct acpi_table_header *table,
-					struct acpi_table_header *pptt)
+static int __init kunpeng_acpi_mpam_parse_table(struct acpi_table_header *table,
+						struct acpi_table_header *pptt)
 {
 	char *table_offset = (char *)(table + 1);
 	char *table_end = (char *)table + table->length;
@@ -204,10 +204,10 @@ static int __init acpi_mpam_parse_table(struct acpi_table_header *table,
 		switch (node_hdr->type) {
 
 		case ACPI_MPAM_TYPE_CACHE:
-			ret = acpi_mpam_parse_cache(node_hdr, pptt);
+			ret = kunpeng_acpi_mpam_parse_cache(node_hdr, pptt);
 			break;
 		case ACPI_MPAM_TYPE_MEMORY:
-			ret = acpi_mpam_parse_memory(node_hdr);
+			ret = kunpeng_acpi_mpam_parse_memory(node_hdr);
 			break;
 		default:
 			pr_warn_once("Unknown node type %u offset %ld.",
@@ -239,7 +239,7 @@ static int __init acpi_mpam_parse_table(struct acpi_table_header *table,
 	return ret;
 }
 
-int __init acpi_mpam_parse(void)
+int __init kunpeng_acpi_mpam_parse(void)
 {
 	struct acpi_table_header *mpam, *pptt;
 	acpi_status status;
@@ -248,7 +248,7 @@ int __init acpi_mpam_parse(void)
 	if (!cpus_have_const_cap(ARM64_HAS_MPAM))
 		return 0;
 
-	if (acpi_disabled || mpam_enabled != MPAM_ENABLE_ACPI)
+	if (acpi_disabled || kunpeng_mpam_enabled != MPAM_ENABLE_ACPI)
 		return 0;
 
 	status = acpi_get_table(ACPI_SIG_MPAM, 0, &mpam);
@@ -265,7 +265,7 @@ int __init acpi_mpam_parse(void)
 	if (ACPI_FAILURE(status))
 		pptt = NULL;
 
-	ret = acpi_mpam_parse_table(mpam, pptt);
+	ret = kunpeng_acpi_mpam_parse_table(mpam, pptt);
 	acpi_put_table(pptt);
 	acpi_put_table(mpam);
 
@@ -276,4 +276,4 @@ int __init acpi_mpam_parse(void)
  * We want to run after cacheinfo_sysfs_init() has caused the cacheinfo
  * structures to be populated. That runs as a device_initcall.
  */
-device_initcall_sync(acpi_mpam_parse);
+device_initcall_sync(kunpeng_acpi_mpam_parse);
