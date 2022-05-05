@@ -246,4 +246,9 @@ static inline int vfio_pci_info_zdev_add_caps(struct vfio_pci_device *vdev,
 }
 #endif
 
+extern int vfio_pci_dma_fault_init(struct vfio_pci_device *vdev, bool register_fault);
+extern int vfio_pci_set_ext_irq_trigger(struct vfio_pci_device *vdev,
+					unsigned int index, unsigned int start,
+					unsigned int count, uint32_t flags, void *data);
+
 #endif /* VFIO_PCI_PRIVATE_H */

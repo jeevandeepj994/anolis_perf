@@ -427,7 +427,7 @@ unlock:
 
 #define DMA_FAULT_RING_LENGTH 512
 
-static int vfio_pci_dma_fault_init(struct vfio_pci_device *vdev)
+int vfio_pci_dma_fault_init(struct vfio_pci_device *vdev,  bool register_fault)
 {
 	struct vfio_region_dma_fault *header;
 	size_t size;
@@ -461,17 +461,20 @@ static int vfio_pci_dma_fault_init(struct vfio_pci_device *vdev)
 	header->nb_entries = DMA_FAULT_RING_LENGTH;
 	header->offset = PAGE_SIZE;
 
-	ret = iommu_register_device_fault_handler(&vdev->pdev->dev,
-					vfio_pci_iommu_dev_fault_handler,
-					vdev);
-	if (ret) /* the dma fault region is freed in vfio_pci_disable() */
-		goto out;
+	if (register_fault) {
+		ret = iommu_register_device_fault_handler(&vdev->pdev->dev,
+							  vfio_pci_iommu_dev_fault_handler,
+							  vdev);
+		if (ret) /* the dma fault region is freed in vfio_pci_disable() */
+			goto out;
+	}
 
 	return 0;
 out:
 	kfree(vdev->fault_pages);
 	return ret;
 }
+EXPORT_SYMBOL_GPL(vfio_pci_dma_fault_init);
 
 static int vfio_pci_enable(struct vfio_pci_device *vdev)
 {
@@ -571,7 +574,7 @@ static int vfio_pci_enable(struct vfio_pci_device *vdev)
 		}
 	}
 
-	ret = vfio_pci_dma_fault_init(vdev);
+	ret = vfio_pci_dma_fault_init(vdev, true);
 	if (ret)
 		goto disable_exit;
 
