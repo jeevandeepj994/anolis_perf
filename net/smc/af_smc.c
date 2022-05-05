@@ -522,7 +522,7 @@ static int smcr_lgr_reg_rmbs(struct smc_link *link,
 			     struct smc_buf_desc *rmb_desc)
 {
 	struct smc_link_group *lgr = link->lgr;
-	int i, rc = 0;
+	int i, lnk = 0, rc = 0;
 
 	rc = smc_llc_flow_initiate(lgr, SMC_LLC_FLOW_RKEY);
 	if (rc)
@@ -537,14 +537,20 @@ static int smcr_lgr_reg_rmbs(struct smc_link *link,
 		rc = smcr_link_reg_buf(&lgr->lnk[i], rmb_desc);
 		if (rc)
 			goto out;
+		/* available link count inc */
+		lnk++;
 	}
 
-	/* exchange confirm_rkey msg with peer */
-	rc = smc_llc_do_confirm_rkey(link, rmb_desc);
-	if (rc) {
-		rc = -EFAULT;
-		goto out;
+	/* do not exchange confirm_rkey msg since there are only one link */
+	if (lnk > 1) {
+		/* exchange confirm_rkey msg with peer */
+		rc = smc_llc_do_confirm_rkey(link, rmb_desc);
+		if (rc) {
+			rc = -EFAULT;
+			goto out;
+		}
 	}
+
 	rmb_desc->is_conf_rkey = true;
 out:
 	mutex_unlock(&lgr->llc_conf_mutex);
