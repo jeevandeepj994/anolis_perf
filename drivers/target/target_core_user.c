@@ -2257,7 +2257,7 @@ static ssize_t tcmu_show_configfs_dev_params(struct se_device *dev, char *b)
 	bl += sprintf(b + bl, "Size: %llu ", udev->dev_size);
 	bl += sprintf(b + bl, "MaxDataAreaMB: %u ",
 		      TCMU_BLOCKS_TO_MBS(udev->max_blocks));
-	bl += sprintf(b + bl, "CmdRingSizeMB: %lu\n",
+	bl += sprintf(b + bl, "CmdRingSizeMB: %u\n",
 		      (udev->cmdr_size + CMDR_OFF) >> 20);
 
 	return bl;
@@ -2363,7 +2363,7 @@ static ssize_t tcmu_cmd_ring_size_mb_show(struct config_item *item, char *page)
 						struct se_dev_attrib, da_group);
 	struct tcmu_dev *udev = TCMU_DEV(da->da_dev);
 
-	return snprintf(page, PAGE_SIZE, "%lu\n",
+	return snprintf(page, PAGE_SIZE, "%u\n",
 			(udev->cmdr_size + CMDR_OFF) >> 20);
 }
 CONFIGFS_ATTR_RO(tcmu_, cmd_ring_size_mb);
