@@ -133,6 +133,17 @@ static inline int smc_wr_rx_credits_need_announce(struct smc_link *link)
 		atomic_read(&link->local_rq_credits) >= link->local_cr_watermark_high;
 }
 
+static inline int smc_wr_rx_credits_need_announce_frequent(struct smc_link *link)
+{
+	/* announce when local rq credits accumulated more than credits_update_limit, or
+	 * peer rq credits is empty. As peer credits empty and local credits is less than
+	 * credits_update_limit, may results in credits deadlock.
+	 */
+	return link->credits_enable &&
+		(atomic_read(&link->local_rq_credits) >= link->credits_update_limit ||
+		!atomic_read(&link->peer_rq_credits));
+}
+
 /* post a new receive work request to fill a completed old work request entry */
 static inline int smc_wr_rx_post(struct smc_link *link)
 {
