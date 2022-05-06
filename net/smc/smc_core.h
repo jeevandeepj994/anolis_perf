@@ -138,6 +138,7 @@ struct smc_link {
 	u8		credits_enable;		/* credits enable flag, set when negotiation */
 	u8		local_cr_watermark_high;	/* local rq credits watermark */
 	u8		peer_cr_watermark_low;	/* peer rq credits watermark */
+	u8		credits_update_limit;	/* credits update limit for cdc msg */
 	struct work_struct	credits_announce_work;	/* work for credits announcement */
 	unsigned long	flags;	/* link flags, SMC_LINKFLAG_ANNOUNCE_PENDING .etc */
 
