@@ -121,7 +121,8 @@ int smc_cdc_msg_send(struct smc_connection *conn,
 	conn->tx_cdc_seq++;
 	conn->local_tx_ctrl.seqno = conn->tx_cdc_seq;
 	smc_host_msg_to_cdc(cdc_msg, conn, &cfed);
-	saved_credits = (u8)smc_wr_rx_get_credits(link);
+	if (smc_wr_rx_credits_need_announce_frequent(link))
+		saved_credits = (u8)smc_wr_rx_get_credits(link);
 	cdc_msg->credits = saved_credits;
 
 	atomic_inc(&conn->cdc_pend_tx_wr);
