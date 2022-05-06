@@ -85,6 +85,15 @@ static int setup_dtb(struct kimage *image,
 				crashk_res.end - crashk_res.start + 1);
 		if (ret)
 			return (ret == -FDT_ERR_NOSPACE ? -ENOMEM : -EINVAL);
+
+		if (crashk_low_res.end) {
+			ret = fdt_appendprop_addrrange(dtb, 0, off,
+				FDT_PROP_MEM_RANGE,
+				crashk_low_res.start,
+				crashk_low_res.end - crashk_low_res.start + 1);
+			if (ret)
+				return (ret == -FDT_ERR_NOSPACE ? -ENOMEM : -EINVAL);
+		}
 	}
 
 	/* add bootargs */
