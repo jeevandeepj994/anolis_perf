@@ -337,6 +337,7 @@ enum {
 #include <asm/membarrier.h>
 #endif
 
+#ifdef CONFIG_ARCH_HAS_SYNC_CORE_BEFORE_USERMODE
 static inline void membarrier_mm_sync_core_before_usermode(struct mm_struct *mm)
 {
 	if (current->mm != mm)
@@ -346,6 +347,11 @@ static inline void membarrier_mm_sync_core_before_usermode(struct mm_struct *mm)
 		return;
 	sync_core_before_usermode();
 }
+#else
+static inline void membarrier_mm_sync_core_before_usermode(struct mm_struct *mm)
+{
+}
+#endif
 
 extern void membarrier_exec_mmap(struct mm_struct *mm);
 
