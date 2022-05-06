@@ -923,6 +923,11 @@ int smc_wr_create_link(struct smc_link *lnk)
 	lnk->flags = 0;
 	lnk->local_cr_watermark_high = max(lnk->wr_rx_cnt / 3, 1U);
 	lnk->peer_cr_watermark_low = 0;
+
+	/* if credits accumlated less than 10% of wr_rx_cnt(at least 5),
+	 * will not be announced by cdc msg.
+	 */
+	lnk->credits_update_limit = max(lnk->wr_rx_cnt / 10, 5U);
 	return rc;
 
 dma_unmap:
