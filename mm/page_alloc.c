@@ -1273,8 +1273,12 @@ static __always_inline bool free_pages_prepare(struct page *page,
 			 * maintain age information for each page in the
 			 * compound page, So we have to clear them one by one.
 			 */
+#if defined(CONFIG_KIDLED) && !defined(KIDLED_AGE_NOT_IN_PAGE_FLAGS)
+			(page + i)->flags &= ~(KIDLED_AGE_MASK << KIDLED_AGE_PGSHIFT);
+#else
 			kidled_set_page_age(page_pgdat(page + i),
 					    page_to_pfn(page + i), 0);
+#endif
 			(page + i)->flags &= ~PAGE_FLAGS_CHECK_AT_PREP;
 		}
 	}
@@ -1288,7 +1292,11 @@ static __always_inline bool free_pages_prepare(struct page *page,
 		return false;
 
 	page_cpupid_reset_last(page);
+#if defined(CONFIG_KIDLED) && !defined(KIDLED_AGE_NOT_IN_PAGE_FLAGS)
+	page->flags &= ~(KIDLED_AGE_MASK << KIDLED_AGE_PGSHIFT);
+#else
 	kidled_set_page_age(page_pgdat(page), page_to_pfn(page), 0);
+#endif
 	page->flags &= ~PAGE_FLAGS_CHECK_AT_PREP | __PG_KFENCE;
 	reset_page_owner(page, order);
 
