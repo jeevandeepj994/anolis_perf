@@ -82,6 +82,14 @@ static int _akcipher_recvmsg(struct socket *sock, struct msghdr *msg,
 	size_t used;
 	int err;
 	int maxsize;
+	bool any_size = false;
+
+#ifdef CONFIG_X86
+	/* If this platform support asymmetric encrypt/decrypt, any size should be allowed */
+	if (boot_cpu_data.x86_vendor == X86_VENDOR_HYGON) {
+		any_size = true;
+	}
+#endif
 
 	if (!ctx->used) {
 		err = af_alg_wait_for_data(sk, flags, 0);
@@ -99,15 +107,34 @@ static int _akcipher_recvmsg(struct socket *sock, struct msghdr *msg,
 	if (IS_ERR(areq))
 		return PTR_ERR(areq);
 
-	/* convert iovecs of output buffers into RX SGL */
-	err = af_alg_get_rsgl(sk, msg, flags, areq, maxsize, &len);
-	if (err)
-		goto free;
+	/**
+	 * The plaintext length maybe 16, 32, or 48 and so on for SM2 encrypt algorithm.
+	 * For example, the plaintext is usually 48 bytes on tls handshake process.
+	 * Correspondingly the output data encrypted will be 112, 128, or 144 bytes and so on.
+	 * In return the decrypted data length maybe 16, 32, or 48 and so on.
+	 * So the output data length is not fixed but variable.
+	 */
+	if (any_size) {
+		err = af_alg_get_rsgl(sk, msg, flags, areq, -1, &len);
+		if (err)
+			goto free;
 
-	/* ensure output buffer is sufficiently large */
-	if (len < maxsize) {
-		err = -EMSGSIZE;
-		goto free;
+		if (ctx->op != ALG_OP_ENCRYPT && ctx->op != ALG_OP_DECRYPT)
+			if (len < maxsize) {
+				err = -EMSGSIZE;
+				goto free;
+			}
+	} else {
+		/* convert iovecs of output buffers into RX SGL */
+		err = af_alg_get_rsgl(sk, msg, flags, areq, maxsize, &len);
+		if (err)
+			goto free;
+
+		/* ensure output buffer is sufficiently large */
+		if (len < maxsize) {
+			err = -EMSGSIZE;
+			goto free;
+		}
 	}
 
 	/*
