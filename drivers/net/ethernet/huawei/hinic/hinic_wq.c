@@ -616,7 +616,7 @@ void *hinic_get_wqe(struct hinic_wq *wq, int num_wqebbs, u16 *prod_idx)
 	/* If we only have one page, still need to get shadown wqe when
 	 * wqe rolling-over page
 	 */
-	if (curr_pg != end_pg || MASKED_WQE_IDX(wq, end_prod_idx) < *prod_idx) {
+	if (curr_pg != end_pg || end_prod_idx < *prod_idx) {
 		u32 offset = curr_pg * wq->max_wqe_size;
 		u8 *shadow_addr = wq->shadow_wqe + offset;
 
@@ -651,7 +651,10 @@ void *hinic_read_wqe(struct hinic_wq *wq, int num_wqebbs, u16 *cons_idx)
 
 	*cons_idx = curr_cons_idx;
 
-	if (curr_pg != end_pg) {
+	/* If we only have one page, still need to get shadown wqe when
+ 	 * wqe rolling-over page
+ 	 */
+	if (curr_pg != end_pg || end_cons_idx < curr_cons_idx) {
 		u32 offset = curr_pg * wq->max_wqe_size;
 		u8 *shadow_addr = wq->shadow_wqe + offset;
 
