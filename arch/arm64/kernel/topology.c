@@ -121,6 +121,20 @@ int __init parse_acpi_topology(void)
 
 	return 0;
 }
+
+static int cpu_die_map[NR_CPUS] __initdata = {[0 ... (NR_CPUS - 1)] = -1};
+
+static int __init cpu_topology_die_map(void)
+{
+	int cpu;
+
+	acpi_cpu_die_init(cpu_die_map);
+	for (cpu = 0; cpu < NR_CPUS; ++cpu)
+		cpu_topology[cpu].die_id = cpu_die_map[cpu];
+	return 0;
+}
+
+late_initcall(cpu_topology_die_map);
 #endif
 
 #ifdef CONFIG_ARM64_AMU_EXTN
