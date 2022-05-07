@@ -497,6 +497,12 @@ static int af_alg_cmsg_send(struct msghdr *msg, struct af_alg_control *con)
 	return 0;
 }
 
+int af_alg_ctrl_cmsg_send(struct msghdr *msg, struct af_alg_control *con)
+{
+	return af_alg_cmsg_send(msg, con);
+}
+EXPORT_SYMBOL_GPL(af_alg_ctrl_cmsg_send);
+
 /**
  * af_alg_alloc_tsgl - allocate the TX SGL
  *
