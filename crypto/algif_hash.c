@@ -16,6 +16,9 @@
 #include <linux/net.h>
 #include <net/sock.h>
 
+#define HASH_COPY_IOVEC_LEN     1
+#define HASH_UPDATE_IOVEC_LEN   2
+
 struct hash_ctx {
 	struct af_alg_sgl sgl;
 
@@ -60,6 +63,131 @@ static void hash_free_result(struct sock *sk, struct hash_ctx *ctx)
 	ctx->result = NULL;
 }
 
+#ifdef CONFIG_X86
+static int hash_alg_cmsg_send(struct hash_ctx *ctx, struct msghdr *msg, int *set)
+{
+	struct af_alg_control con = {};
+	unsigned int ds;
+	int err;
+
+	err = af_alg_ctrl_cmsg_send(msg, &con);
+	if (err)
+		return err;
+
+	if (con.iv) {
+		ds = crypto_ahash_digestsize(crypto_ahash_reqtfm(&ctx->req));
+		if (con.iv->ivlen != ds)
+			return -EINVAL;
+		*set = 1;
+	}
+
+	return 0;
+}
+
+static int hash_sendmsg_ex(struct socket *sock, struct msghdr *msg)
+{
+	int limit = ALG_MAX_PAGES * PAGE_SIZE;
+	struct sock *sk = sock->sk;
+	struct alg_sock *ask = alg_sk(sk);
+	struct hash_ctx *ctx = ask->private;
+	char state[HASH_MAX_STATESIZE];
+	unsigned statesize =
+		crypto_ahash_statesize(crypto_ahash_reqtfm(&ctx->req));
+	long copied = 0;
+	int setiv = 0;
+	int remain = 0;
+	int err;
+
+	if (limit > sk->sk_sndbuf)
+		limit = sk->sk_sndbuf;
+
+	lock_sock(sk);
+	if (!ctx->more) {
+		if ((msg->msg_flags & MSG_MORE))
+			hash_free_result(sk, ctx);
+
+		err = crypto_wait_req(crypto_ahash_init(&ctx->req), &ctx->wait);
+		if (err)
+			goto unlock;
+	}
+
+	err = hash_alg_cmsg_send(ctx, msg, &setiv);
+	if (err)
+		goto unlock;
+
+	/* setiv == 1: need exchange context data with userspace */
+	if (setiv) {
+		/* msg->msg_iter.nr_segs == 1: copy context data from userspace
+		 * msg->msg_iter.nr_segs == 2: transfer context data to userspace
+		 */
+		if (msg->msg_iter.nr_segs == HASH_COPY_IOVEC_LEN) {
+			err = memcpy_from_msg((void *)state, msg, statesize);
+			if (err)
+				goto unlock;
+			err = crypto_ahash_import(&ctx->req, state);
+			if (err)
+				goto unlock;
+		} else if (msg->msg_iter.nr_segs == HASH_UPDATE_IOVEC_LEN) {
+			remain = statesize;
+		} else {
+			err = -EINVAL;
+			goto unlock;
+		}
+	}
+
+	ctx->more = 0;
+
+	while (msg_data_left(msg) - remain) {
+		int len = msg_data_left(msg) - remain;
+
+		if (len > limit)
+			len = limit;
+
+		len = af_alg_make_sg(&ctx->sgl, &msg->msg_iter, len);
+		if (len < 0) {
+			err = copied ? 0 : len;
+			goto unlock;
+		}
+
+		ahash_request_set_crypt(&ctx->req, ctx->sgl.sg, NULL, len);
+
+		err = crypto_wait_req(crypto_ahash_update(&ctx->req),
+				      &ctx->wait);
+		af_alg_free_sg(&ctx->sgl);
+		if (err)
+			goto unlock;
+
+		copied += len;
+		iov_iter_advance(&msg->msg_iter, len);
+	}
+
+	if (remain) {
+		err = crypto_ahash_export(&ctx->req, state);
+		if (err)
+			goto unlock;
+		memcpy_to_msg(msg, (void *)state, statesize);
+	}
+
+	err = 0;
+
+	ctx->more = msg->msg_flags & MSG_MORE;
+	if (!ctx->more) {
+		err = hash_alloc_result(sk, ctx);
+		if (err)
+			goto unlock;
+
+		ahash_request_set_crypt(&ctx->req, NULL, ctx->result, 0);
+		err = crypto_wait_req(crypto_ahash_final(&ctx->req),
+				      &ctx->wait);
+	}
+
+unlock:
+	release_sock(sk);
+
+	return err ?: copied;
+}
+#endif
+
 static int hash_sendmsg(struct socket *sock, struct msghdr *msg,
 			size_t ignored)
 {
@@ -69,6 +197,11 @@ static int hash_sendmsg(struct socket *sock, struct msghdr *msg,
 	struct hash_ctx *ctx = ask->private;
 	long copied = 0;
 	int err;
+
+#ifdef CONFIG_X86
+	if (boot_cpu_data.x86_vendor == X86_VENDOR_HYGON)
+		return hash_sendmsg_ex(sock, msg);
+#endif
 
 	if (limit > sk->sk_sndbuf)
 		limit = sk->sk_sndbuf;

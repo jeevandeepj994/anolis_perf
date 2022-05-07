@@ -171,6 +171,8 @@ int af_alg_accept(struct sock *sk, struct socket *newsock, bool kern);
 int af_alg_make_sg(struct af_alg_sgl *sgl, struct iov_iter *iter, int len);
 void af_alg_free_sg(struct af_alg_sgl *sgl);
 
+int af_alg_ctrl_cmsg_send(struct msghdr *msg, struct af_alg_control *con);
+
 static inline struct alg_sock *alg_sk(struct sock *sk)
 {
 	return (struct alg_sock *)sk;
