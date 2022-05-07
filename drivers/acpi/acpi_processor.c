@@ -595,6 +595,68 @@ static int duplicate_processor_ids[] = {
 	[0 ... NR_CPUS - 1] = -1,
 };
 
+struct acpi_cpu_die_ctx {
+	int die_id;
+	int cpu_ct;
+	int *cpu_die_map;
+};
+
+static acpi_status __init acpi_cpu_die_walk(acpi_handle object,
+					    u32 nesting_level,
+					    void *context,
+					    void **return_value)
+{
+	struct acpi_device *d = NULL;
+	int cpuid;
+	unsigned long long acpi_id;
+	acpi_status status;
+	struct acpi_cpu_die_ctx *ctx = context;
+
+	acpi_bus_get_device(object, &d);
+	if (strcmp(acpi_device_hid(d), ACPI_PROCESSOR_DEVICE_HID))
+		return AE_OK;
+
+	status = acpi_evaluate_integer(object, METHOD_NAME__UID, NULL,
+				       &acpi_id);
+	if (ACPI_FAILURE(status))
+		return AE_OK;
+
+	cpuid = acpi_get_cpuid(object, 1, (u32)acpi_id);
+
+	if (cpuid >= ctx->cpu_ct || cpuid < 0)
+		return AE_OK;
+
+	ctx->cpu_die_map[cpuid] = ctx->die_id;
+	return AE_OK;
+}
+
+static acpi_status __init acpi_cpu_die_topology(acpi_handle object,
+						u32 nesting_level,
+						void *context,
+						void **return_value)
+{
+	acpi_status status;
+	unsigned long long value;
+	struct acpi_cpu_die_ctx *ctx = context;
+
+	status = acpi_evaluate_integer(object, METHOD_NAME__UID, NULL, &value);
+	if (ACPI_FAILURE(status))
+		return AE_OK;
+
+	ctx->die_id = (int)value;
+	return acpi_walk_namespace(ACPI_TYPE_DEVICE, object, ACPI_UINT32_MAX,
+				   acpi_cpu_die_walk, NULL, context, NULL);
+}
+
+void __init acpi_cpu_die_init(int *cpu_die_map, int ct)
+{
+	struct acpi_cpu_die_ctx ctx = {.cpu_ct = ct,
+				       .cpu_die_map = cpu_die_map};
+
+	acpi_get_devices(ACPI_PROCESSOR_CONTAINER_HID,
+			 acpi_cpu_die_topology, &ctx, NULL);
+}
+
 static void __init processor_validated_ids_update(int proc_id)
 {
 	int i;
