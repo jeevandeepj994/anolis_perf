@@ -342,6 +342,12 @@ static int ccp_register_algs(void)
 		ret = ccp_register_sm3_hygon_algs(&hash_algs);
 		if (ret)
 			return ret;
+
+		ret = ccp_register_sm4_hygon_algs(&skcipher_algs);
+		if (ret)
+			return ret;
+
+		return 0;
 	}
 #endif
 
