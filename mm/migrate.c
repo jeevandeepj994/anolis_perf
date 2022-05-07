@@ -3380,7 +3380,7 @@ static int migrate_page_unmap(new_page_t get_new_page, free_page_t put_new_page,
 		/* Establish migration ptes */
 		VM_BUG_ON_PAGE(PageAnon(page) && !PageKsm(page) && !anon_vma,
 				page);
-		try_to_unmap(page, TTU_MIGRATION|TTU_IGNORE_MLOCK);
+		try_to_unmap(page, TTU_MIGRATION|TTU_IGNORE_MLOCK | TTU_BATCH_FLUSH);
 		page_was_mapped = 1;
 	}
 
@@ -3660,6 +3660,8 @@ retry:
 	nr_failed += retry + thp_retry;
 	nr_thp_failed += thp_retry;
 move:
+	try_to_unmap_flush();
+
 	retry = 1;
 	thp_retry = 1;
 	for (pass = 0; pass < 10 && (retry || thp_retry); pass++) {
