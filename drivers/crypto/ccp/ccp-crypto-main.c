@@ -338,6 +338,10 @@ static int ccp_register_algs(void)
 		ret = ccp_register_sm2_hygon_algs(&akcipher_algs);
 		if (ret)
 			return ret;
+
+		ret = ccp_register_sm3_hygon_algs(&hash_algs);
+		if (ret)
+			return ret;
 	}
 #endif
 
