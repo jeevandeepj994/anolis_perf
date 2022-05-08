@@ -3408,6 +3408,7 @@ static int __init init_dmars(void)
 				PTR_ERR(host_pasid_set));
 			intel_iommu_sm = 0;
 		} else {
+			intel_svm_add_pasid_notifier();
 			/* If do this allocation in guest, then it may encounter
 			 * failure as guest allocation will go into host, while
 			 * PASID#0 should have been allocated before VM boot. So
