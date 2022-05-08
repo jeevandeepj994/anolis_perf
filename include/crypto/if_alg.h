@@ -21,6 +21,7 @@
 #include <crypto/akcipher.h>
 
 #define ALG_MAX_PAGES			16
+#define ALG_MAX_PAGE_SIZE    (PAGE_SIZE * ALG_MAX_PAGES)
 
 struct crypto_async_request;
 

@@ -1135,7 +1135,7 @@ ssize_t af_alg_sendpage(struct socket *sock, struct page *page,
 		flags |= MSG_MORE;
 
 	lock_sock(sk);
-	if (!ctx->more && ctx->used)
+	if (!ctx->more && ctx->used >= ALG_MAX_PAGE_SIZE)
 		goto unlock;
 
 	if (!size)
