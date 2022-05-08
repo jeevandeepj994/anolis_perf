@@ -647,8 +647,8 @@ static int enable_bars(struct nfp6000_pcie *nfp, u16 interface)
 		nfp->expl.data = bar->iomem + NFP_PCIE_SRAM +
 			nfp->dev_info->pcie_expl_offset;
 
-		if (nfp->pdev->device == PCI_DEVICE_ID_NETRONOME_NFP4000 ||
-		    nfp->pdev->device == PCI_DEVICE_ID_NETRONOME_NFP6000) {
+		if (nfp->pdev->device == PCI_DEVICE_ID_NFP4000 ||
+		    nfp->pdev->device == PCI_DEVICE_ID_NFP6000) {
 			nfp->iomem.csr = bar->iomem + NFP_PCIE_BAR(0);
 		} else {
 			int pf = nfp->pdev->devfn & 7;
@@ -658,8 +658,8 @@ static int enable_bars(struct nfp6000_pcie *nfp, u16 interface)
 		nfp->iomem.em = bar->iomem + NFP_PCIE_EM;
 	}
 
-	if (nfp->pdev->device == PCI_DEVICE_ID_NETRONOME_NFP4000 ||
-	    nfp->pdev->device == PCI_DEVICE_ID_NETRONOME_NFP6000)
+	if (nfp->pdev->device == PCI_DEVICE_ID_NFP4000 ||
+	    nfp->pdev->device == PCI_DEVICE_ID_NFP6000)
 		expl_groups = 4;
 	else
 		expl_groups = 1;
