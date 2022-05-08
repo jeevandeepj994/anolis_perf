@@ -998,6 +998,126 @@ unlock:
 EXPORT_SYMBOL_GPL(af_alg_sendmsg);
 
 /**
+ * af_alg_sgl_sendmsg - implementation of sendmsg system call handler
+ *
+ * will create the TX SGL for the input data from the crypto operation
+ *
+ */
+int af_alg_tsgl_sendmsg(struct socket *sock, struct msghdr *msg, size_t size,
+		   unsigned int ivsize)
+{
+	struct sock *sk = sock->sk;
+	struct alg_sock *ask = alg_sk(sk);
+	struct af_alg_ctx *ctx = ask->private;
+	struct af_alg_tsgl *sgl;
+	struct af_alg_control con = {};
+	long copied = 0;
+	int op = 0;
+	bool init = 0;
+	int err = 0;
+
+	if (msg->msg_controllen) {
+		err = af_alg_cmsg_send(msg, &con);
+		if (err)
+			return err;
+
+		init = 1;
+		switch (con.op) {
+		case ALG_OP_VERIFY:
+		case ALG_OP_SIGN:
+		case ALG_OP_ENCRYPT:
+		case ALG_OP_DECRYPT:
+			op = con.op;
+			break;
+		default:
+			return -EINVAL;
+		}
+
+		if (con.iv && con.iv->ivlen != ivsize)
+			return -EINVAL;
+	}
+
+	lock_sock(sk);
+	if (!ctx->more && ctx->used) {
+		err = -EINVAL;
+		goto unlock;
+	}
+
+	ctx->init = true;
+	if (init) {
+		ctx->op = op;
+		if (con.iv)
+			memcpy(ctx->iv, con.iv->iv, ivsize);
+
+		ctx->aead_assoclen = con.aead_assoclen;
+	}
+
+	while (size) {
+		struct scatterlist *sg;
+		size_t len = size;
+		size_t plen;
+
+		err = af_alg_alloc_tsgl(sk);
+		if (err)
+			goto unlock;
+
+		sgl = list_entry(ctx->tsgl_list.prev, struct af_alg_tsgl,
+				 list);
+		sg = sgl->sg;
+		if (sgl->cur)
+			sg_unmark_end(sg + sgl->cur - 1);
+
+		do {
+			unsigned int i = sgl->cur;
+			struct page *page;
+			ssize_t n;
+			size_t off;
+
+			plen = min_t(size_t, len, PAGE_SIZE);
+
+			/* -1: max size, 1: page number */
+			n = iov_iter_get_pages(&msg->msg_iter, &page,
+				-1, 1, &off);
+			if (n < 0 || n > plen) {
+				err = -EFAULT;
+				goto unlock;
+			}
+			sg_assign_page(sg + i, page);
+			if (!sg_page(sg + i)) {
+				err = -ENOMEM;
+				goto unlock;
+			}
+			iov_iter_advance(&msg->msg_iter, n);
+
+			plen = n;
+			sg[i].length = plen;
+			sg[i].offset = off;
+			len -= plen;
+			ctx->used += plen;
+			copied += plen;
+			size -= plen;
+			sgl->cur++;
+		} while (len && sgl->cur < MAX_SGL_ENTS);
+
+		if (!size)
+			sg_mark_end(sg + sgl->cur - 1);
+
+		ctx->merge = plen & (PAGE_SIZE - 1);
+	}
+
+	err = 0;
+
+	ctx->more = msg->msg_flags & MSG_MORE;
+
+unlock:
+	af_alg_data_wakeup(sk);
+	release_sock(sk);
+
+	return copied ?: err;
+}
+EXPORT_SYMBOL_GPL(af_alg_tsgl_sendmsg);
+
+/**
  * af_alg_sendpage - sendpage system call handler
  *
  * This is a generic implementation of sendpage to fill ctx->tsgl_list.
@@ -1162,15 +1282,24 @@ int af_alg_get_rsgl(struct sock *sk, struct msghdr *msg, int flags,
 	struct alg_sock *ask = alg_sk(sk);
 	struct af_alg_ctx *ctx = ask->private;
 	size_t len = 0;
+	bool readable_check = true;
+
+#ifdef CONFIG_X86
+	/* The platform support user space message of any length */
+	if (boot_cpu_data.x86_vendor == X86_VENDOR_HYGON) {
+		readable_check = false;
+	}
+#endif
 
 	while (maxsize > len && msg_data_left(msg)) {
 		struct af_alg_rsgl *rsgl;
 		size_t seglen;
 		int err;
 
-		/* limit the amount of readable buffers */
-		if (!af_alg_readable(sk))
-			break;
+		if (readable_check)
+			/* limit the amount of readable buffers */
+			if (!af_alg_readable(sk))
+				break;
 
 		seglen = min_t(size_t, (maxsize - len),
 			       msg_data_left(msg));

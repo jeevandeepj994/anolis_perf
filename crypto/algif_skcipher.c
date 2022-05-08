@@ -44,6 +44,12 @@ static int skcipher_sendmsg(struct socket *sock, struct msghdr *msg,
 	struct crypto_skcipher *tfm = pask->private;
 	unsigned ivsize = crypto_skcipher_ivsize(tfm);
 
+#ifdef CONFIG_X86
+	/* The platform support sendmsg by paring user space address*/
+	if (boot_cpu_data.x86_vendor == X86_VENDOR_HYGON)
+		return af_alg_tsgl_sendmsg(sock, msg, size, ivsize);
+#endif
+
 	return af_alg_sendmsg(sock, msg, size, ivsize);
 }
 
