@@ -448,6 +448,13 @@ static void af_alg_link_sg(struct af_alg_sgl *sgl_prev,
 	sg_chain(sgl_prev->sg, sgl_prev->npages + 1, sgl_new->sg);
 }
 
+void af_alg_sgl_link(struct af_alg_sgl *sgl_prev,
+		struct af_alg_sgl *sgl_new)
+{
+	af_alg_link_sg(sgl_prev, sgl_new);
+}
+EXPORT_SYMBOL_GPL(af_alg_sgl_link);
+
 void af_alg_free_sg(struct af_alg_sgl *sgl)
 {
 	int i;
