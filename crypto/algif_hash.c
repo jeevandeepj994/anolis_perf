@@ -19,8 +19,17 @@
 #define HASH_COPY_IOVEC_LEN     1
 #define HASH_UPDATE_IOVEC_LEN   2
 
+struct hash_alg_sgl {
+	struct af_alg_sgl sgl;
+	struct list_head list;
+};
+
 struct hash_ctx {
 	struct af_alg_sgl sgl;
+
+	struct hash_alg_sgl first_sgl;
+	struct hash_alg_sgl *last_sgl;
+	struct list_head tsgl_list;
 
 	u8 *result;
 
@@ -63,6 +72,51 @@ static void hash_free_result(struct sock *sk, struct hash_ctx *ctx)
 	ctx->result = NULL;
 }
 
+static int hash_alg_get_tsgl(struct sock *sk, struct hash_ctx *ctx,
+			     struct msghdr *msg, size_t size)
+{
+	struct hash_alg_sgl *tsgl;
+	int err;
+
+	while (size > 0) {
+		if (list_empty(&ctx->tsgl_list)) {
+			tsgl = &ctx->first_sgl;
+		} else {
+			tsgl = sock_kmalloc(sk, sizeof(*tsgl), GFP_KERNEL);
+			if (!tsgl)
+				return -ENOMEM;
+		}
+
+		list_add_tail(&tsgl->list, &ctx->tsgl_list);
+
+		err = af_alg_make_sg(&tsgl->sgl, &msg->msg_iter, size);
+		if (err < 0)
+			return err;
+
+		if (ctx->last_sgl)
+			af_alg_sgl_link(&ctx->last_sgl->sgl, &tsgl->sgl);
+
+		ctx->last_sgl = tsgl;
+		size -= err;
+		iov_iter_advance(&msg->msg_iter, err);
+	}
+
+	return 0;
+}
+
+static void hash_alg_put_tsgl(struct sock *sk, struct hash_ctx *ctx)
+{
+	struct hash_alg_sgl *tsgl, *tmp;
+
+	list_for_each_entry_safe(tsgl, tmp, &ctx->tsgl_list, list) {
+		af_alg_free_sg(&tsgl->sgl);
+		list_del(&tsgl->list);
+		if (tsgl != &ctx->first_sgl)
+			sock_kfree_s(sk, tsgl, sizeof(*tsgl));
+	}
+	ctx->last_sgl = NULL;
+}
+
 #ifdef CONFIG_X86
 static int hash_alg_cmsg_send(struct hash_ctx *ctx, struct msghdr *msg, int *set)
 {
@@ -86,7 +140,7 @@ static int hash_alg_cmsg_send(struct hash_ctx *ctx, struct msghdr *msg, int *set
 
 static int hash_sendmsg_ex(struct socket *sock, struct msghdr *msg)
 {
-	int limit = ALG_MAX_PAGES * PAGE_SIZE;
+	int limit = ALG_MAX_PAGES * ALG_MAX_PAGES * PAGE_SIZE;
 	struct sock *sk = sock->sk;
 	struct alg_sock *ask = alg_sk(sk);
 	struct hash_ctx *ctx = ask->private;
@@ -97,9 +151,6 @@ static int hash_sendmsg_ex(struct socket *sock, struct msghdr *msg)
 	int setiv = 0;
 	int remain = 0;
 	int err;
-
-	if (limit > sk->sk_sndbuf)
-		limit = sk->sk_sndbuf;
 
 	lock_sock(sk);
 	if (!ctx->more) {
@@ -143,22 +194,24 @@ static int hash_sendmsg_ex(struct socket *sock, struct msghdr *msg)
 		if (len > limit)
 			len = limit;
 
-		len = af_alg_make_sg(&ctx->sgl, &msg->msg_iter, len);
-		if (len < 0) {
-			err = copied ? 0 : len;
+		err = hash_alg_get_tsgl(sk, ctx, msg, len);
+		if (err < 0) {
+			err = copied ? 0 : err;
+			hash_alg_put_tsgl(sk, ctx);
 			goto unlock;
 		}
 
-		ahash_request_set_crypt(&ctx->req, ctx->sgl.sg, NULL, len);
+		ahash_request_set_crypt(&ctx->req, ctx->first_sgl.sgl.sg, NULL, len);
 
 		err = crypto_wait_req(crypto_ahash_update(&ctx->req),
 				      &ctx->wait);
-		af_alg_free_sg(&ctx->sgl);
-		if (err)
+		if (err) {
+			hash_alg_put_tsgl(sk, ctx);
 			goto unlock;
+		}
 
+		hash_alg_put_tsgl(sk, ctx);
 		copied += len;
-		iov_iter_advance(&msg->msg_iter, len);
 	}
 
 	if (remain) {
@@ -564,6 +617,8 @@ static int hash_accept_parent_nokey(void *private, struct sock *sk)
 	ctx->len = len;
 	ctx->more = false;
 	crypto_init_wait(&ctx->wait);
+	ctx->last_sgl = NULL;
+	INIT_LIST_HEAD(&ctx->tsgl_list);
 
 	ask->private = ctx;
 
