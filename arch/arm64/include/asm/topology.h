@@ -4,6 +4,11 @@
 
 #include <linux/cpumask.h>
 
+#ifdef CONFIG_ACPI
+#define topology_die_id(cpu)		(cpu_topology[cpu].die_id)
+#define topology_die_cpumask(cpu)	(&cpu_topology[cpu].die_cpus)
+#endif
+
 #ifdef CONFIG_NUMA
 
 struct pci_bus;
