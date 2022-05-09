@@ -121,6 +121,31 @@ int __init parse_acpi_topology(void)
 
 	return 0;
 }
+
+static int cpu_die_map[NR_CPUS] __initdata = {[0 ... (NR_CPUS - 1)] = -1};
+
+static int __init cpu_topology_die_map(void)
+{
+	int cpu, iter, die_id;
+
+	acpi_cpu_die_init(cpu_die_map);
+	for_each_possible_cpu(cpu) {
+		die_id = cpu_die_map[cpu];
+		cpu_topology[cpu].die_id = die_id;
+		cpumask_set_cpu(cpu, &cpu_topology[cpu].die_cpus);
+		if (die_id < 0)
+			continue;
+		for (iter = 0; iter < cpu; iter++) {
+			if (cpu_topology[iter].die_id != die_id)
+				continue;
+			cpumask_set_cpu(cpu, &cpu_topology[iter].die_cpus);
+			cpumask_set_cpu(iter, &cpu_topology[cpu].die_cpus);
+		}
+	}
+	return 0;
+}
+
+late_initcall(cpu_topology_die_map);
 #endif
 
 #ifdef CONFIG_ARM64_AMU_EXTN
