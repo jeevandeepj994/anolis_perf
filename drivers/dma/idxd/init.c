@@ -176,6 +176,7 @@ static int idxd_setup_wqs(struct idxd_device *idxd)
 		init_waitqueue_head(&wq->err_queue);
 		init_completion(&wq->wq_dead);
 		init_completion(&wq->wq_resurrect);
+		INIT_LIST_HEAD(&wq->vdcm_list);
 		wq->max_xfer_bytes = WQ_DEFAULT_MAX_XFER;
 		wq->max_batch_size = WQ_DEFAULT_MAX_BATCH;
 		wq->enqcmds_retries = IDXD_ENQCMDS_RETRIES;

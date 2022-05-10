@@ -11,9 +11,13 @@
 #include <linux/idr.h>
 #include <linux/pci.h>
 #include <linux/ioasid.h>
+#include <linux/mdev.h>
+#include <linux/idxd.h>
+#include <linux/vfio.h>
 #include <linux/perf_event.h>
 #include <uapi/linux/idxd.h>
 #include "registers.h"
+#include "../../vfio/pci/vfio_pci_private.h"
 
 #define IDXD_DRIVER_VERSION	"1.00"
 
@@ -55,11 +59,16 @@ enum idxd_type {
 #define IDXD_ENQCMDS_RETRIES		32
 #define IDXD_ENQCMDS_MAX_RETRIES	64
 
+struct idxd_device_ops {
+	void (*notify_error)(struct idxd_wq *wq);
+};
+
 struct idxd_device_driver {
 	const char *name;
 	enum idxd_dev_type *type;
 	int (*probe)(struct idxd_dev *idxd_dev);
 	void (*remove)(struct idxd_dev *idxd_dev);
+	struct idxd_device_ops *ops;
 	struct device_driver drv;
 };
 
@@ -127,6 +136,7 @@ struct idxd_pmu {
 enum idxd_wq_state {
 	IDXD_WQ_DISABLED = 0,
 	IDXD_WQ_ENABLED,
+	IDXD_WQ_LOCKED,
 };
 
 enum idxd_wq_flag {
@@ -210,6 +220,7 @@ struct idxd_wq {
 	u64 max_xfer_bytes;
 	u32 max_batch_size;
 	bool ats_dis;
+	struct list_head vdcm_list;
 };
 
 struct idxd_engine {
@@ -270,6 +281,7 @@ struct idxd_device {
 
 	struct pci_dev *pdev;
 	void __iomem *reg_base;
+	void __iomem *portal_base;
 
 	spinlock_t dev_lock;	/* spinlock for device */
 	spinlock_t cmd_lock;	/* spinlock for device commands */
@@ -309,6 +321,14 @@ struct idxd_device {
 	struct idxd_dma_dev *idxd_dma;
 	struct workqueue_struct *wq;
 	struct work_struct work;
+
+	struct irq_domain *ims_domain;
+	struct vfio_pci_device vfio_pdev;
+	struct kref mdev_kref;
+	struct mutex kref_lock;
+	bool mdev_host_init;
+	int *new_handles;
+	struct ida vdev_ida;
 
 	struct idxd_pmu *idxd_pmu;
 };
@@ -548,6 +568,9 @@ void idxd_driver_unregister(struct idxd_device_driver *idxd_drv);
 
 #define module_idxd_driver(__idxd_driver) \
 	module_driver(__idxd_driver, idxd_driver_register, idxd_driver_unregister)
+
+#define MODULE_ALIAS_IDXD_DEVICE(type) MODULE_ALIAS("idxd:t" __stringify(type) "*")
+#define IDXD_DEVICES_MODALIAS_FMT "idxd:t%d"
 
 int idxd_register_bus_type(void);
 void idxd_unregister_bus_type(void);
