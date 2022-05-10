@@ -15,7 +15,8 @@
 #define __packed __attribute__((packed))
 
 #include "../../../../arch/x86/kernel/cpu/sgx/arch.h"
-#include "../../../../arch/x86/include/asm/enclu.h"
 #include "../../../../arch/x86/include/uapi/asm/sgx.h"
+#include "enclu.h"
+#include "vdso.h"
 
 #endif /* DEFINES_H */

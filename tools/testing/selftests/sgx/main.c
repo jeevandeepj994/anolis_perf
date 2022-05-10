@@ -211,8 +211,11 @@ int main(int argc, char *argv[], char *envp[])
 		goto err;
 
 	eenter_sym = vdso_symtab_get(&symtab, "__vdso_sgx_enter_enclave");
-	if (!eenter_sym)
-		goto err;
+	if (!eenter_sym) {
+		printf("__vdso_sgx_enter_enclave is not supported\n");
+		encl_delete(&encl);
+		exit(KSFT_XFAIL);
+	}
 
 	eenter = addr + eenter_sym->st_value;
 
