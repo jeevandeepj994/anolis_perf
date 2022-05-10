@@ -42,3 +42,43 @@ sgx_call_vdso:
 	.cfi_adjust_cfa_offset	-8
 	ret
 	.cfi_endproc
+
+
+#define EEXIT	0x04
+
+/* Relative to %rbp. */
+#define SGX_ENCLAVE_OFFSET_OF_RUN		16
+
+/* The offsets relative to struct sgx_enclave_run. */
+#define SGX_ENCLAVE_RUN_TCS			0
+#define SGX_ENCLAVE_RUN_LEAF			8
+
+	.global eenter_no_vdso
+eenter_no_vdso:
+	/* Prolog */
+	push	%rbp
+	mov	%rsp, %rbp
+	push	%rbx
+	mov	%ecx, %eax
+
+	/* Load struct sgx_enclave_run from stack */
+	mov	SGX_ENCLAVE_OFFSET_OF_RUN(%rbp), %rcx
+
+	/* Load TCS and AEP */
+	mov	SGX_ENCLAVE_RUN_TCS(%rcx), %rbx
+	lea	.Lasync_exit_pointer(%rip), %rcx
+
+.Lasync_exit_pointer:
+	enclu
+
+	/* EEXIT jumps here unless the enclave is doing something fancy. */
+	mov	SGX_ENCLAVE_OFFSET_OF_RUN(%rbp), %rbx
+
+	/* Set exit_reason. */
+	movl	$EEXIT, SGX_ENCLAVE_RUN_LEAF(%rbx)
+
+	xor %eax, %eax
+
+	pop %rbx
+	leave
+	ret

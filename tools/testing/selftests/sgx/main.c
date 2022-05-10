@@ -203,6 +203,7 @@ int main(int argc, char *argv[], char *envp[])
 	memset(&run, 0, sizeof(run));
 	run.tcs = encl.encl_base;
 
+	printf("1. Try EENTER within vdso\n");
 	addr = vdso_get_base_addr(envp);
 	if (!addr)
 		goto err;
@@ -212,9 +213,8 @@ int main(int argc, char *argv[], char *envp[])
 
 	eenter_sym = vdso_symtab_get(&symtab, "__vdso_sgx_enter_enclave");
 	if (!eenter_sym) {
-		printf("__vdso_sgx_enter_enclave is not supported\n");
-		encl_delete(&encl);
-		exit(KSFT_XFAIL);
+		printf("Not found __vdso_sgx_enter_enclave, skip it.\n");
+		goto no_vdso;
 	}
 
 	eenter = addr + eenter_sym->st_value;
@@ -237,6 +237,16 @@ int main(int argc, char *argv[], char *envp[])
 	ret = eenter((unsigned long)&MAGIC, (unsigned long)&result, 0, EENTER,
 		     0, 0, &run);
 	if (!report_results(&run, ret, result, "user_handler"))
+		goto err;
+
+	printf("SUCCESS\n");
+
+no_vdso:
+	printf("2. Try EENTER without vdso\n");
+	result = 0;
+	ret = eenter_no_vdso((unsigned long)&MAGIC, (unsigned long)&result, 0, EENTER,
+		     0, 0, &run);
+	if (!report_results(&run, ret, result, "eenter"))
 		goto err;
 
 	printf("SUCCESS\n");
