@@ -33,6 +33,22 @@
 #include <linux/pci-acpi.h>
 #include "pci.h"
 
+static bool device_has_acpi_name(struct device *dev)
+{
+#ifdef CONFIG_ACPI
+	acpi_handle handle;
+
+	handle = ACPI_HANDLE(dev);
+	if (!handle)
+		return false;
+
+	return acpi_check_dsm(handle, &pci_acpi_dsm_guid, 0x2,
+			      1 << DSM_PCI_DEVICE_NAME);
+#else
+	return false;
+#endif
+}
+
 #ifdef CONFIG_DMI
 enum smbios_attr_enum {
 	SMBIOS_ATTR_NONE = 0,
@@ -156,14 +172,17 @@ enum acpi_attr_enum {
 	ACPI_ATTR_INDEX_SHOW,
 };
 
-static void dsm_label_utf16s_to_utf8s(union acpi_object *obj, char *buf)
+static int dsm_label_utf16s_to_utf8s(union acpi_object *obj, char *buf)
 {
 	int len;
+
 	len = utf16s_to_utf8s((const wchar_t *)obj->buffer.pointer,
 			      obj->buffer.length,
 			      UTF16_LITTLE_ENDIAN,
 			      buf, PAGE_SIZE - 1);
-	buf[len] = '\n';
+	buf[len++] = '\n';
+
+	return len;
 }
 
 static int dsm_get_label(struct device *dev, char *buf,
@@ -171,7 +190,7 @@ static int dsm_get_label(struct device *dev, char *buf,
 {
 	acpi_handle handle;
 	union acpi_object *obj, *tmp;
-	int len = -1;
+	int len = 0;
 
 	handle = ACPI_HANDLE(dev);
 	if (!handle)
@@ -193,32 +212,19 @@ static int dsm_get_label(struct device *dev, char *buf,
 		 * this entry must return a null string.
 		 */
 		if (attr == ACPI_ATTR_INDEX_SHOW) {
-			scnprintf(buf, PAGE_SIZE, "%llu\n", tmp->integer.value);
+			len = sysfs_emit(buf, "%llu\n", tmp->integer.value);
 		} else if (attr == ACPI_ATTR_LABEL_SHOW) {
 			if (tmp[1].type == ACPI_TYPE_STRING)
-				scnprintf(buf, PAGE_SIZE, "%s\n",
-					  tmp[1].string.pointer);
+				len = sysfs_emit(buf, "%s\n",
+						 tmp[1].string.pointer);
 			else if (tmp[1].type == ACPI_TYPE_BUFFER)
-				dsm_label_utf16s_to_utf8s(tmp + 1, buf);
+				len = dsm_label_utf16s_to_utf8s(tmp + 1, buf);
 		}
-		len = strlen(buf) > 0 ? strlen(buf) : -1;
 	}
 
 	ACPI_FREE(obj);
 
-	return len;
-}
-
-static bool device_has_dsm(struct device *dev)
-{
-	acpi_handle handle;
-
-	handle = ACPI_HANDLE(dev);
-	if (!handle)
-		return false;
-
-	return !!acpi_check_dsm(handle, &pci_acpi_dsm_guid, 0x2,
-				1 << DSM_PCI_DEVICE_NAME);
+	return len > 0 ? len : -1;
 }
 
 static umode_t acpi_index_string_exist(struct kobject *kobj,
@@ -228,7 +234,7 @@ static umode_t acpi_index_string_exist(struct kobject *kobj,
 
 	dev = kobj_to_dev(kobj);
 
-	if (device_has_dsm(dev))
+	if (device_has_acpi_name(dev))
 		return S_IRUGO;
 
 	return 0;
@@ -287,16 +293,11 @@ static inline int pci_remove_acpi_index_label_files(struct pci_dev *pdev)
 {
 	return -1;
 }
-
-static inline bool device_has_dsm(struct device *dev)
-{
-	return false;
-}
 #endif
 
 void pci_create_firmware_label_files(struct pci_dev *pdev)
 {
-	if (device_has_dsm(&pdev->dev))
+	if (device_has_acpi_name(&pdev->dev))
 		pci_create_acpi_index_label_files(pdev);
 	else
 		pci_create_smbiosname_file(pdev);
@@ -304,7 +305,7 @@ void pci_create_firmware_label_files(struct pci_dev *pdev)
 
 void pci_remove_firmware_label_files(struct pci_dev *pdev)
 {
-	if (device_has_dsm(&pdev->dev))
+	if (device_has_acpi_name(&pdev->dev))
 		pci_remove_acpi_index_label_files(pdev);
 	else
 		pci_remove_smbiosname_file(pdev);
