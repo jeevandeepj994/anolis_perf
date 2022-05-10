@@ -127,10 +127,14 @@ static bool check_crypto_errors(void)
 
 static inline const BIGNUM *get_modulus(RSA *key)
 {
+#if OPENSSL_VERSION_NUMBER < 0x10100000L
+	return key->n;
+#else
 	const BIGNUM *n;
 
 	RSA_get0_key(key, &n, NULL, NULL);
 	return n;
+#endif
 }
 
 static RSA *gen_sign_key(void)
