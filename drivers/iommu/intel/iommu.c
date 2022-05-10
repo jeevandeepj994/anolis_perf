@@ -347,6 +347,10 @@ int intel_iommu_sm = 1;
 int intel_iommu_sm;
 #endif /* CONFIG_INTEL_IOMMU_SCALABLE_MODE_DEFAULT_ON */
 
+/* == 0 --> use FL for IOVA (default), != 0 --> use SL for IOVA */
+static int default_iova;
+#define slad_supported(iommu)	(ecap_slts(iommu->ecap) && ecap_slads(iommu->ecap))
+
 int intel_iommu_enabled = 0;
 EXPORT_SYMBOL_GPL(intel_iommu_enabled);
 
@@ -463,6 +467,9 @@ static int __init intel_iommu_setup(char *str)
 		} else if (!strncmp(str, "nobounce", 8)) {
 			pr_info("Intel-IOMMU: No bounce buffer. This could expose security risks of DMA attacks\n");
 			intel_no_bounce = 1;
+		} else if (!strncmp(str, "iova_sl", 7)) {
+			pr_info("Intel-IOMMU: default SL IOVA enabled\n");
+			default_iova = 1;
 		}
 
 		str += strcspn(str, ",");
@@ -997,6 +1004,11 @@ static struct dma_pte *pfn_to_dma_pte(struct dmar_domain *domain,
 				      unsigned long pfn, int *target_level)
 {
 	struct dma_pte *parent, *pte;
+	/*
+	 * level == 5: 5 level page table;
+	 * level == 4: 4 level page table;
+	 * level == 3: 3 level page table;
+	 */
 	int level = agaw_to_level(domain->agaw);
 	int offset;
 
@@ -1876,6 +1888,10 @@ static bool first_level_by_default(void)
 	struct intel_iommu *iommu;
 	static int first_level_support = -1;
 
+	/* Change IOVA mapping to SL instead of FL */
+	if (default_iova)
+		return false;
+
 	if (likely(first_level_support != -1))
 		return first_level_support;
 
@@ -1908,6 +1924,7 @@ static struct dmar_domain *alloc_domain(int flags)
 		domain->flags |= DOMAIN_FLAG_USE_FIRST_LEVEL;
 	domain->has_iotlb_device = false;
 	INIT_LIST_HEAD(&domain->devices);
+	INIT_LIST_HEAD(&domain->subdevices);
 
 	return domain;
 }
@@ -2677,7 +2694,7 @@ static struct dmar_domain *dmar_insert_one_dev_info(struct intel_iommu *iommu,
 	info->iommu = iommu;
 	info->pasid_table = NULL;
 	info->auxd_enabled = 0;
-	INIT_LIST_HEAD(&info->auxiliary_domains);
+	INIT_LIST_HEAD(&info->subdevices);
 
 	if (dev && dev_is_pci(dev)) {
 		struct pci_dev *pdev = to_pci_dev(info->dev);
@@ -5213,33 +5230,60 @@ is_aux_domain(struct device *dev, struct iommu_domain *domain)
 			domain->type == IOMMU_DOMAIN_UNMANAGED;
 }
 
-static void auxiliary_link_device(struct dmar_domain *domain,
-				  struct device *dev)
+static inline struct subdev_domain_info *
+lookup_subdev_info(struct dmar_domain *domain, struct device *dev)
 {
-	struct device_domain_info *info = get_domain_info(dev);
+	struct subdev_domain_info *sinfo;
 
-	assert_spin_locked(&device_domain_lock);
-	if (WARN_ON(!info))
-		return;
+	if (!list_empty(&domain->subdevices)) {
+		list_for_each_entry(sinfo, &domain->subdevices, link_domain) {
+			if (sinfo->pdev == dev)
+				return sinfo;
+		}
+	}
 
-	domain->auxd_refcnt++;
-	list_add(&domain->auxd, &info->auxiliary_domains);
+	return NULL;
 }
 
-static void auxiliary_unlink_device(struct dmar_domain *domain,
-				    struct device *dev)
+static int auxiliary_link_device(struct dmar_domain *domain,
+				 struct device *dev)
 {
 	struct device_domain_info *info = get_domain_info(dev);
+	struct subdev_domain_info *sinfo = lookup_subdev_info(domain, dev);
 
 	assert_spin_locked(&device_domain_lock);
 	if (WARN_ON(!info))
-		return;
+		return -EINVAL;
 
-	list_del(&domain->auxd);
-	domain->auxd_refcnt--;
+	if (!sinfo) {
+		sinfo = kzalloc(sizeof(*sinfo), GFP_ATOMIC);
+		sinfo->domain = domain;
+		sinfo->pdev = dev;
+		list_add(&sinfo->link_phys, &info->subdevices);
+		list_add(&sinfo->link_domain, &domain->subdevices);
+	}
+	return ++sinfo->users;
+}
 
-	if (!domain->auxd_refcnt && domain->default_pasid > 0)
-		ioasid_free(domain->default_pasid);
+static int auxiliary_unlink_device(struct dmar_domain *domain,
+				   struct device *dev)
+{
+	struct device_domain_info *info = get_domain_info(dev);
+	struct subdev_domain_info *sinfo = lookup_subdev_info(domain, dev);
+	int ret;
+
+	assert_spin_locked(&device_domain_lock);
+	if (WARN_ON(!info || !sinfo || sinfo->users <= 0))
+		return -EINVAL;
+
+	ret = --sinfo->users;
+	if (!ret) {
+		list_del(&sinfo->link_phys);
+		list_del(&sinfo->link_domain);
+		kfree(sinfo);
+	}
+
+	return ret;
 }
 
 static int aux_domain_add_dev(struct dmar_domain *domain,
@@ -5268,6 +5312,19 @@ static int aux_domain_add_dev(struct dmar_domain *domain,
 	}
 
 	spin_lock_irqsave(&device_domain_lock, flags);
+	ret = auxiliary_link_device(domain, dev);
+	if (ret <= 0)
+		goto link_failed;
+
+	/*
+	 * Subdevices from the same physical device can be attached to the
+	 * same domain. For such cases, only the first subdevice attachment
+	 * needs to go through the full steps in this function. So if ret >
+	 * 1, just goto out.
+	 */
+	if (ret > 1)
+		goto out;
+
 	/*
 	 * iommu->lock must be held to attach domain to iommu and setup the
 	 * pasid entry for second level translation.
@@ -5288,8 +5345,7 @@ static int aux_domain_add_dev(struct dmar_domain *domain,
 		goto table_failed;
 	spin_unlock(&iommu->lock);
 
-	auxiliary_link_device(domain, dev);
-
+out:
 	spin_unlock_irqrestore(&device_domain_lock, flags);
 
 	return 0;
@@ -5298,8 +5354,10 @@ table_failed:
 	domain_detach_iommu(domain, iommu);
 attach_failed:
 	spin_unlock(&iommu->lock);
+	auxiliary_unlink_device(domain, dev);
+link_failed:
 	spin_unlock_irqrestore(&device_domain_lock, flags);
-	if (!domain->auxd_refcnt && domain->default_pasid > 0)
+	if (list_empty(&domain->subdevices) && domain->default_pasid > 0)
 		ioasid_free(domain->default_pasid);
 
 	return ret;
@@ -5319,14 +5377,18 @@ static void aux_domain_remove_dev(struct dmar_domain *domain,
 	info = get_domain_info(dev);
 	iommu = info->iommu;
 
-	auxiliary_unlink_device(domain, dev);
-
-	spin_lock(&iommu->lock);
-	intel_pasid_tear_down_entry(iommu, dev, domain->default_pasid, false);
-	domain_detach_iommu(domain, iommu);
-	spin_unlock(&iommu->lock);
+	if (!auxiliary_unlink_device(domain, dev)) {
+		spin_lock(&iommu->lock);
+		intel_pasid_tear_down_entry(iommu, dev,
+					    domain->default_pasid, false);
+		domain_detach_iommu(domain, iommu);
+		spin_unlock(&iommu->lock);
+	}
 
 	spin_unlock_irqrestore(&device_domain_lock, flags);
+
+	if (list_empty(&domain->subdevices) && domain->default_pasid > 0)
+		ioasid_free(domain->default_pasid);
 }
 
 static int prepare_domain_attach_device(struct iommu_domain *domain,
@@ -5716,6 +5778,24 @@ static inline bool scalable_mode_support(void)
 	return ret;
 }
 
+static inline bool slad_support(void)
+{
+	struct dmar_drhd_unit *drhd;
+	struct intel_iommu *iommu;
+	bool ret = true;
+
+	rcu_read_lock();
+	for_each_active_iommu(iommu, drhd) {
+		if (!sm_supported(iommu) || !slad_supported(iommu)) {
+			ret = false;
+			break;
+		}
+	}
+	rcu_read_unlock();
+
+	return ret;
+}
+
 static inline bool iommu_pasid_support(void)
 {
 	struct dmar_drhd_unit *drhd;
@@ -6023,6 +6103,14 @@ intel_iommu_dev_has_feat(struct device *dev, enum iommu_dev_features feat)
 			info->ats_supported;
 	}
 
+	if (feat == IOMMU_DEV_FEAT_HWDBM) {
+		struct device_domain_info *info = get_domain_info(dev);
+
+		/* FL supports dirty bit by default. */
+		return domain_use_first_level(info->domain) ||
+		       (!domain_use_first_level(info->domain) && slad_support());
+	}
+
 	return false;
 }
 
@@ -6068,6 +6156,9 @@ intel_iommu_dev_feat_enabled(struct device *dev, enum iommu_dev_features feat)
 	if (feat == IOMMU_DEV_FEAT_AUX)
 		return scalable_mode_support() && info && info->auxd_enabled;
 
+	if (feat == IOMMU_DEV_FEAT_HWDBM)
+		return intel_iommu_dev_has_feat(dev, feat);
+
 	return false;
 }
 
@@ -6078,6 +6169,16 @@ intel_iommu_aux_get_pasid(struct iommu_domain *domain, struct device *dev)
 
 	return dmar_domain->default_pasid > 0 ?
 			dmar_domain->default_pasid : -EINVAL;
+}
+
+int domain_get_pasid(struct iommu_domain *domain, struct device *dev)
+{
+	struct dmar_domain *dmar_domain = to_dmar_domain(domain);
+
+	if (is_aux_domain(dev, domain))
+		return intel_iommu_aux_get_pasid(domain, dev);
+
+	return dmar_domain->default_pasid;
 }
 
 static bool intel_iommu_is_attach_deferred(struct iommu_domain *domain,
@@ -6134,6 +6235,483 @@ static bool risky_device(struct pci_dev *pdev)
 	return false;
 }
 
+static int __setup_slade(struct iommu_domain *domain,
+			 struct device_domain_info *info, bool enable)
+{
+	u32 pasid;
+	int ret = 0;
+
+	pasid = domain_get_pasid(domain, info->dev);
+
+	spin_lock(&info->iommu->lock);
+	ret = intel_pasid_setup_slade(info->dev, to_dmar_domain(domain), pasid, enable);
+	spin_unlock(&info->iommu->lock);
+
+	return ret;
+}
+
+static int
+__domain_clear_dirty_log(struct dmar_domain *domain,
+			 unsigned long iova, size_t size,
+			 unsigned long *bitmap,
+			 unsigned long base_iova,
+			 unsigned long bitmap_pgshift);
+
+static int intel_iommu_set_hwdbm(struct iommu_domain *domain, bool enable,
+				 unsigned long iova, size_t size)
+{
+	struct dmar_domain *dmar_domain = to_dmar_domain(domain);
+	struct device_domain_info *info;
+	struct subdev_domain_info *sinfo;
+	unsigned long flags;
+	int ret = 0;
+
+	if (domain_use_first_level(dmar_domain)) {
+		/* FL supports A/D bits by default. */
+		/* TODO: shall we clear FLT existing D bits? */
+		if (enable)
+			__domain_clear_dirty_log(dmar_domain, iova, size, NULL,
+						 iova, VTD_PAGE_SHIFT);
+		return 0;
+	}
+
+	if (!slad_support()) {
+		pr_err("Don't support SLAD\n");
+		return -EINVAL;
+	}
+
+	spin_lock_irqsave(&device_domain_lock, flags);
+	list_for_each_entry(info, &dmar_domain->devices, link) {
+		ret = __setup_slade(domain, info, enable);
+		if (ret)
+			goto out;
+	}
+
+	list_for_each_entry(sinfo, &dmar_domain->subdevices, link_domain) {
+		info = get_domain_info(sinfo->pdev);
+		ret = __setup_slade(domain, info, enable);
+		if (ret)
+			break;
+	}
+
+out:
+	spin_unlock_irqrestore(&device_domain_lock, flags);
+
+	return ret;
+}
+
+static int
+__domain_sync_dirty_log(struct dmar_domain *domain,
+			unsigned long iova, size_t size,
+			unsigned long *bitmap,
+			unsigned long base_iova,
+			unsigned long bitmap_pgshift)
+{
+	struct dma_pte *pte = NULL;
+	unsigned long nr_pages = size >> VTD_PAGE_SHIFT;
+	unsigned long lvl_pages = 0;
+	unsigned long iov_pfn = iova >> VTD_PAGE_SHIFT;
+	unsigned long offset;
+	unsigned int largepage_lvl = 0;
+	unsigned int nbits;
+
+	if (bitmap_pgshift != VTD_PAGE_SHIFT)
+		return -EINVAL;
+
+	while (nr_pages > 0) {
+		largepage_lvl = 0;
+
+		pte = pfn_to_dma_pte(domain, iov_pfn, &largepage_lvl);
+		if (!pte || !dma_pte_present(pte))
+			return -EINVAL;
+
+		lvl_pages = lvl_to_nr_pages(largepage_lvl);
+		BUG_ON(nr_pages < lvl_pages);
+
+		if (!(pte->val & DMA_PTE_WRITE)) {
+			pr_debug("The 0x%lx pte is READ ONLY.\n", iova);
+			goto skip;
+		}
+
+		if (!domain_use_first_level(domain)) {
+			if (!(pte->val & BIT(9))) {
+				pr_debug("SL: The 0x%lx pte is not dirty.\n", iova);
+				goto skip;
+			}
+		} else {
+			if (!(pte->val & BIT(6))) {
+				pr_debug("FL: The 0x%lx pte is not dirty.\n", iova);
+				goto skip;
+			}
+		}
+
+		if (bitmap) {
+			nbits = lvl_pages;
+			offset = (iova - base_iova) >> bitmap_pgshift;
+			bitmap_set(bitmap, offset, nbits);
+		}
+
+skip:
+		nr_pages -= lvl_pages;
+		iov_pfn += lvl_pages;
+		iova += lvl_pages * VTD_PAGE_SIZE;
+	}
+
+	return 0;
+}
+
+/*
+ * Make sure the querying iova has been mapped and is being used. Otherwise,
+ * there may be fatal error if another thread free the visiting pages.
+ */
+static int intel_iommu_sync_dirty_log(struct iommu_domain *domain,
+				      unsigned long iova, size_t size,
+				      unsigned long *bitmap,
+				      unsigned long base_iova,
+				      unsigned long bitmap_pgshift)
+{
+	struct dmar_domain *dmar_domain = to_dmar_domain(domain);
+
+	if (!domain_use_first_level(dmar_domain) && !slad_support()) {
+		pr_err("Don't support SLAD\n");
+		return -EINVAL;
+	}
+
+	__domain_sync_dirty_log(dmar_domain, iova, size, bitmap,
+				base_iova, bitmap_pgshift);
+
+	return 0;
+}
+
+static int
+__domain_clear_dirty_log(struct dmar_domain *domain,
+			 unsigned long iova, size_t size,
+			 unsigned long *bitmap,
+			 unsigned long base_iova,
+			 unsigned long bitmap_pgshift)
+{
+	struct dma_pte *pte = NULL;
+	unsigned long nr_pages = size >> VTD_PAGE_SHIFT;
+	unsigned long lvl_pages = 0;
+	unsigned long iov_pfn = iova >> VTD_PAGE_SHIFT;
+	unsigned long offset;
+	unsigned int largepage_lvl = 0;
+	unsigned int nbits;
+	int iommu_id, i;
+	unsigned long start_pfn = iov_pfn;
+	bool cleared = false;
+
+	if (bitmap_pgshift != VTD_PAGE_SHIFT)
+		return -EINVAL;
+
+	while (nr_pages > 0) {
+		largepage_lvl = hardware_largepage_caps(domain, iov_pfn,
+							0, nr_pages);
+
+		pte = pfn_to_dma_pte(domain, iov_pfn, &largepage_lvl);
+		if (!pte || !dma_pte_present(pte))
+			return -EINVAL;
+
+		lvl_pages = lvl_to_nr_pages(largepage_lvl);
+		BUG_ON(nr_pages < lvl_pages);
+
+		if (!(pte->val & DMA_PTE_WRITE)) {
+			pr_warn("The 0x%lx pte is READ ONLY.\n", iova);
+			goto skip;
+		}
+
+		/* Ensure all corresponding bits are set */
+		if (bitmap) {
+			nbits = lvl_pages;
+			offset = (iova - base_iova) >> bitmap_pgshift;
+			for (i = offset; i < offset + nbits; i++) {
+				if (!test_bit(i, bitmap))
+					goto skip;
+			}
+		}
+
+		if (!domain_use_first_level(domain))
+			test_and_clear_bit(9, (unsigned long *)&pte->val);
+		else
+			test_and_clear_bit(6, (unsigned long *)&pte->val);
+
+		cleared = true;
+skip:
+		nr_pages -= lvl_pages;
+		iov_pfn += lvl_pages;
+		iova += lvl_pages * VTD_PAGE_SIZE;
+	}
+
+	if (cleared)
+		for_each_domain_iommu(iommu_id, domain)
+			iommu_flush_iotlb_psi(g_iommus[iommu_id], domain,
+				start_pfn, size >> VTD_PAGE_SHIFT, 1, 0);
+
+	return 0;
+}
+
+/*
+ * Make sure the clearing iova has been mapped and is being used. Otherwise,
+ * there may be fatal error if another thread free the visiting pages.
+ */
+static int intel_iommu_clear_dirty_log(struct iommu_domain *domain,
+				       unsigned long iova, size_t size,
+				       unsigned long *bitmap,
+				       unsigned long base_iova,
+				       unsigned long bitmap_pgshift)
+{
+	struct dmar_domain *dmar_domain = to_dmar_domain(domain);
+	int ret = 0;
+
+	if (!domain_use_first_level(dmar_domain) && !slad_support()) {
+		pr_err("Don't support SLAD\n");
+		return -EINVAL;
+	}
+
+	ret = __domain_clear_dirty_log(dmar_domain, iova, size, bitmap,
+					base_iova, bitmap_pgshift);
+
+	return ret;
+}
+
+static int
+__domain_split_block(struct dmar_domain *domain, struct intel_iommu *iommu,
+		     unsigned long iova, size_t size)
+{
+	struct dma_pte *pte = NULL;
+	unsigned long nr_pages = size >> VTD_PAGE_SHIFT;
+	unsigned long lvl_pages = 0, child_lvl_pages = 0;
+	unsigned long iov_pfn = iova >> VTD_PAGE_SHIFT;
+	unsigned int largepage_lvl = 0;
+	unsigned int create_pages = 0;
+	int i;
+	unsigned long page_pfn;
+	unsigned long phys_pfn;
+	phys_addr_t pteval;
+	u64 attr;
+	bool split = false;
+
+	spin_lock(&iommu->lock);
+	while (nr_pages > 0) {
+		/*
+		 * largepage_lvl == 1: 4KB page;
+		 * largepage_lvl == 2: 2MB page;
+		 * largepage_lvl == 3: 1GB page;
+		 */
+		largepage_lvl = hardware_largepage_caps(domain, iov_pfn,
+							0, nr_pages);
+
+		lvl_pages = lvl_to_nr_pages(largepage_lvl);
+		BUG_ON(nr_pages < lvl_pages);
+
+		if (largepage_lvl <= 1) {
+			/* It is not large page*/
+			pr_debug("The 0x%lx pte is not super page. largepage_lvl=%d\n",
+				iova, largepage_lvl);
+			goto skip;
+		}
+
+		/* Get the current level pte, e.g. if largepage_lvl == 1,
+		 * we get "SL-PDE: 4KB page" item which is assigned to pte.
+		 */
+		pte = pfn_to_dma_pte(domain, iov_pfn, &largepage_lvl);
+		if (!pte || !dma_pte_present(pte))
+			return -EINVAL;
+
+		if (!(pte->val & DMA_PTE_WRITE)) {
+			pr_warn("The 0x%lx pte is READ ONLY.\n", iova);
+			goto skip;
+		}
+
+		/* If the page is super, split it. */
+		if (!dma_pte_superpage(pte)) {
+			pr_warn("The 0x%lx pte is not super page.\n", iova);
+			goto skip;
+		}
+
+		phys_pfn = dma_pte_addr(pte);
+		page_pfn = iov_pfn;
+		attr = pte->val & VTD_ATTR_MASK;
+		pteval = ((phys_addr_t)phys_pfn) | attr;
+		pteval &= ~(uint64_t)DMA_PTE_LARGE_PAGE;
+		if (largepage_lvl == 2) {
+			/* 2MB: Create 512 4KB items, i.e. split 2MB to 512 4KB pages */
+			create_pages = 512;
+		} else {
+			/* 1GB: Create 512*512 4KB items */
+			create_pages = 512 * 512;
+		}
+
+		/* Change big page level to 4KB level */
+		largepage_lvl = 1;
+
+		/* Establish page table and get the 4KB page item */
+		pte = NULL;
+		for (i = 0; i < create_pages; i++) {
+			if (!pte) {
+				pte = pfn_to_dma_pte(domain, page_pfn, &largepage_lvl);
+				if (!pte)
+					return -ENOMEM;
+			}
+			cmpxchg64_local(&pte->val, 0ULL, pteval);
+			/* Always 1 here */
+			child_lvl_pages = lvl_to_nr_pages(largepage_lvl);
+			page_pfn += child_lvl_pages;
+			phys_pfn += child_lvl_pages;
+			pteval += child_lvl_pages * VTD_PAGE_SIZE;
+			pte++;
+			pr_debug("%s: Big page split to 4KB pages, pteval=0x%llx, pte=0x%llx\n",
+				__func__, pteval, (uint64_t)pte);
+			if (first_pte_in_page(pte))
+				pte = NULL;
+		}
+
+		split = true;
+skip:
+		nr_pages -= lvl_pages;
+		iov_pfn += lvl_pages;
+		iova += lvl_pages * VTD_PAGE_SIZE;
+	}
+	spin_unlock(&iommu->lock);
+
+	if (split)
+		return 1;
+
+	return 0;
+}
+
+static int intel_iommu_split_block(struct iommu_domain *domain,
+				   unsigned long iova, size_t size)
+{
+	struct dmar_domain *dmar_domain = to_dmar_domain(domain);
+	struct device_domain_info *info;
+	struct subdev_domain_info *sinfo;
+	int ret = 0;
+	unsigned long flags;
+
+	if (!domain_use_first_level(dmar_domain) && !slad_support()) {
+		pr_err("Don't support SLAD\n");
+		return -EINVAL;
+	}
+
+	/* Return if size is less than 2MB */
+	if (size < 0x200000)
+		return 0;
+
+	spin_lock_irqsave(&device_domain_lock, flags);
+	list_for_each_entry(info, &dmar_domain->devices, link) {
+		pr_debug("%s: split for %02x:%02x.%d, iova=0x%lx, size=0x%zx\n",
+			__func__, info->bus, PCI_SLOT(info->devfn), PCI_FUNC(info->devfn),
+			iova, size);
+
+		ret = __domain_split_block(dmar_domain, info->iommu, iova, size);
+		if (ret && ret != 1)
+			goto out;
+	}
+
+	list_for_each_entry(sinfo, &dmar_domain->subdevices, link_domain) {
+		info = get_domain_info(sinfo->pdev);
+		pr_debug("%s: split for subdev %02x:%02x.%d, iova=0x%lx, size=0x%zx\n",
+			__func__, info->bus, PCI_SLOT(info->devfn), PCI_FUNC(info->devfn),
+			iova, size);
+
+		ret = __domain_split_block(dmar_domain, info->iommu, iova, size);
+		if (ret && ret != 1)
+			break;
+	}
+
+out:
+	spin_unlock_irqrestore(&device_domain_lock, flags);
+
+	return ret;
+}
+
+static int
+__domain_merge_pages(struct dmar_domain *domain, struct intel_iommu *iommu,
+		     unsigned long iova, phys_addr_t paddr, size_t size)
+{
+	struct dma_pte *pte = NULL;
+	unsigned int largepage_lvl = 0;
+	unsigned long iov_pfn = iova >> VTD_PAGE_SHIFT;
+	unsigned long start_pfn = iov_pfn;
+	unsigned long end_pfn = (iova + size - 1) >> VTD_PAGE_SHIFT;
+	struct page *freelist;
+	int prot = 0;
+	int ret = 0;
+
+	/* Construct the big page again */
+	largepage_lvl = 1;
+	pte = pfn_to_dma_pte(domain, iov_pfn, &largepage_lvl);
+	if (!pte || !dma_pte_present(pte))
+		return -EINVAL;
+
+	if (pte->val & DMA_PTE_READ)
+		prot |= DMA_PTE_READ;
+	if (pte->val & DMA_PTE_WRITE)
+		prot |= DMA_PTE_WRITE;
+	if (pte->val & DMA_PTE_SNP)
+		prot |= DMA_PTE_SNP;
+
+	pr_debug("%s: start_pfn=0x%lx, end_pfn=0x%lx, prot=0x%x, size=0x%zx, paddr=0x%llx\n",
+		__func__, start_pfn, end_pfn, prot, size, paddr);
+
+	/* Free the split 4KB pages */
+	freelist = domain_unmap(domain, start_pfn, end_pfn);
+	dma_free_pagelist(freelist);
+
+	ret = __domain_mapping(domain, start_pfn, NULL, paddr >> VTD_PAGE_SHIFT,
+				size >> VTD_PAGE_SHIFT, prot);
+
+	return ret;
+}
+
+static int intel_iommu_merge_pages(struct iommu_domain *domain, unsigned long iova,
+				   phys_addr_t phys, size_t size)
+{
+	struct dmar_domain *dmar_domain = to_dmar_domain(domain);
+	struct device_domain_info *info;
+	struct subdev_domain_info *sinfo;
+	int ret = 0;
+	unsigned long flags;
+
+	if (!domain_use_first_level(dmar_domain) && !slad_support()) {
+		pr_err("Don't support SLAD\n");
+		return -EINVAL;
+	}
+
+	/* Return if size is less than 2MB */
+	if (size < 0x200000)
+		return 0;
+
+	spin_lock_irqsave(&device_domain_lock, flags);
+
+	list_for_each_entry(info, &dmar_domain->devices, link) {
+		pr_debug("%s: merge for %02x:%02x.%d, iova=0x%lx, phys=0x%llx, size=0x%zx\n",
+			__func__, info->bus, PCI_SLOT(info->devfn), PCI_FUNC(info->devfn),
+			iova, phys, size);
+
+		ret = __domain_merge_pages(dmar_domain, info->iommu, iova, phys, size);
+		if (ret)
+			goto out;
+	}
+
+	list_for_each_entry(sinfo, &dmar_domain->subdevices, link_domain) {
+		info = get_domain_info(sinfo->pdev);
+		pr_debug("%s: merge for subdev %02x:%02x.%d, iova=0x%lx, phys=0x%llx, size=0x%zx\n",
+			__func__, info->bus, PCI_SLOT(info->devfn), PCI_FUNC(info->devfn),
+			iova, phys, size);
+
+		ret = __domain_merge_pages(dmar_domain, info->iommu, iova, phys, size);
+		if (ret)
+			break;
+	}
+
+out:
+	spin_unlock_irqrestore(&device_domain_lock, flags);
+
+	return ret;
+}
+
 const struct iommu_ops intel_iommu_ops = {
 	.capable		= intel_iommu_capable,
 	.domain_alloc		= intel_iommu_domain_alloc,
@@ -6170,6 +6748,11 @@ const struct iommu_ops intel_iommu_ops = {
 	.sva_get_pasid		= intel_svm_get_pasid,
 	.page_response		= intel_svm_page_response,
 #endif
+	.merge_pages		= intel_iommu_merge_pages,
+	.split_block		= intel_iommu_split_block,
+	.set_hwdbm		= intel_iommu_set_hwdbm,
+	.sync_dirty_log		= intel_iommu_sync_dirty_log,
+	.clear_dirty_log	= intel_iommu_clear_dirty_log,
 };
 
 static void quirk_iommu_igfx(struct pci_dev *dev)
