@@ -451,6 +451,15 @@ pasid_set_eafe(struct pasid_entry *pe)
 	pasid_set_bits(&pe->val[2], 1 << 7, 1 << 7);
 }
 
+/*
+ * Setup Second Level Access/Dirty bit Enable field (Bit 9) of a
+ * scalable mode PASID entry.
+ */
+static inline void pasid_set_slade(struct pasid_entry *pe, bool value)
+{
+	pasid_set_bits(&pe->val[0], 1 << 9, value << 9);
+}
+
 static void
 pasid_cache_invalidation_with_pasid(struct intel_iommu *iommu,
 				    u16 did, u32 pasid)
@@ -493,6 +502,21 @@ devtlb_invalidation_with_pasid(struct intel_iommu *iommu,
 		qi_flush_dev_iotlb_pasid(iommu, sid, pfsid, pasid, qdep, 0, 64 - VTD_PAGE_SHIFT);
 }
 
+static void
+flush_iotlb_all(struct intel_iommu *iommu, struct device *dev,
+		u16 did, u16 pgtt, u32 pasid, u64 type)
+{
+	pasid_cache_invalidation_with_pasid(iommu, did, pasid);
+
+	if (type)
+		iommu->flush.flush_iotlb(iommu, did, 0, 0, type);
+	else if (pgtt == PASID_ENTRY_PGTT_PT || pgtt == PASID_ENTRY_PGTT_FL_ONLY)
+		qi_flush_piotlb(iommu, did, pasid, 0, -1, 0);
+
+	if (!cap_caching_mode(iommu->cap))
+		devtlb_invalidation_with_pasid(iommu, dev, pasid);
+}
+
 void intel_pasid_tear_down_entry(struct intel_iommu *iommu, struct device *dev,
 				 u32 pasid, bool fault_ignore)
 {
@@ -511,16 +535,7 @@ void intel_pasid_tear_down_entry(struct intel_iommu *iommu, struct device *dev,
 	if (!ecap_coherent(iommu->ecap))
 		clflush_cache_range(pte, sizeof(*pte));
 
-	pasid_cache_invalidation_with_pasid(iommu, did, pasid);
-
-	if (pgtt == PASID_ENTRY_PGTT_PT || pgtt == PASID_ENTRY_PGTT_FL_ONLY)
-		qi_flush_piotlb(iommu, did, pasid, 0, -1, 0);
-	else
-		iommu->flush.flush_iotlb(iommu, did, 0, 0, DMA_TLB_DSI_FLUSH);
-
-	/* Device IOTLB doesn't need to be flushed in caching mode. */
-	if (!cap_caching_mode(iommu->cap))
-		devtlb_invalidation_with_pasid(iommu, dev, pasid);
+	flush_iotlb_all(iommu, dev, did, pgtt, pasid, 0);
 }
 
 static void pasid_flush_caches(struct intel_iommu *iommu,
@@ -867,4 +882,41 @@ int intel_pasid_setup_nested(struct intel_iommu *iommu, struct device *dev,
 	pasid_flush_caches(iommu, pte, pasid, did);
 
 	return ret;
+}
+
+/**
+ * intel_pasid_setup_slade() - Set up Second Level Access/Dirty bit Enable
+ * field in PASID entry for scalable mode pasid table.
+ *
+ * @dev:     Device to be set up for translation
+ * @domain:  Domain info for setting up slad enabling
+ * @pasid:   PASID to be programmed in the device PASID table
+ * @value:   Value set to the entry
+ */
+int intel_pasid_setup_slade(struct device *dev, struct dmar_domain *domain,
+			    u32 pasid, bool value)
+{
+	struct device_domain_info *info = get_domain_info(dev);
+	struct intel_iommu *iommu;
+	struct pasid_entry *pte;
+	u16 did;
+
+	if (!info || !info->iommu)
+		return -ENODEV;
+
+	iommu = info->iommu;
+	did = domain->iommu_did[iommu->seq_id];
+
+	pte = intel_pasid_get_entry(dev, pasid);
+	if (WARN_ON(!pte))
+		return -ENODEV;
+
+	if (!pasid_pte_is_present(pte))
+		return -EINVAL;
+
+	pasid_set_slade(pte, value);
+
+	flush_iotlb_all(iommu, dev, did, 0, pasid, DMA_TLB_DSI_FLUSH);
+
+	return 0;
 }
