@@ -278,6 +278,9 @@ EXPORT_SYMBOL_GPL(ring_buffer_event_data);
 #define for_each_buffer_cpu(buffer, cpu)		\
 	for_each_cpu(cpu, buffer->cpumask)
 
+#define for_each_online_buffer_cpu(buffer, cpu)		\
+	for_each_cpu_and(cpu, buffer->cpumask, cpu_online_mask)
+
 #define TS_SHIFT	27
 #define TS_MASK		((1ULL << TS_SHIFT) - 1)
 #define TS_DELTA_TEST	(~TS_MASK)
@@ -4367,26 +4370,10 @@ rb_reset_cpu(struct ring_buffer_per_cpu *cpu_buffer)
 	rb_head_page_activate(cpu_buffer);
 }
 
-/**
- * ring_buffer_reset_cpu - reset a ring buffer per CPU buffer
- * @buffer: The ring buffer to reset a per cpu buffer of
- * @cpu: The CPU buffer to be reset
- */
-void ring_buffer_reset_cpu(struct ring_buffer *buffer, int cpu)
+/* Must have disabled the cpu buffer then done a synchronize_rcu */
+static void reset_disabled_cpu_buffer(struct ring_buffer_per_cpu *cpu_buffer)
 {
-	struct ring_buffer_per_cpu *cpu_buffer = buffer->buffers[cpu];
 	unsigned long flags;
-
-	if (!cpumask_test_cpu(cpu, buffer->cpumask))
-		return;
-	/* prevent another thread from changing buffer sizes */
-	mutex_lock(&buffer->mutex);
-
-	atomic_inc(&buffer->resize_disabled);
-	atomic_inc(&cpu_buffer->record_disabled);
-
-	/* Make sure all commits have finished */
-	synchronize_sched();
 
 	raw_spin_lock_irqsave(&cpu_buffer->reader_lock, flags);
 
@@ -4401,6 +4388,29 @@ void ring_buffer_reset_cpu(struct ring_buffer *buffer, int cpu)
 
  out:
 	raw_spin_unlock_irqrestore(&cpu_buffer->reader_lock, flags);
+}
+
+/**
+ * ring_buffer_reset_cpu - reset a ring buffer per CPU buffer
+ * @buffer: The ring buffer to reset a per cpu buffer of
+ * @cpu: The CPU buffer to be reset
+ */
+void ring_buffer_reset_cpu(struct ring_buffer *buffer, int cpu)
+{
+	struct ring_buffer_per_cpu *cpu_buffer = buffer->buffers[cpu];
+
+	if (!cpumask_test_cpu(cpu, buffer->cpumask))
+		return;
+	/* prevent another thread from changing buffer sizes */
+	mutex_lock(&buffer->mutex);
+
+	atomic_inc(&buffer->resize_disabled);
+	atomic_inc(&cpu_buffer->record_disabled);
+
+	/* Make sure all commits have finished */
+	synchronize_sched();
+
+	reset_disabled_cpu_buffer(cpu_buffer);
 
 	atomic_dec(&cpu_buffer->record_disabled);
 	atomic_dec(&buffer->resize_disabled);
@@ -4410,15 +4420,72 @@ void ring_buffer_reset_cpu(struct ring_buffer *buffer, int cpu)
 EXPORT_SYMBOL_GPL(ring_buffer_reset_cpu);
 
 /**
+ * ring_buffer_reset_cpu - reset a ring buffer per CPU buffer
+ * @buffer: The ring buffer to reset a per cpu buffer of
+ * @cpu: The CPU buffer to be reset
+ */
+void ring_buffer_reset_online_cpus(struct ring_buffer *buffer)
+{
+	struct ring_buffer_per_cpu *cpu_buffer;
+	int cpu;
+
+	/* prevent another thread from changing buffer sizes */
+	mutex_lock(&buffer->mutex);
+
+	for_each_online_buffer_cpu(buffer, cpu) {
+		cpu_buffer = buffer->buffers[cpu];
+
+		atomic_inc(&buffer->resize_disabled);
+		atomic_inc(&cpu_buffer->record_disabled);
+	}
+
+	/* Make sure all commits have finished */
+	synchronize_rcu();
+
+	for_each_online_buffer_cpu(buffer, cpu) {
+		cpu_buffer = buffer->buffers[cpu];
+
+		reset_disabled_cpu_buffer(cpu_buffer);
+
+		atomic_dec(&cpu_buffer->record_disabled);
+		atomic_dec(&buffer->resize_disabled);
+	}
+
+	mutex_unlock(&buffer->mutex);
+}
+
+/**
  * ring_buffer_reset - reset a ring buffer
  * @buffer: The ring buffer to reset all cpu buffers
  */
 void ring_buffer_reset(struct ring_buffer *buffer)
 {
+	struct ring_buffer_per_cpu *cpu_buffer;
 	int cpu;
 
-	for_each_buffer_cpu(buffer, cpu)
-		ring_buffer_reset_cpu(buffer, cpu);
+	/* prevent another thread from changing buffer sizes */
+	mutex_lock(&buffer->mutex);
+
+	for_each_buffer_cpu(buffer, cpu) {
+		cpu_buffer = buffer->buffers[cpu];
+
+		atomic_inc(&buffer->resize_disabled);
+		atomic_inc(&cpu_buffer->record_disabled);
+	}
+
+	/* Make sure all commits have finished */
+	synchronize_rcu();
+
+	for_each_buffer_cpu(buffer, cpu) {
+		cpu_buffer = buffer->buffers[cpu];
+
+		reset_disabled_cpu_buffer(cpu_buffer);
+
+		atomic_dec(&cpu_buffer->record_disabled);
+		atomic_dec(&buffer->resize_disabled);
+	}
+
+	mutex_unlock(&buffer->mutex);
 }
 EXPORT_SYMBOL_GPL(ring_buffer_reset);
 
