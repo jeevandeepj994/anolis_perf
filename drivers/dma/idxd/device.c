@@ -176,22 +176,28 @@ void idxd_wq_free_resources(struct idxd_wq *wq)
 	sbitmap_queue_free(&wq->sbq);
 }
 
-int idxd_wq_enable(struct idxd_wq *wq)
+int idxd_wq_enable(struct idxd_wq *wq, u32 *status)
 {
 	struct idxd_device *idxd = wq->idxd;
 	struct device *dev = &idxd->pdev->dev;
-	u32 status;
+	u32 stat;
+
+	if (status)
+		*status = 0;
 
 	if (wq->state == IDXD_WQ_ENABLED) {
 		dev_dbg(dev, "WQ %d already enabled\n", wq->id);
 		return -ENXIO;
 	}
 
-	idxd_cmd_exec(idxd, IDXD_CMD_ENABLE_WQ, wq->id, &status);
+	idxd_cmd_exec(idxd, IDXD_CMD_ENABLE_WQ, wq->id, &stat);
 
-	if (status != IDXD_CMDSTS_SUCCESS &&
-	    status != IDXD_CMDSTS_ERR_WQ_ENABLED) {
-		dev_dbg(dev, "WQ enable failed: %#x\n", status);
+	if (status)
+		*status = stat;
+
+	if (stat != IDXD_CMDSTS_SUCCESS &&
+	    stat != IDXD_CMDSTS_ERR_WQ_ENABLED) {
+		dev_dbg(dev, "WQ enable failed: %#x\n", stat);
 		return -ENXIO;
 	}
 
@@ -199,14 +205,25 @@ int idxd_wq_enable(struct idxd_wq *wq)
 	dev_dbg(dev, "WQ %d enabled\n", wq->id);
 	return 0;
 }
+EXPORT_SYMBOL_GPL(idxd_wq_enable);
 
-int idxd_wq_disable(struct idxd_wq *wq, bool reset_config)
+int idxd_wq_disable(struct idxd_wq *wq, bool reset_config, u32 *status)
 {
 	struct idxd_device *idxd = wq->idxd;
 	struct device *dev = &idxd->pdev->dev;
-	u32 status, operand;
+	u32 stat, operand;
 
 	dev_dbg(dev, "Disabling WQ %d\n", wq->id);
+	if (status)
+		*status = 0;
+
+	/*
+	 * When the wq is in LOCKED state, it means it is disabled but
+	 * also at the same time is "enabled" as far as the user is
+	 * concerned. So a call to disable the hardware can be skipped.
+	 */
+	if (wq->state == IDXD_WQ_LOCKED)
+		goto out;
 
 	if (wq->state != IDXD_WQ_ENABLED) {
 		dev_dbg(dev, "WQ %d in wrong state: %d\n", wq->id, wq->state);
@@ -214,35 +231,59 @@ int idxd_wq_disable(struct idxd_wq *wq, bool reset_config)
 	}
 
 	operand = BIT(wq->id % 16) | ((wq->id / 16) << 16);
-	idxd_cmd_exec(idxd, IDXD_CMD_DISABLE_WQ, operand, &status);
+	idxd_cmd_exec(idxd, IDXD_CMD_DISABLE_WQ, operand, &stat);
 
-	if (status != IDXD_CMDSTS_SUCCESS) {
-		dev_dbg(dev, "WQ disable failed: %#x\n", status);
+	if (status)
+		*status = stat;
+
+	if (stat != IDXD_CMDSTS_SUCCESS) {
+		dev_dbg(dev, "WQ disable failed: %#x\n", stat);
 		return -ENXIO;
 	}
 
-	if (reset_config)
-		idxd_wq_disable_cleanup(wq);
-	wq->state = IDXD_WQ_DISABLED;
+out:
+	if (wq_dedicated(wq) && is_idxd_wq_mdev(wq)) {
+		wq->state = IDXD_WQ_LOCKED;
+	} else {
+		if (reset_config && test_bit(IDXD_FLAG_CONFIGURABLE, &idxd->flags))
+			idxd_wq_disable_cleanup(wq);
+		wq->state = IDXD_WQ_DISABLED;
+	}
 	dev_dbg(dev, "WQ %d disabled\n", wq->id);
 	return 0;
 }
+EXPORT_SYMBOL_GPL(idxd_wq_disable);
 
-void idxd_wq_drain(struct idxd_wq *wq)
+int idxd_wq_drain(struct idxd_wq *wq, u32 *status)
 {
 	struct idxd_device *idxd = wq->idxd;
 	struct device *dev = &idxd->pdev->dev;
-	u32 operand;
+	u32 operand, stat;
+
+	if (status)
+		*status = 0;
 
 	if (wq->state != IDXD_WQ_ENABLED) {
 		dev_dbg(dev, "WQ %d in wrong state: %d\n", wq->id, wq->state);
-		return;
+		return 0;
 	}
 
 	dev_dbg(dev, "Draining WQ %d\n", wq->id);
 	operand = BIT(wq->id % 16) | ((wq->id / 16) << 16);
-	idxd_cmd_exec(idxd, IDXD_CMD_DRAIN_WQ, operand, NULL);
+	idxd_cmd_exec(idxd, IDXD_CMD_DRAIN_WQ, operand, &stat);
+
+	if (status)
+		*status = stat;
+
+	if (stat != IDXD_CMDSTS_SUCCESS) {
+		dev_dbg(dev, "WQ drain failed: %#x\n", stat);
+		return -ENXIO;
+	}
+
+	dev_dbg(dev, "WQ %d drained\n", wq->id);
+	return 0;
 }
+EXPORT_SYMBOL_GPL(idxd_wq_drain);
 
 void idxd_wq_reset(struct idxd_wq *wq)
 {
@@ -269,7 +310,7 @@ int idxd_wq_map_portal(struct idxd_wq *wq)
 	resource_size_t start;
 
 	start = pci_resource_start(pdev, IDXD_WQ_BAR);
-	start += idxd_get_wq_portal_full_offset(wq->id, IDXD_PORTAL_LIMITED);
+	start += idxd_get_wq_portal_full_offset(wq->id, IDXD_PORTAL_LIMITED, IDXD_IRQ_MSIX);
 
 	wq->portal = devm_ioremap(dev, start, IDXD_PORTAL_SIZE);
 	if (!wq->portal)
@@ -330,17 +371,46 @@ static void __idxd_wq_set_pasid_locked(struct idxd_wq *wq, int pasid)
 	spin_unlock(&idxd->dev_lock);
 }
 
+int idxd_wq_abort(struct idxd_wq *wq, u32 *status)
+{
+	struct idxd_device *idxd = wq->idxd;
+	struct device *dev = &idxd->pdev->dev;
+	u32 operand, stat;
+
+	dev_dbg(dev, "Abort WQ %d\n", wq->id);
+	if (wq->state != IDXD_WQ_ENABLED) {
+		dev_dbg(dev, "WQ %d not active\n", wq->id);
+		return -ENXIO;
+	}
+
+	operand = BIT(wq->id % 16) | ((wq->id / 16) << 16);
+	dev_dbg(dev, "cmd: %u operand: %#x\n", IDXD_CMD_ABORT_WQ, operand);
+	idxd_cmd_exec(idxd, IDXD_CMD_ABORT_WQ, operand, &stat);
+
+	if (status)
+		*status = stat;
+
+	if (stat != IDXD_CMDSTS_SUCCESS) {
+		dev_dbg(dev, "WQ abort failed: %#x\n", stat);
+		return -ENXIO;
+	}
+
+	dev_dbg(dev, "WQ %d aborted\n", wq->id);
+	return 0;
+}
+EXPORT_SYMBOL_GPL(idxd_wq_abort);
+
 int idxd_wq_set_pasid(struct idxd_wq *wq, int pasid)
 {
 	int rc;
 
-	rc = idxd_wq_disable(wq, false);
+	rc = idxd_wq_disable(wq, false, NULL);
 	if (rc < 0)
 		return rc;
 
 	__idxd_wq_set_pasid_locked(wq, pasid);
 
-	rc = idxd_wq_enable(wq);
+	rc = idxd_wq_enable(wq, NULL);
 	if (rc < 0)
 		return rc;
 
@@ -354,7 +424,7 @@ int idxd_wq_disable_pasid(struct idxd_wq *wq)
 	union wqcfg wqcfg;
 	unsigned int offset;
 
-	rc = idxd_wq_disable(wq, false);
+	rc = idxd_wq_disable(wq, false, NULL);
 	if (rc < 0)
 		return rc;
 
@@ -366,7 +436,7 @@ int idxd_wq_disable_pasid(struct idxd_wq *wq)
 	iowrite32(wqcfg.bits[WQCFG_PASID_IDX], idxd->reg_base + offset);
 	spin_unlock(&idxd->dev_lock);
 
-	rc = idxd_wq_enable(wq);
+	rc = idxd_wq_enable(wq, NULL);
 	if (rc < 0)
 		return rc;
 
@@ -435,6 +505,34 @@ void idxd_wq_quiesce(struct idxd_wq *wq)
 	__idxd_wq_quiesce(wq);
 	mutex_unlock(&wq->wq_lock);
 }
+
+void idxd_wq_setup_pasid(struct idxd_wq *wq, int pasid)
+{
+	struct idxd_device *idxd = wq->idxd;
+	int offset;
+
+	lockdep_assert_held(&idxd->dev_lock);
+
+	/* PASID fields are 8 bytes into the WQCFG register */
+	offset = WQCFG_OFFSET(idxd, wq->id, WQCFG_PASID_IDX);
+	wq->wqcfg->pasid = pasid;
+	iowrite32(wq->wqcfg->bits[WQCFG_PASID_IDX], idxd->reg_base + offset);
+}
+EXPORT_SYMBOL_GPL(idxd_wq_setup_pasid);
+
+void idxd_wq_setup_priv(struct idxd_wq *wq, int priv)
+{
+	struct idxd_device *idxd = wq->idxd;
+	int offset;
+
+	lockdep_assert_held(&idxd->dev_lock);
+
+	/* priv field is 8 bytes into the WQCFG register */
+	offset = WQCFG_OFFSET(idxd, wq->id, WQCFG_PRIV_IDX);
+	wq->wqcfg->priv = !!priv;
+	iowrite32(wq->wqcfg->bits[WQCFG_PRIV_IDX], idxd->reg_base + offset);
+}
+EXPORT_SYMBOL_GPL(idxd_wq_setup_priv);
 
 /* Device control bits */
 static inline bool idxd_is_enabled(struct idxd_device *idxd)
@@ -603,6 +701,18 @@ void idxd_device_drain_pasid(struct idxd_device *idxd, int pasid)
 	dev_dbg(dev, "cmd: %u operand: %#x\n", IDXD_CMD_DRAIN_PASID, operand);
 	idxd_cmd_exec(idxd, IDXD_CMD_DRAIN_PASID, operand, NULL);
 	dev_dbg(dev, "pasid %d drained\n", pasid);
+}
+EXPORT_SYMBOL_GPL(idxd_device_drain_pasid);
+
+void idxd_device_abort_pasid(struct idxd_device *idxd, int pasid)
+{
+	struct device *dev = &idxd->pdev->dev;
+	u32 operand;
+
+	operand = pasid;
+	dev_dbg(dev, "cmd: %u operand: %#x\n", IDXD_CMD_ABORT_PASID, operand);
+	idxd_cmd_exec(idxd, IDXD_CMD_ABORT_PASID, operand, NULL);
+	dev_dbg(dev, "pasid %d aborted\n", pasid);
 }
 
 int idxd_device_request_int_handle(struct idxd_device *idxd, int idx, int *handle,
@@ -1310,7 +1420,7 @@ int __drv_enable_wq(struct idxd_wq *wq)
 		goto err;
 	}
 
-	rc = idxd_wq_enable(wq);
+	rc = idxd_wq_enable(wq, NULL);
 	if (rc < 0) {
 		dev_dbg(dev, "wq %d enabling failed: %d\n", wq->id, rc);
 		goto err;
@@ -1327,12 +1437,13 @@ int __drv_enable_wq(struct idxd_wq *wq)
 	return 0;
 
 err_map_portal:
-	rc = idxd_wq_disable(wq, false);
+	rc = idxd_wq_disable(wq, false, NULL);
 	if (rc < 0)
 		dev_dbg(dev, "wq %s disable failed\n", dev_name(wq_confdev(wq)));
 err:
 	return rc;
 }
+EXPORT_SYMBOL_GPL(__drv_enable_wq);
 
 int drv_enable_wq(struct idxd_wq *wq)
 {
@@ -1357,11 +1468,12 @@ void __drv_disable_wq(struct idxd_wq *wq)
 
 	idxd_wq_unmap_portal(wq);
 
-	idxd_wq_drain(wq);
+	idxd_wq_drain(wq, NULL);
 	idxd_wq_reset(wq);
 
 	wq->client_count = 0;
 }
+EXPORT_SYMBOL_GPL(__drv_disable_wq);
 
 void drv_disable_wq(struct idxd_wq *wq)
 {
@@ -1369,6 +1481,7 @@ void drv_disable_wq(struct idxd_wq *wq)
 	__drv_disable_wq(wq);
 	mutex_unlock(&wq->wq_lock);
 }
+EXPORT_SYMBOL_GPL(drv_disable_wq);
 
 int idxd_device_drv_probe(struct idxd_dev *idxd_dev)
 {

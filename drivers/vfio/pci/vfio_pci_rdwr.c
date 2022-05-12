@@ -381,6 +381,102 @@ static void vfio_pci_ioeventfd_do_write(struct vfio_pci_ioeventfd *ioeventfd,
 	}
 }
 
+ssize_t vfio_pci_dma_fault_rw(struct vfio_pci_device *vdev, char __user *buf,
+			     size_t count, loff_t *ppos, bool iswrite)
+{
+	unsigned int i = VFIO_PCI_OFFSET_TO_INDEX(*ppos) - VFIO_PCI_NUM_REGIONS;
+	loff_t pos = *ppos & VFIO_PCI_OFFSET_MASK;
+	void *base = vdev->region[i].data;
+	int ret = -EFAULT;
+
+	if (pos >= vdev->region[i].size)
+		return -EINVAL;
+
+	count = min(count, (size_t)(vdev->region[i].size - pos));
+
+	mutex_lock(&vdev->fault_queue_lock);
+
+	if (iswrite) {
+		struct vfio_region_dma_fault *header =
+			(struct vfio_region_dma_fault *)base;
+		u32 new_tail;
+
+		if (pos != 0 || count != 4) {
+			ret = -EINVAL;
+			goto unlock;
+		}
+
+		if (copy_from_user((void *)&new_tail, buf, count))
+			goto unlock;
+
+		if (new_tail > header->nb_entries) {
+			ret = -EINVAL;
+			goto unlock;
+		}
+		header->tail = new_tail;
+	} else {
+		if (copy_to_user(buf, base + pos, count))
+			goto unlock;
+	}
+	*ppos += count;
+	ret = count;
+unlock:
+	mutex_unlock(&vdev->fault_queue_lock);
+	return ret;
+}
+
+ssize_t vfio_pci_mregion_rw(struct vfio_pci_device *vdev, char __user *buf,
+			     size_t count, loff_t *ppos, bool iswrite)
+{
+	unsigned int i = VFIO_PCI_OFFSET_TO_INDEX(*ppos) - VFIO_PCI_NUM_REGIONS;
+	loff_t pos = *ppos & VFIO_PCI_OFFSET_MASK;
+	void *base = vdev->region[i].data;
+	struct vfio_device_migration_info *mig_info = (struct vfio_device_migration_info *) base;
+	int ret = -EFAULT;
+
+	if (pos >= vdev->region[i].size)
+		return -EINVAL;
+
+	count = min(count, (size_t)(vdev->region[i].size - pos));
+
+	mutex_lock(&vdev->mig_lock);
+
+	if (iswrite) {
+		if ((pos == offsetof(struct vfio_device_migration_info,
+				device_state)) && vdev->migops) {
+			u32 new_state;
+			/* Call into the device specific code to handle
+			 * the state change (before changing the state)
+			 */
+			if (count != sizeof(mig_info->device_state)) {
+				ret = -EINVAL;
+				goto unlock;
+			}
+
+			if (copy_from_user((void *)&new_state, buf, count))
+				goto unlock;
+
+			ret = vdev->migops->state_change(vdev, new_state);
+			if (ret)
+				goto unlock;
+			mig_info->device_state = new_state;
+		} else {
+			if (copy_from_user(base + pos, buf, count))
+				goto unlock;
+		}
+	} else {
+		if (copy_to_user(buf, base + pos, count))
+			goto unlock;
+		if (pos >= mig_info->data_offset &&
+			pos < mig_info->data_offset + mig_info->data_size)
+			mig_info->pending_bytes -= count;
+	}
+	ret = count;
+unlock:
+	mutex_unlock(&vdev->mig_lock);
+	return ret;
+}
+
 static int vfio_pci_ioeventfd_handler(void *opaque, void *unused)
 {
 	struct vfio_pci_ioeventfd *ioeventfd = opaque;
