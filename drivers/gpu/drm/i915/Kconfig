@@ -102,6 +102,7 @@ config DRM_I915_GVT
 	depends on DRM_I915
 	depends on X86
 	depends on 64BIT
+	depends on VFIO_MDEV
 	default n
 	help
 	  Choose this option if you want to enable Intel GVT-g graphics
