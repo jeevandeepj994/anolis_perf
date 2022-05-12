@@ -934,6 +934,9 @@ static __init void svm_set_cpu_caps(void)
 	    boot_cpu_has(X86_FEATURE_AMD_SSBD))
 		kvm_cpu_cap_set(X86_FEATURE_VIRT_SSBD);
 
+	/* CPUID 0x8000001F (SME/SEV features) */
+	sev_set_cpu_caps();
+
 	/* Enable INVPCID feature */
 	kvm_cpu_cap_check_and_set(X86_FEATURE_INVPCID);
 }

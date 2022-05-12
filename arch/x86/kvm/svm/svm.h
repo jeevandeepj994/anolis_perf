@@ -580,6 +580,7 @@ int svm_unregister_enc_region(struct kvm *kvm,
 			      struct kvm_enc_region *range);
 int sev_vm_attestation(struct kvm *kvm, unsigned long gpa, unsigned long len);
 void pre_sev_run(struct vcpu_svm *svm, int cpu);
+void __init sev_set_cpu_caps(void);
 void __init sev_hardware_setup(void);
 void sev_hardware_teardown(void);
 void sev_free_vcpu(struct kvm_vcpu *vcpu);
