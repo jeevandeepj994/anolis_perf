@@ -205,6 +205,7 @@ int idxd_wq_enable(struct idxd_wq *wq, u32 *status)
 	dev_dbg(dev, "WQ %d enabled\n", wq->id);
 	return 0;
 }
+EXPORT_SYMBOL_GPL(idxd_wq_enable);
 
 int idxd_wq_disable(struct idxd_wq *wq, bool reset_config, u32 *status)
 {
@@ -238,6 +239,7 @@ int idxd_wq_disable(struct idxd_wq *wq, bool reset_config, u32 *status)
 	dev_dbg(dev, "WQ %d disabled\n", wq->id);
 	return 0;
 }
+EXPORT_SYMBOL_GPL(idxd_wq_disable);
 
 int idxd_wq_drain(struct idxd_wq *wq, u32 *status)
 {
@@ -268,6 +270,7 @@ int idxd_wq_drain(struct idxd_wq *wq, u32 *status)
 	dev_dbg(dev, "WQ %d drained\n", wq->id);
 	return 0;
 }
+EXPORT_SYMBOL_GPL(idxd_wq_drain);
 
 void idxd_wq_reset(struct idxd_wq *wq)
 {
@@ -382,6 +385,7 @@ int idxd_wq_abort(struct idxd_wq *wq, u32 *status)
 	dev_dbg(dev, "WQ %d aborted\n", wq->id);
 	return 0;
 }
+EXPORT_SYMBOL_GPL(idxd_wq_abort);
 
 int idxd_wq_set_pasid(struct idxd_wq *wq, int pasid)
 {
@@ -501,6 +505,7 @@ void idxd_wq_setup_pasid(struct idxd_wq *wq, int pasid)
 	wq->wqcfg->pasid = pasid;
 	iowrite32(wq->wqcfg->bits[WQCFG_PASID_IDX], idxd->reg_base + offset);
 }
+EXPORT_SYMBOL_GPL(idxd_wq_setup_pasid);
 
 void idxd_wq_setup_priv(struct idxd_wq *wq, int priv)
 {
@@ -514,6 +519,7 @@ void idxd_wq_setup_priv(struct idxd_wq *wq, int priv)
 	wq->wqcfg->priv = !!priv;
 	iowrite32(wq->wqcfg->bits[WQCFG_PRIV_IDX], idxd->reg_base + offset);
 }
+EXPORT_SYMBOL_GPL(idxd_wq_setup_priv);
 
 /* Device control bits */
 static inline bool idxd_is_enabled(struct idxd_device *idxd)
