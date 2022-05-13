@@ -353,6 +353,7 @@ union wqcfg {
 } __packed;
 
 #define WQCFG_PASID_IDX                2
+#define WQCFG_PRIV_IDX          2
 #define WQCFG_PRIVL_IDX		2
 #define WQCFG_OCCUP_IDX		6
 
