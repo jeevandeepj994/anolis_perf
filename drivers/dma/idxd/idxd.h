@@ -12,9 +12,12 @@
 #include <linux/pci.h>
 #include <linux/ioasid.h>
 #include <linux/mdev.h>
+#include <linux/idxd.h>
+#include <linux/vfio.h>
 #include <linux/perf_event.h>
 #include <uapi/linux/idxd.h>
 #include "registers.h"
+#include "../../vfio/pci/vfio_pci_private.h"
 
 #define IDXD_DRIVER_VERSION	"1.00"
 
@@ -212,6 +215,7 @@ struct idxd_wq {
 	u64 max_xfer_bytes;
 	u32 max_batch_size;
 	bool ats_dis;
+	struct list_head vdcm_list;
 };
 
 struct idxd_engine {
@@ -272,6 +276,7 @@ struct idxd_device {
 
 	struct pci_dev *pdev;
 	void __iomem *reg_base;
+	void __iomem *portal_base;
 
 	spinlock_t dev_lock;	/* spinlock for device */
 	spinlock_t cmd_lock;	/* spinlock for device commands */
@@ -311,6 +316,7 @@ struct idxd_device {
 	struct idxd_dma_dev *idxd_dma;
 	struct workqueue_struct *wq;
 	struct work_struct work;
+	struct vfio_pci_device vfio_pdev;
 	struct idxd_pmu *idxd_pmu;
 	struct kref mdev_kref;
 	struct mutex kref_lock;
@@ -553,6 +559,9 @@ void idxd_driver_unregister(struct idxd_device_driver *idxd_drv);
 #define module_idxd_driver(__idxd_driver) \
 	module_driver(__idxd_driver, idxd_driver_register, idxd_driver_unregister)
 
+#define MODULE_ALIAS_IDXD_DEVICE(type) MODULE_ALIAS("idxd:t" __stringify(type) "*")
+#define IDXD_DEVICES_MODALIAS_FMT "idxd:t%d"
+
 int idxd_register_bus_type(void);
 void idxd_unregister_bus_type(void);
 int idxd_register_devices(struct idxd_device *idxd);
@@ -648,9 +657,5 @@ static inline void perfmon_counter_overflow(struct idxd_device *idxd) {}
 static inline void perfmon_init(void) {}
 static inline void perfmon_exit(void) {}
 #endif
-
-/* mdev host */
-int idxd_mdev_host_init(struct idxd_device *idxd, const struct mdev_parent_ops *ops);
-void idxd_mdev_host_release(struct kref *kref);
 
 #endif
