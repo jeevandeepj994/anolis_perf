@@ -1571,21 +1571,25 @@ static bool try_to_unmap_one(struct page *page, struct vm_area_struct *vma,
 			goto discard;
 		}
 
-		/* Nuke the page table entry. */
-		if (should_defer_flush(mm, flags)) {
-			/*
-			 * We clear the PTE but do not flush so potentially
-			 * a remote CPU could still be writing to the page.
-			 * If the entry was previously clean then the
-			 * architecture must guarantee that a clear->dirty
-			 * transition on a cached TLB entry is written through
-			 * and traps if the PTE is unmapped.
-			 */
-			pteval = ptep_get_and_clear(mm, address, pvmw.pte);
-
-			set_tlb_ubc_flush_pending(mm, pte_dirty(pteval));
+		if (PageHuge(page)) {
+			pteval = huge_ptep_clear_flush(vma, address, pvmw.pte);
 		} else {
-			pteval = ptep_clear_flush(vma, address, pvmw.pte);
+			/* Nuke the page table entry. */
+			if (should_defer_flush(mm, flags)) {
+				/*
+				 * We clear the PTE but do not flush so potentially
+				 * a remote CPU could still be writing to the page.
+				 * If the entry was previously clean then the
+				 * architecture must guarantee that a clear->dirty
+				 * transition on a cached TLB entry is written through
+				 * and traps if the PTE is unmapped.
+				 */
+				pteval = ptep_get_and_clear(mm, address, pvmw.pte);
+
+				set_tlb_ubc_flush_pending(mm, pte_dirty(pteval));
+			} else {
+				pteval = ptep_clear_flush(vma, address, pvmw.pte);
+			}
 		}
 
 		/* Move the dirty bit to the page. Now the pte is gone. */
@@ -1628,7 +1632,10 @@ static bool try_to_unmap_one(struct page *page, struct vm_area_struct *vma,
 			pte_t swp_pte;
 
 			if (arch_unmap_one(mm, vma, address, pteval) < 0) {
-				set_pte_at(mm, address, pvmw.pte, pteval);
+				if (PageHuge(page))
+					set_huge_pte_at(mm, address, pvmw.pte, pteval);
+				else
+					set_pte_at(mm, address, pvmw.pte, pteval);
 				ret = false;
 				page_vma_mapped_walk_done(&pvmw);
 				break;
@@ -1646,7 +1653,11 @@ static bool try_to_unmap_one(struct page *page, struct vm_area_struct *vma,
 				swp_pte = pte_swp_mksoft_dirty(swp_pte);
 			if (pte_uffd_wp(pteval))
 				swp_pte = pte_swp_mkuffd_wp(swp_pte);
-			set_pte_at(mm, address, pvmw.pte, swp_pte);
+			if (PageHuge(page))
+				set_huge_swap_pte_at(mm, address, pvmw.pte,
+						     swp_pte, vma_mmu_pagesize(vma));
+			else
+				set_pte_at(mm, address, pvmw.pte, swp_pte);
 			/*
 			 * No need to invalidate here it will synchronize on
 			 * against the special swap migration pte.
