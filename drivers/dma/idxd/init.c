@@ -176,6 +176,7 @@ static int idxd_setup_wqs(struct idxd_device *idxd)
 		init_waitqueue_head(&wq->err_queue);
 		init_completion(&wq->wq_dead);
 		init_completion(&wq->wq_resurrect);
+		INIT_LIST_HEAD(&wq->vdcm_list);
 		wq->max_xfer_bytes = WQ_DEFAULT_MAX_XFER;
 		wq->max_batch_size = WQ_DEFAULT_MAX_BATCH;
 		wq->enqcmds_retries = IDXD_ENQCMDS_RETRIES;
@@ -336,9 +337,6 @@ static int idxd_setup_internals(struct idxd_device *idxd)
 		rc = -ENOMEM;
 		goto err_wkq_create;
 	}
-
-	kref_init(&idxd->mdev_kref);
-	mutex_init(&idxd->kref_lock);
 
 	return 0;
 
@@ -706,7 +704,6 @@ static void idxd_remove(struct pci_dev *pdev)
 	get_device(idxd_confdev(idxd));
 	device_unregister(idxd_confdev(idxd));
 	idxd_shutdown(pdev);
-	kref_put_mutex(&idxd->mdev_kref, idxd_mdev_host_release, &idxd->kref_lock);
 	if (device_pasid_enabled(idxd))
 		idxd_disable_system_pasid(idxd);
 

@@ -36,15 +36,49 @@
 #define VIDXD_PASID_OFFSET 0x120
 #define VIDXD_MSIX_PBA_OFFSET 0x700
 
+#define VIDXD_STATE_BUFFER_SIZE (4 * PAGE_SIZE)
+#define VIDXD_MAX_INTS 65536
+
+struct ioasid_mm_entry {
+	struct mm_struct *mm;
+	struct list_head node;
+};
+
+#define IDXD_DESC_SIZE sizeof(struct dsa_hw_desc)
+
+#define VIDXD_MAX_PORTALS 64
+
+struct idxd_wq_desc_elem {
+	enum idxd_portal_prot portal_prot;
+	u8   portal_id;
+	u8  work_desc[IDXD_DESC_SIZE];
+	struct list_head link;
+};
+
+struct idxd_wq_portal {
+	u8 data[IDXD_DESC_SIZE];
+	unsigned int count;
+};
+
+struct idxd_virtual_wq {
+	unsigned int ndescs;
+	struct list_head head;
+	struct idxd_wq_portal portals[VIDXD_MAX_PORTALS];
+};
+
 struct idxd_vdev {
 	struct mdev_device *mdev;
 	struct vfio_group *vfio_group;
+	struct notifier_block pasid_nb;
+	struct mutex ioasid_lock;
+	struct list_head mm_list;
 };
 
 struct vdcm_idxd {
 	struct vfio_device vdev;
 	struct idxd_device *idxd;
 	struct idxd_wq *wq;
+	struct idxd_virtual_wq vwq;
 	struct idxd_vdev ivdev;
 	struct vdcm_idxd_type *type;
 	int num_wqs;
@@ -56,10 +90,14 @@ struct vdcm_idxd {
 	u8 bar0[VIDXD_MAX_MMIO_SPACE_SZ];
 	struct list_head list;
 	struct mutex dev_lock; /* lock for vidxd resources */
+	struct mutex mig_submit_lock;
+	bool paused;
 
 	int refcount;
 	struct vfio_pci_device vfio_pdev;
 };
+
+#define vdev_to_vidxd(vdev) container_of(vdev, struct vdcm_idxd, vdev)
 
 static inline struct vdcm_idxd *to_vidxd(struct idxd_vdev *vdev)
 {
@@ -115,6 +153,8 @@ static inline u8 vidxd_state(struct vdcm_idxd *vidxd)
 	return gensts->state;
 }
 
+int idxd_mdev_host_init(struct idxd_device *idxd, const struct mdev_parent_ops *ops);
+void idxd_mdev_host_release(struct kref *kref);
 int idxd_mdev_get_pasid(struct mdev_device *mdev, u32 *pasid);
 int vidxd_mmio_read(struct vdcm_idxd *vidxd, u64 pos, void *buf, unsigned int size);
 int vidxd_mmio_write(struct vdcm_idxd *vidxd, u64 pos, void *buf, unsigned int size);
@@ -122,6 +162,13 @@ int vidxd_cfg_read(struct vdcm_idxd *vidxd, unsigned int pos, void *buf, unsigne
 int vidxd_cfg_write(struct vdcm_idxd *vidxd, unsigned int pos, void *buf, unsigned int size);
 void vidxd_mmio_init(struct vdcm_idxd *vidxd);
 void vidxd_reset(struct vdcm_idxd *vidxd);
-void vidxd_send_interrupt(struct vdcm_idxd *vidxd);
+void vidxd_send_interrupt(struct vdcm_idxd *vidxd, int msix_idx);
+
+int vidxd_portal_mmio_read(struct vdcm_idxd *vidxd, u64 pos, void *buf,
+				unsigned int size);
+int vidxd_portal_mmio_write(struct vdcm_idxd *vidxd, u64 pos, void *buf,
+				unsigned int size);
+
+void vidxd_notify_revoked_handles(struct vdcm_idxd *vidxd);
 
 #endif

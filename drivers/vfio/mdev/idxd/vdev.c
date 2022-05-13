@@ -16,6 +16,7 @@
 #include <linux/intel-svm.h>
 #include <linux/kvm_host.h>
 #include <linux/eventfd.h>
+#include <linux/sched/mm.h>
 #include <uapi/linux/idxd.h>
 #include "registers.h"
 #include "idxd.h"
@@ -25,11 +26,11 @@
 
 static void vidxd_do_command(struct vdcm_idxd *vidxd, u32 val);
 
-void vidxd_send_interrupt(struct vdcm_idxd *vidxd)
+void vidxd_send_interrupt(struct vdcm_idxd *vidxd, int msix_idx)
 {
 	struct vfio_pci_device *vfio_pdev = &vidxd->vfio_pdev;
 
-	eventfd_signal(vfio_pdev->ctx[0].trigger, 1);
+	eventfd_signal(vfio_pdev->ctx[msix_idx].trigger, 1);
 }
 
 static void vidxd_report_error(struct vdcm_idxd *vidxd, unsigned int error)
@@ -53,8 +54,18 @@ static void vidxd_report_error(struct vdcm_idxd *vidxd, unsigned int error)
 		u32 *intcause = (u32 *)(bar0 + IDXD_INTCAUSE_OFFSET);
 
 		*intcause |= IDXD_INTC_ERR;
-		vidxd_send_interrupt(vidxd);
+		vidxd_send_interrupt(vidxd, 0);
 	}
+}
+
+void vidxd_notify_revoked_handles(struct vdcm_idxd *vidxd)
+{
+	u8 *bar0 = vidxd->bar0;
+	u32 *intcause = (u32 *)(bar0 + IDXD_INTCAUSE_OFFSET);
+
+	*intcause |= IDXD_INTC_INT_HANDLE_REVOKED;
+	pr_info("informating guest about revoked handles\n");
+	vidxd_send_interrupt(vidxd, 0);
 }
 
 int vidxd_mmio_write(struct vdcm_idxd *vidxd, u64 pos, void *buf, unsigned int size)
@@ -66,12 +77,16 @@ int vidxd_mmio_write(struct vdcm_idxd *vidxd, u64 pos, void *buf, unsigned int s
 	dev_dbg(dev, "vidxd mmio W %d %x %x: %llx\n", vidxd->wq->id, size,
 		offset, get_reg_val(buf, size));
 
-	if (((size & (size - 1)) != 0) || (offset & (size - 1)) != 0)
+	if (((size & (size - 1)) != 0) || (offset & (size - 1)) != 0) {
+		dev_warn(dev, "XXX %s out of bounds\n", __func__);
 		return -EINVAL;
+	}
 
 	/* If we don't limit this, we potentially can write out of bound */
-	if (size > sizeof(u32))
+	if (size > sizeof(u32)) {
+		dev_warn(dev, "XXX %s size greater than u32\n", __func__);
 		return -EINVAL;
+	}
 
 	switch (offset) {
 	case IDXD_GENCFG_OFFSET ... IDXD_GENCFG_OFFSET + 3:
@@ -85,7 +100,7 @@ int vidxd_mmio_write(struct vdcm_idxd *vidxd, u64 pos, void *buf, unsigned int s
 		break;
 
 	case IDXD_INTCAUSE_OFFSET:
-		bar0[offset] &= ~(get_reg_val(buf, 1) & GENMASK(4, 0));
+		*(u32 *)&bar0[offset] &= ~(get_reg_val(buf, 4));
 		break;
 
 	case IDXD_CMD_OFFSET: {
@@ -125,16 +140,117 @@ int vidxd_mmio_write(struct vdcm_idxd *vidxd, u64 pos, void *buf, unsigned int s
 		if (!(msix_entry[MSIX_ENTRY_CTRL_BYTE] & MSIX_ENTRY_MASK_INT) &&
 		    ctrl & MSIX_ENTRY_MASK_INT)
 			if (test_and_clear_bit(index, (unsigned long *)pba))
-				vidxd_send_interrupt(vidxd);
+				vidxd_send_interrupt(vidxd, index);
 		break;
 	}
 
 	case VIDXD_MSIX_PERM_OFFSET ...  VIDXD_MSIX_PERM_OFFSET + VIDXD_MSIX_PERM_TBL_SZ - 1:
 		memcpy(bar0 + offset, buf, size);
 		break;
+
 	} /* offset */
 
 	return 0;
+}
+
+int vidxd_portal_mmio_read(struct vdcm_idxd *vidxd, u64 pos, void *buf,
+			   unsigned int size)
+{
+	u32 offset = pos & (vidxd->bar_size[1] - 1);
+	struct device *dev = mdev_dev(vidxd->ivdev.mdev);
+
+	BUG_ON((size & (size - 1)) != 0);
+	BUG_ON(size > 8);
+	BUG_ON((offset & (size - 1)) != 0);
+
+	memset(buf, 0xff, size);
+
+	dev_dbg(dev, "vidxd portal mmio R %d %x %x: %llx\n",
+		vidxd->wq->id, size, offset, get_reg_val(buf, size));
+	return 0;
+}
+
+int vidxd_portal_mmio_write(struct vdcm_idxd *vidxd, u64 pos, void *buf,
+				unsigned int size)
+{
+	struct device *dev = mdev_dev(vidxd->ivdev.mdev);
+	u32 offset = pos & (vidxd->bar_size[1] - 1);
+	uint16_t wq_id = offset >> 14;
+	uint16_t portal_id, portal_offset;
+	struct idxd_virtual_wq *vwq;
+	struct idxd_wq *wq;
+	struct idxd_wq_portal *portal;
+	enum idxd_portal_prot portal_prot = IDXD_PORTAL_UNLIMITED;
+	int rc = 0;
+
+	BUG_ON((size & (size - 1)) != 0);
+	BUG_ON(size > 64);
+	BUG_ON((offset & (size - 1)) != 0);
+
+	dev_dbg(dev, "vidxd portal mmio W %d %x %x: %llx\n", vidxd->wq->id, size,
+			offset, get_reg_val(buf, size));
+
+	if (wq_id >= vidxd->num_wqs)
+		dev_dbg(dev, "DSA portal write: Invalid wq  %d\n", wq_id);
+
+	vwq = &vidxd->vwq;
+	wq = vidxd->wq;
+
+	if (!wq_dedicated(wq) || (((offset >> PAGE_SHIFT) & 0x3) == 1))
+		portal_prot = IDXD_PORTAL_LIMITED;
+
+	portal_id = (offset & 0xFFF) >> 6;
+	portal_offset = offset & 0x3F;
+
+	portal = &vwq->portals[portal_id];
+
+	portal->count += size;
+	memcpy(&portal->data[portal_offset], buf, size);
+
+	if (portal->count == IDXD_DESC_SIZE) {
+		struct idxd_wq_desc_elem *elem;
+		u64 *p = (u64 *)portal->data;
+
+		dev_dbg(dev, "desc: %016llx %016llx  %016llx %016llx %016llx %016llx %016llx %016llx\n",
+			p[0], p[1], p[2], p[3], p[4], p[5], p[6], p[7]);
+
+		mutex_lock(&vidxd->mig_submit_lock);
+		if (vidxd->paused) {
+			/* Queue the descriptor if submitted to DWQ */
+			if (vwq->ndescs == wq->size) {
+				dev_dbg(dev, "can't submit more descriptors than WQ size. Dropping.\n");
+				goto out_unlock;
+			}
+
+			elem = kmalloc(sizeof(struct idxd_wq_desc_elem), GFP_KERNEL);
+
+			if (elem == NULL) {
+				rc = -ENOMEM;
+				goto out_unlock;
+			}
+			memcpy(elem->work_desc, portal->data, IDXD_DESC_SIZE);
+			elem->portal_prot = portal_prot;
+			elem->portal_id = portal_id;
+
+			list_add_tail(&elem->link, &vwq->head);
+			vwq->ndescs++;
+		} else {
+			void __iomem *wq_portal;
+
+			wq_portal = vidxd->idxd->portal_base +
+				idxd_get_wq_portal_full_offset(wq->id,
+						portal_prot, IDXD_IRQ_IMS);
+			wq_portal += (portal_id << 6);
+			dev_dbg(dev, "submitting a desc to WQ %d ded %d\n", wq->id, wq_dedicated(wq));
+			iosubmit_cmds512(wq_portal, (struct dsa_hw_desc *)p, 1);
+		}
+out_unlock:
+		mutex_unlock(&vidxd->mig_submit_lock);
+		memset(&portal->data, 0, IDXD_DESC_SIZE);
+		portal->count = 0;
+	}
+
+	return rc;
 }
 
 int vidxd_mmio_read(struct vdcm_idxd *vidxd, u64 pos, void *buf, unsigned int size)
@@ -309,7 +425,6 @@ int vidxd_cfg_write(struct vdcm_idxd *vidxd, unsigned int pos, void *buf, unsign
 		if (!IS_ALIGNED(pos, 4))
 			return -EINVAL;
 		return _pci_cfg_bar_write(vidxd, pos, buf, size);
-
 	default:
 		_pci_cfg_mem_write(vidxd, pos, buf, size);
 	}
@@ -377,7 +492,6 @@ static void vidxd_mmio_init_wqcfg(struct vdcm_idxd *vidxd)
 	wqcfg->wq_thresh = wq->threshold;
 
 	wqcfg->mode = WQCFG_MODE_DEDICATED;
-
 	wqcfg->bof = wq->wqcfg->bof;
 
 	wqcfg->priority = wq->priority;
@@ -421,7 +535,8 @@ static void vidxd_mmio_init_cmdcap(struct vdcm_idxd *vidxd)
 	else
 		*cmdcap = 0x1ffe;
 
-	*cmdcap |= BIT(IDXD_CMD_REQUEST_INT_HANDLE) | BIT(IDXD_CMD_RELEASE_INT_HANDLE);
+	*cmdcap |= BIT(IDXD_CMD_REQUEST_INT_HANDLE) | BIT(IDXD_CMD_RELEASE_INT_HANDLE) |
+			BIT(IDXD_CMD_REVOKED_HANDLES_PROCESSED);
 }
 
 static void vidxd_mmio_init_opcap(struct vdcm_idxd *vidxd)
@@ -447,8 +562,13 @@ static void vidxd_mmio_init_opcap(struct vdcm_idxd *vidxd)
 			 BIT_ULL(IAX_OPCODE_MEMMOVE);
 		*opcap = opcode;
 		opcap++;
-		opcode = OPCAP_BIT(IAX_OPCODE_DECOMPRESS) |
-			 OPCAP_BIT(IAX_OPCODE_COMPRESS);
+		opcode = OPCAP_BIT(IAX_OPCODE_DECOMPRESS) | OPCAP_BIT(IAX_OPCODE_COMPRESS) |
+			 OPCAP_BIT(IAX_OPCODE_CRC64) | OPCAP_BIT(IAX_OPCODE_ZERO_DECOMP_32) |
+			 OPCAP_BIT(IAX_OPCODE_ZERO_DECOMP_16) | OPCAP_BIT(IAX_OPCODE_DECOMP_32) |
+			 OPCAP_BIT(IAX_OPCODE_DECOMP_16) | OPCAP_BIT(IAX_OPCODE_SCAN) |
+			 OPCAP_BIT(IAX_OPCODE_SET_MEMBER) | OPCAP_BIT(IAX_OPCODE_EXTRACT) |
+			 OPCAP_BIT(IAX_OPCODE_SELECT) | OPCAP_BIT(IAX_OPCODE_RLE_BURST) |
+			 OPCAP_BIT(IAX_OPCDE_FIND_UNIQUE) | OPCAP_BIT(IAX_OPCODE_EXPAND);
 		*opcap = opcode;
 	}
 }
@@ -460,6 +580,22 @@ static void vidxd_mmio_init_version(struct vdcm_idxd *vidxd)
 
 	version = (u32 *)vidxd->bar0;
 	*version = idxd->hw.version;
+}
+
+static void vidxd_mmio_reset(struct vdcm_idxd *vidxd)
+{
+	u8 *bar0 = vidxd->bar0;
+
+	memset(bar0 + IDXD_GENCFG_OFFSET, 0, 4);
+	memset(bar0 + IDXD_GENCTRL_OFFSET, 0, 4);
+	memset(bar0 + IDXD_GENSTATS_OFFSET, 0, 4);
+	memset(bar0 + IDXD_INTCAUSE_OFFSET, 0, 4);
+	memset(bar0 + IDXD_INTCAUSE_OFFSET, 0, 4);
+	memset(bar0 + VIDXD_MSIX_PBA_OFFSET, 0, 1);
+	memset(bar0 + VIDXD_MSIX_PERM_OFFSET, 0, VIDXD_MSIX_PERM_TBL_SZ);
+
+	vidxd_mmio_init_grpcfg(vidxd);
+	vidxd_mmio_init_wqcfg(vidxd);
 }
 
 void vidxd_mmio_init(struct vdcm_idxd *vidxd)
@@ -501,7 +637,7 @@ static void idxd_complete_command(struct vdcm_idxd *vidxd, enum idxd_cmdsts_err 
 
 	if (*cmd & IDXD_CMD_INT_MASK) {
 		*intcause |= IDXD_INTC_CMD;
-		vidxd_send_interrupt(vidxd);
+		vidxd_send_interrupt(vidxd, 0);
 	}
 }
 
@@ -649,11 +785,15 @@ void vidxd_reset(struct vdcm_idxd *vidxd)
 	wq = vidxd->wq;
 
 	if (wq->state == IDXD_WQ_ENABLED) {
-		idxd_wq_abort(wq, NULL);
-		idxd_wq_disable(wq, false, NULL);
+		if (wq_dedicated(wq)) {
+			idxd_wq_abort(wq, NULL);
+			idxd_wq_disable(wq, false, NULL);
+		} else {
+			idxd_wq_drain(wq, NULL);
+		}
 	}
 
-	vidxd_mmio_init(vidxd);
+	vidxd_mmio_reset(vidxd);
 	gensts->state = IDXD_DEVICE_STATE_DISABLED;
 	idxd_complete_command(vidxd, IDXD_CMDSTS_SUCCESS);
 }
@@ -706,7 +846,7 @@ static void vidxd_alloc_int_handle(struct vdcm_idxd *vidxd, int operand)
 	dev_dbg(dev, "allocating int handle for %d\n", vidx);
 
 	/* vidx cannot be 0 since that's emulated and does not require IMS handle */
-	if (vidx <= 0 || vidx >= VIDXD_MAX_MSIX_ENTRIES) {
+	if (vidx <= 0 || vidx >= VIDXD_MAX_MSIX_VECS) {
 		idxd_complete_command(vidxd, IDXD_CMDSTS_ERR_INVAL_INT_IDX);
 		return;
 	}
@@ -721,6 +861,31 @@ static void vidxd_alloc_int_handle(struct vdcm_idxd *vidxd, int operand)
 	cmdsts = ims_idx << IDXD_CMDSTS_RES_SHIFT;
 	dev_dbg(dev, "requested index %d handle %d\n", vidx, ims_idx);
 	idxd_complete_command(vidxd, cmdsts);
+}
+
+static void vidxd_revoked_handles_processed(struct vdcm_idxd *vidxd, int operand)
+{
+	struct mdev_device *mdev = vidxd->ivdev.mdev;
+	struct device *dev = mdev_dev(mdev);
+	struct idxd_virtual_wq *vwq = &vidxd->vwq;
+	int idx;
+	u32 status;
+
+	idxd_complete_command(vidxd, 0);
+
+	BUG_ON(!list_empty(&vwq->head));
+
+	/* Step 1. Drain all the WQs associated with this VM. Currently only 1 */
+	idxd_wq_drain(vidxd->wq, &status);
+
+	if (status)
+		dev_dbg(dev, "wq drain failed: %#x\n", status);
+
+	/* Step 2. Generate a completion interrupt for all int handles */
+	for (idx = 1; idx < VIDXD_MAX_MSIX_VECS; idx++) {
+		dev_dbg(dev, "revoked int handle processed idx %d\n", idx);
+		vidxd_send_interrupt(vidxd, idx);
+	}
 }
 
 static void vidxd_release_int_handle(struct vdcm_idxd *vidxd, int operand)
@@ -741,7 +906,7 @@ static void vidxd_release_int_handle(struct vdcm_idxd *vidxd, int operand)
 	}
 
 	/* IMS backed entry start at 1, 0 is emulated vector */
-	for (i = 0; i < VIDXD_MAX_MSIX_ENTRIES - 1; i++) {
+	for (i = 0; i < VIDXD_MAX_MSIX_VECS - 1; i++) {
 		if (dev_msi_hwirq(dev, i) == handle) {
 			found = true;
 			break;
@@ -831,7 +996,7 @@ static void vidxd_wq_enable(struct vdcm_idxd *vidxd, int wq_id)
 static void vidxd_wq_disable(struct vdcm_idxd *vidxd, int wq_id_mask)
 {
 	struct idxd_wq *wq;
-	union wqcfg *wqcfg;
+	union wqcfg *wqcfg, *vwqcfg;
 	u8 *bar0 = vidxd->bar0;
 	struct mdev_device *mdev = vidxd->ivdev.mdev;
 	struct device *dev = mdev_dev(mdev);
@@ -841,19 +1006,41 @@ static void vidxd_wq_disable(struct vdcm_idxd *vidxd, int wq_id_mask)
 
 	dev_dbg(dev, "vidxd disable wq %u:%u\n", 0, wq->id);
 
-	wqcfg = (union wqcfg *)(bar0 + VIDXD_WQCFG_OFFSET);
-	if (wqcfg->wq_state != IDXD_WQ_DEV_ENABLED) {
+	wqcfg = wq->wqcfg;
+	vwqcfg = (union wqcfg *)(bar0 + VIDXD_WQCFG_OFFSET);
+	if (vwqcfg->wq_state != IDXD_WQ_DEV_ENABLED) {
 		idxd_complete_command(vidxd, IDXD_CMDSTS_ERR_WQ_NOT_EN);
 		return;
 	}
 
 	/* If it is a DWQ, need to disable the DWQ as well */
 	if (wq_dedicated(wq)) {
+		struct ioasid_set *ioasid_set;
+		struct mm_struct *mm;
+
 		idxd_wq_disable(wq, false, &status);
 		if (status) {
 			dev_warn(dev, "vidxd disable wq failed: %#x\n", status);
 			idxd_complete_command(vidxd, status);
 			return;
+		}
+
+		if (vwqcfg->pasid_en) {
+			mm = get_task_mm(current);
+			if (!mm) {
+				dev_dbg(dev, "Can't retrieve task mm\n");
+				return;
+			}
+
+			ioasid_set = ioasid_find_mm_set(mm);
+			if (!ioasid_set) {
+				dev_dbg(dev, "Unable to find ioasid_set\n");
+				mmput(mm);
+				return;
+			}
+			mmput(mm);
+			if (!ioasid_put(ioasid_set, wqcfg->pasid))
+				dev_warn(dev, "Unable to put ioasid\n");
 		}
 	} else {
 		idxd_wq_drain(wq, &status);
@@ -864,18 +1051,24 @@ static void vidxd_wq_disable(struct vdcm_idxd *vidxd, int wq_id_mask)
 		}
 	}
 
-	wqcfg->wq_state = IDXD_WQ_DEV_DISABLED;
+	vwqcfg->wq_state = IDXD_WQ_DEV_DISABLED;
 	idxd_complete_command(vidxd, IDXD_CMDSTS_SUCCESS);
+}
+
+void vidxd_free_ims_entries(struct vdcm_idxd *vidxd)
+{
+	struct mdev_device *mdev = vidxd->ivdev.mdev;
+	struct device *dev = mdev_dev(mdev);
+
+	msi_domain_free_irqs(dev_get_msi_domain(dev), dev);
 }
 
 static bool command_supported(struct vdcm_idxd *vidxd, u32 cmd)
 {
-	struct idxd_device *idxd = vidxd->idxd;
+	u8 *bar0 = vidxd->bar0;
+	u32 *cmd_cap = (u32 *)(bar0 + IDXD_CMDCAP_OFFSET);
 
-	if (cmd == IDXD_CMD_REQUEST_INT_HANDLE || cmd == IDXD_CMD_RELEASE_INT_HANDLE)
-		return true;
-
-	return !!(idxd->hw.cmd_cap & BIT(cmd));
+	return !!(*cmd_cap & BIT(cmd));
 }
 
 static void vidxd_do_command(struct vdcm_idxd *vidxd, u32 val)
@@ -929,6 +1122,9 @@ static void vidxd_do_command(struct vdcm_idxd *vidxd, u32 val)
 		break;
 	case IDXD_CMD_RELEASE_INT_HANDLE:
 		vidxd_release_int_handle(vidxd, reg->operand);
+		break;
+	case IDXD_CMD_REVOKED_HANDLES_PROCESSED:
+		vidxd_revoked_handles_processed(vidxd, reg->operand);
 		break;
 	default:
 		idxd_complete_command(vidxd, IDXD_CMDSTS_INVAL_CMD);

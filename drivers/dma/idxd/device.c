@@ -702,6 +702,7 @@ void idxd_device_drain_pasid(struct idxd_device *idxd, int pasid)
 	idxd_cmd_exec(idxd, IDXD_CMD_DRAIN_PASID, operand, NULL);
 	dev_dbg(dev, "pasid %d drained\n", pasid);
 }
+EXPORT_SYMBOL_GPL(idxd_device_drain_pasid);
 
 void idxd_device_abort_pasid(struct idxd_device *idxd, int pasid)
 {
@@ -1442,6 +1443,7 @@ err_map_portal:
 err:
 	return rc;
 }
+EXPORT_SYMBOL_GPL(__drv_enable_wq);
 
 int drv_enable_wq(struct idxd_wq *wq)
 {
@@ -1471,6 +1473,7 @@ void __drv_disable_wq(struct idxd_wq *wq)
 
 	wq->client_count = 0;
 }
+EXPORT_SYMBOL_GPL(__drv_disable_wq);
 
 void drv_disable_wq(struct idxd_wq *wq)
 {
@@ -1478,6 +1481,7 @@ void drv_disable_wq(struct idxd_wq *wq)
 	__drv_disable_wq(wq);
 	mutex_unlock(&wq->wq_lock);
 }
+EXPORT_SYMBOL_GPL(drv_disable_wq);
 
 int idxd_device_drv_probe(struct idxd_dev *idxd_dev)
 {
