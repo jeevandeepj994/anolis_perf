@@ -217,6 +217,14 @@ int idxd_wq_disable(struct idxd_wq *wq, bool reset_config, u32 *status)
 	if (status)
 		*status = 0;
 
+	/*
+	 * When the wq is in LOCKED state, it means it is disabled but
+	 * also at the same time is "enabled" as far as the user is
+	 * concerned. So a call to disable the hardware can be skipped.
+	 */
+	if (wq->state == IDXD_WQ_LOCKED)
+		goto out;
+
 	if (wq->state != IDXD_WQ_ENABLED) {
 		dev_dbg(dev, "WQ %d in wrong state: %d\n", wq->id, wq->state);
 		return 0;
@@ -233,9 +241,14 @@ int idxd_wq_disable(struct idxd_wq *wq, bool reset_config, u32 *status)
 		return -ENXIO;
 	}
 
-	if (reset_config)
-		idxd_wq_disable_cleanup(wq);
-	wq->state = IDXD_WQ_DISABLED;
+out:
+	if (wq_dedicated(wq) && is_idxd_wq_mdev(wq)) {
+		wq->state = IDXD_WQ_LOCKED;
+	} else {
+		if (reset_config && test_bit(IDXD_FLAG_CONFIGURABLE, &idxd->flags))
+			idxd_wq_disable_cleanup(wq);
+		wq->state = IDXD_WQ_DISABLED;
+	}
 	dev_dbg(dev, "WQ %d disabled\n", wq->id);
 	return 0;
 }
