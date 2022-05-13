@@ -59,11 +59,16 @@ enum idxd_type {
 #define IDXD_ENQCMDS_RETRIES		32
 #define IDXD_ENQCMDS_MAX_RETRIES	64
 
+struct idxd_device_ops {
+	void (*notify_error)(struct idxd_wq *wq);
+};
+
 struct idxd_device_driver {
 	const char *name;
 	enum idxd_dev_type *type;
 	int (*probe)(struct idxd_dev *idxd_dev);
 	void (*remove)(struct idxd_dev *idxd_dev);
+	struct idxd_device_ops *ops;
 	struct device_driver drv;
 };
 
