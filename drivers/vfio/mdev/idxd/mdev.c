@@ -2217,9 +2217,14 @@ static enum idxd_dev_type dev_types[] = {
 	IDXD_DEV_NONE,
 };
 
+static struct idxd_device_ops mdev_wq_ops = {
+	.notify_error = idxd_wq_vidxd_send_errors,
+};
+
 static struct idxd_device_driver idxd_mdev_driver = {
 	.probe = idxd_mdev_drv_probe,
 	.remove = idxd_mdev_drv_remove,
+	.ops = &mdev_wq_ops,
 	.name = "mdev",
 	.type = dev_types
 };
