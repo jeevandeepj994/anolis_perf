@@ -337,6 +337,9 @@ static int idxd_setup_internals(struct idxd_device *idxd)
 		goto err_wkq_create;
 	}
 
+	kref_init(&idxd->mdev_kref);
+	mutex_init(&idxd->kref_lock);
+
 	return 0;
 
  err_wkq_create:
@@ -703,6 +706,7 @@ static void idxd_remove(struct pci_dev *pdev)
 	get_device(idxd_confdev(idxd));
 	device_unregister(idxd_confdev(idxd));
 	idxd_shutdown(pdev);
+	kref_put_mutex(&idxd->mdev_kref, idxd_mdev_host_release, &idxd->kref_lock);
 	if (device_pasid_enabled(idxd))
 		idxd_disable_system_pasid(idxd);
 
