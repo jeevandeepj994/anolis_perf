@@ -11,6 +11,7 @@
 #include <linux/idr.h>
 #include <linux/pci.h>
 #include <linux/ioasid.h>
+#include <linux/mdev.h>
 #include <linux/perf_event.h>
 #include <uapi/linux/idxd.h>
 #include "registers.h"
@@ -309,8 +310,10 @@ struct idxd_device {
 	struct idxd_dma_dev *idxd_dma;
 	struct workqueue_struct *wq;
 	struct work_struct work;
-
 	struct idxd_pmu *idxd_pmu;
+	struct kref mdev_kref;
+	struct mutex kref_lock;
+	bool mdev_host_init;
 };
 
 /* IDXD software descriptor */
@@ -644,5 +647,9 @@ static inline void perfmon_counter_overflow(struct idxd_device *idxd) {}
 static inline void perfmon_init(void) {}
 static inline void perfmon_exit(void) {}
 #endif
+
+/* mdev host */
+int idxd_mdev_host_init(struct idxd_device *idxd, const struct mdev_parent_ops *ops);
+void idxd_mdev_host_release(struct kref *kref);
 
 #endif
