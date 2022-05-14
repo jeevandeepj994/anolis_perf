@@ -73,6 +73,8 @@ struct idxd_ioasid_work {
 
 static const char idxd_dsa_1dwq_name[] = "dsa-1dwq-v1";
 static const char idxd_iax_1dwq_name[] = "iax-1dwq-v1";
+static const char idxd_dsa_1swq_name[] = "dsa-1swq-v1";
+static const char idxd_iax_1swq_name[] = "iax-1swq-v1";
 
 static int idxd_vdcm_get_irq_count(struct mdev_device *mdev, int type)
 {
@@ -759,6 +761,88 @@ static struct idxd_wq *find_any_dwq(struct idxd_device *idxd, struct vdcm_idxd_t
 	return NULL;
 }
 
+static int swq_lowest_client_count(struct idxd_device *idxd)
+{
+	struct idxd_wq *wq;
+	int i, count = -ENODEV;
+
+	lockdep_assert_held(&idxd->dev_lock);
+	for (i = 0; i < idxd->max_wqs; i++) {
+		wq = idxd->wqs[i];
+
+		if (wq->state != IDXD_WQ_ENABLED)
+			continue;
+
+		if (!is_idxd_wq_mdev(wq))
+			continue;
+
+		if (wq_dedicated(wq))
+			continue;
+
+		if (count == -ENODEV)
+			count = idxd_wq_refcount(wq);
+		else if (count > idxd_wq_refcount(wq))
+			count = idxd_wq_refcount(wq);
+	}
+
+	return count;
+}
+
+static struct idxd_wq *find_any_swq(struct idxd_device *idxd, struct vdcm_idxd_type *type)
+{
+	int i, count;
+	struct idxd_wq *wq;
+	unsigned long flags;
+
+	switch (type->type) {
+	case IDXD_MDEV_TYPE_DSA_1_SWQ:
+		if (idxd->data->type != IDXD_TYPE_DSA)
+			return NULL;
+		break;
+	case IDXD_MDEV_TYPE_IAX_1_SWQ:
+		if (idxd->data->type != IDXD_TYPE_IAX)
+			return NULL;
+		break;
+	default:
+		return NULL;
+	}
+
+	spin_lock_irqsave(&idxd->dev_lock, flags);
+	count = swq_lowest_client_count(idxd);
+	if (count < 0)
+		goto out;
+
+	for (i = 0; i < idxd->max_wqs; i++) {
+		wq = idxd->wqs[i];
+
+		if (wq->state != IDXD_WQ_ENABLED)
+			continue;
+
+		if (!is_idxd_wq_mdev(wq))
+			continue;
+
+		if (wq_dedicated(wq))
+			continue;
+
+		/*
+		 * Attempt to load balance the shared wq by round robin until on the lowest
+		 * ref count for the wq.
+		 */
+		if (idxd_wq_refcount(wq) != count)
+			continue;
+
+		spin_unlock_irqrestore(&idxd->dev_lock, flags);
+		mutex_lock(&wq->wq_lock);
+		idxd_wq_get(wq);
+		mutex_unlock(&wq->wq_lock);
+		return wq;
+	}
+
+ out:
+	spin_unlock_irqrestore(&idxd->dev_lock, flags);
+	return NULL;
+}
+
 extern const struct vfio_pci_regops vfio_pci_dma_fault_regops;
 
 static struct vdcm_idxd *vdcm_vidxd_create(struct idxd_device *idxd, struct mdev_device *mdev,
@@ -769,7 +853,19 @@ static struct vdcm_idxd *vdcm_vidxd_create(struct idxd_device *idxd, struct mdev
 	struct idxd_wq *wq = NULL;
 	int rc;
 
-	wq = find_any_dwq(idxd, type);
+	switch (type->type) {
+	case IDXD_MDEV_TYPE_DSA_1_DWQ:
+	case IDXD_MDEV_TYPE_IAX_1_DWQ:
+		wq = find_any_dwq(idxd, type);
+		break;
+	case IDXD_MDEV_TYPE_DSA_1_SWQ:
+	case IDXD_MDEV_TYPE_IAX_1_SWQ:
+		wq = find_any_swq(idxd, type);
+		break;
+	default:
+		return ERR_PTR(-ENODEV);
+	}
+
 	if (!wq)
 		return ERR_PTR(-ENODEV);
 
@@ -828,6 +924,14 @@ static struct vdcm_idxd_type idxd_mdev_types[IDXD_MDEV_TYPES] = {
 	{
 		.name = idxd_iax_1dwq_name,
 		.type = IDXD_MDEV_TYPE_IAX_1_DWQ,
+	},
+	{
+		.name = idxd_dsa_1swq_name,
+		.type = IDXD_MDEV_TYPE_DSA_1_SWQ,
+	},
+	{
+		.name = idxd_iax_1swq_name,
+		.type = IDXD_MDEV_TYPE_IAX_1_SWQ,
 	},
 };
 
@@ -2122,10 +2226,12 @@ static int find_available_mdev_instances(struct idxd_device *idxd, struct vdcm_i
 
 	switch (type->type) {
 	case IDXD_MDEV_TYPE_DSA_1_DWQ:
+	case IDXD_MDEV_TYPE_DSA_1_SWQ:
 		if (idxd->data->type != IDXD_TYPE_DSA)
 			return 0;
 		break;
 	case IDXD_MDEV_TYPE_IAX_1_DWQ:
+	case IDXD_MDEV_TYPE_IAX_1_SWQ:
 		if (idxd->data->type != IDXD_TYPE_IAX)
 			return 0;
 		break;
@@ -2149,6 +2255,11 @@ static int find_available_mdev_instances(struct idxd_device *idxd, struct vdcm_i
 		case IDXD_MDEV_TYPE_DSA_1_DWQ:
 		case IDXD_MDEV_TYPE_IAX_1_DWQ:
 			if (wq_dedicated(wq) && !idxd_wq_refcount(wq))
+				count++;
+			break;
+		case IDXD_MDEV_TYPE_DSA_1_SWQ:
+		case IDXD_MDEV_TYPE_IAX_1_SWQ:
+			if (!wq_dedicated(wq))
 				count++;
 			break;
 		default:
@@ -2200,10 +2311,21 @@ static struct attribute_group idxd_mdev_type_iax_group0 = {
 	.attrs = idxd_mdev_types_attrs,
 };
 
+static struct attribute_group idxd_mdev_type_dsa_group1 = {
+	.name = idxd_dsa_1swq_name,
+	.attrs = idxd_mdev_types_attrs,
+};
+
+static struct attribute_group idxd_mdev_type_iax_group1 = {
+	.name = idxd_iax_1swq_name,
+	.attrs = idxd_mdev_types_attrs,
+};
 
 static struct attribute_group *idxd_mdev_type_groups[] = {
 	&idxd_mdev_type_dsa_group0,
 	&idxd_mdev_type_iax_group0,
+	&idxd_mdev_type_dsa_group1,
+	&idxd_mdev_type_iax_group1,
 	NULL,
 };
 

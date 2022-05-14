@@ -107,11 +107,15 @@ static inline struct vdcm_idxd *to_vidxd(struct idxd_vdev *vdev)
 #define IDXD_MDEV_NAME_LEN 64
 
 enum idxd_mdev_type {
+	IDXD_MDEV_TYPE_NONE = -1,
 	IDXD_MDEV_TYPE_DSA_1_DWQ = 0,
 	IDXD_MDEV_TYPE_IAX_1_DWQ,
+	IDXD_MDEV_TYPE_DSA_1_SWQ,
+	IDXD_MDEV_TYPE_IAX_1_SWQ,
 };
 
-#define IDXD_MDEV_TYPES 2
+#define IDXD_MDEV_WQ_TYPES	2
+#define IDXD_MDEV_TYPES		(IDXD_TYPE_MAX * IDXD_MDEV_WQ_TYPES)
 
 struct vdcm_idxd_type {
 	const char *name;
