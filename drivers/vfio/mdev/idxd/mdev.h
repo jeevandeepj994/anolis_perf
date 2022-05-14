@@ -156,6 +156,7 @@ static inline u8 vidxd_state(struct vdcm_idxd *vidxd)
 int idxd_mdev_host_init(struct idxd_device *idxd, const struct mdev_parent_ops *ops);
 void idxd_mdev_host_release(struct kref *kref);
 int idxd_mdev_get_pasid(struct mdev_device *mdev, u32 *pasid);
+int idxd_mdev_get_host_pasid(struct mdev_device *mdev, u32 gpasid, u32 *pasid);
 int vidxd_mmio_read(struct vdcm_idxd *vidxd, u64 pos, void *buf, unsigned int size);
 int vidxd_mmio_write(struct vdcm_idxd *vidxd, u64 pos, void *buf, unsigned int size);
 int vidxd_cfg_read(struct vdcm_idxd *vidxd, unsigned int pos, void *buf, unsigned int count);

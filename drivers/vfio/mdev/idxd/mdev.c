@@ -173,6 +173,34 @@ int idxd_mdev_get_pasid(struct mdev_device *mdev, u32 *pasid)
 	return -EFAULT;
 }
 
+int idxd_mdev_get_host_pasid(struct mdev_device *mdev, u32 gpasid, u32 *pasid)
+{
+	struct ioasid_set *ioasid_set;
+	struct mm_struct *mm;
+
+	mm = get_task_mm(current);
+	if (!mm) {
+		dev_warn(mdev_dev(mdev), "%s no mm!\n", __func__);
+		return -ENXIO;
+	}
+
+	ioasid_set = ioasid_find_mm_set(mm);
+	if (!ioasid_set) {
+		mmput(mm);
+		dev_warn(mdev_dev(mdev), "%s no ioasid_set!\n", __func__);
+		return -ENXIO;
+	}
+
+	*pasid = ioasid_find_by_spid(ioasid_set, gpasid, true);
+	mmput(mm);
+	if (*pasid == INVALID_IOASID) {
+		dev_warn(mdev_dev(mdev), "%s invalid ioasid by spid!\n", __func__);
+		return -ENXIO;
+	}
+
+	return 0;
+}
+
 static inline void reset_vconfig(struct vdcm_idxd *vidxd)
 {
 	u16 *devid = (u16 *)(vidxd->cfg + PCI_DEVICE_ID);
@@ -390,8 +418,17 @@ static int vidxd_resume_wq_state(struct vdcm_idxd *vidxd)
 			 * the default PASID in the WQ PASID register */
 			if (wq_dedicated(wq) && vwqcfg->mode_support) {
 				int wq_pasid, gpasid = -1;
-				rc = idxd_mdev_get_pasid(mdev, &wq_pasid);
-				priv = true;
+
+				if (vwqcfg->pasid_en) {
+					gpasid = vwqcfg->pasid;
+					priv = vwqcfg->priv;
+					rc = idxd_mdev_get_host_pasid(mdev,
+						gpasid, &wq_pasid);
+				} else {
+					rc = idxd_mdev_get_pasid(mdev,
+						&wq_pasid);
+					priv = true;
+				}
 
 				if (wq_pasid >= 0) {
 					u32 status;
@@ -493,7 +530,10 @@ static int vidxd_resume_ims_state(struct vdcm_idxd *vidxd,
 		paside = (perm_val >> 3) & 1;
 		gpasid = (perm_val >> 12) & 0xfffff;
 
-		rc = idxd_mdev_get_pasid(vidxd->ivdev.mdev, &pasid);
+		if (paside)
+			rc = idxd_mdev_get_host_pasid(vidxd->ivdev.mdev, gpasid, &pasid);
+		else
+			rc = idxd_mdev_get_pasid(vidxd->ivdev.mdev, &pasid);
 		if (rc < 0)
 			return rc;
 
@@ -514,6 +554,7 @@ static int vidxd_resubmit_pending_descs(struct vdcm_idxd *vidxd,
 		unsigned int *offset)
 {
 	struct vfio_pci_device *vdev = &vidxd->vfio_pdev;
+	struct mdev_device *mdev = vidxd->ivdev.mdev;
 	u8 *data_ptr = (u8 *)vdev->mig_pages;
 	struct idxd_virtual_wq *vwq;
 	struct idxd_wq *wq;
@@ -542,7 +583,30 @@ static int vidxd_resubmit_pending_descs(struct vdcm_idxd *vidxd,
 
 			pr_info("submitting a desc to WQ %d:%d ded %d\n",
 				i, wq->id, wq_dedicated(wq));
-			iosubmit_cmds512(portal, el.work_desc, 1);
+			if (wq_dedicated(wq)) {
+				iosubmit_cmds512(portal, el.work_desc, 1);
+			} else {
+				int rc;
+				struct dsa_hw_desc *hw =
+					(struct dsa_hw_desc *)el.work_desc;
+				int hpasid, gpasid = hw->pasid;
+
+				/* Translate the gpasid in the descriptor */
+				rc = idxd_mdev_get_host_pasid(mdev,
+						gpasid, &hpasid);
+				if (rc < 0) {
+					pr_info("gpasid->hpasid trans failed\n");
+					continue;
+				}
+				hw->pasid = hpasid;
+				/* FIXME: Allow enqcmds to retry a few times
+				 * before failing */
+				rc = enqcmds(portal, el.work_desc);
+				if (rc < 0) {
+					pr_info("%s: enqcmds failed\n", __func__);
+					continue;
+				}
+			}
 		}
 	}
 
@@ -1397,6 +1461,17 @@ static int idxd_vdcm_msix_set_vector_signal(struct vdcm_idxd *vidxd, int vector,
 		}
 
 		dev_dbg(dev, "%s: pasid: %d\n", __func__, pasid);
+	} else {
+		u32 gpasid;
+
+		gpasid = (msix_perm & GENMASK(31, 12)) >> 12;
+		rc = idxd_mdev_get_host_pasid(vidxd->ivdev.mdev, gpasid, &pasid);
+		if (rc < 0) {
+			dev_warn(dev, "%s guest pasid %u translate failure\n", __func__, gpasid);
+			goto err;
+		}
+		dev_dbg(dev, "%s: guest pasid: %u host pasid: %u\n",
+			__func__, gpasid, pasid);
 	}
 
 	auxval = ims_ctrl_pasid_aux(pasid, true);
