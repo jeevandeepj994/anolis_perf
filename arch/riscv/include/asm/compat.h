@@ -126,4 +126,10 @@ static inline void cregs_to_regs(struct compat_user_regs_struct *cregs,
 	regs->t6	= (unsigned long) cregs->t6;
 };
 
+#define compat_user_stack_pointer() (user_stack_pointer(task_pt_regs(current)))
+static inline void __user *arch_compat_alloc_user_space(long len)
+{
+	return (void __user *)compat_user_stack_pointer() - len;
+}
+
 #endif /* __ASM_COMPAT_H */
