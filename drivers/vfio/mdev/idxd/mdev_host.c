@@ -6,6 +6,8 @@
 #include <linux/pci.h>
 #include <linux/iommu.h>
 #include <linux/mdev.h>
+#include <linux/irqdomain.h>
+#include <linux/irqchip/irq-ims-msi.h>
 #include <uapi/linux/idxd.h>
 #include "idxd.h"
 #include "mdev.h"
@@ -15,6 +17,7 @@ extern const struct vfio_pci_regops vfio_pci_dma_fault_regops;
 int idxd_mdev_host_init(struct idxd_device *idxd, const struct mdev_parent_ops *ops)
 {
 	struct device *dev = &idxd->pdev->dev;
+	struct ims_array_info ims_info;
 	int rc;
 
 	if (!test_bit(IDXD_FLAG_IMS_SUPPORTED, &idxd->flags))
@@ -26,11 +29,19 @@ int idxd_mdev_host_init(struct idxd_device *idxd, const struct mdev_parent_ops *
 		return rc;
 	}
 
+	ims_info.max_slots = idxd->ims_size;
+	ims_info.slots = idxd->reg_base + idxd->ims_offset;
+	idxd->ims_domain = pci_ims_array_create_msi_irq_domain(idxd->pdev, &ims_info);
+	if (!idxd->ims_domain) {
+		dev_warn(dev, "Fail to acquire IMS domain\n");
+		rc = -ENODEV;
+		goto fail_exit;
+	}
+
 	rc = mdev_register_device(dev, ops);
 	if (rc < 0) {
 		dev_warn(dev, "mdev register failed\n");
-		iommu_dev_disable_feature(dev, IOMMU_DEV_FEAT_AUX);
-		return rc;
+		goto fail_register;
 	}
 
 	mutex_init(&idxd->vfio_pdev.igate);
@@ -38,13 +49,19 @@ int idxd_mdev_host_init(struct idxd_device *idxd, const struct mdev_parent_ops *
 	rc = vfio_pci_dma_fault_init(&idxd->vfio_pdev, true);
 	if (rc < 0) {
 		dev_err(dev, "dma fault region init failed\n");
-		iommu_dev_disable_feature(dev, IOMMU_DEV_FEAT_AUX);
-		mdev_unregister_device(dev);
-		return rc;
+		goto fail_init;
 	}
 
 	idxd->mdev_host_init = true;
 	return 0;
+
+fail_init:
+	mdev_unregister_device(dev);
+fail_register:
+	irq_domain_remove(idxd->ims_domain);
+fail_exit:
+	iommu_dev_disable_feature(dev, IOMMU_DEV_FEAT_AUX);
+	return rc;
 }
 
 void idxd_mdev_host_release(struct kref *kref)
@@ -73,6 +90,7 @@ void idxd_mdev_host_release(struct kref *kref)
 	kfree(vfio_pdev->ext_irqs);
 	vfio_pdev->ext_irqs = NULL;
 
+	irq_domain_remove(idxd->ims_domain);
 	mdev_unregister_device(dev);
 	iommu_dev_disable_feature(dev, IOMMU_DEV_FEAT_AUX);
 	idxd->mdev_host_init = false;

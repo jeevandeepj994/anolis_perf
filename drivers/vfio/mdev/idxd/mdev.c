@@ -685,6 +685,7 @@ static struct vdcm_idxd *vdcm_vidxd_create(struct idxd_device *idxd, struct mdev
 					   struct vdcm_idxd_type *type)
 {
 	struct vdcm_idxd *vidxd;
+	struct device *dev = mdev_dev(mdev);
 	struct idxd_wq *wq = NULL;
 	int rc;
 
@@ -705,6 +706,7 @@ static struct vdcm_idxd *vdcm_vidxd_create(struct idxd_device *idxd, struct mdev
 	mdev_set_drvdata(mdev, vidxd);
 	vidxd->type = type;
 	vidxd->num_wqs = VIDXD_MAX_WQS;
+	dev_set_msi_domain(dev, idxd->ims_domain);
 	mutex_init(&vidxd->ivdev.ioasid_lock);
 	INIT_LIST_HEAD(&vidxd->ivdev.mm_list);
 
@@ -714,6 +716,7 @@ static struct vdcm_idxd *vdcm_vidxd_create(struct idxd_device *idxd, struct mdev
 	vidxd->vfio_pdev.pdev = idxd->pdev;
 	rc = vfio_pci_dma_fault_init(&vidxd->vfio_pdev, false);
 	if (rc < 0) {
+		dev_err(dev, "dma fault region init failed\n");
 		kfree(vidxd);
 		goto err;
 	}
