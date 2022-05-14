@@ -392,6 +392,9 @@ static int _pci_cfg_bar_write(struct vdcm_idxd *vidxd, unsigned int offset, void
 int vidxd_cfg_write(struct vdcm_idxd *vidxd, unsigned int pos, void *buf, unsigned int size)
 {
 	struct device *dev = &vidxd->idxd->pdev->dev;
+	u8 *cfg = vidxd->cfg;
+	u32 offset = pos & 0xfff;
+	u64 val;
 
 	if (size > 4)
 		return -EINVAL;
@@ -425,6 +428,64 @@ int vidxd_cfg_write(struct vdcm_idxd *vidxd, unsigned int pos, void *buf, unsign
 		if (!IS_ALIGNED(pos, 4))
 			return -EINVAL;
 		return _pci_cfg_bar_write(vidxd, pos, buf, size);
+
+	case VIDXD_ATS_OFFSET + 4:
+		if (size < 4)
+			break;
+		offset += 2;
+		buf = buf + 2;
+		size -= 2;
+		fallthrough;
+
+	case VIDXD_ATS_OFFSET + 6:
+		memcpy(&cfg[offset], buf, size);
+		break;
+
+	case VIDXD_PRS_OFFSET + 4: {
+		u8 old_val, new_val;
+
+		val = get_reg_val(buf, 1);
+		old_val = cfg[VIDXD_PRS_OFFSET + 4];
+		new_val = val & 1;
+
+		cfg[offset] = new_val;
+		if (old_val == 0 && new_val == 1) {
+			/*
+			 * Clear Stopped, Response Failure,
+			 * and Unexpected Response.
+			 */
+			*(u16 *)&cfg[VIDXD_PRS_OFFSET + 6] &= ~(u16)(0x0103);
+		}
+
+		if (size < 4)
+			break;
+
+		offset += 2;
+		buf = (u8 *)buf + 2;
+		size -= 2;
+		fallthrough;
+	}
+
+	case VIDXD_PRS_OFFSET + 6:
+		cfg[offset] &= ~(get_reg_val(buf, 1) & 3);
+		break;
+
+	case VIDXD_PRS_OFFSET + 12 ... VIDXD_PRS_OFFSET + 15:
+		memcpy(&cfg[offset], buf, size);
+		break;
+
+	case VIDXD_PASID_OFFSET + 4:
+		if (size < 4)
+			break;
+		offset += 2;
+		buf = buf + 2;
+		size -= 2;
+		fallthrough;
+
+	case VIDXD_PASID_OFFSET + 6:
+		cfg[offset] = get_reg_val(buf, 1) & 5;
+		break;
+
 	default:
 		_pci_cfg_mem_write(vidxd, pos, buf, size);
 	}
