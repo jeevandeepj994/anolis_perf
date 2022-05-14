@@ -40,8 +40,22 @@ static u64 idxd_pci_config[] = {
 	0x0000000000000000ULL,
 	0x0000000000000000ULL,
 	0x0000000000000000ULL,
+	0x0070001000000000ULL,
 	0x0000000000000000ULL,
 	0x0000000000000000ULL,
+	0x0000000000000000ULL,
+};
+
+static u64 idxd_pci_ext_cap[] = {
+	0x000000611101000fULL, /* ATS capability */
+	0x0000000000000000ULL,
+	0x8100000012010013ULL, /* Page Request capability */
+	0x0000000000000001ULL,
+	0x000014040001001bULL, /* PASID capability */
+	0x0000000000000000ULL,
+	0x0181808600010023ULL, /* Scalable IOV capability */
+	0x0000000100000005ULL,
+	0x0000000000000001ULL,
 	0x0000000000000000ULL,
 };
 
@@ -171,6 +185,8 @@ static inline void reset_vconfig(struct vdcm_idxd *vidxd)
 		*devid = PCI_DEVICE_ID_INTEL_DSA_SPR0;
 	else if (idxd->data->type == IDXD_TYPE_IAX)
 		*devid = PCI_DEVICE_ID_INTEL_IAX_SPR0;
+
+	memcpy(vidxd->cfg + 0x100, idxd_pci_ext_cap, sizeof(idxd_pci_ext_cap));
 }
 
 static inline void reset_vmmio(struct vdcm_idxd *vidxd)
