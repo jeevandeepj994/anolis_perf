@@ -57,6 +57,9 @@ struct idxd_ioasid_work {
 	u32 host_pasid;
 };
 
+static const char idxd_dsa_1dwq_name[] = "dsa-1dwq-v1";
+static const char idxd_iax_1dwq_name[] = "iax-1dwq-v1";
+
 static int idxd_vdcm_get_irq_count(struct mdev_device *mdev, int type)
 {
 	struct vdcm_idxd *vidxd = mdev_get_drvdata(mdev);
@@ -630,6 +633,52 @@ static struct vfio_pci_migops vidxd_migops = {
 	.state_change	= vidxd_migration_state_change,
 };
 
+static struct idxd_wq *find_any_dwq(struct idxd_device *idxd, struct vdcm_idxd_type *type)
+{
+	int i;
+	struct idxd_wq *wq;
+	unsigned long flags;
+
+	switch (type->type) {
+	case IDXD_MDEV_TYPE_DSA_1_DWQ:
+		if (idxd->data->type != IDXD_TYPE_DSA)
+			return NULL;
+		break;
+	case IDXD_MDEV_TYPE_IAX_1_DWQ:
+		if (idxd->data->type != IDXD_TYPE_IAX)
+			return NULL;
+		break;
+	default:
+		return NULL;
+	}
+
+	spin_lock_irqsave(&idxd->dev_lock, flags);
+	for (i = 0; i < idxd->max_wqs; i++) {
+		wq = idxd->wqs[i];
+
+		if (wq->state != IDXD_WQ_ENABLED && wq->state != IDXD_WQ_LOCKED)
+			continue;
+
+		if (!is_idxd_wq_mdev(wq))
+			continue;
+
+		if (!wq_dedicated(wq))
+			continue;
+
+		if (idxd_wq_refcount(wq) != 0)
+			continue;
+
+		spin_unlock_irqrestore(&idxd->dev_lock, flags);
+		mutex_lock(&wq->wq_lock);
+		idxd_wq_get(wq);
+		mutex_unlock(&wq->wq_lock);
+		return wq;
+	}
+
+	spin_unlock_irqrestore(&idxd->dev_lock, flags);
+	return NULL;
+}
+
 extern const struct vfio_pci_regops vfio_pci_dma_fault_regops;
 
 static struct vdcm_idxd *vdcm_vidxd_create(struct idxd_device *idxd, struct mdev_device *mdev,
@@ -639,8 +688,7 @@ static struct vdcm_idxd *vdcm_vidxd_create(struct idxd_device *idxd, struct mdev
 	struct idxd_wq *wq = NULL;
 	int rc;
 
-	/* PLACEHOLDER, wq matching comes later */
-
+	wq = find_any_dwq(idxd, type);
 	if (!wq)
 		return ERR_PTR(-ENODEV);
 
@@ -690,7 +738,14 @@ static struct vdcm_idxd *vdcm_vidxd_create(struct idxd_device *idxd, struct mdev
 }
 
 static struct vdcm_idxd_type idxd_mdev_types[IDXD_MDEV_TYPES] = {
-
+	{
+		.name = idxd_dsa_1dwq_name,
+		.type = IDXD_MDEV_TYPE_DSA_1_DWQ,
+	},
+	{
+		.name = idxd_iax_1dwq_name,
+		.type = IDXD_MDEV_TYPE_IAX_1_DWQ,
+	},
 };
 
 static struct vdcm_idxd_type *idxd_vdcm_get_type(struct mdev_device *mdev)
@@ -1960,7 +2015,101 @@ static void idxd_vdcm_mdev_request(struct vfio_device *vdev, unsigned int count)
 	mutex_unlock(&vfio_pdev->igate);
 }
 
+static ssize_t name_show(struct mdev_type *mtype, struct mdev_type_attribute *attr, char *buf)
+{
+	return sysfs_emit(buf, "%s\n", idxd_mdev_types[mtype_get_type_group_id(mtype)].name);
+}
+static MDEV_TYPE_ATTR_RO(name);
+
+static int find_available_mdev_instances(struct idxd_device *idxd, struct vdcm_idxd_type *type)
+{
+	int count = 0, i;
+	unsigned long flags;
+
+	switch (type->type) {
+	case IDXD_MDEV_TYPE_DSA_1_DWQ:
+		if (idxd->data->type != IDXD_TYPE_DSA)
+			return 0;
+		break;
+	case IDXD_MDEV_TYPE_IAX_1_DWQ:
+		if (idxd->data->type != IDXD_TYPE_IAX)
+			return 0;
+		break;
+	default:
+		return 0;
+	}
+
+	spin_lock_irqsave(&idxd->dev_lock, flags);
+	for (i = 0; i < idxd->max_wqs; i++) {
+		struct idxd_wq *wq;
+
+		wq = idxd->wqs[i];
+
+		if (wq->state != IDXD_WQ_ENABLED)
+			continue;
+
+		if (!is_idxd_wq_mdev(wq))
+			continue;
+
+		switch (type->type) {
+		case IDXD_MDEV_TYPE_DSA_1_DWQ:
+		case IDXD_MDEV_TYPE_IAX_1_DWQ:
+			if (wq_dedicated(wq) && !idxd_wq_refcount(wq))
+				count++;
+			break;
+		default:
+			return 0;
+		}
+	}
+	spin_unlock_irqrestore(&idxd->dev_lock, flags);
+
+	return count;
+}
+
+static ssize_t available_instances_show(struct mdev_type *mtype,
+					struct mdev_type_attribute *attr,
+					char *buf)
+{
+	struct device *dev = mtype_get_parent_dev(mtype);
+	struct idxd_device *idxd = dev_get_drvdata(dev);
+	int count;
+	struct vdcm_idxd_type *type;
+
+	type = &idxd_mdev_types[mtype_get_type_group_id(mtype)];
+	count = find_available_mdev_instances(idxd, type);
+
+	return sprintf(buf, "%d\n", count);
+}
+static MDEV_TYPE_ATTR_RO(available_instances);
+
+static ssize_t device_api_show(struct mdev_type *mtype, struct mdev_type_attribute *attr,
+			       char *buf)
+{
+	return sprintf(buf, "%s\n", VFIO_DEVICE_API_PCI_STRING);
+}
+static MDEV_TYPE_ATTR_RO(device_api);
+
+static struct attribute *idxd_mdev_types_attrs[] = {
+	&mdev_type_attr_name.attr,
+	&mdev_type_attr_device_api.attr,
+	&mdev_type_attr_available_instances.attr,
+	NULL,
+};
+
+static struct attribute_group idxd_mdev_type_dsa_group0 = {
+	.name = idxd_dsa_1dwq_name,
+	.attrs = idxd_mdev_types_attrs,
+};
+
+static struct attribute_group idxd_mdev_type_iax_group0 = {
+	.name = idxd_iax_1dwq_name,
+	.attrs = idxd_mdev_types_attrs,
+};
+
+
 static struct attribute_group *idxd_mdev_type_groups[] = {
+	&idxd_mdev_type_dsa_group0,
+	&idxd_mdev_type_iax_group0,
 	NULL,
 };
 
