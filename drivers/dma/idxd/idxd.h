@@ -316,6 +316,7 @@ struct idxd_device {
 	struct idxd_dma_dev *idxd_dma;
 	struct workqueue_struct *wq;
 	struct work_struct work;
+	struct irq_domain *ims_domain;
 	struct vfio_pci_device vfio_pdev;
 	struct idxd_pmu *idxd_pmu;
 	struct kref mdev_kref;
