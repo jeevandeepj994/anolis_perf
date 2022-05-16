@@ -353,8 +353,8 @@ static __always_inline void setup_uintr(struct cpuinfo_x86 *c)
 	if (!cpu_has_xfeatures(XFEATURE_MASK_UINTR, NULL)) {
 		pr_info_once("x86: User Interrupts (UINTR) not enabled. XSAVE support for UINTR is missing.\n");
 		goto clear_uintr_cap;
-	}	
-	
+	}
+
 	/*
 	 * User Interrupts currently doesn't support PTI. For processors that
 	 * support User interrupts PTI in auto mode will default to off.  Need
@@ -1038,6 +1038,9 @@ void get_cpu_cap(struct cpuinfo_x86 *c)
 
 	if (c->extended_cpuid_level >= 0x8000000a)
 		c->x86_capability[CPUID_8000_000A_EDX] = cpuid_edx(0x8000000a);
+
+	if (c->extended_cpuid_level >= 0x8000001f)
+		c->x86_capability[CPUID_8000_001F_EAX] = cpuid_eax(0x8000001f);
 
 	init_scattered_cpuid_features(c);
 	init_speculation_control(c);
