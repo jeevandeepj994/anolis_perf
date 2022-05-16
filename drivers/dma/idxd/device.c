@@ -1347,7 +1347,6 @@ void idxd_wq_free_irq(struct idxd_wq *wq)
 	struct idxd_device *idxd = wq->idxd;
 	struct idxd_irq_entry *ie = &wq->ie;
 
-	synchronize_irq(ie->vector);
 	free_irq(ie->vector, ie);
 	idxd_flush_pending_descs(ie);
 	if (idxd->request_int_handles)
