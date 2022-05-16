@@ -159,7 +159,7 @@
 #define FUSE_KERNEL_VERSION 7
 
 /** Minor version number of this interface */
-#define FUSE_KERNEL_MINOR_VERSION 27
+#define FUSE_KERNEL_MINOR_VERSION 31
 
 /** The node ID of the root inode */
 #define FUSE_ROOT_ID 1
