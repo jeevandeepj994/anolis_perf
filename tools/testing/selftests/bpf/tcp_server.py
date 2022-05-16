@@ -39,9 +39,8 @@ HostName = socket.gethostname()
 
 # create passive socket
 serverSocket = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
-host = socket.gethostname()
 
-try: serverSocket.bind((host, 0))
+try: serverSocket.bind(('::1', 0))
 except socket.error as msg:
     print('bind fails: ' + str(msg))
 
