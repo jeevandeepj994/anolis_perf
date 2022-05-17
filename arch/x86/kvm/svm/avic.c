@@ -335,7 +335,7 @@ int avic_incomplete_ipi_interception(struct vcpu_svm *svm)
 		kvm_for_each_vcpu(i, vcpu, kvm) {
 			bool m = kvm_apic_match_dest(vcpu, apic,
 						     icrl & APIC_SHORT_MASK,
-						     GET_APIC_DEST_FIELD(icrh),
+						     GET_XAPIC_DEST_FIELD(icrh),
 						     icrl & APIC_DEST_MASK);
 
 			if (m && !avic_vcpu_is_running(vcpu))
