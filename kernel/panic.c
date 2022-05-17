@@ -253,6 +253,10 @@ void panic(const char *fmt, ...)
 	 */
 	if (!_crash_kexec_post_notifiers) {
 		printk_safe_flush_on_panic();
+
+		if (in_nmi() && console_trylock())
+			console_unlock();
+
 		__crash_kexec(NULL);
 
 		/*
