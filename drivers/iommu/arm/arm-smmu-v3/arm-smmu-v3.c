@@ -88,6 +88,17 @@ static struct arm_smmu_option_prop arm_smmu_options[] = {
 	{ 0, NULL},
 };
 
+#ifdef CONFIG_ARM_SMMU_V3_POLLING_EVT
+static bool enable_evtpolling;
+
+static int __init arm_smmu_evt_polling_setup(char *str)
+{
+	enable_evtpolling = true;
+	return 1;
+}
+__setup("enable_evtpolling", arm_smmu_evt_polling_setup);
+#endif
+
 static inline void __iomem *arm_smmu_page1_fixup(unsigned long offset,
 						 struct arm_smmu_device *smmu)
 {
@@ -1355,11 +1366,9 @@ static int arm_smmu_init_l2_strtab(struct arm_smmu_device *smmu, u32 sid)
 	return 0;
 }
 
-/* IRQ and event handlers */
-static irqreturn_t arm_smmu_evtq_thread(int irq, void *dev)
+static void arm_smmu_evtq_read_events(struct arm_smmu_device *smmu)
 {
 	int i;
-	struct arm_smmu_device *smmu = dev;
 	struct arm_smmu_queue *q = &smmu->evtq.q;
 	struct arm_smmu_ll_queue *llq = &q->llq;
 	u64 evt[EVTQ_ENT_DWORDS];
@@ -1387,6 +1396,15 @@ static irqreturn_t arm_smmu_evtq_thread(int irq, void *dev)
 	/* Sync our overflow flag, as we believe we're up to speed */
 	llq->cons = Q_OVF(llq->prod) | Q_WRP(llq, llq->cons) |
 		    Q_IDX(llq, llq->cons);
+}
+
+/* IRQ and event handlers */
+static irqreturn_t arm_smmu_evtq_thread(int irq, void *dev)
+{
+	struct arm_smmu_device *smmu = dev;
+
+	arm_smmu_evtq_read_events(smmu);
+
 	return IRQ_HANDLED;
 }
 
@@ -1514,6 +1532,40 @@ static irqreturn_t arm_smmu_combined_irq_handler(int irq, void *dev)
 	arm_smmu_gerror_handler(irq, dev);
 	return IRQ_WAKE_THREAD;
 }
+
+#ifdef CONFIG_ARM_SMMU_V3_POLLING_EVT
+static int arm_smmu_evt_polling_thread(void *p)
+{
+	struct arm_smmu_device *smmu = (struct arm_smmu_device *)p;
+
+	do {
+		arm_smmu_evtq_read_events(smmu);
+		schedule_timeout(10 * HZ);
+	} while (!kthread_should_stop());
+
+	return 0;
+}
+
+static int arm_smmu_init_event_polling(struct arm_smmu_device *smmu)
+{
+	int ret = 0;
+	struct task_struct *evt_polling = NULL;
+
+	if (smmu->features & ARM_SMMU_FEAT_STALLS &&
+	    !(smmu->features & ARM_SMMU_FEAT_STALL_FORCE)) {
+		evt_polling = kthread_run(arm_smmu_evt_polling_thread, smmu, "evtpolld");
+		if (IS_ERR(evt_polling)) {
+			ret = PTR_ERR(evt_polling);
+			pr_err("smmu init the event polling failed ret:%d\n", ret);
+			return ret;
+		}
+	}
+
+	smmu->evt_polling = evt_polling;
+
+	return ret;
+}
+#endif
 
 static void
 arm_smmu_atc_inv_to_cmd(int ssid, unsigned long iova, size_t size,
@@ -3580,6 +3632,14 @@ static int arm_smmu_device_probe(struct platform_device *pdev)
 	if (ret)
 		return ret;
 
+#ifdef CONFIG_ARM_SMMU_V3_POLLING_EVT
+	if (enable_evtpolling) {
+		ret = arm_smmu_init_event_polling(smmu);
+		if (ret)
+			dev_warn(dev, "Failed to run the evt polling thread ret:%d\n", ret);
+	}
+#endif
+
 	/* And we're up. Go go go! */
 	ret = iommu_device_sysfs_add(&smmu->iommu, dev, NULL,
 				     "smmu3.%pa", &ioaddr);
@@ -3602,6 +3662,12 @@ static int arm_smmu_device_remove(struct platform_device *pdev)
 {
 	struct arm_smmu_device *smmu = platform_get_drvdata(pdev);
 
+#ifdef CONFIG_ARM_SMMU_V3_POLLING_EVT
+	if (enable_evtpolling && smmu->evt_polling) {
+		kthread_stop(smmu->evt_polling);
+		smmu->evt_polling = NULL;
+	}
+#endif
 	arm_smmu_set_bus_ops(NULL);
 	iommu_device_unregister(&smmu->iommu);
 	iommu_device_sysfs_remove(&smmu->iommu);
