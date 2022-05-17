@@ -813,8 +813,8 @@ struct fuse_conn {
 	/* Delete dentries that have gone stale */
 	unsigned int delete_stale:1;
 
-	/* Does the filesystem support per-file DAX? */
-	unsigned int perfile_dax:1;
+	/* Does the filesystem support per inode DAX? */
+	unsigned int inode_dax:1;
 
 	/* Does the filesystem has its own magic? */
 	unsigned int conn_fs_magic:1;
