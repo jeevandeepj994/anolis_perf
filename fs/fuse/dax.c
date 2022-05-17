@@ -1509,7 +1509,7 @@ static bool fuse_should_enable_dax(struct inode *inode, unsigned int flags)
 		return true;
 
 	WARN_ON_ONCE(dax_mode != FUSE_DAX_INODE);
-	return fc->perfile_dax && (flags & FUSE_ATTR_DAX);
+	return fc->inode_dax && (flags & FUSE_ATTR_DAX);
 }
 
 void fuse_dax_inode_init(struct inode *inode, unsigned int flags)
@@ -1526,7 +1526,7 @@ void fuse_dax_dontcache(struct inode *inode, bool newdax)
 	struct fuse_conn *fc = get_fuse_conn(inode);
 
 	if (fc->dax_mode == FUSE_DAX_INODE &&
-	    fc->perfile_dax && (!!IS_DAX(inode) != newdax))
+	    fc->inode_dax && (!!IS_DAX(inode) != newdax))
 		d_mark_dontcache(inode);
 }
 

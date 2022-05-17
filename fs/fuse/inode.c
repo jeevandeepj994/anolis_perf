@@ -659,7 +659,7 @@ static int fuse_show_options(struct seq_file *m, struct dentry *root)
 		seq_puts(m, ",dax=always");
 	else if (fc->dax_mode == FUSE_DAX_NEVER)
 		seq_puts(m, ",dax=never");
-	else if ((fc->dax_mode == FUSE_DAX_INODE) && fc->perfile_dax)
+	else if ((fc->dax_mode == FUSE_DAX_INODE) && fc->inode_dax)
 		seq_puts(m, ",dax=inode");
 #endif
 
@@ -984,66 +984,68 @@ static void process_init_reply(struct fuse_conn *fc, struct fuse_req *req)
 		process_init_limits(fc, arg);
 
 		if (arg->minor >= 6) {
+			u64 flags = arg->flags | (u64) arg->flags2 << 32;
+
 			ra_pages = arg->max_readahead / PAGE_SIZE;
-			if (arg->flags & FUSE_ASYNC_READ)
+			if (flags & FUSE_ASYNC_READ)
 				fc->async_read = 1;
-			if (!(arg->flags & FUSE_POSIX_LOCKS))
+			if (!(flags & FUSE_POSIX_LOCKS))
 				fc->no_lock = 1;
 			if (arg->minor >= 17) {
-				if (!(arg->flags & FUSE_FLOCK_LOCKS))
+				if (!(flags & FUSE_FLOCK_LOCKS))
 					fc->no_flock = 1;
 			} else {
-				if (!(arg->flags & FUSE_POSIX_LOCKS))
+				if (!(flags & FUSE_POSIX_LOCKS))
 					fc->no_flock = 1;
 			}
-			if (arg->flags & FUSE_ATOMIC_O_TRUNC)
+			if (flags & FUSE_ATOMIC_O_TRUNC)
 				fc->atomic_o_trunc = 1;
 			if (arg->minor >= 9) {
 				/* LOOKUP has dependency on proto version */
-				if (arg->flags & FUSE_EXPORT_SUPPORT)
+				if (flags & FUSE_EXPORT_SUPPORT)
 					fc->export_support = 1;
 			}
-			if (arg->flags & FUSE_BIG_WRITES)
+			if (flags & FUSE_BIG_WRITES)
 				fc->big_writes = 1;
-			if (arg->flags & FUSE_DONT_MASK)
+			if (flags & FUSE_DONT_MASK)
 				fc->dont_mask = 1;
-			if (arg->flags & FUSE_AUTO_INVAL_DATA)
+			if (flags & FUSE_AUTO_INVAL_DATA)
 				fc->auto_inval_data = 1;
-			if (arg->flags & FUSE_DO_READDIRPLUS) {
+			if (flags & FUSE_DO_READDIRPLUS) {
 				fc->do_readdirplus = 1;
-				if (arg->flags & FUSE_READDIRPLUS_AUTO)
+				if (flags & FUSE_READDIRPLUS_AUTO)
 					fc->readdirplus_auto = 1;
 			}
-			if (arg->flags & FUSE_ASYNC_DIO)
+			if (flags & FUSE_ASYNC_DIO)
 				fc->async_dio = 1;
-			if (arg->flags & FUSE_WRITEBACK_CACHE)
+			if (flags & FUSE_WRITEBACK_CACHE)
 				fc->writeback_cache = 1;
-			if (arg->flags & FUSE_PARALLEL_DIROPS)
+			if (flags & FUSE_PARALLEL_DIROPS)
 				fc->parallel_dirops = 1;
-			if (arg->flags & FUSE_HANDLE_KILLPRIV)
+			if (flags & FUSE_HANDLE_KILLPRIV)
 				fc->handle_killpriv = 1;
 			if (arg->time_gran && arg->time_gran <= 1000000000)
 				fc->sb->s_time_gran = arg->time_gran;
-			if ((arg->flags & FUSE_POSIX_ACL)) {
+			if ((flags & FUSE_POSIX_ACL)) {
 				fc->default_permissions = 1;
 				fc->posix_acl = 1;
 				fc->sb->s_xattr = fuse_acl_xattr_handlers;
 			}
-			if (arg->flags & FUSE_CACHE_SYMLINKS)
+			if (flags & FUSE_CACHE_SYMLINKS)
 				fc->cache_symlinks = 1;
-			if (arg->flags & FUSE_ABORT_ERROR)
+			if (flags & FUSE_ABORT_ERROR)
 				fc->abort_err = 1;
-			if (arg->flags & FUSE_MAX_PAGES) {
+			if (flags & FUSE_MAX_PAGES) {
 				fc->max_pages =
 					min_t(unsigned int, fc->max_pages_limit,
 					max_t(unsigned int, arg->max_pages, 1));
 			}
 			if (IS_ENABLED(CONFIG_FUSE_DAX)) {
-				if (arg->flags & FUSE_MAP_ALIGNMENT &&
+				if (flags & FUSE_MAP_ALIGNMENT &&
 				    !fuse_dax_check_alignment(fc, arg->map_alignment))
 					ok = false;
-				if (arg->flags & FUSE_PERFILE_DAX)
-					fc->perfile_dax = 1;
+				if (flags & FUSE_HAS_INODE_DAX)
+					fc->inode_dax = 1;
 
 			}
 		} else {
@@ -1072,24 +1074,29 @@ static void process_init_reply(struct fuse_conn *fc, struct fuse_req *req)
 void fuse_send_init(struct fuse_conn *fc, struct fuse_req *req)
 {
 	struct fuse_init_in *arg = &req->misc.init_in;
+	u64 flags;
 
 	arg->major = FUSE_KERNEL_VERSION;
 	arg->minor = FUSE_KERNEL_MINOR_VERSION;
 	arg->max_readahead = fc->sb->s_bdi->ra_pages * PAGE_SIZE;
-	arg->flags |= FUSE_ASYNC_READ | FUSE_POSIX_LOCKS | FUSE_ATOMIC_O_TRUNC |
+	flags = FUSE_ASYNC_READ | FUSE_POSIX_LOCKS | FUSE_ATOMIC_O_TRUNC |
 		FUSE_EXPORT_SUPPORT | FUSE_BIG_WRITES | FUSE_DONT_MASK |
 		FUSE_SPLICE_WRITE | FUSE_SPLICE_MOVE | FUSE_SPLICE_READ |
 		FUSE_FLOCK_LOCKS | FUSE_HAS_IOCTL_DIR | FUSE_AUTO_INVAL_DATA |
 		FUSE_DO_READDIRPLUS | FUSE_READDIRPLUS_AUTO | FUSE_ASYNC_DIO |
 		FUSE_WRITEBACK_CACHE | FUSE_NO_OPEN_SUPPORT |
 		FUSE_PARALLEL_DIROPS | FUSE_HANDLE_KILLPRIV | FUSE_POSIX_ACL |
-		FUSE_ABORT_ERROR | FUSE_MAX_PAGES | FUSE_CACHE_SYMLINKS;
+		FUSE_ABORT_ERROR | FUSE_MAX_PAGES | FUSE_CACHE_SYMLINKS |
+		FUSE_INIT_EXT;
 #ifdef CONFIG_FUSE_DAX
 	if (fc->dax)
-		arg->flags |= FUSE_MAP_ALIGNMENT;
+		flags |= FUSE_MAP_ALIGNMENT;
 	if (fc->dax_mode == FUSE_DAX_INODE)
-		arg->flags |= FUSE_PERFILE_DAX;
+		flags |= FUSE_HAS_INODE_DAX;
 #endif
+	arg->flags = flags;
+	arg->flags2 = flags >> 32;
+
 	req->in.h.opcode = FUSE_INIT;
 	req->in.numargs = 1;
 	req->in.args[0].size = sizeof(*arg);
