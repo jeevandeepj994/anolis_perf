@@ -87,6 +87,8 @@ struct iommu_domain {
 	void *handler_token;
 	struct iommu_domain_geometry geometry;
 	void *iova_cookie;
+	ioasid_t dma_pasid;		/* Used for DMA requests with PASID */
+	atomic_t dma_pasid_users;
 };
 
 enum iommu_cap {
