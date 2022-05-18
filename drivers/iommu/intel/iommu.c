@@ -1609,6 +1609,7 @@ static void iommu_flush_dev_iotlb(struct dmar_domain *domain,
 	u16 sid, qdep;
 	unsigned long flags;
 	struct device_domain_info *info;
+	ioasid_t pasid;
 
 	if (!domain->has_iotlb_device)
 		return;
@@ -1620,6 +1621,12 @@ static void iommu_flush_dev_iotlb(struct dmar_domain *domain,
 
 		sid = info->bus << 8 | info->devfn;
 		qdep = info->ats_qdep;
+		pasid = iommu_get_pasid_from_domain(info->dev,
+						&info->domain->domain);
+		if (pasid != INVALID_IOASID) {
+			qi_flush_dev_iotlb_pasid(info->iommu, sid, info->pfsid,
+						 pasid, qdep, addr, mask);
+		}
 		qi_flush_dev_iotlb(info->iommu, sid, info->pfsid,
 				qdep, addr, mask);
 	}
@@ -1648,6 +1655,7 @@ static void iommu_flush_iotlb_psi(struct intel_iommu *iommu,
 	unsigned int mask = ilog2(__roundup_pow_of_two(pages));
 	uint64_t addr = (uint64_t)pfn << VTD_PAGE_SHIFT;
 	u16 did = domain->iommu_did[iommu->seq_id];
+	struct iommu_domain *iommu_domain = &domain->domain;
 
 	BUG_ON(pages == 0);
 
@@ -1656,6 +1664,10 @@ static void iommu_flush_iotlb_psi(struct intel_iommu *iommu,
 
 	if (domain_use_first_level(domain)) {
 		domain_flush_piotlb(iommu, domain, addr, pages, ih);
+		/* flush additional kernel DMA PASIDs attached */
+		if (iommu_domain->dma_pasid)
+			qi_flush_piotlb(iommu, did, iommu_domain->dma_pasid,
+					addr, pages, ih);
 	} else {
 		/*
 		 * Fallback to domain selective flush if no PSI support or
@@ -4624,6 +4636,7 @@ static void __dmar_remove_one_dev_info(struct device_domain_info *info)
 	struct dmar_domain *domain;
 	struct intel_iommu *iommu;
 	unsigned long flags;
+	ioasid_t pasid;
 
 	assert_spin_locked(&device_domain_lock);
 
@@ -4634,9 +4647,15 @@ static void __dmar_remove_one_dev_info(struct device_domain_info *info)
 	domain = info->domain;
 
 	if (info->dev) {
-		if (dev_is_pci(info->dev) && sm_supported(iommu))
+		if (dev_is_pci(info->dev) && sm_supported(iommu)) {
 			intel_pasid_tear_down_entry(iommu, info->dev,
 					PASID_RID2PASID, false);
+			pasid = iommu_get_pasid_from_domain(info->dev,
+							&info->domain->domain);
+			if (pasid != INVALID_IOASID)
+				intel_pasid_tear_down_entry(iommu, info->dev,
+							    pasid, false);
+		}
 
 		iommu_disable_dev_iotlb(info);
 		if (!dev_is_real_dma_subdevice(info->dev))
@@ -6251,6 +6270,56 @@ out:
 	return ret;
 }
 
+static int intel_iommu_attach_dev_pasid(struct iommu_domain *domain,
+					struct device *dev,
+					ioasid_t pasid)
+{
+	struct device_domain_info *info = dev_iommu_priv_get(dev);
+	struct dmar_domain *dmar_domain = to_dmar_domain(domain);
+	struct intel_iommu *iommu = info->iommu;
+	unsigned long flags;
+	int ret = 0;
+
+	if (!sm_supported(iommu) || !info)
+		return -ENODEV;
+
+	if (WARN_ON(pasid == PASID_RID2PASID))
+		return -EINVAL;
+
+	spin_lock_irqsave(&device_domain_lock, flags);
+	spin_lock(&iommu->lock);
+	if (hw_pass_through && domain_type_is_si(dmar_domain))
+		ret = intel_pasid_setup_pass_through(iommu, dmar_domain,
+						     dev, pasid);
+	else if (domain_use_first_level(dmar_domain))
+		ret = domain_setup_first_level(iommu, dmar_domain,
+					       dev, pasid);
+	else
+		ret = intel_pasid_setup_second_level(iommu, dmar_domain,
+						     dev, pasid);
+
+	spin_unlock(&iommu->lock);
+	spin_unlock_irqrestore(&device_domain_lock, flags);
+
+	return ret;
+}
+
+static void intel_iommu_detach_dev_pasid(struct iommu_domain *domain,
+					struct device *dev,
+					ioasid_t pasid)
+{
+	struct device_domain_info *info = dev_iommu_priv_get(dev);
+	struct intel_iommu *iommu = info->iommu;
+	unsigned long flags;
+
+	if (pasid != iommu_get_pasid_from_domain(info->dev, &info->domain->domain))
+		return;
+
+	spin_lock_irqsave(&iommu->lock, flags);
+	intel_pasid_tear_down_entry(iommu, dev, pasid, false);
+	spin_unlock_irqrestore(&iommu->lock, flags);
+}
+
 const struct iommu_ops intel_iommu_ops = {
 	.capable		= intel_iommu_capable,
 	.domain_alloc		= intel_iommu_domain_alloc,
@@ -6259,6 +6328,8 @@ const struct iommu_ops intel_iommu_ops = {
 	.domain_set_attr	= intel_iommu_domain_set_attr,
 	.attach_dev		= intel_iommu_attach_device,
 	.detach_dev		= intel_iommu_detach_device,
+	.attach_dev_pasid	= intel_iommu_attach_dev_pasid,
+	.detach_dev_pasid	= intel_iommu_detach_dev_pasid,
 	.aux_attach_dev		= intel_iommu_aux_attach_device,
 	.aux_detach_dev		= intel_iommu_aux_detach_device,
 	.aux_get_pasid		= intel_iommu_aux_get_pasid,
