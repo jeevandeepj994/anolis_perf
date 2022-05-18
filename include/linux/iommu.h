@@ -682,6 +682,9 @@ int iommu_attach_device_pasid(struct iommu_domain *domain,
 			      struct device *dev, ioasid_t pasid);
 void iommu_detach_device_pasid(struct iommu_domain *domain,
 			       struct device *dev, ioasid_t pasid);
+
+ioasid_t iommu_get_pasid_from_domain(struct device *dev,
+				     struct iommu_domain *domain);
 #else /* CONFIG_IOMMU_API */
 
 struct iommu_ops {};
@@ -1145,6 +1148,11 @@ static inline int iommu_attach_device_pasid(struct iommu_domain *domain,
 static inline void iommu_detach_device_pasid(struct iommu_domain *domain,
 					     struct device *dev, ioasid_t pasid)
 {
+}
+static ioasid_t iommu_get_pasid_from_domain(struct device *dev,
+					    struct iommu_domain *domain)
+{
+	return INVALID_IOASID;
 }
 #endif /* CONFIG_IOMMU_API */
 
