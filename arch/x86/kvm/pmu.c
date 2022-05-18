@@ -14,6 +14,7 @@
 #include <linux/kvm_host.h>
 #include <linux/perf_event.h>
 #include <asm/perf_event.h>
+#include <asm/cpu_device_id.h>
 #include "x86.h"
 #include "cpuid.h"
 #include "lapic.h"
@@ -24,6 +25,12 @@
 
 struct x86_pmu_capability __read_mostly kvm_pmu_cap;
 EXPORT_SYMBOL_GPL(kvm_pmu_cap);
+
+static const struct x86_cpu_id vmx_icl_pebs_cpu[] = {
+	X86_MATCH_INTEL_FAM6_MODEL(ICELAKE_D, NULL),
+	X86_MATCH_INTEL_FAM6_MODEL(ICELAKE_X, NULL),
+	{}
+};
 
 /* NOTE:
  * - Each perf counter is defined as "struct kvm_pmc";
