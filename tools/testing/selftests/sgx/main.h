@@ -38,4 +38,9 @@ bool encl_build(struct encl *encl);
 int sgx_call_vdso(void *rdi, void *rsi, long rdx, u32 function, void *r8, void *r9,
 		  struct sgx_enclave_run *run);
 
+int eenter_no_vdso(unsigned long rdi, unsigned long rsi,
+		unsigned long rdx, unsigned int function,
+		unsigned long r8,  unsigned long r9,
+		struct sgx_enclave_run *run);
+
 #endif /* MAIN_H */
