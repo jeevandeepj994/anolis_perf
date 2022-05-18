@@ -229,14 +229,14 @@ static void ovl_free_fs(struct ovl_fs *ofs)
 	if (ofs->upperdir_locked)
 		ovl_inuse_unlock(ofs->upper_mnt->mnt_root);
 	mntput(ofs->upper_mnt);
-	for (i = 0; i < ofs->numlower; i++) {
-		iput(ofs->lower_layers[i].trap);
-		mntput(ofs->lower_layers[i].mnt);
+	for (i = 1; i < ofs->numlayer; i++) {
+		iput(ofs->layers[i].trap);
+		mntput(ofs->layers[i].mnt);
 	}
-	for (i = 0; i < ofs->numlowerfs; i++)
-		free_anon_bdev(ofs->lower_fs[i].pseudo_dev);
-	kfree(ofs->lower_layers);
-	kfree(ofs->lower_fs);
+	kfree(ofs->layers);
+	for (i = 0; i < ofs->numfs; i++)
+		free_anon_bdev(ofs->fs[i].pseudo_dev);
+	kfree(ofs->fs);
 
 	kfree(ofs->config.lowerdir);
 	kfree(ofs->config.upperdir);
@@ -1381,20 +1381,66 @@ out:
 	return err;
 }
 
-/* Get a unique fsid for the layer */
-static int ovl_get_fsid(struct ovl_fs *ofs, struct super_block *sb)
+static bool ovl_lower_uuid_ok(struct ovl_fs *ofs, const uuid_t *uuid)
 {
+	unsigned int i;
+
+	if (!ofs->config.nfs_export && !ofs->upper_mnt)
+		return true;
+
+	/*
+	 * We allow using single lower with null uuid for index and nfs_export
+	 * for example to support those features with single lower squashfs.
+	 * To avoid regressions in setups of overlay with re-formatted lower
+	 * squashfs, do not allow decoding origin with lower null uuid unless
+	 * user opted-in to one of the new features that require following the
+	 * lower inode of non-dir upper.
+	 */
+	if (!ofs->config.index && !ofs->config.metacopy && !ofs->config.xino &&
+	    uuid_is_null(uuid))
+		return false;
+
+	for (i = 0; i < ofs->numfs; i++) {
+		/*
+		 * We use uuid to associate an overlay lower file handle with a
+		 * lower layer, so we can accept lower fs with null uuid as long
+		 * as all lower layers with null uuid are on the same fs.
+		 * if we detect multiple lower fs with the same uuid, we
+		 * disable lower file handle decoding on all of them.
+		 */
+		if (ofs->fs[i].is_lower &&
+		    uuid_equal(&ofs->fs[i].sb->s_uuid, uuid)) {
+			ofs->fs[i].bad_uuid = true;
+			return false;
+		}
+	}
+	return true;
+}
+
+/* Get a unique fsid for the layer */
+static int ovl_get_fsid(struct ovl_fs *ofs, const struct path *path)
+{
+	struct super_block *sb = path->mnt->mnt_sb;
 	unsigned int i;
 	dev_t dev;
 	int err;
+	bool bad_uuid = false;
 
-	/* fsid 0 is reserved for upper fs even with non upper overlay */
-	if (ofs->upper_mnt && ofs->upper_mnt->mnt_sb == sb)
-		return 0;
+	for (i = 0; i < ofs->numfs; i++) {
+		if (ofs->fs[i].sb == sb)
+			return i;
+	}
 
-	for (i = 0; i < ofs->numlowerfs; i++) {
-		if (ofs->lower_fs[i].sb == sb)
-			return i + 1;
+	if (!ovl_lower_uuid_ok(ofs, &sb->s_uuid)) {
+		bad_uuid = true;
+		if (ofs->config.index || ofs->config.nfs_export) {
+			ofs->config.index = false;
+			ofs->config.nfs_export = false;
+			pr_warn("overlayfs: %s uuid detected in lower fs '%pd2', falling back to index=off,nfs_export=off.\n",
+				uuid_is_null(&sb->s_uuid) ? "null" :
+							    "conflicting",
+				path->dentry);
+		}
 	}
 
 	err = get_anon_bdev(&dev);
@@ -1403,36 +1449,60 @@ static int ovl_get_fsid(struct ovl_fs *ofs, struct super_block *sb)
 		return err;
 	}
 
-	ofs->lower_fs[ofs->numlowerfs].sb = sb;
-	ofs->lower_fs[ofs->numlowerfs].pseudo_dev = dev;
-	ofs->numlowerfs++;
+	ofs->fs[ofs->numfs].sb = sb;
+	ofs->fs[ofs->numfs].pseudo_dev = dev;
+	ofs->fs[ofs->numfs].bad_uuid = bad_uuid;
 
-	return ofs->numlowerfs;
+	return ofs->numfs++;
 }
 
-static int ovl_get_lower_layers(struct super_block *sb, struct ovl_fs *ofs,
-				struct path *stack, unsigned int numlower)
+static int ovl_get_layers(struct super_block *sb, struct ovl_fs *ofs,
+			  struct path *stack, unsigned int numlower)
 {
 	int err;
 	unsigned int i;
 
 	err = -ENOMEM;
-	ofs->lower_layers = kcalloc(numlower, sizeof(struct ovl_layer),
-				    GFP_KERNEL);
-	if (ofs->lower_layers == NULL)
+	ofs->layers = kcalloc(numlower + 1, sizeof(struct ovl_layer),
+			      GFP_KERNEL);
+	if (ofs->layers == NULL)
 		goto out;
 
-	ofs->lower_fs = kcalloc(numlower, sizeof(struct ovl_sb),
-				GFP_KERNEL);
-	if (ofs->lower_fs == NULL)
+	ofs->fs = kcalloc(numlower + 1, sizeof(struct ovl_sb), GFP_KERNEL);
+	if (ofs->fs == NULL)
 		goto out;
+
+	/* idx/fsid 0 are reserved for upper fs even with lower only overlay */
+	ofs->numfs++;
+
+	ofs->layers[0].mnt = ofs->upper_mnt;
+	ofs->layers[0].idx = 0;
+	ofs->layers[0].fsid = 0;
+	ofs->numlayer = 1;
+
+	/*
+	 * All lower layers that share the same fs as upper layer, use the same
+	 * pseudo_dev as upper layer.  Allocate fs[0].pseudo_dev even for lower
+	 * only overlay to simplify ovl_fs_free().
+	 * is_lower will be set if upper fs is shared with a lower layer.
+	 */
+	err = get_anon_bdev(&ofs->fs[0].pseudo_dev);
+	if (err) {
+		pr_err("failed to get anonymous bdev for upper fs\n");
+		goto out;
+	}
+
+	if (ofs->upper_mnt) {
+		ofs->fs[0].sb = ofs->upper_mnt->mnt_sb;
+		ofs->fs[0].is_lower = false;
+	}
 
 	for (i = 0; i < numlower; i++) {
 		struct vfsmount *mnt;
 		struct inode *trap;
 		int fsid;
 
-		err = fsid = ovl_get_fsid(ofs, stack[i].mnt->mnt_sb);
+		err = fsid = ovl_get_fsid(ofs, &stack[i]);
 		if (err < 0)
 			goto out;
 
@@ -1469,15 +1539,13 @@ static int ovl_get_lower_layers(struct super_block *sb, struct ovl_fs *ofs,
 		 */
 		mnt->mnt_flags |= MNT_READONLY | MNT_NOATIME;
 
-		ofs->lower_layers[ofs->numlower].trap = trap;
-		ofs->lower_layers[ofs->numlower].mnt = mnt;
-		ofs->lower_layers[ofs->numlower].idx = i + 1;
-		ofs->lower_layers[ofs->numlower].fsid = fsid;
-		if (fsid) {
-			ofs->lower_layers[ofs->numlower].fs =
-				&ofs->lower_fs[fsid - 1];
-		}
-		ofs->numlower++;
+		ofs->layers[ofs->numlayer].trap = trap;
+		ofs->layers[ofs->numlayer].mnt = mnt;
+		ofs->layers[ofs->numlayer].idx = ofs->numlayer;
+		ofs->layers[ofs->numlayer].fsid = fsid;
+		ofs->layers[ofs->numlayer].fs = &ofs->fs[fsid];
+		ofs->numlayer++;
+		ofs->fs[fsid].is_lower = true;
 	}
 
 	/*
@@ -1488,7 +1556,7 @@ static int ovl_get_lower_layers(struct super_block *sb, struct ovl_fs *ofs,
 	 * bits reserved for fsid, it emits a warning and uses the original
 	 * inode number.
 	 */
-	if (!ofs->numlowerfs || (ofs->numlowerfs == 1 && !ofs->upper_mnt)) {
+	if (ofs->numfs - !ofs->upper_mnt == 1) {
 		if (ofs->config.xino == OVL_XINO_ON)
 			pr_info("\"xino=on\" is useless with all layers on same fs, ignore.\n");
 		ofs->xino_mode = 0;
@@ -1496,12 +1564,12 @@ static int ovl_get_lower_layers(struct super_block *sb, struct ovl_fs *ofs,
 		ofs->xino_mode = -1;
 	} else if (ofs->config.xino == OVL_XINO_ON && ofs->xino_mode < 0) {
 		/*
-		 * This is a roundup of number of bits needed for numlowerfs+1
-		 * (i.e. ilog2(numlowerfs+1 - 1) + 1). fsid 0 is reserved for
-		 * upper fs even with non upper overlay.
+		 * This is a roundup of number of bits needed for encoding
+		 * fsid, where fsid 0 is reserved for upper fs even with
+		 * lower only overlay.
 		 */
 		BUILD_BUG_ON(ilog2(OVL_MAX_STACK) > 31);
-		ofs->xino_mode = ilog2(ofs->numlowerfs) + 1;
+		ofs->xino_mode = ilog2(ofs->numfs-1) + 1;
 	}
 
 	if (ofs->xino_mode > 0) {
@@ -1567,7 +1635,7 @@ static struct ovl_entry *ovl_get_lowerstack(struct super_block *sb,
 		goto out_err;
 	}
 
-	err = ovl_get_lower_layers(sb, ofs, stack, numlower);
+	err = ovl_get_layers(sb, ofs, stack, numlower);
 	if (err)
 		goto out_err;
 
@@ -1578,7 +1646,7 @@ static struct ovl_entry *ovl_get_lowerstack(struct super_block *sb,
 
 	for (i = 0; i < numlower; i++) {
 		oe->lowerstack[i].dentry = dget(stack[i].dentry);
-		oe->lowerstack[i].layer = &ofs->lower_layers[i];
+		oe->lowerstack[i].layer = &ofs->layers[i+1];
 	}
 
 	if (remote)
@@ -1661,9 +1729,9 @@ static int ovl_check_overlapping_layers(struct super_block *sb,
 			return err;
 	}
 
-	for (i = 0; i < ofs->numlower; i++) {
+	for (i = 1; i < ofs->numlayer; i++) {
 		err = ovl_check_layer(sb, ofs,
-				      ofs->lower_layers[i].mnt->mnt_root,
+				      ofs->layers[i].mnt->mnt_root,
 				      "lowerdir", true);
 		if (err)
 			return err;
