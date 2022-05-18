@@ -289,10 +289,12 @@ unsigned long read_word_at_a_time(const void *addr)
 })
 
 #ifdef CONFIG_DEFAULT_HIDDEN_SYMS
-#pragma GCC visibility push(hidden)
-#define __default_visibility  __attribute__((visibility ("default")))
+# ifndef BUILD_VDSO
+#  pragma GCC visibility push(hidden)
+# endif
+# define __default_visibility  __attribute__((visibility("default")))
 #else
-#define __default_visibility
+# define __default_visibility
 #endif
 
 #endif /* __KERNEL__ */
