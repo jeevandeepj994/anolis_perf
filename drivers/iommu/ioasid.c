@@ -781,7 +781,7 @@ ioasid_t ioasid_alloc(struct ioasid_set *set, ioasid_t min, ioasid_t max,
 
 	spin_lock(&ioasid_allocator_lock);
 	/* Check if the IOASID set has been allocated and initialized */
-	if (!ioasid_set_is_valid(set))
+	if (!set || !ioasid_set_is_valid(set))
 		goto done_unlock;
 
 	if (set->quota <= atomic_read(&set->nr_ioasids)) {

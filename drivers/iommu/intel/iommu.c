@@ -104,9 +104,6 @@
  */
 #define INTEL_IOMMU_PGSIZES	(~0xFFFUL)
 
-/* PASIDs used by host SVM */
-struct ioasid_set *host_pasid_set;
-
 static inline int agaw_to_level(int agaw)
 {
 	return agaw + 2;

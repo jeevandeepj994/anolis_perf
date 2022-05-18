@@ -99,6 +99,8 @@ struct ioasid_nb_args {
 	void *pdata;
 };
 
+extern struct ioasid_set *host_pasid_set;
+
 #if IS_ENABLED(CONFIG_IOASID)
 void ioasid_install_capacity(ioasid_t total);
 int ioasid_reserve_capacity(ioasid_t nr_ioasid);
