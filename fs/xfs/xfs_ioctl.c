@@ -2379,6 +2379,7 @@ xfs_file_ioctl(
 
 	case XFS_IOC_ATOMIC_WRITE_SET: {
 		uint32_t in;
+		bool set = false;
 		static const int enable = 1;
 
 		if (!S_ISREG(inode->i_mode))
@@ -2396,6 +2397,8 @@ xfs_file_ioctl(
 			/* set atomic write only after file is newly created */
 			xfs_info(mp, "set atomic write for inode %lld", ip->i_ino);
 			error = xfs_ioc_set_atomic_write(ip);
+			if (!error)
+				set = true;
 			goto out;
 		}
 
@@ -2408,6 +2411,13 @@ xfs_file_ioctl(
 		error = -EOPNOTSUPP;
 out:
 		xfs_iunlock(ip, XFS_IOLOCK_EXCL | XFS_MMAPLOCK_EXCL);
+
+		if (set && !xfs_sb_has_ro_compat_feature(&mp->m_sb,
+				XFS_SB_FEAT_RO_COMPAT_ATOMIC_FILE)) {
+			mp->m_sb.sb_features_ro_compat |=
+				XFS_SB_FEAT_RO_COMPAT_ATOMIC_FILE;
+			error = xfs_sync_sb(mp, true);
+		}
 		return error;
 	}
 	default:
