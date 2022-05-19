@@ -5594,6 +5594,11 @@
 			<port#>,<js1>,<js2>,<js3>,<js4>,<js5>,<js6>,<js7>
 			See also Documentation/input/devices/joystick-parport.rst
 
+	ucode=		[X86,Intel] Control microcode rollback in Intel CPUs
+			Format: <string>
+			For example, to enable microcode rollback:
+			ucode=rollback
+
 	udbg-immortal	[PPC] When debugging early kernel crashes that
 			happen after console_init() and before a proper
 			console driver takes over, this boot options might
