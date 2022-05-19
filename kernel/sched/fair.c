@@ -643,7 +643,7 @@ static inline bool __is_underclass(struct sched_entity *se)
 	return test_identity(se, ID_UNDERCLASS);
 }
 
-static inline bool is_underclass(struct sched_entity *se)
+inline bool is_underclass(struct sched_entity *se)
 {
 	if (group_identity_disabled())
 		return false;
@@ -714,8 +714,16 @@ static inline void __update_rq_on_expel(struct rq *rq)
 	 * Write 'on_expel' as less as possible since
 	 * it's really hot.
 	 */
-	if (ret != rq->on_expel)
+	if (ret != rq->on_expel) {
+		/* This function is called in atomic context, so no race with other writers */
+		write_seqcount_begin(&rq->expel_seq);
 		rq->on_expel = ret;
+		if (ret)
+			rq->expel_start = __rq_clock_broken(rq);
+		else
+			rq->expel_sum += __rq_clock_broken(rq) - rq->expel_start;
+		write_seqcount_end(&rq->expel_seq);
+	}
 }
 
 /*
@@ -749,7 +757,7 @@ static inline bool __rq_on_expel(struct rq *rq)
 	return rq->on_expel;
 }
 
-static inline bool rq_on_expel(struct rq *rq)
+inline bool rq_on_expel(struct rq *rq)
 {
 	if (group_identity_disabled())
 		return false;
@@ -942,7 +950,7 @@ static inline bool task_is_expeller(struct task_struct *p)
 	return ret;
 }
 
-static inline bool is_underclass_task(struct task_struct *p)
+inline bool is_underclass_task(struct task_struct *p)
 {
 	bool ret;
 
@@ -1210,6 +1218,7 @@ hierarchy_update_nr_expel_immune(struct sched_entity *se, long delta)
 			break;
 	}
 }
+
 #else
 static inline u64 get_expel_spread(struct cfs_rq *cfs_rq)
 {
@@ -1440,6 +1449,16 @@ static void __update_identity(struct task_group *tg, int flags)
 			update_min_vruntime(cfs_rq);
 		}
 
+#ifdef CONFIG_SCHED_SMT
+		if (is_underclass(se)) {
+			se->expel_start = rq->expel_sum;
+			se->expel_start_ts = rq_clock(rq);
+			se->expel_sum = 0;
+		} else {
+			se->expel_start_ts = 0;
+		}
+		seqlock_init(&se->expel_seq);
+#endif
 		__notify_smt_expeller(rq, rq->curr);
 
 		rq_unlock_irq(rq, &rf);
@@ -13294,6 +13313,14 @@ void init_tg_cfs_entry(struct task_group *tg, struct cfs_rq *cfs_rq,
 
 #if defined(CONFIG_GROUP_IDENTITY) && defined(CONFIG_SCHED_SMT)
 	INIT_LIST_HEAD(&se->expel_node);
+	if (is_underclass(se)) {
+		se->expel_start = rq->expel_sum;
+		se->expel_start_ts = __rq_clock_broken(rq);
+		se->expel_sum = 0;
+	} else {
+		se->expel_start_ts = 0;
+	}
+	seqlock_init(&se->expel_seq);
 #endif
 
 	se->my_q = cfs_rq;

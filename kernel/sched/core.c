@@ -7264,6 +7264,11 @@ void __init sched_init(void)
 #endif /* CONFIG_SMP */
 		hrtick_rq_init(rq);
 		atomic_set(&rq->nr_iowait, 0);
+#if defined(CONFIG_GROUP_IDENTITY) && defined(CONFIG_SCHED_SMT)
+		rq->expel_start = rq->clock;
+		rq->expel_sum = 0;
+		seqcount_init(&rq->expel_seq);
+#endif
 	}
 
 	set_load_weight(&init_task, false);

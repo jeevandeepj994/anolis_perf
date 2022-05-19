@@ -33,6 +33,7 @@ struct cpuacct_usage {
 /* Maintain various statistics */
 struct cpuacct_alistats {
 	u64		nr_migrations;
+	u64		steal_high;
 } ____cacheline_aligned;
 #endif
 
@@ -755,6 +756,97 @@ out_rcu_unlock:
 	return nr;
 }
 
+#ifdef CONFIG_GROUP_IDENTITY
+#ifdef CONFIG_SCHED_SMT
+static inline void idle_start_update_expel_sum(struct sched_entity *se)
+{
+	struct rq *rq;
+
+	if (!schedstat_enabled())
+		return;
+
+	write_seqlock(&se->expel_seq);
+	if (is_underclass(se)) {
+		rq = se->my_q->rq;
+
+		__schedstat_add(se->expel_sum, rq->expel_sum - schedstat_val(se->expel_start));
+		if (rq_on_expel(rq))
+			__schedstat_add(se->expel_sum, __rq_clock_broken(rq) -
+				max(schedstat_val(se->expel_start_ts), rq->expel_start));
+		__schedstat_set(se->expel_start_ts, 0);
+	}
+	write_sequnlock(&se->expel_seq);
+}
+
+static inline void idle_end_update_expel_sum(struct sched_entity *se)
+{
+	struct rq *rq;
+
+	if (!schedstat_enabled())
+		return;
+
+	write_seqlock(&se->expel_seq);
+	if (is_underclass(se)) {
+		rq = se->my_q->rq;
+
+		__schedstat_set(se->expel_start, rq->expel_sum);
+		__schedstat_set(se->expel_start_ts, __rq_clock_broken(rq));
+	}
+	write_sequnlock(&se->expel_seq);
+}
+
+static inline u64 get_cpu_expel_sum(struct sched_entity *se, int cpu)
+{
+	struct rq *rq = cpu_rq(cpu);
+	unsigned int se_seq, rq_seq;
+	u64 cpu_expel_sum;
+
+	do {
+		se_seq = read_seqbegin(&se->expel_seq);
+		cpu_expel_sum = schedstat_val(se->expel_sum);
+		if (schedstat_val(se->expel_start_ts)) {
+			do {
+				rq_seq = read_seqcount_begin(&rq->expel_seq);
+				cpu_expel_sum += rq->expel_sum -
+					schedstat_val(se->expel_start);
+				if (rq_on_expel(rq))
+					cpu_expel_sum += __rq_clock_broken(rq) -
+					max(rq->expel_start, schedstat_val(se->expel_start_ts));
+			} while (read_seqcount_retry(&rq->expel_seq, rq_seq));
+		}
+	} while (read_seqretry(&se->expel_seq, se_seq));
+
+	return cpu_expel_sum;
+}
+#else
+static inline void idle_start_update_expel_sum(struct sched_entity *se) {}
+static inline void idle_end_update_expel_sum(struct sched_entity *se) {}
+static inline u64 get_cpu_expel_sum(struct sched_entity *se, int cpu) { return 0; }
+#endif
+static inline void update_steal_high(struct task_struct *tsk, u64 cputime)
+{
+	int cpu = tsk->cpu;
+	struct rq *rq = cpu_rq(cpu);
+	struct cpuacct *ca = task_ca(tsk);
+	struct task_group *tg = cgroup_tg(task_ca(tsk)->css.cgroup);
+
+	if (!schedstat_enabled())
+		return;
+
+	/* Make sure them bonded */
+	if (unlikely(!tg) || tsk->sched_class != &fair_sched_class)
+		return;
+
+	if (is_underclass_task(tsk) && rq->nr_high_running)
+		per_cpu_ptr(ca->alistats, cpu)->steal_high += cputime;
+}
+#else
+static inline void idle_start_update_expel_sum(struct sched_entity *se) {}
+static inline void idle_end_update_expel_sum(struct sched_entity *se) {}
+static inline u64 get_cpu_expel_sum(struct sched_entity *se, int cpu) { return 0; }
+static inline void update_steal_high(struct task_struct *tsk, u64 cputime) {}
+#endif
+
 void cgroup_idle_start(struct sched_entity *se)
 {
 	unsigned long flags;
@@ -775,6 +867,8 @@ void cgroup_idle_start(struct sched_entity *se)
 	if (schedstat_val(se->cg_nr_iowait))
 		__schedstat_set(se->cg_iowait_start, clock);
 	spin_unlock(&se->iowait_lock);
+
+	idle_start_update_expel_sum(se);
 
 	local_irq_restore(flags);
 }
@@ -805,6 +899,8 @@ void cgroup_idle_end(struct sched_entity *se)
 		__schedstat_set(se->cg_iowait_start, 0);
 	}
 	spin_unlock(&se->iowait_lock);
+
+	idle_end_update_expel_sum(se);
 
 	local_irq_restore(flags);
 }
@@ -1106,10 +1202,12 @@ static int cpuacct_proc_stats_show(struct seq_file *sf, void *v)
 static int cpuacct_sched_cfs_show(struct seq_file *sf, void *v)
 {
 	struct cgroup *cgrp = seq_css(sf)->cgroup;
+	struct cpuacct *ca;
 	struct task_group *tg = cgroup_tg(cgrp);
 	struct sched_entity *se;
 	int cpu;
 	u64 wait_max = 0, wait_sum = 0, wait_sum_other = 0, exec_sum = 0;
+	u64 expel_sum = 0, steal_high = 0;
 
 	if (!schedstat_enabled())
 		goto out_show;
@@ -1121,6 +1219,8 @@ static int cpuacct_sched_cfs_show(struct seq_file *sf, void *v)
 		goto rcu_unlock_show;
 	}
 
+	ca = cgroup_ca(cgrp);
+
 	for_each_online_cpu(cpu) {
 		se = tg->se[cpu];
 		if (!se)
@@ -1131,6 +1231,8 @@ static int cpuacct_sched_cfs_show(struct seq_file *sf, void *v)
 		wait_sum += schedstat_val(se->statistics.wait_sum);
 		wait_max =
 			max(wait_max, schedstat_val(se->statistics.wait_max));
+		expel_sum += get_cpu_expel_sum(se, cpu);
+		steal_high += per_cpu_ptr(ca->alistats, cpu)->steal_high;
 	}
 rcu_unlock_show:
 	rcu_read_unlock();
@@ -1139,6 +1241,8 @@ out_show:
 	seq_printf(sf, "%lld %lld %lld %lld %lld\n",
 			exec_sum + wait_sum, exec_sum, wait_sum_other,
 			wait_sum - wait_sum_other, wait_max);
+	seq_printf(sf, "%lld %lld %lld %lld\n",
+		steal_high, 0llu, expel_sum, 0llu);
 
 	return 0;
 }
@@ -1235,6 +1339,8 @@ static int sched_lat_stat_show(struct seq_file *sf, void *v)
 
 	return 0;
 }
+#else
+static inline void update_steal_high(struct task_struct *tsk, u64 cputime) {}
 #endif
 
 static struct cftype files[] = {
@@ -1331,6 +1437,8 @@ void cpuacct_charge(struct task_struct *tsk, u64 cputime)
 
 	for (ca = task_ca(tsk); ca; ca = parent_ca(ca))
 		__this_cpu_add(ca->cpuusage->usages[index], cputime);
+
+	update_steal_high(tsk, cputime);
 
 	rcu_read_unlock();
 }
