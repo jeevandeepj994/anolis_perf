@@ -552,6 +552,10 @@ struct sched_entity {
 	int				id_flags;
 #ifdef CONFIG_SCHED_SMT
 	struct list_head		expel_node;
+	u64				expel_start;
+	u64				expel_start_ts;
+	u64				expel_sum;
+	seqlock_t			expel_seq;
 #endif
 #endif
 
