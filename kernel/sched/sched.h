@@ -585,6 +585,11 @@ extern int update_bvt_warp_ns(struct task_group *tg, s64 val);
 extern void notify_smt_expeller(struct rq *rq, struct task_struct *p);
 extern unsigned int id_nr_invalid(struct rq *rq);
 extern void update_id_idle_avg(struct rq *rq, u64 delta);
+extern bool is_underclass(struct sched_entity *se);
+extern bool is_underclass_task(struct task_struct *p);
+#ifdef CONFIG_SCHED_SMT
+extern bool rq_on_expel(struct rq *rq);
+#endif
 #else
 static inline void notify_smt_expeller(struct rq *rq, struct task_struct *p) {}
 static inline unsigned int id_nr_invalid(struct rq *rq) { return 0; }
@@ -1082,6 +1087,9 @@ struct rq {
 #ifdef CONFIG_SCHED_SMT
 	unsigned long		next_expel_ib;
 	unsigned long		next_expel_update;
+	u64			expel_start;
+	u64			expel_sum;
+	seqcount_t		expel_seq;
 #endif
 #endif
 
