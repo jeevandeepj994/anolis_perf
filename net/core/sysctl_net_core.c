@@ -6,6 +6,7 @@
  * Added /proc/sys/net/core directory entry (empty =) ). [MS]
  */
 
+#include <linux/filter.h>
 #include <linux/mm.h>
 #include <linux/sysctl.h>
 #include <linux/module.h>
@@ -22,8 +23,9 @@
 #include <net/busy_poll.h>
 #include <net/pkt_sched.h>
 
-static int two __maybe_unused = 2;
+static int two = 2;
 static int three = 3;
+static int int_3600 = 3600;
 static int min_sndbuf = SOCK_MIN_SNDBUF;
 static int min_rcvbuf = SOCK_MIN_RCVBUF;
 static int max_skb_frags = MAX_SKB_FRAGS;
@@ -101,8 +103,7 @@ static int rps_sock_flow_sysctl(struct ctl_table *table, int write,
 			if (orig_sock_table) {
 				static_branch_dec(&rps_needed);
 				static_branch_dec(&rfs_needed);
-				synchronize_rcu();
-				vfree(orig_sock_table);
+				kvfree_rcu(orig_sock_table);
 			}
 		}
 	}
@@ -140,8 +141,7 @@ static int flow_limit_cpu_sysctl(struct ctl_table *table, int write,
 				     lockdep_is_held(&flow_limit_update_mutex));
 			if (cur && !cpumask_test_cpu(i, mask)) {
 				RCU_INIT_POINTER(sd->flow_limit, NULL);
-				synchronize_rcu();
-				kfree(cur);
+				kfree_rcu(cur);
 			} else if (!cur && cpumask_test_cpu(i, mask)) {
 				cur = kzalloc_node(len, GFP_KERNEL,
 						   cpu_to_node(i));
@@ -309,7 +309,6 @@ proc_dolongvec_minmax_bpf_restricted(struct ctl_table *table, int write,
 #endif
 
 static struct ctl_table net_core_table[] = {
-#ifdef CONFIG_NET
 	{
 		.procname	= "wmem_max",
 		.data		= &sysctl_wmem_max,
@@ -419,7 +418,7 @@ static struct ctl_table net_core_table[] = {
 		.mode		= 0600,
 		.proc_handler	= proc_dolongvec_minmax_bpf_restricted,
 		.extra1		= &long_one,
-		.extra2		= &long_max,
+		.extra2		= &bpf_jit_limit_max,
 	},
 #endif
 	{
@@ -507,7 +506,6 @@ static struct ctl_table net_core_table[] = {
 		.proc_handler	= set_default_qdisc
 	},
 #endif
-#endif /* CONFIG_NET */
 	{
 		.procname	= "netdev_budget",
 		.data		= &netdev_budget,
@@ -546,7 +544,7 @@ static struct ctl_table net_core_table[] = {
 		.mode		= 0644,
 		.proc_handler	= proc_dointvec_minmax,
 		.extra1		= SYSCTL_ZERO,
-		.extra2		= SYSCTL_ONE,
+		.extra2		= &two,
 	},
 	{
 		.procname	= "devconf_inherit_init_net",
@@ -572,6 +570,15 @@ static struct ctl_table net_core_table[] = {
 		.proc_handler	= proc_dointvec_minmax,
 		.extra1		= SYSCTL_ONE,
 	},
+	{
+		.procname	= "netdev_unregister_timeout_secs",
+		.data		= &netdev_unregister_timeout_secs,
+		.maxlen		= sizeof(unsigned int),
+		.mode		= 0644,
+		.proc_handler	= proc_dointvec_minmax,
+		.extra1		= SYSCTL_ONE,
+		.extra2		= &int_3600,
+	},
 	{ }
 };
 
@@ -584,12 +591,34 @@ static struct ctl_table netns_core_table[] = {
 		.extra1		= SYSCTL_ZERO,
 		.proc_handler	= proc_dointvec_minmax
 	},
+	{
+		.procname	= "txrehash",
+		.data		= &init_net.core.sysctl_txrehash,
+		.maxlen		= sizeof(u8),
+		.mode		= 0644,
+		.extra1		= SYSCTL_ZERO,
+		.extra2		= SYSCTL_ONE,
+		.proc_handler	= proc_dou8vec_minmax,
+	},
 	{ }
 };
 
+static int __init fb_tunnels_only_for_init_net_sysctl_setup(char *str)
+{
+	/* fallback tunnels for initns only */
+	if (!strncmp(str, "initns", 6))
+		sysctl_fb_tunnels_only_for_init_net = 1;
+	/* no fallback tunnels anywhere */
+	else if (!strncmp(str, "none", 4))
+		sysctl_fb_tunnels_only_for_init_net = 2;
+
+	return 1;
+}
+__setup("fb_tunnels=", fb_tunnels_only_for_init_net_sysctl_setup);
+
 static __net_init int sysctl_core_net_init(struct net *net)
 {
-	struct ctl_table *tbl;
+	struct ctl_table *tbl, *tmp;
 
 	tbl = netns_core_table;
 	if (!net_eq(net, &init_net)) {
@@ -597,7 +626,8 @@ static __net_init int sysctl_core_net_init(struct net *net)
 		if (tbl == NULL)
 			goto err_dup;
 
-		tbl[0].data = &net->core.sysctl_somaxconn;
+		for (tmp = tbl; tmp->procname; tmp++)
+			tmp->data += (char *)net - (char *)&init_net;
 
 		/* Don't export any sysctls to unprivileged users */
 		if (net->user_ns != &init_user_ns) {

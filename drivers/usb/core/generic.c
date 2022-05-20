@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 /*
- * drivers/usb/generic.c - generic driver for USB devices (not interfaces)
+ * drivers/usb/core/generic.c - generic driver for USB devices (not interfaces)
  *
  * (C) Copyright 2005 Greg Kroah-Hartman <gregkh@suse.de>
  *
@@ -205,9 +205,7 @@ static int __check_for_non_generic_match(struct device_driver *drv, void *data)
 	udrv = to_usb_device_driver(drv);
 	if (udrv == &usb_generic_driver)
 		return 0;
-	if (usb_device_match_id(udev, udrv->id_table) != NULL)
-		return 1;
-	return (udrv->match && udrv->match(udev));
+	return usb_driver_applicable(udev, udrv);
 }
 
 static bool usb_generic_driver_match(struct usb_device *udev)

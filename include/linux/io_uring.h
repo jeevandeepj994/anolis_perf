@@ -4,35 +4,24 @@
 
 #include <linux/sched.h>
 #include <linux/xarray.h>
-#include <linux/percpu-refcount.h>
-
-struct io_uring_task {
-	/* submission side */
-	struct xarray		xa;
-	struct wait_queue_head	wait;
-	struct file		*last;
-	atomic_long_t		req_issue;
-
-	/* completion side */
-	bool			in_idle ____cacheline_aligned_in_smp;
-	atomic_long_t		req_complete;
-};
 
 #if defined(CONFIG_IO_URING)
 struct sock *io_uring_get_socket(struct file *file);
-void __io_uring_task_cancel(void);
-void __io_uring_files_cancel(struct files_struct *files);
+void __io_uring_cancel(bool cancel_all);
 void __io_uring_free(struct task_struct *tsk);
+void io_uring_unreg_ringfd(void);
 
+static inline void io_uring_files_cancel(void)
+{
+	if (current->io_uring) {
+		io_uring_unreg_ringfd();
+		__io_uring_cancel(false);
+	}
+}
 static inline void io_uring_task_cancel(void)
 {
-	if (current->io_uring && !xa_empty(&current->io_uring->xa))
-		__io_uring_task_cancel();
-}
-static inline void io_uring_files_cancel(struct files_struct *files)
-{
-	if (current->io_uring && !xa_empty(&current->io_uring->xa))
-		__io_uring_files_cancel(files);
+	if (current->io_uring)
+		__io_uring_cancel(true);
 }
 static inline void io_uring_free(struct task_struct *tsk)
 {
@@ -47,7 +36,7 @@ static inline struct sock *io_uring_get_socket(struct file *file)
 static inline void io_uring_task_cancel(void)
 {
 }
-static inline void io_uring_files_cancel(struct files_struct *files)
+static inline void io_uring_files_cancel(void)
 {
 }
 static inline void io_uring_free(struct task_struct *tsk)

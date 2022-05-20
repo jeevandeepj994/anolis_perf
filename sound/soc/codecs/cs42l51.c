@@ -254,8 +254,28 @@ static const struct snd_soc_dapm_widget cs42l51_dapm_widgets[] = {
 		&cs42l51_adcr_mux_controls),
 };
 
+static int mclk_event(struct snd_soc_dapm_widget *w,
+		      struct snd_kcontrol *kcontrol, int event)
+{
+	struct snd_soc_component *comp = snd_soc_dapm_to_component(w->dapm);
+	struct cs42l51_private *cs42l51 = snd_soc_component_get_drvdata(comp);
+
+	switch (event) {
+	case SND_SOC_DAPM_PRE_PMU:
+		return clk_prepare_enable(cs42l51->mclk_handle);
+	case SND_SOC_DAPM_POST_PMD:
+		/* Delay mclk shutdown to fulfill power-down sequence requirements */
+		msleep(20);
+		clk_disable_unprepare(cs42l51->mclk_handle);
+		break;
+	}
+
+	return 0;
+}
+
 static const struct snd_soc_dapm_widget cs42l51_dapm_mclk_widgets[] = {
-	SND_SOC_DAPM_CLOCK_SUPPLY("MCLK")
+	SND_SOC_DAPM_SUPPLY("MCLK", SND_SOC_NOPM, 0, 0, mclk_event,
+			    SND_SOC_DAPM_PRE_PMU | SND_SOC_DAPM_POST_PMD),
 };
 
 static const struct snd_soc_dapm_route cs42l51_routes[] = {
@@ -773,14 +793,19 @@ error:
 }
 EXPORT_SYMBOL_GPL(cs42l51_probe);
 
-int cs42l51_remove(struct device *dev)
+void cs42l51_remove(struct device *dev)
 {
 	struct cs42l51_private *cs42l51 = dev_get_drvdata(dev);
+	int ret;
 
 	gpiod_set_value_cansleep(cs42l51->reset_gpio, 1);
 
-	return regulator_bulk_disable(ARRAY_SIZE(cs42l51->supplies),
-				      cs42l51->supplies);
+	ret = regulator_bulk_disable(ARRAY_SIZE(cs42l51->supplies),
+				     cs42l51->supplies);
+	if (ret)
+		dev_warn(dev, "Failed to disable all regulators (%pe)\n",
+			 ERR_PTR(ret));
+
 }
 EXPORT_SYMBOL_GPL(cs42l51_remove);
 

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 /*
- * Broadcom BM2835 V4L2 driver
+ * Broadcom BCM2835 V4L2 driver
  *
  * Copyright © 2013 Raspberry Pi (Trading) Ltd.
  *
@@ -168,9 +168,6 @@ struct vchiq_mmal_instance {
 	/* ensure serialised access to service */
 	struct mutex vchiq_mutex;
 
-	/* vmalloc page to receive scratch bulk xfers into */
-	void *bulk_scratch;
-
 	struct idr context_map;
 	/* protect accesses to context_map */
 	struct mutex context_map_lock;
@@ -179,6 +176,9 @@ struct vchiq_mmal_instance {
 
 	/* ordered workqueue to process all bulk operations */
 	struct workqueue_struct *bulk_wq;
+
+	/* handle for a vchiq instance */
+	struct vchiq_instance *vchiq_instance;
 };
 
 static struct mmal_msg_context *
@@ -429,7 +429,7 @@ buffer_from_host(struct vchiq_mmal_instance *instance,
 	m.u.buffer_from_host.buffer_header.pts = MMAL_TIME_UNKNOWN;
 	m.u.buffer_from_host.buffer_header.dts = MMAL_TIME_UNKNOWN;
 
-	/* clear buffer type sepecific data */
+	/* clear buffer type specific data */
 	memset(&m.u.buffer_from_host.buffer_header_type_specific, 0,
 	       sizeof(m.u.buffer_from_host.buffer_header_type_specific));
 
@@ -924,7 +924,7 @@ release_msg:
 	return ret;
 }
 
-/* create comonent on vc */
+/* create component on vc */
 static int create_component(struct vchiq_mmal_instance *instance,
 			    struct vchiq_mmal_component *component,
 			    const char *name)
@@ -1840,10 +1840,9 @@ int vchiq_mmal_finalise(struct vchiq_mmal_instance *instance)
 
 	mutex_unlock(&instance->vchiq_mutex);
 
+	vchiq_shutdown(instance->vchiq_instance);
 	flush_workqueue(instance->bulk_wq);
 	destroy_workqueue(instance->bulk_wq);
-
-	vfree(instance->bulk_scratch);
 
 	idr_destroy(&instance->context_map);
 
@@ -1856,8 +1855,9 @@ EXPORT_SYMBOL_GPL(vchiq_mmal_finalise);
 int vchiq_mmal_init(struct vchiq_mmal_instance **out_instance)
 {
 	int status;
+	int err = -ENODEV;
 	struct vchiq_mmal_instance *instance;
-	static struct vchiq_instance *vchiq_instance;
+	struct vchiq_instance *vchiq_instance;
 	struct vchiq_service_params_kernel params = {
 		.version		= VC_MMAL_VER,
 		.version_min		= VC_MMAL_MIN_VER,
@@ -1890,17 +1890,20 @@ int vchiq_mmal_init(struct vchiq_mmal_instance **out_instance)
 	status = vchiq_connect(vchiq_instance);
 	if (status) {
 		pr_err("Failed to connect VCHI instance (status=%d)\n", status);
-		return -EIO;
+		err = -EIO;
+		goto err_shutdown_vchiq;
 	}
 
 	instance = kzalloc(sizeof(*instance), GFP_KERNEL);
 
-	if (!instance)
-		return -ENOMEM;
+	if (!instance) {
+		err = -ENOMEM;
+		goto err_shutdown_vchiq;
+	}
 
 	mutex_init(&instance->vchiq_mutex);
 
-	instance->bulk_scratch = vmalloc(PAGE_SIZE);
+	instance->vchiq_instance = vchiq_instance;
 
 	mutex_init(&instance->context_map_lock);
 	idr_init_base(&instance->context_map, 1);
@@ -1930,9 +1933,10 @@ err_close_services:
 	vchiq_close_service(instance->service_handle);
 	destroy_workqueue(instance->bulk_wq);
 err_free:
-	vfree(instance->bulk_scratch);
 	kfree(instance);
-	return -ENODEV;
+err_shutdown_vchiq:
+	vchiq_shutdown(vchiq_instance);
+	return err;
 }
 EXPORT_SYMBOL_GPL(vchiq_mmal_init);
 

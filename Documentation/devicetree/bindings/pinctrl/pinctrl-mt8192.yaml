@@ -106,7 +106,10 @@ patternProperties:
     required:
       - pinmux
 
-    additionalProperties:  false
+    additionalProperties: false
+
+allOf:
+  - $ref: "pinctrl.yaml#"
 
 required:
   - compatible

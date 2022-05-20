@@ -100,7 +100,7 @@ static void rtllib_tkip_deinit(void *priv)
 		crypto_free_shash(_priv->tx_tfm_michael);
 		crypto_free_shash(_priv->rx_tfm_michael);
 	}
-	kzfree(priv);
+	kfree_sensitive(priv);
 }
 
 
@@ -291,7 +291,7 @@ static int rtllib_tkip_encrypt(struct sk_buff *skb, int hdr_len, void *priv)
 		tkip_mixing_phase2(rc4key, tkey->key, tkey->tx_ttak,
 				   tkey->tx_iv16);
 	} else
-	tkey->tx_phase1_done = 1;
+		tkey->tx_phase1_done = 1;
 
 
 	len = skb->len - hdr_len;

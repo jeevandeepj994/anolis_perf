@@ -1,8 +1,4 @@
 # SPDX-License-Identifier: GPL-2.0-only
-config DAX_DRIVER
-	select DAX
-	bool
-
 menuconfig DAX
 	tristate "DAX: direct access to differentiated memory"
 	select SRCU
@@ -50,7 +46,6 @@ config DEV_DAX_HMEM
 	  Say M if unsure.
 
 config DEV_DAX_HMEM_DEVICES
-	depends on NUMA_KEEP_MEMINFO # for phys_to_target_node()
 	depends on DEV_DAX_HMEM && DAX=y
 	def_bool y
 
@@ -70,14 +65,5 @@ config DEV_DAX_KMEM
 	  device_dax driver and bound to this kmem driver on each boot.
 
 	  Say N if unsure.
-
-config DEV_DAX_PMEM_COMPAT
-	tristate "PMEM DAX: support the deprecated /sys/class/dax interface"
-	depends on m && DEV_DAX_PMEM=m
-	default DEV_DAX_PMEM
-	help
-	  Older versions of the libdaxctl library expect to find all
-	  device-dax instances under /sys/class/dax. If libdaxctl in
-	  your distribution is older than v58 say M, otherwise say N.
 
 endif

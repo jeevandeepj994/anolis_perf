@@ -12,9 +12,10 @@
 #include <linux/of_device.h>
 #include <linux/platform_device.h>
 
-#include "clk-mtk.h"
 #include "clk-gate.h"
+#include "clk-mtk.h"
 #include "clk-mux.h"
+#include "clk-pll.h"
 
 #include <dt-bindings/clock/mt6765-clk.h>
 
@@ -909,7 +910,6 @@ static struct platform_driver clk_mt6765_drv = {
 	.probe = clk_mt6765_probe,
 	.driver = {
 		.name = "clk-mt6765",
-		.owner = THIS_MODULE,
 		.of_match_table = of_match_clk_mt6765,
 	},
 };

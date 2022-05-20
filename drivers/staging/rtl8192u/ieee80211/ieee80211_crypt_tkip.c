@@ -107,7 +107,7 @@ static void ieee80211_tkip_deinit(void *priv)
 		crypto_free_shash(_priv->tx_tfm_michael);
 		crypto_free_shash(_priv->rx_tfm_michael);
 	}
-	kzfree(priv);
+	kfree_sensitive(priv);
 }
 
 
@@ -712,7 +712,7 @@ int __init ieee80211_crypto_tkip_init(void)
 	return ieee80211_register_crypto_ops(&ieee80211_crypt_tkip);
 }
 
-void __exit ieee80211_crypto_tkip_exit(void)
+void ieee80211_crypto_tkip_exit(void)
 {
 	ieee80211_unregister_crypto_ops(&ieee80211_crypt_tkip);
 }

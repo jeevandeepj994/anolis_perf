@@ -357,6 +357,12 @@ int rxrpc_send_data_packet(struct rxrpc_call *call, struct sk_buff *skb,
 
 	_enter(",{%d}", skb->len);
 
+	if (hlist_unhashed(&call->error_link)) {
+		spin_lock_bh(&call->peer->lock);
+		hlist_add_head_rcu(&call->error_link, &call->peer->error_targets);
+		spin_unlock_bh(&call->peer->lock);
+	}
+
 	/* Each transmission of a Tx packet needs a new serial number */
 	serial = atomic_inc_return(&conn->serial);
 
@@ -462,7 +468,7 @@ done:
 			if (call->peer->rtt_count > 1) {
 				unsigned long nowj = jiffies, ack_lost_at;
 
-				ack_lost_at = rxrpc_get_rto_backoff(call->peer, retrans);
+				ack_lost_at = rxrpc_get_rto_backoff(call->peer, false);
 				ack_lost_at += nowj;
 				WRITE_ONCE(call->ack_lost_at, ack_lost_at);
 				rxrpc_reduce_call_timer(call, ack_lost_at, nowj,

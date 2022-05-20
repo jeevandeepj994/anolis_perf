@@ -483,8 +483,7 @@ EXPORT_SYMBOL(iscsit_queue_rsp);
 void iscsit_aborted_task(struct iscsi_conn *conn, struct iscsi_cmd *cmd)
 {
 	spin_lock_bh(&conn->cmd_lock);
-	if (!list_empty(&cmd->i_conn_node) &&
-	    !(cmd->se_cmd.transport_state & CMD_T_FABRIC_STOP))
+	if (!list_empty(&cmd->i_conn_node))
 		list_del_init(&cmd->i_conn_node);
 	spin_unlock_bh(&conn->cmd_lock);
 
@@ -703,13 +702,19 @@ static int __init iscsi_target_init_module(void)
 	if (!iscsit_global->ts_bitmap)
 		goto configfs_out;
 
+	if (!zalloc_cpumask_var(&iscsit_global->allowed_cpumask, GFP_KERNEL)) {
+		pr_err("Unable to allocate iscsit_global->allowed_cpumask\n");
+		goto bitmap_out;
+	}
+	cpumask_setall(iscsit_global->allowed_cpumask);
+
 	lio_qr_cache = kmem_cache_create("lio_qr_cache",
 			sizeof(struct iscsi_queue_req),
 			__alignof__(struct iscsi_queue_req), 0, NULL);
 	if (!lio_qr_cache) {
 		pr_err("Unable to kmem_cache_create() for"
 				" lio_qr_cache\n");
-		goto bitmap_out;
+		goto cpumask_out;
 	}
 
 	lio_dr_cache = kmem_cache_create("lio_dr_cache",
@@ -754,6 +759,8 @@ dr_out:
 	kmem_cache_destroy(lio_dr_cache);
 qr_out:
 	kmem_cache_destroy(lio_qr_cache);
+cpumask_out:
+	free_cpumask_var(iscsit_global->allowed_cpumask);
 bitmap_out:
 	vfree(iscsit_global->ts_bitmap);
 configfs_out:
@@ -783,6 +790,7 @@ static void __exit iscsi_target_cleanup_module(void)
 
 	target_unregister_template(&iscsi_ops);
 
+	free_cpumask_var(iscsit_global->allowed_cpumask);
 	vfree(iscsit_global->ts_bitmap);
 	kfree(iscsit_global);
 }
@@ -1155,10 +1163,10 @@ int iscsit_setup_scsi_cmd(struct iscsi_conn *conn, struct iscsi_cmd *cmd,
 	/*
 	 * Initialize struct se_cmd descriptor from target_core_mod infrastructure
 	 */
-	transport_init_se_cmd(&cmd->se_cmd, &iscsi_ops,
-			conn->sess->se_sess, be32_to_cpu(hdr->data_length),
-			cmd->data_direction, sam_task_attr,
-			cmd->sense_buffer + 2, scsilun_to_int(&hdr->lun));
+	__target_init_cmd(&cmd->se_cmd, &iscsi_ops,
+			 conn->sess->se_sess, be32_to_cpu(hdr->data_length),
+			 cmd->data_direction, sam_task_attr,
+			 cmd->sense_buffer + 2, scsilun_to_int(&hdr->lun));
 
 	pr_debug("Got SCSI Command, ITT: 0x%08x, CmdSN: 0x%08x,"
 		" ExpXferLen: %u, Length: %u, CID: %hu\n", hdr->itt,
@@ -1167,7 +1175,10 @@ int iscsit_setup_scsi_cmd(struct iscsi_conn *conn, struct iscsi_cmd *cmd,
 
 	target_get_sess_cmd(&cmd->se_cmd, true);
 
-	cmd->sense_reason = target_cmd_init_cdb(&cmd->se_cmd, hdr->cdb);
+	cmd->se_cmd.tag = (__force u32)cmd->init_task_tag;
+	cmd->sense_reason = target_cmd_init_cdb(&cmd->se_cmd, hdr->cdb,
+						GFP_KERNEL);
+
 	if (cmd->sense_reason) {
 		if (cmd->sense_reason == TCM_OUT_OF_RESOURCES) {
 			return iscsit_add_reject_cmd(cmd,
@@ -1181,8 +1192,6 @@ int iscsit_setup_scsi_cmd(struct iscsi_conn *conn, struct iscsi_cmd *cmd,
 	if (cmd->sense_reason)
 		goto attach_cmd;
 
-	/* only used for printks or comparing with ->ref_task_tag */
-	cmd->se_cmd.tag = (__force u32)cmd->init_task_tag;
 	cmd->sense_reason = target_cmd_parse_cdb(&cmd->se_cmd);
 	if (cmd->sense_reason)
 		goto attach_cmd;
@@ -2014,10 +2023,10 @@ iscsit_handle_task_mgt_cmd(struct iscsi_conn *conn, struct iscsi_cmd *cmd,
 					     buf);
 	}
 
-	transport_init_se_cmd(&cmd->se_cmd, &iscsi_ops,
-			      conn->sess->se_sess, 0, DMA_NONE,
-			      TCM_SIMPLE_TAG, cmd->sense_buffer + 2,
-			      scsilun_to_int(&hdr->lun));
+	__target_init_cmd(&cmd->se_cmd, &iscsi_ops,
+			  conn->sess->se_sess, 0, DMA_NONE,
+			  TCM_SIMPLE_TAG, cmd->sense_buffer + 2,
+			  scsilun_to_int(&hdr->lun));
 
 	target_get_sess_cmd(&cmd->se_cmd, true);
 
@@ -3587,6 +3596,11 @@ static int iscsit_send_reject(
 void iscsit_thread_get_cpumask(struct iscsi_conn *conn)
 {
 	int ord, cpu;
+	cpumask_t conn_allowed_cpumask;
+
+	cpumask_and(&conn_allowed_cpumask, iscsit_global->allowed_cpumask,
+		    cpu_online_mask);
+
 	/*
 	 * bitmap_id is assigned from iscsit_global->ts_bitmap from
 	 * within iscsit_start_kthreads()
@@ -3595,8 +3609,9 @@ void iscsit_thread_get_cpumask(struct iscsi_conn *conn)
 	 * iSCSI connection's RX/TX threads will be scheduled to
 	 * execute upon.
 	 */
-	ord = conn->bitmap_id % cpumask_weight(cpu_online_mask);
-	for_each_online_cpu(cpu) {
+	cpumask_clear(conn->conn_cpumask);
+	ord = conn->bitmap_id % cpumask_weight(&conn_allowed_cpumask);
+	for_each_cpu(cpu, &conn_allowed_cpumask) {
 		if (ord-- == 0) {
 			cpumask_set_cpu(cpu, conn->conn_cpumask);
 			return;
@@ -3608,6 +3623,62 @@ void iscsit_thread_get_cpumask(struct iscsi_conn *conn)
 	dump_stack();
 	cpumask_setall(conn->conn_cpumask);
 }
+
+static void iscsit_thread_reschedule(struct iscsi_conn *conn)
+{
+	/*
+	 * If iscsit_global->allowed_cpumask modified, reschedule iSCSI
+	 * connection's RX/TX threads update conn->allowed_cpumask.
+	 */
+	if (!cpumask_equal(iscsit_global->allowed_cpumask,
+			   conn->allowed_cpumask)) {
+		iscsit_thread_get_cpumask(conn);
+		conn->conn_tx_reset_cpumask = 1;
+		conn->conn_rx_reset_cpumask = 1;
+		cpumask_copy(conn->allowed_cpumask,
+			     iscsit_global->allowed_cpumask);
+	}
+}
+
+void iscsit_thread_check_cpumask(
+	struct iscsi_conn *conn,
+	struct task_struct *p,
+	int mode)
+{
+	/*
+	 * The TX and RX threads maybe call iscsit_thread_check_cpumask()
+	 * at the same time. The RX thread might be faster and return from
+	 * iscsit_thread_reschedule() with conn_rx_reset_cpumask set to 0.
+	 * Then the TX thread sets it back to 1.
+	 * The next time the RX thread loops, it sees conn_rx_reset_cpumask
+	 * set to 1 and calls set_cpus_allowed_ptr() again and set it to 0.
+	 */
+	iscsit_thread_reschedule(conn);
+
+	/*
+	 * mode == 1 signals iscsi_target_tx_thread() usage.
+	 * mode == 0 signals iscsi_target_rx_thread() usage.
+	 */
+	if (mode == 1) {
+		if (!conn->conn_tx_reset_cpumask)
+			return;
+	} else {
+		if (!conn->conn_rx_reset_cpumask)
+			return;
+	}
+
+	/*
+	 * Update the CPU mask for this single kthread so that
+	 * both TX and RX kthreads are scheduled to run on the
+	 * same CPU.
+	 */
+	set_cpus_allowed_ptr(p, conn->conn_cpumask);
+	if (mode == 1)
+		conn->conn_tx_reset_cpumask = 0;
+	else
+		conn->conn_rx_reset_cpumask = 0;
+}
+EXPORT_SYMBOL(iscsit_thread_check_cpumask);
 
 int
 iscsit_immediate_queue(struct iscsi_conn *conn, struct iscsi_cmd *cmd, int state)
@@ -4083,12 +4154,22 @@ static void iscsit_release_commands_from_conn(struct iscsi_conn *conn)
 	spin_lock_bh(&conn->cmd_lock);
 	list_splice_init(&conn->conn_cmd_list, &tmp_list);
 
-	list_for_each_entry(cmd, &tmp_list, i_conn_node) {
+	list_for_each_entry_safe(cmd, cmd_tmp, &tmp_list, i_conn_node) {
 		struct se_cmd *se_cmd = &cmd->se_cmd;
 
 		if (se_cmd->se_tfo != NULL) {
 			spin_lock_irq(&se_cmd->t_state_lock);
-			se_cmd->transport_state |= CMD_T_FABRIC_STOP;
+			if (se_cmd->transport_state & CMD_T_ABORTED) {
+				/*
+				 * LIO's abort path owns the cleanup for this,
+				 * so put it back on the list and let
+				 * aborted_task handle it.
+				 */
+				list_move_tail(&cmd->i_conn_node,
+					       &conn->conn_cmd_list);
+			} else {
+				se_cmd->transport_state |= CMD_T_FABRIC_STOP;
+			}
 			spin_unlock_irq(&se_cmd->t_state_lock);
 		}
 	}
@@ -4318,7 +4399,7 @@ int iscsit_close_connection(
 	     atomic_read(&sess->session_fall_back_to_erl0)) {
 		spin_unlock_bh(&sess->conn_lock);
 		complete_all(&sess->session_wait_comp);
-		iscsit_close_session(sess);
+		iscsit_close_session(sess, true);
 
 		return 0;
 	} else if (atomic_read(&sess->session_logout)) {
@@ -4328,7 +4409,7 @@ int iscsit_close_connection(
 		if (atomic_read(&sess->session_close)) {
 			spin_unlock_bh(&sess->conn_lock);
 			complete_all(&sess->session_wait_comp);
-			iscsit_close_session(sess);
+			iscsit_close_session(sess, true);
 		} else {
 			spin_unlock_bh(&sess->conn_lock);
 		}
@@ -4344,7 +4425,7 @@ int iscsit_close_connection(
 		if (atomic_read(&sess->session_close)) {
 			spin_unlock_bh(&sess->conn_lock);
 			complete_all(&sess->session_wait_comp);
-			iscsit_close_session(sess);
+			iscsit_close_session(sess, true);
 		} else {
 			spin_unlock_bh(&sess->conn_lock);
 		}
@@ -4357,7 +4438,7 @@ int iscsit_close_connection(
  * If the iSCSI Session for the iSCSI Initiator Node exists,
  * forcefully shutdown the iSCSI NEXUS.
  */
-int iscsit_close_session(struct iscsi_session *sess)
+int iscsit_close_session(struct iscsi_session *sess, bool can_sleep)
 {
 	struct iscsi_portal_group *tpg = sess->tpg;
 	struct se_portal_group *se_tpg = &tpg->tpg_se_tpg;
@@ -4390,14 +4471,10 @@ int iscsit_close_session(struct iscsi_session *sess)
 	 * time2retain handler) and contain and active session usage count we
 	 * restart the timer and exit.
 	 */
-	if (!in_interrupt()) {
-		iscsit_check_session_usage_count(sess);
-	} else {
-		if (iscsit_check_session_usage_count(sess) == 2) {
-			atomic_set(&sess->session_logout, 0);
-			iscsit_start_time2retain_handler(sess);
-			return 0;
-		}
+	if (iscsit_check_session_usage_count(sess, can_sleep)) {
+		atomic_set(&sess->session_logout, 0);
+		iscsit_start_time2retain_handler(sess);
+		return 0;
 	}
 
 	transport_deregister_session(sess->se_sess);

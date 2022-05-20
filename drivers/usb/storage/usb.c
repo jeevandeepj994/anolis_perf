@@ -388,7 +388,7 @@ static int usb_stor_control_thread(void * __us)
 		if (srb->result == DID_ABORT << 16) {
 SkipForAbort:
 			usb_stor_dbg(us, "scsi command aborted\n");
-			srb = NULL;	/* Don't call srb->scsi_done() */
+			srb = NULL;	/* Don't call scsi_done() */
 		}
 
 		/*
@@ -417,7 +417,7 @@ SkipForAbort:
 		if (srb) {
 			usb_stor_dbg(us, "scsi cmd done, result=0x%x\n",
 					srb->result);
-			srb->scsi_done(srb);
+			scsi_done_direct(srb);
 		}
 	} /* for (;;) */
 
@@ -540,6 +540,9 @@ void usb_stor_adjust_quirks(struct usb_device *udev, unsigned long *fflags)
 			break;
 		case 'j':
 			f |= US_FL_NO_REPORT_LUNS;
+			break;
+		case 'k':
+			f |= US_FL_NO_SAME;
 			break;
 		case 'l':
 			f |= US_FL_NOT_LOCKABLE;
@@ -1049,9 +1052,8 @@ int usb_stor_probe2(struct us_data *us)
 		goto BadDevice;
 	usb_autopm_get_interface_no_resume(us->pusb_intf);
 	snprintf(us->scsi_name, sizeof(us->scsi_name), "usb-storage %s",
-					dev_name(dev));
-	result = scsi_add_host_with_dma(us_to_host(us), dev,
-					us->pusb_dev->bus->sysdev);
+					dev_name(&us->pusb_intf->dev));
+	result = scsi_add_host(us_to_host(us), dev);
 	if (result) {
 		dev_warn(dev,
 				"Unable to add the scsi host\n");

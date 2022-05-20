@@ -68,21 +68,14 @@ enum rxrpc_client_trace {
 	rxrpc_client_chan_activate,
 	rxrpc_client_chan_disconnect,
 	rxrpc_client_chan_pass,
-	rxrpc_client_chan_unstarted,
 	rxrpc_client_chan_wait_failed,
 	rxrpc_client_cleanup,
-	rxrpc_client_count,
 	rxrpc_client_discard,
 	rxrpc_client_duplicate,
 	rxrpc_client_exposed,
 	rxrpc_client_replace,
 	rxrpc_client_to_active,
-	rxrpc_client_to_culled,
 	rxrpc_client_to_idle,
-	rxrpc_client_to_inactive,
-	rxrpc_client_to_upgrade,
-	rxrpc_client_to_waiting,
-	rxrpc_client_uncount,
 };
 
 enum rxrpc_call_trace {
@@ -90,12 +83,15 @@ enum rxrpc_call_trace {
 	rxrpc_call_error,
 	rxrpc_call_got,
 	rxrpc_call_got_kernel,
+	rxrpc_call_got_timer,
 	rxrpc_call_got_userid,
 	rxrpc_call_new_client,
 	rxrpc_call_new_service,
 	rxrpc_call_put,
 	rxrpc_call_put_kernel,
 	rxrpc_call_put_noqueue,
+	rxrpc_call_put_notimer,
+	rxrpc_call_put_timer,
 	rxrpc_call_put_userid,
 	rxrpc_call_queued,
 	rxrpc_call_queued_ref,
@@ -271,41 +267,29 @@ enum rxrpc_tx_point {
 	EM(rxrpc_client_chan_activate,		"ChActv") \
 	EM(rxrpc_client_chan_disconnect,	"ChDisc") \
 	EM(rxrpc_client_chan_pass,		"ChPass") \
-	EM(rxrpc_client_chan_unstarted,		"ChUnst") \
 	EM(rxrpc_client_chan_wait_failed,	"ChWtFl") \
 	EM(rxrpc_client_cleanup,		"Clean ") \
-	EM(rxrpc_client_count,			"Count ") \
 	EM(rxrpc_client_discard,		"Discar") \
 	EM(rxrpc_client_duplicate,		"Duplic") \
 	EM(rxrpc_client_exposed,		"Expose") \
 	EM(rxrpc_client_replace,		"Replac") \
 	EM(rxrpc_client_to_active,		"->Actv") \
-	EM(rxrpc_client_to_culled,		"->Cull") \
-	EM(rxrpc_client_to_idle,		"->Idle") \
-	EM(rxrpc_client_to_inactive,		"->Inac") \
-	EM(rxrpc_client_to_upgrade,		"->Upgd") \
-	EM(rxrpc_client_to_waiting,		"->Wait") \
-	E_(rxrpc_client_uncount,		"Uncoun")
-
-#define rxrpc_conn_cache_states \
-	EM(RXRPC_CONN_CLIENT_INACTIVE,		"Inac") \
-	EM(RXRPC_CONN_CLIENT_WAITING,		"Wait") \
-	EM(RXRPC_CONN_CLIENT_ACTIVE,		"Actv") \
-	EM(RXRPC_CONN_CLIENT_UPGRADE,		"Upgd") \
-	EM(RXRPC_CONN_CLIENT_CULLED,		"Cull") \
-	E_(RXRPC_CONN_CLIENT_IDLE,		"Idle") \
+	E_(rxrpc_client_to_idle,		"->Idle")
 
 #define rxrpc_call_traces \
 	EM(rxrpc_call_connected,		"CON") \
 	EM(rxrpc_call_error,			"*E*") \
 	EM(rxrpc_call_got,			"GOT") \
 	EM(rxrpc_call_got_kernel,		"Gke") \
+	EM(rxrpc_call_got_timer,		"GTM") \
 	EM(rxrpc_call_got_userid,		"Gus") \
 	EM(rxrpc_call_new_client,		"NWc") \
 	EM(rxrpc_call_new_service,		"NWs") \
 	EM(rxrpc_call_put,			"PUT") \
 	EM(rxrpc_call_put_kernel,		"Pke") \
-	EM(rxrpc_call_put_noqueue,		"PNQ") \
+	EM(rxrpc_call_put_noqueue,		"PnQ") \
+	EM(rxrpc_call_put_notimer,		"PnT") \
+	EM(rxrpc_call_put_timer,		"PTM") \
 	EM(rxrpc_call_put_userid,		"Pus") \
 	EM(rxrpc_call_queued,			"QUE") \
 	EM(rxrpc_call_queued_ref,		"QUR") \
@@ -594,23 +578,20 @@ TRACE_EVENT(rxrpc_client,
 		    __field(int,			channel		)
 		    __field(int,			usage		)
 		    __field(enum rxrpc_client_trace,	op		)
-		    __field(enum rxrpc_conn_cache_state, cs		)
 			     ),
 
 	    TP_fast_assign(
-		    __entry->conn = conn->debug_id;
+		    __entry->conn = conn ? conn->debug_id : 0;
 		    __entry->channel = channel;
-		    __entry->usage = atomic_read(&conn->usage);
+		    __entry->usage = conn ? atomic_read(&conn->usage) : -2;
 		    __entry->op = op;
-		    __entry->cid = conn->proto.cid;
-		    __entry->cs = conn->cache_state;
+		    __entry->cid = conn ? conn->proto.cid : 0;
 			   ),
 
-	    TP_printk("C=%08x h=%2d %s %s i=%08x u=%d",
+	    TP_printk("C=%08x h=%2d %s i=%08x u=%d",
 		      __entry->conn,
 		      __entry->channel,
 		      __print_symbolic(__entry->op, rxrpc_client_traces),
-		      __print_symbolic(__entry->cs, rxrpc_conn_cache_states),
 		      __entry->cid,
 		      __entry->usage)
 	    );

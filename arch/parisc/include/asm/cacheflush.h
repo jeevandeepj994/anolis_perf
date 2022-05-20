@@ -9,16 +9,11 @@
 /* The usual comment is "Caches aren't brain-dead on the <architecture>".
  * Unfortunately, that doesn't apply to PA-RISC. */
 
-/* Internal implementation */
-void flush_data_cache_local(void *);  /* flushes local data-cache only */
-void flush_instruction_cache_local(void *); /* flushes local code-cache only */
-#ifdef CONFIG_SMP
-void flush_data_cache(void); /* flushes data-cache only (all processors) */
-void flush_instruction_cache(void); /* flushes i-cache only (all processors) */
-#else
-#define flush_data_cache() flush_data_cache_local(NULL)
-#define flush_instruction_cache() flush_instruction_cache_local(NULL)
-#endif
+#include <linux/jump_label.h>
+
+DECLARE_STATIC_KEY_TRUE(parisc_has_cache);
+DECLARE_STATIC_KEY_TRUE(parisc_has_dcache);
+DECLARE_STATIC_KEY_TRUE(parisc_has_icache);
 
 #define flush_cache_dup_mm(mm) flush_cache_mm(mm)
 
@@ -36,16 +31,12 @@ void flush_cache_all_local(void);
 void flush_cache_all(void);
 void flush_cache_mm(struct mm_struct *mm);
 
-#define ARCH_HAS_FLUSH_KERNEL_DCACHE_PAGE
 void flush_kernel_dcache_page_addr(void *addr);
-static inline void flush_kernel_dcache_page(struct page *page)
-{
-	flush_kernel_dcache_page_addr(page_address(page));
-}
 
 #define flush_kernel_dcache_range(start,size) \
 	flush_kernel_dcache_range_asm((start), (start)+(size));
 
+#define ARCH_IMPLEMENTS_FLUSH_KERNEL_VMAP_RANGE 1
 void flush_kernel_vmap_range(void *vaddr, int size);
 void invalidate_kernel_vmap_range(void *vaddr, int size);
 
@@ -53,13 +44,13 @@ void invalidate_kernel_vmap_range(void *vaddr, int size);
 #define flush_cache_vunmap(start, end)		flush_cache_all()
 
 #define ARCH_IMPLEMENTS_FLUSH_DCACHE_PAGE 1
-extern void flush_dcache_page(struct page *page);
+void flush_dcache_page(struct page *page);
 
 #define flush_dcache_mmap_lock(mapping)		xa_lock_irq(&mapping->i_pages)
 #define flush_dcache_mmap_unlock(mapping)	xa_unlock_irq(&mapping->i_pages)
 
 #define flush_icache_page(vma,page)	do { 		\
-	flush_kernel_dcache_page(page);			\
+	flush_kernel_dcache_page_addr(page_address(page)); \
 	flush_kernel_icache_page(page_address(page)); 	\
 } while (0)
 

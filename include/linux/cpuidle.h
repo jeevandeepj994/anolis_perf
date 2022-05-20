@@ -49,8 +49,8 @@ struct cpuidle_state {
 	char		name[CPUIDLE_NAME_LEN];
 	char		desc[CPUIDLE_DESC_LEN];
 
-	u64		exit_latency_ns;
-	u64		target_residency_ns;
+	s64		exit_latency_ns;
+	s64		target_residency_ns;
 	unsigned int	flags;
 	unsigned int	exit_latency; /* in US */
 	int		power_usage; /* in mW */
@@ -271,13 +271,8 @@ struct cpuidle_governor {
 	void (*reflect)		(struct cpuidle_device *dev, int index);
 };
 
-#ifdef CONFIG_CPU_IDLE
 extern int cpuidle_register_governor(struct cpuidle_governor *gov);
 extern s64 cpuidle_governor_latency_req(unsigned int cpu);
-#else
-static inline int cpuidle_register_governor(struct cpuidle_governor *gov)
-{return 0;}
-#endif
 
 #define __CPU_PM_CPU_IDLE_ENTER(low_level_idle_enter,			\
 				idx,					\

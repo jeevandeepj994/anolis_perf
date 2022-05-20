@@ -46,11 +46,16 @@ properties:
   vled-supply:
     description: LED supply.
 
+  '#address-cells':
+    const: 1
+
+  '#size-cells':
+    const: 0
+
 patternProperties:
   '^multi-led@[0-9a-f]$':
     type: object
-    allOf:
-      - $ref: leds-class-multicolor.yaml#
+    $ref: leds-class-multicolor.yaml#
     properties:
       reg:
         minItems: 1
@@ -68,6 +73,8 @@ patternProperties:
 required:
   - compatible
   - reg
+
+additionalProperties: false
 
 examples:
   - |

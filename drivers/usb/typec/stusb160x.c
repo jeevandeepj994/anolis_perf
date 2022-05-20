@@ -544,11 +544,10 @@ static int stusb160x_get_fw_caps(struct stusb160x *chip,
 	 */
 	ret = fwnode_property_read_string(fwnode, "power-role", &cap_str);
 	if (!ret) {
-		chip->port_type = typec_find_port_power_role(cap_str);
-		if (chip->port_type < 0) {
-			ret = chip->port_type;
+		ret = typec_find_port_power_role(cap_str);
+		if (ret < 0)
 			return ret;
-		}
+		chip->port_type = ret;
 	}
 	chip->capability.type = chip->port_type;
 
@@ -563,17 +562,15 @@ static int stusb160x_get_fw_caps(struct stusb160x *chip,
 	 * Supported power operation mode can be configured through device tree
 	 * else it is read from chip registers in stusb160x_get_caps.
 	 */
-	ret = fwnode_property_read_string(fwnode, "power-opmode", &cap_str);
+	ret = fwnode_property_read_string(fwnode, "typec-power-opmode", &cap_str);
 	if (!ret) {
-		chip->pwr_opmode = typec_find_pwr_opmode(cap_str);
+		ret = typec_find_pwr_opmode(cap_str);
 		/* Power delivery not yet supported */
-		if (chip->pwr_opmode < 0 ||
-		    chip->pwr_opmode == TYPEC_PWR_MODE_PD) {
-			ret = chip->pwr_opmode < 0 ? chip->pwr_opmode : -EINVAL;
-			dev_err(chip->dev, "bad power operation mode: %d\n",
-				chip->pwr_opmode);
-			return ret;
+		if (ret < 0 || ret == TYPEC_PWR_MODE_PD) {
+			dev_err(chip->dev, "bad power operation mode: %d\n", ret);
+			return -EINVAL;
 		}
+		chip->pwr_opmode = ret;
 	}
 
 	return 0;
@@ -632,6 +629,7 @@ static const struct of_device_id stusb160x_of_match[] = {
 	{ .compatible = "st,stusb1600", .data = &stusb1600_regmap_config},
 	{},
 };
+MODULE_DEVICE_TABLE(of, stusb160x_of_match);
 
 static int stusb160x_probe(struct i2c_client *client)
 {
@@ -684,8 +682,17 @@ static int stusb160x_probe(struct i2c_client *client)
 	}
 
 	fwnode = device_get_named_child_node(chip->dev, "connector");
-	if (IS_ERR(fwnode))
-		return PTR_ERR(fwnode);
+	if (!fwnode)
+		return -ENODEV;
+
+	/*
+	 * This fwnode has a "compatible" property, but is never populated as a
+	 * struct device. Instead we simply parse it to read the properties.
+	 * This it breaks fw_devlink=on. To maintain backward compatibility
+	 * with existing DT files, we work around this by deleting any
+	 * fwnode_links to/from this fwnode.
+	 */
+	fw_devlink_purge_absent_suppliers(fwnode);
 
 	/*
 	 * When both VDD and VSYS power supplies are present, the low power
@@ -729,8 +736,8 @@ static int stusb160x_probe(struct i2c_client *client)
 	}
 
 	chip->port = typec_register_port(chip->dev, &chip->capability);
-	if (!chip->port) {
-		ret = -ENODEV;
+	if (IS_ERR(chip->port)) {
+		ret = PTR_ERR(chip->port);
 		goto all_reg_disable;
 	}
 
@@ -741,10 +748,6 @@ static int stusb160x_probe(struct i2c_client *client)
 	typec_set_pwr_opmode(chip->port, chip->pwr_opmode);
 
 	if (client->irq) {
-		ret = stusb160x_irq_init(chip, client->irq);
-		if (ret)
-			goto port_unregister;
-
 		chip->role_sw = fwnode_usb_role_switch_get(fwnode);
 		if (IS_ERR(chip->role_sw)) {
 			ret = PTR_ERR(chip->role_sw);
@@ -754,6 +757,10 @@ static int stusb160x_probe(struct i2c_client *client)
 					ret);
 			goto port_unregister;
 		}
+
+		ret = stusb160x_irq_init(chip, client->irq);
+		if (ret)
+			goto role_sw_put;
 	} else {
 		/*
 		 * If Source or Dual power role, need to enable VDD supply
@@ -777,6 +784,9 @@ static int stusb160x_probe(struct i2c_client *client)
 
 	return 0;
 
+role_sw_put:
+	if (chip->role_sw)
+		usb_role_switch_put(chip->role_sw);
 port_unregister:
 	typec_unregister_port(chip->port);
 all_reg_disable:
