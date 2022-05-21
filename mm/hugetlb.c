@@ -47,6 +47,8 @@ int hugetlb_max_hstate __read_mostly;
 unsigned int default_hstate_idx;
 struct hstate hstates[HUGE_MAX_HSTATE];
 
+int sysctl_enable_used_hugtlb_migration;
+
 #ifdef CONFIG_CMA
 static struct cma *hugetlb_cma[MAX_NUMNODES];
 #endif
@@ -2383,7 +2385,8 @@ retry:
 		 * Fail with -EBUSY if not possible.
 		 */
 		spin_unlock_irq(&hugetlb_lock);
-		if (!isolate_huge_page(old_page, list))
+		if (!sysctl_enable_used_hugtlb_migration ||
+		    !isolate_huge_page(old_page, list))
 			ret = -EBUSY;
 		spin_lock_irq(&hugetlb_lock);
 		goto free_new;
@@ -2464,7 +2467,8 @@ int isolate_or_dissolve_huge_page(struct page *page, struct list_head *list)
 	if (hstate_is_gigantic(h))
 		return -ENOMEM;
 
-	if (page_count(head) && isolate_huge_page(head, list))
+	if (sysctl_enable_used_hugtlb_migration && page_count(head)
+	    && isolate_huge_page(head, list))
 		ret = 0;
 	else if (!page_count(head))
 		ret = alloc_and_dissolve_huge_page(h, head, list);

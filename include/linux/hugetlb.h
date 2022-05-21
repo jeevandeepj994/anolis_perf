@@ -16,6 +16,8 @@ struct ctl_table;
 struct user_struct;
 struct mmu_gather;
 
+extern int sysctl_enable_used_hugtlb_migration;
+
 #ifndef is_hugepd
 typedef struct { unsigned long pd; } hugepd_t;
 #define is_hugepd(hugepd) (0)
