@@ -28,7 +28,7 @@
 #define KVM_HC_MIPS_CONSOLE_OUTPUT	8
 #define KVM_HC_CLOCK_PAIRING		9
 #define KVM_HC_SEND_IPI		10
-#define KVM_HC_VM_ATTESTATION		12
+#define KVM_HC_VM_ATTESTATION		100	/* Specific to Hygon CPU */
 
 /*
  * hypercalls use architecture specific
