@@ -2682,7 +2682,7 @@ static struct nft_expr *nft_expr_init(const struct nft_ctx *ctx,
 		goto err_expr_parse;
 
 	err = -EOPNOTSUPP;
-	if (!(info.ops->type->flags & NFT_EXPR_STATEFUL))
+	if (!(expr_info.ops->type->flags & NFT_EXPR_STATEFUL))
 		goto err_expr_stateful;
 
 	err = -ENOMEM;
