@@ -3438,6 +3438,15 @@ static struct ctl_table vm_table[] = {
 		.extra1		= SYSCTL_ZERO,
 		.extra2		= SYSCTL_ONE,
 	},
+#ifdef CONFIG_HUGETLBFS
+	{
+		.procname	= "enable_used_hugtlb_migration",
+		.data		= &sysctl_enable_used_hugtlb_migration,
+		.maxlen		= sizeof(sysctl_enable_used_hugtlb_migration),
+		.mode		= 0644,
+		.proc_handler	= proc_dointvec_minmax,
+	},
+#endif
 	{ }
 };
 
