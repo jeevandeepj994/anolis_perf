@@ -1156,14 +1156,6 @@ static int vfio_iova_dirty_bitmap(u64 __user *bitmap, struct vfio_iommu *iommu,
 		if (ret)
 			return ret;
 
-		/*
-		 * Re-populate bitmap to include all pinned pages which are
-		 * considered as dirty but exclude pages which are unpinned and
-		 * pages which are marked dirty by vfio_dma_rw()
-		 */
-		bitmap_clear(dma->bitmap, 0, dma->size >> pgshift);
-		vfio_dma_populate_bitmap(dma, pgsize);
-
 		/* Clear iommu dirty log to re-enable dirty log tracking */
 		if (!iommu->pinned_page_dirty_scope &&
 		    dma->iommu_mapped && !iommu->num_non_hwdbm_groups) {
@@ -1175,6 +1167,13 @@ static int vfio_iova_dirty_bitmap(u64 __user *bitmap, struct vfio_iommu *iommu,
 				return ret;
 			}
 		}
+		/*
+		 * Re-populate bitmap to include all pinned pages which are
+		 * considered as dirty but exclude pages which are unpinned and
+		 * pages which are marked dirty by vfio_dma_rw()
+		 */
+		bitmap_clear(dma->bitmap, 0, dma->size >> pgshift);
+		vfio_dma_populate_bitmap(dma, pgsize);
 	}
 	return 0;
 }
