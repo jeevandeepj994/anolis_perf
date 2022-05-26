@@ -146,6 +146,15 @@ struct vfio_regions {
 #define DIRTY_BITMAP_PAGES_MAX	 ((u64)INT_MAX)
 #define DIRTY_BITMAP_SIZE_MAX	 DIRTY_BITMAP_BYTES(DIRTY_BITMAP_PAGES_MAX)
 
+struct domain_capsule {
+	struct vfio_group	*group;
+	struct iommu_domain	*domain;
+	void			*data;
+	/* set if @data contains a user pointer*/
+	bool			user;
+	u64			flags;
+};
+
 static int put_pfn(unsigned long pfn, int prot);
 
 static struct vfio_group *vfio_iommu_find_iommu_group(struct vfio_iommu *iommu,
@@ -1002,21 +1011,39 @@ static void vfio_update_pgsize_bitmap(struct vfio_iommu *iommu)
 	}
 }
 
+static struct device *vfio_get_iommu_device(struct vfio_group *group,
+					    struct device *dev)
+{
+	struct mdev_device *mdev = to_mdev_device(dev);
+
+	if (group->mdev_group)
+		return mdev_get_iommu_device(mdev);
+	else
+		return dev;
+}
+
 static int vfio_dev_enable_feature(struct device *dev, void *data)
 {
-	enum iommu_dev_features *feat = data;
+	struct domain_capsule *dc = data;
+	enum iommu_dev_features *feat = dc->data;
+	struct device *iommu_device;
 
-	if (iommu_dev_feature_enabled(dev, *feat))
+	iommu_device = vfio_get_iommu_device(dc->group, dev);
+	if (!iommu_device)
+		return -EINVAL;
+
+	if (iommu_dev_feature_enabled(iommu_device, *feat))
 		return 0;
 
-	return iommu_dev_enable_feature(dev, *feat);
+	return iommu_dev_enable_feature(iommu_device, *feat);
 }
 
 static bool vfio_group_supports_hwdbm(struct vfio_group *group)
 {
 	enum iommu_dev_features feat = IOMMU_DEV_FEAT_HWDBM;
+	struct domain_capsule dc = { .group = group, .data = &feat, };
 
-	if (iommu_group_for_each_dev(group->iommu_group, &feat,
+	if (iommu_group_for_each_dev(group->iommu_group, &dc,
 				     vfio_dev_enable_feature))
 		return false;
 
