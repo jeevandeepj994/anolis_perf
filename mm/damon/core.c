@@ -168,8 +168,10 @@ void damon_free_target(struct damon_target *t)
 {
 	struct damon_region *r, *next;
 
+	spin_lock(&t->target_lock);
 	damon_for_each_region_safe(r, next, t)
 		damon_free_region(r);
+	spin_unlock(&t->target_lock);
 	kfree(t);
 }
 
@@ -901,14 +903,10 @@ static struct damon_region *get_damon_region(struct damon_target *t, unsigned lo
 	if (!t || !addr)
 		return NULL;
 
-	spin_lock(&t->target_lock);
 	damon_for_each_region_safe(r, next, t) {
-		if (r->ar.start <= addr && r->ar.end >= addr) {
-			spin_unlock(&t->target_lock);
+		if (r->ar.start <= addr && r->ar.end >= addr)
 			return r;
-		}
 	}
-	spin_unlock(&t->target_lock);
 
 	return NULL;
 }
@@ -922,6 +920,7 @@ void damon_numa_fault(int page_nid, int node_id, struct vm_fault *vmf)
 			&& nr_online_nodes > 1) {
 		t = get_damon_target(current);
 		if (t) {
+			spin_lock(&t->target_lock);
 			r = get_damon_region(t, vmf->address);
 			if (r) {
 				if (page_nid == node_id)
@@ -929,6 +928,7 @@ void damon_numa_fault(int page_nid, int node_id, struct vm_fault *vmf)
 				else
 					r->remote++;
 			}
+			spin_unlock(&t->target_lock);
 		}
 	}
 }
