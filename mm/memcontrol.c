@@ -6671,6 +6671,60 @@ static int memcg_pgtable_misplaced_write(struct cgroup_subsys_state *css,
 }
 #endif /* CONFIG_PGTABLE_BIND */
 
+#ifdef CONFIG_LRU_GEN
+static bool mglru_size_valid_check(struct mem_cgroup *memcg)
+{
+	struct mem_cgroup *parent;
+
+	while ((parent = parent_mem_cgroup(memcg)) != NULL) {
+		if (unlikely(parent->mglru_batch_size))
+			return false;
+
+		memcg = parent;
+	}
+
+	return true;
+}
+
+static ssize_t mem_cgroup_mglru_size_write(struct kernfs_open_file *of,
+			 char *buf, size_t nbytes, loff_t off)
+{
+	struct mem_cgroup *memcg = mem_cgroup_from_css(of_css(of));
+	char *end;
+	unsigned long batch_size;
+
+	if (!mglru_size_valid_check(memcg)) {
+		pr_err("Failed to set the mglru batch size.\n");
+		return -EINVAL;
+	}
+
+	buf = strstrip(buf);
+	batch_size = memparse(buf, &end);
+	if (*end != '\0')
+		return -EINVAL;
+
+	WRITE_ONCE(memcg->mglru_batch_size, batch_size);
+	return nbytes;
+}
+
+static u64 mem_cgroup_mglru_size_read(struct cgroup_subsys_state *css,
+			struct cftype *cft)
+{
+	struct mem_cgroup *memcg = mem_cgroup_from_css(css);
+
+	return READ_ONCE(memcg->mglru_batch_size);
+}
+
+static int memcg_mglru_reclaim_kbytes_show(struct seq_file *m, void *v)
+{
+	struct mem_cgroup *memcg = mem_cgroup_from_css(seq_css(m));
+	unsigned long reclaim_kbytes = memcg->mglru_reclaim_pages << (PAGE_SHIFT - 10);
+
+	seq_printf(m, "%lu\n", reclaim_kbytes);
+	return 0;
+}
+#endif
+
 #ifdef CONFIG_TRANSPARENT_HUGEPAGE
 static int memcg_thp_reclaim_show(struct seq_file *m, void *v)
 {
@@ -7005,6 +7059,18 @@ static struct cftype mem_cgroup_legacy_files[] = {
 		.seq_show =  memcg_lat_stat_show,
 	},
 #endif /* CONFIG_MEMSLI */
+
+#ifdef CONFIG_LRU_GEN
+	{
+		.name = "mglru_batch_size",
+		.write = mem_cgroup_mglru_size_write,
+		.read_u64 = mem_cgroup_mglru_size_read,
+	},
+	{
+		.name = "mglru_reclaim_kbytes",
+		.seq_show = memcg_mglru_reclaim_kbytes_show,
+	},
+#endif
 	{
 		.name = "exstat",
 		.seq_show = memcg_exstat_show,

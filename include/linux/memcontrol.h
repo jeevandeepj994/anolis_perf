@@ -518,6 +518,8 @@ struct mem_cgroup {
 #ifdef CONFIG_LRU_GEN
 	/* per-memcg mm_struct list */
 	struct lru_gen_mm_list mm_list;
+	unsigned long mglru_batch_size;
+	unsigned long mglru_reclaim_pages;
 #endif
 
 #ifdef CONFIG_PGTABLE_BIND
