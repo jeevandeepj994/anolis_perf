@@ -254,6 +254,10 @@ static void set_task_reclaim_state(struct task_struct *task,
 
 static LIST_HEAD(shrinker_list);
 static DECLARE_RWSEM(shrinker_rwsem);
+#ifdef CONFIG_LRU_GEN
+static DECLARE_WAIT_QUEUE_HEAD(kreclaim_thread_wait);
+static int start_stop_mglru_kreclaimed(void);
+#endif
 
 #ifdef CONFIG_MEMCG
 /*
@@ -828,6 +832,16 @@ static unsigned long shrink_slab(gfp_t gfp_mask, int nid,
 	struct shrinker *shrinker;
 
 	/*
+	 * hot and cold pages are effectively divided by different lru
+	 * when mglru enable. hence direct reclaim always evict the
+	 * oldest page, but the slab page is not that case. proactive
+	 * reclaim will result in the slab cache is reclaimed, which is
+	 * not expected and maybe lead to the performance regression.
+	 */
+	if (lru_gen_enabled() && background_proactive_reclaim())
+		return 0;
+
+	/*
 	 * The root memcg might be allocated even though memcg is disabled
 	 * via "cgroup_disable=memory" boot parameter.  This could make
 	 * mem_cgroup_is_root() return false, then just run memcg slab
@@ -1299,6 +1313,11 @@ static unsigned int shrink_page_list(struct list_head *page_list,
 		/* page_update_gen() tried to promote this page? */
 		if (lru_gen_enabled() && !ignore_references &&
 		    page_mapped(page) && PageReferenced(page))
+			goto keep_locked;
+
+		/* proactive reclaim exclude the dirty and writeback based on mglru */
+		if (lru_gen_enabled() && background_proactive_reclaim() &&
+			(PageDirty(page) || PageWriteback(page)))
 			goto keep_locked;
 
 		may_enter_fs = (sc->gfp_mask & __GFP_FS) ||
@@ -4320,6 +4339,8 @@ static bool age_lruvec(struct lruvec *lruvec, struct scan_control *sc, unsigned 
 
 /* to protect the working set of the last N jiffies */
 static unsigned long lru_gen_min_ttl __read_mostly;
+/* to reclaim the memory as the specified period */
+static unsigned long lru_gen_reclaim_ms __read_mostly;
 
 static void lru_gen_age_node(struct pglist_data *pgdat, struct scan_control *sc)
 {
@@ -5146,6 +5167,8 @@ static void lru_gen_change_state(bool enabled)
 
 		cond_resched();
 	} while ((memcg = mem_cgroup_iter(NULL, memcg, NULL)));
+
+	start_stop_mglru_kreclaimed();
 unlock:
 	mutex_unlock(&state_mutex);
 	put_online_mems();
@@ -5234,9 +5257,35 @@ static struct kobj_attribute lru_gen_enabled_attr = __ATTR(
 	enabled, 0644, show_enabled, store_enabled
 );
 
+static ssize_t show_reclaim_sleep_ms(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
+{
+	return sprintf(buf, "%lu\n", READ_ONCE(lru_gen_reclaim_ms));
+}
+
+static ssize_t store_reclaim_sleep_ms(struct kobject *kobj, struct kobj_attribute *attr,
+			const char *buf, size_t len)
+{
+	unsigned long mglru_reclaim_ms;
+	unsigned long prev_reclaim_ms = READ_ONCE(lru_gen_reclaim_ms);
+
+	if (kstrtoul(buf, 0, &mglru_reclaim_ms))
+		return -EINVAL;
+
+	WRITE_ONCE(lru_gen_reclaim_ms, mglru_reclaim_ms);
+
+	if (!prev_reclaim_ms && lru_gen_reclaim_ms)
+		wake_up_interruptible(&kreclaim_thread_wait);
+	return len;
+}
+
+static struct kobj_attribute lru_gen_reclaim_attr = __ATTR(
+	reclaim_sleep_millisecs, 0644, show_reclaim_sleep_ms, store_reclaim_sleep_ms
+);
+
 static struct attribute *lru_gen_attrs[] = {
 	&lru_gen_min_ttl_attr.attr,
 	&lru_gen_enabled_attr.attr,
+	&lru_gen_reclaim_attr.attr,
 	NULL
 };
 
@@ -5650,6 +5699,130 @@ void lru_gen_exit_memcg(struct mem_cgroup *memcg)
 }
 #endif
 
+/* assume reclaim 2M page at once */
+#define mglru_batch_pages  (SZ_2M / PAGE_SIZE)
+
+static unsigned long mglru_kreclaimed_memcg(struct mem_cgroup *memcg,
+						unsigned long nr_pages)
+{
+	unsigned long reclaim_pages = 0;
+	unsigned long progress = 0;
+	unsigned long nr_to_reclaim;
+
+	while (page_counter_read(&memcg->memory)) {
+		nr_to_reclaim = min_t(unsigned long, nr_pages, mglru_batch_pages);
+		progress = try_to_free_mem_cgroup_pages(memcg, nr_to_reclaim,
+					GFP_KERNEL, false);
+		reclaim_pages += progress;
+
+		/*
+		 * Make sure that reclaim will not less than a half of
+		 * nr_to_recalim. The proactive reclaim just reclaim
+		 * the page cache and try the best.
+		 */
+		if (progress <= nr_to_reclaim / 2 ||
+			progress >= nr_pages)
+			break;
+
+		nr_pages -= progress;
+		cond_resched();
+	}
+
+	return reclaim_pages;
+}
+
+/*
+ * Mixed business has different mglru_batch_size to reclaim
+ * in the specified period due to the different type and
+ * priority of business.
+ */
+static void mglru_kreclaimed_memcgs(void)
+{
+	struct mem_cgroup *memcg;
+	unsigned long nr_pages, nr_to_reclaim;
+	unsigned long batch_size;
+
+	memcg = mem_cgroup_iter(NULL, NULL, NULL);
+	do {
+		batch_size = READ_ONCE(memcg->mglru_batch_size);
+		if (batch_size) {
+			nr_to_reclaim = batch_size >> PAGE_SHIFT;
+
+			nr_pages = mglru_kreclaimed_memcg(memcg, nr_to_reclaim);
+			memcg->mglru_reclaim_pages += nr_pages;
+		}
+
+		/* root memcg has specified mglru_batch_size means global reclaim */
+		if (mem_cgroup_is_root(memcg) && batch_size)
+			break;
+
+		cond_resched();
+		memcg = mem_cgroup_iter(NULL, memcg, NULL);
+	} while (memcg);
+}
+
+static bool kreclaimed_should_wakeup(void)
+{
+	if (READ_ONCE(lru_gen_reclaim_ms) ||
+		kthread_should_stop())
+		return true;
+
+	return false;
+}
+
+static int mglru_kreclaimed(void *nothing)
+{
+	unsigned long scan_reclaim_ms;
+
+	set_freezable();
+	set_user_nice(current, MAX_NICE);
+
+	current->flags |= PF_MEMALLOC | PF_PROACTIVE;
+
+	while (!kthread_should_stop()) {
+		scan_reclaim_ms = READ_ONCE(lru_gen_reclaim_ms);
+
+		/*
+		 * Do not start background proactive reclaim
+		 * unless the user set the lru_gen_reclaim_ms.
+		 */
+		if (scan_reclaim_ms) {
+			mglru_kreclaimed_memcgs();
+			schedule_timeout_interruptible(
+				msecs_to_jiffies(scan_reclaim_ms));
+		} else {
+			wait_event_freezable(kreclaim_thread_wait, kreclaimed_should_wakeup());
+		}
+
+		try_to_freeze();
+	}
+
+	current->flags &= ~(PF_MEMALLOC | PF_PROACTIVE);
+
+	return 0;
+}
+
+static int start_stop_mglru_kreclaimed(void)
+{
+	static struct task_struct *kreclaimed_thread;
+	int err = 0;
+
+	if (lru_gen_enabled()) {
+		kreclaimed_thread = kthread_run(mglru_kreclaimed, NULL, "mglru_kreclaimed");
+		if (IS_ERR(kreclaimed_thread)) {
+			err = PTR_ERR(kreclaimed_thread);
+			kreclaimed_thread = NULL;
+		}
+	} else {
+		if (kreclaimed_thread) {
+			kthread_stop(kreclaimed_thread);
+			kreclaimed_thread = NULL;
+		}
+	}
+
+	return err;
+}
+
 static int __init init_lru_gen(void)
 {
 	BUILD_BUG_ON(MIN_NR_GENS + 1 >= MAX_NR_GENS);
@@ -5660,6 +5833,9 @@ static int __init init_lru_gen(void)
 
 	debugfs_create_file("lru_gen", 0644, NULL, NULL, &lru_gen_rw_fops);
 	debugfs_create_file("lru_gen_full", 0444, NULL, NULL, &lru_gen_ro_fops);
+
+	if (start_stop_mglru_kreclaimed())
+		pr_err("Failed to create mglru kreclaimed_thread\n");
 
 	return 0;
 };
