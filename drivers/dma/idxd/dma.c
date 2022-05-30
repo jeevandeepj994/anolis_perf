@@ -12,6 +12,23 @@
 #include "registers.h"
 #include "idxd.h"
 
+
+#define DMA_COOKIE_BITS (sizeof(dma_cookie_t) * 8)
+/*
+ * The descriptor id takes the lower 16 bits of the cookie.
+ */
+#define DESC_ID_BITS 16
+#define DESC_ID_MASK ((1 << DESC_ID_BITS) - 1)
+/*
+ * The 'generation' is in the upper half of the cookie. But dma_cookie_t
+ * is signed, so we leave the upper-most bit for the sign. Further, we
+ * need to flag whether a cookie corresponds to an operation that is
+ * being completed via interrupt to avoid polling it, which takes
+ * the second most upper bit. So we subtract two bits from the upper half.
+ */
+#define DESC_GEN_MAX ((1 << (DMA_COOKIE_BITS - DESC_ID_BITS - 2)) - 1)
+#define DESC_INTERRUPT_FLAG (1 << (DMA_COOKIE_BITS - 2))
+
 static inline struct idxd_wq *to_idxd_wq(struct dma_chan *c)
 {
 	struct idxd_dma_chan *idxd_chan;
@@ -116,6 +133,120 @@ idxd_dma_submit_memcpy(struct dma_chan *c, dma_addr_t dma_dest,
 	return &desc->txd;
 }
 
+static inline int fetch_sg_and_pos(struct scatterlist **sg, size_t *remain,
+				   unsigned int len)
+{
+	int count = 0;
+
+	if (!sg)
+		return 0;
+
+	*remain -= len;
+
+	while (*remain == 0 && *sg) {
+		count++;
+		*sg = sg_next(*sg);
+		if (*sg)
+			*remain = sg_dma_len(*sg);
+	}
+
+	return count;
+}
+
+/*
+ * idxd_dma_prep_memcpy_sg - prepare descriptors for a memcpy_sg transcation
+ *
+ * @chan: DMA channel
+ * @dst_sg: Destination scatter list
+ * @dst_nents: Number of entries in destination scatter list
+ * @src_sg: Source scatter list
+ * @src_nents: Number of entries in source scatter list
+ * @flags: DMA transcation flags
+ *
+ * Return: Async transcation descriptor on success and NULL in failure.
+ *
+ * DSA batch descriptor and work queue depth can provide large memcpy
+ * operation. Combined batch descriptor with WQ depth to support scatter
+ * list.
+ */
+static struct dma_async_tx_descriptor *
+idxd_dma_prep_memcpy_sg(struct dma_chan *chan,
+			struct scatterlist *dst_sg, unsigned int dst_nents,
+			struct scatterlist *src_sg, unsigned int src_nents,
+			unsigned long flags)
+{
+	struct idxd_wq *wq = to_idxd_wq(chan);
+	struct idxd_desc *desc;
+	struct idxd_batch *batch;
+	dma_addr_t dma_dst, dma_src;
+	size_t dst_avail, src_avail, len;
+	u32 desc_flags;
+	int i;
+
+	/* sanity check */
+	if (unlikely(!dst_sg || !src_sg))
+		return NULL;
+	if (unlikely(dst_nents == 0 || src_nents == 0))
+		return NULL;
+
+	if (min(dst_nents, src_nents) > wq->max_batch_size)
+		return NULL;
+
+	dst_avail = sg_dma_len(dst_sg);
+	src_avail = sg_dma_len(src_sg);
+
+	if (dst_nents == 1 && src_nents == 1) {
+		if (unlikely(dst_avail != src_avail))
+			return NULL;
+
+		return idxd_dma_submit_memcpy(chan, sg_dma_address(dst_sg),
+				sg_dma_address(src_sg), dst_avail, flags);
+	}
+
+	desc = idxd_alloc_desc(wq, IDXD_OP_NONBLOCK);
+	if (IS_ERR(desc))
+		return NULL;
+
+	/*
+	 * DSA Batch descriptor has a set of descriptors in array
+	 * is called 'batch'. fill up 'batch' field with some
+	 * descriptors of DSA_OPCODE_MEMMOVE until max_batch_size
+	 * or scatter list is consumed.
+	 */
+	batch = desc->batch;
+	for (i = 0; i < wq->max_batch_size; i++) {
+		dma_dst = sg_dma_address(dst_sg) + sg_dma_len(dst_sg) -
+			dst_avail;
+		dma_src = sg_dma_address(src_sg) + sg_dma_len(src_sg) -
+			src_avail;
+
+		len = min_t(size_t, dst_avail, src_avail);
+		len = min_t(size_t, len, wq->idxd->max_xfer_bytes);
+
+		memset(batch->descs + i, 0, sizeof(struct dsa_hw_desc));
+		idxd_prep_desc_common(wq, batch->descs + i, DSA_OPCODE_MEMMOVE,
+				dma_src, dma_dst, len, 0, IDXD_OP_FLAG_CC);
+		batch->num++;
+
+		dst_nents -= fetch_sg_and_pos(&dst_sg, &dst_avail, len);
+		src_nents -= fetch_sg_and_pos(&src_sg, &src_avail, len);
+
+		/* entries or src or dst consumed */
+		if (!dst_nents || !src_nents ||
+				!min_t(size_t, dst_avail, src_avail)) {
+			break;
+		}
+	}
+
+	/* prepare DSA_OPCODE_BATCH */
+	op_flag_setup(flags, &desc_flags);
+	idxd_prep_desc_common(wq, desc->hw, DSA_OPCODE_BATCH,
+			batch->dma_descs, 0, batch->num,
+			desc->compl_dma, desc_flags);
+
+	return &desc->txd;
+}
+
 static int idxd_dma_alloc_chan_resources(struct dma_chan *chan)
 {
 	struct idxd_wq *wq = to_idxd_wq(chan);
@@ -137,12 +268,66 @@ static void idxd_dma_free_chan_resources(struct dma_chan *chan)
 		idxd_wq_refcount(wq));
 }
 
+
 static enum dma_status idxd_dma_tx_status(struct dma_chan *dma_chan,
 					  dma_cookie_t cookie,
 					  struct dma_tx_state *txstate)
 {
-	return DMA_OUT_OF_ORDER;
+	u8 status;
+	struct idxd_wq *wq;
+	struct idxd_desc *desc;
+	u32 idx;
+
+	memset(txstate, 0, sizeof(*txstate));
+
+	if (dma_submit_error(cookie))
+		return DMA_ERROR;
+
+	wq = to_idxd_wq(dma_chan);
+
+	idx = cookie & DESC_ID_MASK;
+	if (idx >= wq->num_descs)
+		return DMA_ERROR;
+
+	desc = wq->descs[idx];
+
+	if (desc->txd.cookie != cookie) {
+		/*
+		 * The user asked about an old transaction
+		 */
+		return DMA_COMPLETE;
+	}
+
+	/*
+	 * For descriptors completed via interrupt, we can't go
+	 * look at the completion status directly because it races
+	 * with the IRQ handler recyling the descriptor. However,
+	 * since in this case we can rely on the interrupt handler
+	 * to invalidate the cookie when the command completes we
+	 * know that if we get here, the command is still in
+	 * progress.
+	 */
+	if ((cookie & DESC_INTERRUPT_FLAG) != 0)
+		return DMA_IN_PROGRESS;
+
+	status = desc->completion->status & DSA_COMP_STATUS_MASK;
+
+	if (status) {
+		/*
+		 * Check against the original status as ABORT is software defined
+		 * and 0xff, which DSA_COMP_STATUS_MASK can mask out.
+		 */
+		if (unlikely(desc->completion->status == IDXD_COMP_DESC_ABORT))
+			idxd_dma_complete_txd(desc, IDXD_COMPLETE_ABORT, true);
+		else
+			idxd_dma_complete_txd(desc, IDXD_COMPLETE_NORMAL, true);
+
+		return DMA_COMPLETE;
+	}
+
+	return DMA_IN_PROGRESS;
 }
+
 
 /*
  * issue_pending() does not need to do anything since tx_submit() does the job
@@ -160,7 +345,17 @@ static dma_cookie_t idxd_dma_tx_submit(struct dma_async_tx_descriptor *tx)
 	int rc;
 	struct idxd_desc *desc = container_of(tx, struct idxd_desc, txd);
 
-	cookie = dma_cookie_assign(tx);
+	cookie = (desc->gen << DESC_ID_BITS) | (desc->id & DESC_ID_MASK);
+
+	if ((desc->hw->flags & IDXD_OP_FLAG_RCI) != 0)
+		cookie |= DESC_INTERRUPT_FLAG;
+
+	if (desc->gen == DESC_GEN_MAX)
+		desc->gen = 1;
+	else
+		desc->gen++;
+
+	tx->cookie = cookie;
 
 	rc = idxd_submit_desc(wq, desc);
 	if (rc < 0) {
@@ -193,13 +388,24 @@ int idxd_register_dma_device(struct idxd_device *idxd)
 	INIT_LIST_HEAD(&dma->channels);
 	dma->dev = dev;
 
+	/*
+	 * claim device max_segment_size to HugePage/THP size, otherwise
+	 * DMA-API debug code would complain it's longer than default.
+	 */
+	idxd_dma->dma_parms.max_segment_size = HPAGE_PMD_SIZE;
+	dma->dev->dma_parms = &idxd_dma->dma_parms;
+
 	dma_cap_set(DMA_PRIVATE, dma->cap_mask);
-	dma_cap_set(DMA_COMPLETION_NO_ORDER, dma->cap_mask);
 	dma->device_release = idxd_dma_release;
 
 	if (idxd->hw.opcap.bits[0] & IDXD_OPCAP_MEMMOVE) {
 		dma_cap_set(DMA_MEMCPY, dma->cap_mask);
 		dma->device_prep_dma_memcpy = idxd_dma_submit_memcpy;
+	}
+
+	if (idxd->hw.opcap.bits[0] & IDXD_OPCAP_BATCH) {
+		dma_cap_set(DMA_MEMCPY_SG, dma->cap_mask);
+		dma->device_prep_dma_memcpy_sg = idxd_dma_prep_memcpy_sg;
 	}
 
 	dma->device_tx_status = idxd_dma_tx_status;

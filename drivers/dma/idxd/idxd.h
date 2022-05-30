@@ -251,12 +251,14 @@ enum idxd_device_flag {
 	IDXD_FLAG_CONFIGURABLE = 0,
 	IDXD_FLAG_CMD_RUNNING,
 	IDXD_FLAG_PASID_ENABLED,
+	IDXD_FLAG_USER_PASID_ENABLED,
 	IDXD_FLAG_IMS_SUPPORTED,
 };
 
 struct idxd_dma_dev {
 	struct idxd_device *idxd;
 	struct dma_device dma;
+	struct device_dma_parameters dma_parms;
 };
 
 struct idxd_driver_data {
@@ -290,7 +292,6 @@ struct idxd_device {
 	struct idxd_wq **wqs;
 	struct idxd_engine **engines;
 
-	struct iommu_sva *sva;
 	unsigned int pasid;
 
 	int num_groups;
@@ -329,6 +330,22 @@ struct idxd_device {
 	bool mdev_host_init;
 };
 
+/**
+ * IDXD batch field for SW Batch descriptor
+ * @descs: Descriptor list address
+ * @dma_descs: DMA address for descs
+ * @crs: completion record list address
+ * @dma_crs: DMA address for completion records
+ * @num: Number of descs in batch
+ */
+struct idxd_batch {
+	struct dsa_hw_desc *descs;
+	dma_addr_t dma_descs;
+	struct dsa_completion_record *crs;
+	dma_addr_t dma_crs;
+	u32 num;
+};
+
 /* IDXD software descriptor */
 struct idxd_desc {
 	union {
@@ -344,9 +361,11 @@ struct idxd_desc {
 	struct dma_async_tx_descriptor txd;
 	struct llist_node llnode;
 	struct list_head list;
-	int id;
+	u16 id;
+	u16 gen;
 	int cpu;
 	struct idxd_wq *wq;
+	struct idxd_batch *batch;
 };
 
 /*
@@ -492,6 +511,11 @@ static inline bool wq_shared(struct idxd_wq *wq)
 static inline bool device_pasid_enabled(struct idxd_device *idxd)
 {
 	return test_bit(IDXD_FLAG_PASID_ENABLED, &idxd->flags);
+}
+
+static inline bool device_user_pasid_enabled(struct idxd_device *idxd)
+{
+	return test_bit(IDXD_FLAG_USER_PASID_ENABLED, &idxd->flags);
 }
 
 static inline bool device_swq_supported(struct idxd_device *idxd)
