@@ -36,7 +36,7 @@ struct damon_region *damon_new_region(unsigned long start, unsigned long end)
 {
 	struct damon_region *region;
 
-	region = kmalloc(sizeof(*region), GFP_KERNEL);
+	region = kmalloc(sizeof(*region), GFP_ATOMIC);
 	if (!region)
 		return NULL;
 
