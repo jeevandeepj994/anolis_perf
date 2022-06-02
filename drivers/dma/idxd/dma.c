@@ -231,11 +231,15 @@ idxd_dma_prep_memcpy_sg(struct dma_chan *chan,
 		dst_nents -= fetch_sg_and_pos(&dst_sg, &dst_avail, len);
 		src_nents -= fetch_sg_and_pos(&src_sg, &src_avail, len);
 
-		/* entries or src or dst consumed */
-		if (!dst_nents || !src_nents ||
-				!min_t(size_t, dst_avail, src_avail)) {
+		/* entries of src or dst consumed */
+		if (!dst_nents || !src_nents)
 			break;
-		}
+	}
+
+	/* fail if exceeds wq->max_batch_size */
+	if (unlikely(dst_nents && src_nents)) {
+		idxd_free_desc(wq, desc);
+		return NULL;
 	}
 
 	/* prepare DSA_OPCODE_BATCH */
