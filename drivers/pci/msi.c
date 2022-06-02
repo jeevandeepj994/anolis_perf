@@ -715,7 +715,10 @@ static int msix_setup_entries(struct pci_dev *dev,
 		if (masks)
 			curmsk++;
 	}
-	return 0;
+
+	ret = 0;
+	goto out_free;
+
 out:
 	if (!dev->msix_enabled) {
 		if (!i)
@@ -733,6 +736,7 @@ out:
 		}
 	}
 
+out_free:
 	kfree(masks);
 	return ret;
 }
