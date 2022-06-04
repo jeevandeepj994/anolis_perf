@@ -2001,26 +2001,21 @@ static void print_compressed(struct feat_fd *ff, FILE *fp)
 		ff->ph->env.comp_level, ff->ph->env.comp_ratio);
 }
 
-static void print_per_cpu_pmu_caps(FILE *fp, int nr_caps, char *cpu_pmu_caps,
+static void print_per_cpu_pmu_caps(FILE *fp, int nr_caps, char **cpu_pmu_caps,
 				   char *pmu_name)
 {
-	const char *delimiter;
-	char *str, buf[128];
+	const char *delimiter = "";
+	int i;
 
 	if (!nr_caps) {
 		fprintf(fp, "# %s pmu capabilities: not available\n", pmu_name);
 		return;
 	}
 
-	scnprintf(buf, sizeof(buf), "# %s pmu capabilities: ", pmu_name);
-
-	delimiter = buf;
-
-	str = cpu_pmu_caps;
-	while (nr_caps--) {
-		fprintf(fp, "%s%s", delimiter, str);
+	fprintf(fp, "# %s pmu capabilities: ", pmu_name);
+	for (i = 0; i < nr_caps; i++) {
+		fprintf(fp, "%s%s", delimiter, cpu_pmu_caps[i]);
 		delimiter = ", ";
-		str += strlen(str) + 1;
 	}
 
 	fprintf(fp, "\n");
@@ -3158,27 +3153,26 @@ static int process_compressed(struct feat_fd *ff,
 }
 
 static int process_per_cpu_pmu_caps(struct feat_fd *ff, int *nr_cpu_pmu_caps,
-				    char **cpu_pmu_caps,
+				    char ***cpu_pmu_caps,
 				    unsigned int *max_branches)
 {
-	char *name, *value;
-	struct strbuf sb;
-	u32 nr_caps;
+	char *name, *value, *ptr;
+	u32 nr_caps, i;
+
+	*nr_cpu_pmu_caps = 0;
+	*cpu_pmu_caps = NULL;
 
 	if (do_read_u32(ff, &nr_caps))
 		return -1;
 
-	if (!nr_caps) {
-		pr_debug("cpu pmu capabilities not available\n");
+	if (!nr_caps)
 		return 0;
-	}
 
-	*nr_cpu_pmu_caps = nr_caps;
-
-	if (strbuf_init(&sb, 128) < 0)
+	*cpu_pmu_caps = zalloc(sizeof(char *) * nr_caps);
+	if (!*cpu_pmu_caps)
 		return -1;
 
-	while (nr_caps--) {
+	for (i = 0; i < nr_caps; i++) {
 		name = do_read_string(ff);
 		if (!name)
 			goto error;
@@ -3187,12 +3181,10 @@ static int process_per_cpu_pmu_caps(struct feat_fd *ff, int *nr_cpu_pmu_caps,
 		if (!value)
 			goto free_name;
 
-		if (strbuf_addf(&sb, "%s=%s", name, value) < 0)
+		if (asprintf(&ptr, "%s=%s", name, value) < 0)
 			goto free_value;
 
-		/* include a NULL character at the end */
-		if (strbuf_add(&sb, "", 1) < 0)
-			goto free_value;
+		(*cpu_pmu_caps)[i] = ptr;
 
 		if (!strcmp(name, "branches"))
 			*max_branches = atoi(value);
@@ -3200,7 +3192,7 @@ static int process_per_cpu_pmu_caps(struct feat_fd *ff, int *nr_cpu_pmu_caps,
 		free(value);
 		free(name);
 	}
-	*cpu_pmu_caps = strbuf_detach(&sb, NULL);
+	*nr_cpu_pmu_caps = nr_caps;
 	return 0;
 
 free_value:
@@ -3208,16 +3200,24 @@ free_value:
 free_name:
 	free(name);
 error:
-	strbuf_release(&sb);
+	for (; i > 0; i--)
+		free((*cpu_pmu_caps)[i - 1]);
+	free(*cpu_pmu_caps);
+	*cpu_pmu_caps = NULL;
+	*nr_cpu_pmu_caps = 0;
 	return -1;
 }
 
 static int process_cpu_pmu_caps(struct feat_fd *ff,
 				void *data __maybe_unused)
 {
-	return process_per_cpu_pmu_caps(ff, &ff->ph->env.nr_cpu_pmu_caps,
+	int ret = process_per_cpu_pmu_caps(ff, &ff->ph->env.nr_cpu_pmu_caps,
 					&ff->ph->env.cpu_pmu_caps,
 					&ff->ph->env.max_branches);
+
+	if (!ret && !ff->ph->env.cpu_pmu_caps)
+		pr_debug("cpu pmu capabilities not available\n");
+	return ret;
 }
 
 static int process_hybrid_cpu_pmu_caps(struct feat_fd *ff,
@@ -3226,6 +3226,7 @@ static int process_hybrid_cpu_pmu_caps(struct feat_fd *ff,
 	struct hybrid_cpc_node *nodes;
 	u32 nr_pmu, i;
 	int ret;
+	int j;
 
 	if (do_read_u32(ff, &nr_pmu))
 		return -1;
@@ -3253,6 +3254,8 @@ static int process_hybrid_cpu_pmu_caps(struct feat_fd *ff,
 			ret = -1;
 			goto err;
 		}
+		if (!n->nr_cpu_pmu_caps)
+			pr_debug("%s pmu capabilities not available\n", n->pmu_name);
 	}
 
 	ff->ph->env.nr_hybrid_cpc_nodes = nr_pmu;
@@ -3261,6 +3264,8 @@ static int process_hybrid_cpu_pmu_caps(struct feat_fd *ff,
 
 err:
 	for (i = 0; i < nr_pmu; i++) {
+		for (j = 0; j < nodes[i].nr_cpu_pmu_caps; j++)
+			free(nodes[i].cpu_pmu_caps[j]);
 		free(nodes[i].cpu_pmu_caps);
 		free(nodes[i].pmu_name);
 	}
@@ -3410,9 +3415,22 @@ int perf_header__fprintf_info(struct perf_session *session, FILE *fp, bool full)
 	return 0;
 }
 
+struct header_fw {
+	struct feat_writer	fw;
+	struct feat_fd		*ff;
+};
+
+static int feat_writer_cb(struct feat_writer *fw, void *buf, size_t sz)
+{
+	struct header_fw *h = container_of(fw, struct header_fw, fw);
+
+	return do_write(h->ff, buf, sz);
+}
+
 static int do_write_feat(struct feat_fd *ff, int type,
 			 struct perf_file_section **p,
-			 struct evlist *evlist)
+			 struct evlist *evlist,
+			 struct feat_copier *fc)
 {
 	int err;
 	int ret = 0;
@@ -3426,7 +3444,23 @@ static int do_write_feat(struct feat_fd *ff, int type,
 
 		(*p)->offset = lseek(ff->fd, 0, SEEK_CUR);
 
-		err = feat_ops[type].write(ff, evlist);
+		/*
+		 * Hook to let perf inject copy features sections from the input
+		 * file.
+		 */
+		if (fc && fc->copy) {
+			struct header_fw h = {
+				.fw.write = feat_writer_cb,
+				.ff = ff,
+			};
+
+			/* ->copy() returns 0 if the feature was not copied */
+			err = fc->copy(fc, type, &h.fw);
+		} else {
+			err = 0;
+		}
+		if (!err)
+			err = feat_ops[type].write(ff, evlist);
 		if (err < 0) {
 			pr_debug("failed to write feature %s\n", feat_ops[type].name);
 
@@ -3442,7 +3476,8 @@ static int do_write_feat(struct feat_fd *ff, int type,
 }
 
 static int perf_header__adds_write(struct perf_header *header,
-				   struct evlist *evlist, int fd)
+				   struct evlist *evlist, int fd,
+				   struct feat_copier *fc)
 {
 	int nr_sections;
 	struct feat_fd ff;
@@ -3471,7 +3506,7 @@ static int perf_header__adds_write(struct perf_header *header,
 	lseek(fd, sec_start + sec_size, SEEK_SET);
 
 	for_each_set_bit(feat, header->adds_features, HEADER_FEAT_BITS) {
-		if (do_write_feat(&ff, feat, &p, evlist))
+		if (do_write_feat(&ff, feat, &p, evlist, fc))
 			perf_header__clear_feat(header, feat);
 	}
 
@@ -3509,9 +3544,10 @@ int perf_header__write_pipe(int fd)
 	return 0;
 }
 
-int perf_session__write_header(struct perf_session *session,
-			       struct evlist *evlist,
-			       int fd, bool at_exit)
+static int perf_session__do_write_header(struct perf_session *session,
+					 struct evlist *evlist,
+					 int fd, bool at_exit,
+					 struct feat_copier *fc)
 {
 	struct perf_file_header f_header;
 	struct perf_file_attr   f_attr;
@@ -3555,7 +3591,7 @@ int perf_session__write_header(struct perf_session *session,
 	header->feat_offset = header->data_offset + header->data_size;
 
 	if (at_exit) {
-		err = perf_header__adds_write(header, evlist, fd);
+		err = perf_header__adds_write(header, evlist, fd, fc);
 		if (err < 0)
 			return err;
 	}
@@ -3586,6 +3622,13 @@ int perf_session__write_header(struct perf_session *session,
 	lseek(fd, header->data_offset + header->data_size, SEEK_SET);
 
 	return 0;
+}
+
+int perf_session__write_header(struct perf_session *session,
+			       struct evlist *evlist,
+			       int fd, bool at_exit)
+{
+	return perf_session__do_write_header(session, evlist, fd, at_exit, NULL);
 }
 
 static int perf_header__getbuffer64(struct perf_header *header,
