@@ -174,6 +174,28 @@ out:
 	return ret;
 }
 
+int cachefiles_ondemand_restore(struct cachefiles_cache *cache, char *args)
+{
+	void **slot;
+	struct radix_tree_iter iter;
+
+	if (!test_bit(CACHEFILES_ONDEMAND_MODE, &cache->flags))
+		return -EOPNOTSUPP;
+
+	/*
+	 * Reset the requests to CACHEFILES_REQ_NEW state, so that the
+	 * requests have been processed halfway before the crash of the
+	 * user daemon could be reprocessed after the recovery.
+	 */
+	xa_lock(&cache->reqs);
+	radix_tree_for_each_slot(slot, &cache->reqs, &iter, 0)
+		radix_tree_tag_set(&cache->reqs, iter.index, CACHEFILES_REQ_NEW);
+	xa_unlock(&cache->reqs);
+
+	wake_up_all(&cache->daemon_pollwq);
+	return 0;
+}
+
 static int cachefiles_ondemand_get_fd(struct cachefiles_req *req)
 {
 	struct cachefiles_object *object = req->object;
