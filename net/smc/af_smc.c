@@ -69,6 +69,15 @@ struct workqueue_struct	*smc_close_wq;	/* wq for close work */
 static void smc_tcp_listen_work(struct work_struct *);
 static void smc_connect_work(struct work_struct *);
 
+static inline int smc_clcsock_enable_fastopen(struct smc_sock *smc, int is_server)
+{
+	int val = 1;
+
+	return smc->clcsock->ops->setsockopt(smc->clcsock, SOL_TCP,
+					     is_server ? TCP_FASTOPEN : TCP_FASTOPEN_CONNECT,
+					     KERNEL_SOCKPTR(&val), sizeof(val));
+}
+
 int smc_nl_dump_hs_limitation(struct sk_buff *skb, struct netlink_callback *cb)
 {
 	struct smc_nl_dmp_ctx *cb_ctx = smc_nl_dmp_ctx(cb);
@@ -418,6 +427,10 @@ static struct sock *smc_sock_alloc(struct net *net, struct socket *sock,
 	mutex_init(&smc->clcsock_release_lock);
 	smc_init_saved_callbacks(smc);
 
+	/* default behavior from every net namespace */
+	smc->simplify_rkey_exhcange	= net->smc.sysctl_simplify_rkey_exhcange;
+	smc->smc_fastopen	= net->smc.sysctl_smc_fastopen;
+
 	return sk;
 }
 
@@ -539,9 +552,10 @@ static int smcr_lgr_reg_sndbufs(struct smc_link *link,
 }
 
 /* register the new rmb on all links */
-static int smcr_lgr_reg_rmbs(struct smc_link *link,
+static int smcr_lgr_reg_rmbs(struct smc_sock *smc,
 			     struct smc_buf_desc *rmb_desc)
 {
+	struct smc_link *link = smc->conn.lnk;
 	struct smc_link_group *lgr = link->lgr;
 	int i, lnk = 0, rc = 0;
 
@@ -563,7 +577,7 @@ static int smcr_lgr_reg_rmbs(struct smc_link *link,
 	}
 
 	/* do not exchange confirm_rkey msg since there are only one link */
-	if (lnk > 1) {
+	if (lnk > 1 || !smc->simplify_rkey_exhcange) {
 		/* exchange confirm_rkey msg with peer */
 		rc = smc_llc_do_confirm_rkey(link, rmb_desc);
 		if (rc) {
@@ -1311,7 +1325,7 @@ static int smc_connect_rdma(struct smc_sock *smc,
 				goto connect_abort;
 			}
 		}
-		if (smcr_lgr_reg_rmbs(link, smc->conn.rmb_desc)) {
+		if (smcr_lgr_reg_rmbs(smc, smc->conn.rmb_desc)) {
 			reason_code = SMC_CLC_DECL_ERR_REGBUF;
 			goto connect_abort;
 		}
@@ -1576,6 +1590,11 @@ static void smc_connect_work(struct work_struct *work)
 
 	if (!timeo)
 		timeo = MAX_SCHEDULE_TIMEOUT;
+
+	if (smc->smc_fastopen &&
+	    inet_sk(smc->clcsock->sk)->defer_connect)
+		goto defer_connect;
+
 	lock_sock(smc->clcsock->sk);
 	if (smc->clcsock->sk->sk_err) {
 		smc->sk.sk_err = smc->clcsock->sk->sk_err;
@@ -1588,6 +1607,7 @@ static void smc_connect_work(struct work_struct *work)
 			rc = 0;
 	}
 	release_sock(smc->clcsock->sk);
+defer_connect:
 	lock_sock(&smc->sk);
 	if (rc != 0 || smc->sk.sk_err) {
 		smc->sk.sk_state = SMC_CLOSED;
@@ -1672,6 +1692,10 @@ static int smc_connect(struct socket *sock, struct sockaddr *addr,
 		rc = -EALREADY;
 		goto out;
 	}
+
+	if (smc->smc_fastopen && smc_clcsock_enable_fastopen(smc, /* is_server */ 0))
+		smc->smc_fastopen = 0; /* rollback when setsockopt failed */
+
 	rc = kernel_connect(smc->clcsock, addr, alen, flags);
 	if (rc && rc != -EINPROGRESS)
 		goto out;
@@ -2223,7 +2247,7 @@ static int smc_listen_rdma_reg(struct smc_sock *new_smc, bool local_first)
 						 conn->sndbuf_desc))
 				return SMC_CLC_DECL_ERR_REGBUF;
 		}
-		if (smcr_lgr_reg_rmbs(conn->lnk, conn->rmb_desc))
+		if (smcr_lgr_reg_rmbs(new_smc, conn->rmb_desc))
 			return SMC_CLC_DECL_ERR_REGBUF;
 	}
 
@@ -2600,6 +2624,9 @@ static int smc_listen(struct socket *sock, int backlog)
 
 	if (smc->limit_smc_hs)
 		tcp_sk(smc->clcsock->sk)->smc_hs_congested = smc_hs_congested;
+
+	if (smc->smc_fastopen && smc_clcsock_enable_fastopen(smc, /* is server */ 1))
+		smc->smc_fastopen = 0; /* rollback when setsockopt failed */
 
 	rc = kernel_listen(smc->clcsock, backlog);
 	if (rc) {

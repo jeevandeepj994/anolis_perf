@@ -260,6 +260,9 @@ struct smc_sock {				/* smc sock container */
 	struct list_head	accept_q;	/* sockets to be accepted */
 	spinlock_t		accept_q_lock;	/* protects accept_q */
 	bool			limit_smc_hs;	/* put constraint on handshake */
+	bool			simplify_rkey_exhcange;	/*  simplify rkey exchange */
+	/* enable SMC-R handshake proposal via tcp fastopen */
+	bool			smc_fastopen;
 	bool			use_fallback;	/* fallback to tcp */
 	int			fallback_rsn;	/* reason for fallback */
 	u32			peer_diagnosis; /* decline reason from peer */
