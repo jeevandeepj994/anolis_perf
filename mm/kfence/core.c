@@ -240,7 +240,7 @@ struct kfence_freelist {
 };
 static struct kfence_freelist freelist;
 static struct irq_work __percpu *kfence_flush_work;
-static atomic_t kfence_flush_res;
+static atomic_t kfence_flush_res, kfence_refkill_res;
 
 /* Gates the allocation, ensuring only one succeeds in a given period. */
 atomic_t kfence_allocation_gate = ATOMIC_INIT(1);
@@ -1848,17 +1848,24 @@ out:
 	mutex_unlock(&kfence_mutex);
 }
 
+static DECLARE_WAIT_QUEUE_HEAD(kfence_refkill_wait);
+static void kfence_kill_confirm(struct percpu_ref *ref)
+{
+	if (!atomic_dec_return(&kfence_refkill_res))
+		wake_up(&kfence_refkill_wait);
+}
+
 void kfence_disable(void)
 {
 	struct kfence_pool_area *kpa;
 	struct rb_node *iter;
 
+	mutex_lock(&kfence_mutex);
+
 	if (!xchg(&kfence_enabled, false))
-		return;
+		goto out_unlock;
 
 	synchronize_rcu();
-
-	mutex_lock(&kfence_mutex);
 
 #ifdef CONFIG_KFENCE_STATIC_KEYS
 	atomic_set(&kfence_allocation_gate, 1);
@@ -1866,9 +1873,19 @@ void kfence_disable(void)
 	static_branch_disable(&kfence_allocation_key);
 #endif
 
-	kfence_for_each_area(kpa, iter)
-		percpu_ref_kill(&kpa->refcnt);
+	atomic_set(&kfence_refkill_res, 0);
+	kfence_for_each_area(kpa, iter) {
+		atomic_inc(&kfence_refkill_res);
+		percpu_ref_kill_and_confirm(&kpa->refcnt, kfence_kill_confirm);
+	}
 
+	/*
+	 * We must wait here until all percpu_ref being killed.
+	 * After all tasks finished, then release the mutex lock.
+	 */
+	wait_event_idle(kfence_refkill_wait, !atomic_read(&kfence_refkill_res));
+
+out_unlock:
 	mutex_unlock(&kfence_mutex);
 }
 
