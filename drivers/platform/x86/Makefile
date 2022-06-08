@@ -22,7 +22,8 @@ obj-$(CONFIG_ACERHDF)		+= acerhdf.o
 obj-$(CONFIG_ACER_WIRELESS)	+= acer-wireless.o
 obj-$(CONFIG_ACER_WMI)		+= acer-wmi.o
 
-obj-$(CONFIG_AMD_HSMP)		+= amd_hsmp.o
+# AMD
+obj-y				+= amd/
 
 # Apple
 obj-$(CONFIG_APPLE_GMUX)	+= apple-gmux.o
