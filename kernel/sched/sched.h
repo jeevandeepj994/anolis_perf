@@ -1311,6 +1311,7 @@ struct sched_group;
 static inline struct cpumask *sched_group_span(struct sched_group *sg);
 
 DECLARE_STATIC_KEY_FALSE(__sched_core_enabled);
+extern struct workqueue_struct *sched_core_wq;
 
 static inline bool sched_core_enabled(struct rq *rq)
 {
