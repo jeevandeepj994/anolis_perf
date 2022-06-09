@@ -128,6 +128,9 @@ static void __sched_core_set(struct task_struct *p, unsigned long cookie)
 	sched_core_put_cookie(cookie);
 }
 
+int sysctl_sched_core;
+DEFINE_STATIC_KEY_FALSE(__sysctl_sched_core_enabled);
+
 /* Called from prctl interface: PR_SCHED_CORE */
 int sched_core_share_pid(unsigned int cmd, pid_t pid, enum pid_type type,
 			 unsigned long uaddr)
@@ -139,6 +142,10 @@ int sched_core_share_pid(unsigned int cmd, pid_t pid, enum pid_type type,
 
 	if (!static_branch_likely(&sched_smt_present))
 		return -ENODEV;
+
+	if (!static_branch_likely(&__sysctl_sched_core_enabled) &&
+	    cmd != PR_SCHED_CORE_GET)
+		return -EPERM;
 
 	BUILD_BUG_ON(PR_SCHED_CORE_SCOPE_THREAD != PIDTYPE_PID);
 	BUILD_BUG_ON(PR_SCHED_CORE_SCOPE_THREAD_GROUP != PIDTYPE_TGID);
@@ -241,6 +248,56 @@ out_tasklist:
 out:
 	sched_core_put_cookie(cookie);
 	put_task_struct(task);
+	return err;
+}
+
+void clear_all_cookie(void)
+{
+	int cpu;
+	struct task_struct *p, *t;
+	int ret;
+
+	read_lock(&tasklist_lock);
+	for_each_process_thread(p, t)
+		sched_core_share_pid(PR_SCHED_CORE_CLEAR, t->pid, PIDTYPE_PID, 0);
+	read_unlock(&tasklist_lock);
+
+	/*
+	 * When sched_core_count become zero, the work which turn off __sched_core_enabled
+	 * will queue in system_wq, so we flush it to make sure that __sched_core_enabled
+	 * is really turned off.
+	 */
+	flush_workqueue(system_wq);
+}
+
+int sysctl_sched_core_handler(struct ctl_table *table, int write,
+				void __user *buffer, size_t *lenp, loff_t *ppos)
+{
+	unsigned int old, new;
+	int err;
+
+	if (!write) {
+		err = proc_dointvec_minmax(table, write, buffer, lenp, ppos);
+		return err;
+	}
+	old = sysctl_sched_core;
+	err = proc_dointvec_minmax(table, write, buffer, lenp, ppos);
+	new = sysctl_sched_core;
+
+	if (old == new)
+		return err;
+
+	if (new) {
+		static_branch_enable(&__sysctl_sched_core_enabled);
+	} else {
+		static_branch_disable(&__sysctl_sched_core_enabled);
+		/*
+		 * When turn off sched_core, we need to clear cookie of all the tasks, to
+		 * make __sched_core_enabled off.
+		 */
+		clear_all_cookie();
+	}
+
 	return err;
 }
 
