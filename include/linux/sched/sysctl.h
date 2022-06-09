@@ -89,6 +89,12 @@ extern unsigned int sysctl_sched_expel_update_interval;
 #endif
 #endif
 
+#ifdef CONFIG_SCHED_CORE
+extern int sysctl_sched_core;
+extern int sysctl_sched_core_handler(struct ctl_table *table, int write,
+				     void __user *buffer, size_t *lenp, loff_t *ppos);
+#endif
+
 #ifdef CONFIG_SCHED_AUTOGROUP
 extern unsigned int sysctl_sched_autogroup_enabled;
 #endif
