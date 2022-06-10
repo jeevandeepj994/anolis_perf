@@ -168,24 +168,26 @@ static int erofs_init_devices(struct super_block *sb,
 		}
 		dis = ptr + erofs_blkoff(pos);
 
-		if (!sbi->bootstrap) {
-			bdev = blkdev_get_by_path(dif->path,
-						  FMODE_READ | FMODE_EXCL,
-						  sb->s_type);
-			if (IS_ERR(bdev)) {
-				err = PTR_ERR(bdev);
-				goto err_out;
-			}
-			dif->bdev = bdev;
-		} else {
-			struct file *f;
+		if (!erofs_is_fscache_mode(sb)) {
+			if (!sbi->bootstrap) {
+				bdev = blkdev_get_by_path(dif->path,
+							  FMODE_READ | FMODE_EXCL,
+							  sb->s_type);
+				if (IS_ERR(bdev)) {
+					err = PTR_ERR(bdev);
+					goto err_out;
+				}
+				dif->bdev = bdev;
+			} else {
+				struct file *f;
 
-			f = filp_open(dif->path, O_RDONLY | O_LARGEFILE, 0);
-			if (IS_ERR(f)) {
-				err = PTR_ERR(f);
-				goto err_out;
+				f = filp_open(dif->path, O_RDONLY | O_LARGEFILE, 0);
+				if (IS_ERR(f)) {
+					err = PTR_ERR(f);
+					goto err_out;
+				}
+				dif->blobfile = f;
 			}
-			dif->blobfile = f;
 		}
 		dif->blocks = le32_to_cpu(dis->blocks);
 		dif->mapped_blkaddr = le32_to_cpu(dis->mapped_blkaddr);
