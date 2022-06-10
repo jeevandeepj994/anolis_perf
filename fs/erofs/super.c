@@ -610,6 +610,12 @@ static int erofs_fill_super(struct super_block *sb, void *data, int silent)
 	if (err)
 		return err;
 
+	if (erofs_is_fscache_mode(sb)) {
+		err = erofs_fscache_register_fs(sb);
+		if (err)
+			return err;
+	}
+
 	err = rafs_v6_fill_super(sb, data);
 	if (err)
 		return err;
@@ -744,6 +750,7 @@ static void erofs_kill_sb(struct super_block *sb)
 		kfree(sbi->blob_dir_path);
 	}
 	kfree(sbi->bootstrap_path);
+	erofs_fscache_unregister_fs(sb);
 	kfree(sbi);
 	sb->s_fs_info = NULL;
 }
@@ -794,6 +801,10 @@ static int __init erofs_module_init(void)
 	if (err)
 		goto zip_err;
 
+	err = erofs_fscache_register();
+	if (err)
+		goto fscache_err;
+
 	err = register_filesystem(&erofs_fs_type);
 	if (err)
 		goto fs_err;
@@ -801,6 +812,8 @@ static int __init erofs_module_init(void)
 	return 0;
 
 fs_err:
+	erofs_fscache_unregister();
+fscache_err:
 	z_erofs_exit_zip_subsystem();
 zip_err:
 	erofs_exit_shrinker();
@@ -813,6 +826,7 @@ icache_err:
 static void __exit erofs_module_exit(void)
 {
 	unregister_filesystem(&erofs_fs_type);
+	erofs_fscache_unregister();
 	z_erofs_exit_zip_subsystem();
 	erofs_exit_shrinker();
 
