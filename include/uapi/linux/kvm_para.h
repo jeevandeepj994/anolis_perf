@@ -18,6 +18,8 @@
 #define KVM_EPERM		EPERM
 #define KVM_EOPNOTSUPP		95
 
+#define HYERCALL_ANOLIS  1000
+
 #define KVM_HC_VAPIC_POLL_IRQ		1
 #define KVM_HC_MMU_OP			2
 #define KVM_HC_FEATURES			3
@@ -29,7 +31,11 @@
 #define KVM_HC_CLOCK_PAIRING		9
 #define KVM_HC_SEND_IPI		10
 #define KVM_HC_SCHED_YIELD		11
-#define KVM_HC_VM_ATTESTATION		12
+
+/*
+ * Anolis specific hypercall
+ */
+#define KVM_HC_VM_ATTESTATION   HYERCALL_ANOLIS + 1
 
 /*
  * hypercalls use architecture specific
