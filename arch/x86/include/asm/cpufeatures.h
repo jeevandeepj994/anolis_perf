@@ -13,7 +13,7 @@
 /*
  * Defines x86 CPU feature bits
  */
-#define NCAPINTS			21	   /* N 32-bit words worth of info */
+#define NCAPINTS			20	   /* N 32-bit words worth of info */
 #define NBUGINTS			1	   /* N 32-bit bug flags */
 
 /*
@@ -292,6 +292,8 @@
 #define X86_FEATURE_FENCE_SWAPGS_KERNEL	(11*32+ 5) /* "" LFENCE in kernel entry SWAPGS path */
 #define X86_FEATURE_SPLIT_LOCK_DETECT	(11*32+ 6) /* #AC for split lock */
 #define X86_FEATURE_PER_THREAD_MBA	(11*32+ 7) /* "" Per-thread Memory Bandwidth Allocation */
+#define X86_FEATURE_SGX1		(11*32+ 8) /* "" Basic SGX */
+#define X86_FEATURE_SGX2		(11*32+ 9) /* "" SGX Enclave Dynamic Memory Management (EDMM) */
 
 /* Intel-defined CPU features, CPUID level 0x00000007:1 (EAX), word 12 */
 #define X86_FEATURE_AVX_VNNI		(12*32+ 4) /* AVX VNNI instructions */
@@ -393,16 +395,13 @@
 #define X86_FEATURE_CORE_CAPABILITIES	(18*32+30) /* "" IA32_CORE_CAPABILITIES MSR */
 #define X86_FEATURE_SPEC_CTRL_SSBD	(18*32+31) /* "" Speculative Store Bypass Disable */
 
-/* Intel-defined SGX features, CPUID level 0x00000012:0 (EAX), word 19 */
-#define X86_FEATURE_SGX1		(19*32+ 0) /* SGX1 leaf functions */
-#define X86_FEATURE_SGX2		(19*32+ 1) /* SGX2 leaf functions */
-
-/* AMD-defined memory encryption features, CPUID level 0x8000001f (EAX), word 20 */
-#define X86_FEATURE_SME			(20*32+ 0) /* AMD Secure Memory Encryption */
-#define X86_FEATURE_SEV			(20*32+ 1) /* AMD Secure Encrypted Virtualization */
-#define X86_FEATURE_VM_PAGE_FLUSH	(20*32+ 2) /* "" VM Page Flush MSR is supported */
-#define X86_FEATURE_SEV_ES		(20*32+ 3) /* AMD Secure Encrypted Virtualization - Encrypted State */
-#define X86_FEATURE_SME_COHERENT	(20*32+10) /* "" AMD hardware-enforced cache coherency */
+/* AMD-defined memory encryption features, CPUID level 0x8000001f (EAX), word 19 */
+#define X86_FEATURE_SME			(19*32 + 0) /* AMD Secure Memory Encryption */
+#define X86_FEATURE_SEV			(19*32 + 1) /* AMD Secure Encrypted Virtualization */
+#define X86_FEATURE_VM_PAGE_FLUSH	(19*32 + 2) /* "" VM Page Flush MSR is supported */
+/* AMD Secure Encrypted Virtualization - Encrypted State */
+#define X86_FEATURE_SEV_ES		(19*32 + 3)
+#define X86_FEATURE_SME_COHERENT	(19*32 + 10) /* "" AMD hardware-enforced cache coherency */
 
 /*
  * BUG word(s)
