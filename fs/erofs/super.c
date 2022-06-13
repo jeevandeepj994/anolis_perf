@@ -168,7 +168,12 @@ static int erofs_init_devices(struct super_block *sb,
 		}
 		dis = ptr + erofs_blkoff(pos);
 
-		if (!erofs_is_fscache_mode(sb)) {
+		if (erofs_is_fscache_mode(sb)) {
+			err = erofs_fscache_register_cookie(sb, &dif->fscache,
+							    dif->path, false);
+			if (err)
+				break;
+		} else {
 			if (!sbi->bootstrap) {
 				bdev = blkdev_get_by_path(dif->path,
 							  FMODE_READ | FMODE_EXCL,
@@ -673,6 +678,7 @@ static int erofs_release_device_info(int id, void *ptr, void *data)
 		blkdev_put(dif->bdev, FMODE_READ | FMODE_EXCL);
 	if (dif->blobfile)
 		filp_close(dif->blobfile, NULL);
+	erofs_fscache_unregister_cookie(&dif->fscache);
 	kfree(dif->path);
 	kfree(dif);
 	return 0;
