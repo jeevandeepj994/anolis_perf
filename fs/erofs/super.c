@@ -375,6 +375,7 @@ enum {
 	Opt_noacl,
 	Opt_cache_strategy,
 	Opt_device,
+	Opt_fsid,
 	Opt_bootstrap_path,
 	Opt_blob_dir_path,
 	Opt_err
@@ -387,6 +388,7 @@ static match_table_t erofs_tokens = {
 	{Opt_noacl, "noacl"},
 	{Opt_cache_strategy, "cache_strategy=%s"},
 	{Opt_device, "device=%s"},
+	{Opt_fsid, "fsid=%s"},
 	{Opt_bootstrap_path, "bootstrap_path=%s"},
 	{Opt_blob_dir_path, "blob_dir_path=%s"},
 	{Opt_err, NULL}
@@ -466,6 +468,17 @@ static int erofs_parse_options(struct super_block *sb, char *options)
 				return err;
 			}
 			++sbi->devs->extra_devices;
+			break;
+		case Opt_fsid:
+#ifdef CONFIG_EROFS_FS_ONDEMAND
+			kfree(sbi->fsid);
+			sbi->fsid = match_strdup(&args[0]);
+			if (!sbi->fsid)
+				return -ENOMEM;
+#else
+			erofs_err(sb, "fsid option not supported");
+			return -EINVAL;
+#endif
 			break;
 		case Opt_blob_dir_path:
 			kfree(sbi->blob_dir_path);
@@ -717,6 +730,7 @@ static bool erofs_mount_is_rafs_v6(char *options)
 		switch (token) {
 		case Opt_bootstrap_path:
 		case Opt_blob_dir_path:
+		case Opt_fsid:
 			kfree(tmpstr);
 			return true;
 		default:
@@ -763,6 +777,7 @@ static void erofs_kill_sb(struct super_block *sb)
 	kfree(sbi->bootstrap_path);
 	erofs_fscache_unregister_cookie(&sbi->s_fscache);
 	erofs_fscache_unregister_fs(sb);
+	kfree(sbi->fsid);
 	kfree(sbi);
 	sb->s_fs_info = NULL;
 }
@@ -899,6 +914,10 @@ static int erofs_show_options(struct seq_file *seq, struct dentry *root)
 	} else if (sbi->cache_strategy == EROFS_ZIP_CACHE_READAROUND) {
 		seq_puts(seq, ",cache_strategy=readaround");
 	}
+#endif
+#ifdef CONFIG_EROFS_FS_ONDEMAND
+	if (sbi->fsid)
+		seq_printf(seq, ",fsid=%s", sbi->fsid);
 #endif
 	return 0;
 }
