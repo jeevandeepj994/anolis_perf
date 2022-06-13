@@ -117,6 +117,7 @@ enum nfp_nfd_version {
  * @version:			Indicate dp type
  * @tx_min_desc_per_pkt:	Minimal TX descs needed for each packet
  * @cap_mask:			Mask of supported features
+ * @dma_mask:			DMA addressing capability
  * @poll:			Napi poll for normal rx/tx
  * @ctrl_poll:			Tasklet poll for ctrl rx/tx
  * @xmit:			Xmit for normal path
@@ -133,6 +134,7 @@ struct nfp_dp_ops {
 	enum nfp_nfd_version version;
 	unsigned int tx_min_desc_per_pkt;
 	u32 cap_mask;
+	u64 dma_mask;
 
 	int (*poll)(struct napi_struct *napi, int budget);
 	void (*ctrl_poll)(unsigned long arg);
