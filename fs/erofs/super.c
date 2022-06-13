@@ -614,6 +614,11 @@ static int erofs_fill_super(struct super_block *sb, void *data, int silent)
 		err = erofs_fscache_register_fs(sb);
 		if (err)
 			return err;
+
+		err = erofs_fscache_register_cookie(sb, &sbi->s_fscache,
+						    sbi->fsid, true);
+		if (err)
+			return err;
 	}
 
 	err = rafs_v6_fill_super(sb, data);
@@ -750,6 +755,7 @@ static void erofs_kill_sb(struct super_block *sb)
 		kfree(sbi->blob_dir_path);
 	}
 	kfree(sbi->bootstrap_path);
+	erofs_fscache_unregister_cookie(&sbi->s_fscache);
 	erofs_fscache_unregister_fs(sb);
 	kfree(sbi);
 	sb->s_fs_info = NULL;
@@ -767,6 +773,7 @@ static void erofs_put_super(struct super_block *sb)
 	iput(sbi->managed_cache);
 	sbi->managed_cache = NULL;
 #endif
+	erofs_fscache_unregister_cookie(&sbi->s_fscache);
 }
 
 static struct file_system_type erofs_fs_type = {
