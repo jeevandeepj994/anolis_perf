@@ -632,6 +632,7 @@ enum {
 	REQ_F_WORK_INITIALIZED_BIT,
 	REQ_F_LTIMEOUT_ACTIVE_BIT,
 	REQ_F_COMPLETE_INLINE_BIT,
+	REQ_F_CQE32_INIT_BIT,
 
 	/* not a real bit, just to check we're not overflowing the space */
 	__REQ_F_LAST_BIT,
@@ -679,6 +680,8 @@ enum {
 	REQ_F_LTIMEOUT_ACTIVE	= BIT(REQ_F_LTIMEOUT_ACTIVE_BIT),
 	/* completion is deferred through io_comp_state */
 	REQ_F_COMPLETE_INLINE	= BIT(REQ_F_COMPLETE_INLINE_BIT),
+	/* ->extra1 and ->extra2 are initialised */
+	REQ_F_CQE32_INIT	= BIT(REQ_F_CQE32_INIT_BIT),
 };
 
 struct async_poll {
@@ -1886,8 +1889,12 @@ static void __io_cqring_fill_event(struct io_kiocb *req, long res,
 			return;
 		}
 	} else {
-		u64 extra1 = req->extra1;
-		u64 extra2 = req->extra2;
+		u64 extra1 = 0, extra2 = 0;
+
+		if (req->flags & REQ_F_CQE32_INIT) {
+			extra1 = req->extra1;
+			extra2 = req->extra2;
+		}
 
 		trace_io_uring_complete(ctx, req->user_data, res, cflags, extra1, extra2);
 
@@ -3990,6 +3997,14 @@ void io_uring_cmd_complete_in_task(struct io_uring_cmd *ioucmd,
 }
 EXPORT_SYMBOL_GPL(io_uring_cmd_complete_in_task);
 
+static inline void io_req_set_cqe32_extra(struct io_kiocb *req,
+					  u64 extra1, u64 extra2)
+{
+	req->extra1 = extra1;
+	req->extra2 = extra2;
+	req->flags |= REQ_F_CQE32_INIT;
+}
+
 /*
  * Called by consumers of io_uring_cmd, if they originally returned
  * -EIOCBQUEUED upon receiving the command.
@@ -4000,6 +4015,8 @@ void io_uring_cmd_done(struct io_uring_cmd *ioucmd, ssize_t ret, ssize_t res2)
 
 	if (ret < 0)
 		req_set_fail_links(req);
+	if (req->ctx->flags & IORING_SETUP_CQE32)
+		io_req_set_cqe32_extra(req, res2, 0);
 	io_req_complete(req, ret);
 }
 EXPORT_SYMBOL_GPL(io_uring_cmd_done);
