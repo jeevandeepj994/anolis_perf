@@ -127,6 +127,60 @@ static bool check_layout_compatibility(struct super_block *sb,
 	return true;
 }
 
+static int erofs_init_device(struct erofs_buf *buf, struct super_block *sb,
+			     struct erofs_device_info *dif, erofs_off_t *pos)
+{
+	struct erofs_sb_info *sbi = EROFS_SB(sb);
+	struct erofs_deviceslot *dis;
+	struct block_device *bdev;
+	void *ptr;
+	int ret;
+
+	ptr = erofs_read_metabuf(buf, sb, erofs_blknr(*pos), EROFS_KMAP);
+	if (IS_ERR(ptr))
+		return PTR_ERR(ptr);
+	dis = ptr + erofs_blkoff(*pos);
+
+	if (!dif->path) {
+		if (!dis->tag[0]) {
+			erofs_err(sb, "empty device tag @ pos %llu", *pos);
+			return -EINVAL;
+		}
+		dif->path = kmemdup_nul(dis->tag, sizeof(dis->tag), GFP_KERNEL);
+		if (!dif->path)
+			return -ENOMEM;
+	}
+
+	if (erofs_is_fscache_mode(sb)) {
+		ret = erofs_fscache_register_cookie(sb, &dif->fscache,
+				dif->path, false);
+		if (ret)
+			return ret;
+	} else if (sbi->blob_dir_path) {
+		struct file *f;
+
+		f = file_open_root(sbi->blob_dir.dentry, sbi->blob_dir.mnt,
+				   dif->path, O_RDONLY | O_LARGEFILE, 0);
+		if (IS_ERR(f)) {
+			erofs_err(sb, "failed to open blob id %s", dif->path);
+			return PTR_ERR(f);
+		}
+		dif->blobfile = f;
+	} else {
+		bdev = blkdev_get_by_path(dif->path, FMODE_READ | FMODE_EXCL,
+					  sb->s_type);
+		if (IS_ERR(bdev))
+			return PTR_ERR(bdev);
+		dif->bdev = bdev;
+	}
+
+	dif->blocks = le32_to_cpu(dis->blocks);
+	dif->mapped_blkaddr = le32_to_cpu(dis->mapped_blkaddr);
+	sbi->total_blocks += dif->blocks;
+	*pos += EROFS_DEVT_SLOT_SIZE;
+	return 0;
+}
+
 static int erofs_init_devices(struct super_block *sb,
 			      struct erofs_super_block *dsb)
 {
@@ -135,8 +189,6 @@ static int erofs_init_devices(struct super_block *sb,
 	erofs_off_t pos;
 	struct erofs_buf buf = __EROFS_BUF_INITIALIZER;
 	struct erofs_device_info *dif;
-	struct erofs_deviceslot *dis;
-	void *ptr;
 	int id, err = 0;
 
 	sbi->total_blocks = sbi->primarydevice_blocks;
@@ -145,8 +197,8 @@ static int erofs_init_devices(struct super_block *sb,
 	else
 		ondisk_extradevs = le16_to_cpu(dsb->extra_devices);
 
-	if (ondisk_extradevs != sbi->devs->extra_devices &&
-	    !sbi->blob_dir_path) {
+	if (sbi->devs->extra_devices &&
+	    ondisk_extradevs != sbi->devs->extra_devices) {
 		erofs_err(sb, "extra devices don't match (ondisk %u, given %u)",
 			  ondisk_extradevs, sbi->devs->extra_devices);
 		return -EINVAL;
@@ -157,90 +209,32 @@ static int erofs_init_devices(struct super_block *sb,
 	sbi->device_id_mask = roundup_pow_of_two(ondisk_extradevs + 1) - 1;
 	pos = le16_to_cpu(dsb->devt_slotoff) * EROFS_DEVT_SLOT_SIZE;
 	down_read(&sbi->devs->rwsem);
-	idr_for_each_entry(&sbi->devs->tree, dif, id) {
-		struct block_device *bdev;
-
-		ptr = erofs_read_metabuf(&buf, sb, erofs_blknr(pos),
-					 EROFS_KMAP);
-		if (IS_ERR(ptr)) {
-			err = PTR_ERR(ptr);
-			break;
-		}
-		dis = ptr + erofs_blkoff(pos);
-
-		if (erofs_is_fscache_mode(sb)) {
-			err = erofs_fscache_register_cookie(sb, &dif->fscache,
-							    dif->path, false);
+	if (sbi->devs->extra_devices) {
+		idr_for_each_entry(&sbi->devs->tree, dif, id) {
+			err = erofs_init_device(&buf, sb, dif, &pos);
 			if (err)
 				break;
-		} else {
-			if (!sbi->bootstrap) {
-				bdev = blkdev_get_by_path(dif->path,
-							  FMODE_READ | FMODE_EXCL,
-							  sb->s_type);
-				if (IS_ERR(bdev)) {
-					err = PTR_ERR(bdev);
-					goto err_out;
-				}
-				dif->bdev = bdev;
-			} else {
-				struct file *f;
-
-				f = filp_open(dif->path, O_RDONLY | O_LARGEFILE, 0);
-				if (IS_ERR(f)) {
-					err = PTR_ERR(f);
-					goto err_out;
-				}
-				dif->blobfile = f;
+		}
+	} else {
+		for (id = 0; id < ondisk_extradevs; id++) {
+			dif = kzalloc(sizeof(*dif), GFP_KERNEL);
+			if (!dif) {
+				err = -ENOMEM;
+				break;
 			}
+
+			err = idr_alloc(&sbi->devs->tree, dif, 0, 0, GFP_KERNEL);
+			if (err < 0) {
+				kfree(dif);
+				break;
+			}
+			++sbi->devs->extra_devices;
+
+			err = erofs_init_device(&buf, sb, dif, &pos);
+			if (err)
+				break;
 		}
-		dif->blocks = le32_to_cpu(dis->blocks);
-		dif->mapped_blkaddr = le32_to_cpu(dis->mapped_blkaddr);
-		sbi->total_blocks += dif->blocks;
-		pos += sizeof(*dis);
 	}
-	/* Add blob files from RAFS v6 blob dir */
-	while (sbi->devs->extra_devices < ondisk_extradevs) {
-		struct file *f;
-		char blob_id[sizeof(dis->u.userdata) + 1];
-
-		ptr = erofs_read_metabuf(&buf, sb, erofs_blknr(pos),
-					 EROFS_KMAP);
-		if (IS_ERR(ptr)) {
-			up_read(&sbi->devs->rwsem);
-			return PTR_ERR(ptr);
-		}
-		dis = ptr + erofs_blkoff(pos);
-
-		dif = kzalloc(sizeof(*dif), GFP_KERNEL);
-		if (!dif) {
-			err = -ENOMEM;
-			goto err_out;
-		}
-		err = idr_alloc(&sbi->devs->tree, dif, 0, 0, GFP_KERNEL);
-		if (err < 0) {
-			kfree(dif);
-			goto err_out;
-		}
-		strncpy(blob_id, dis->u.userdata, sizeof(blob_id));
-		blob_id[sizeof(blob_id) - 1] = '\0';
-
-		f = file_open_root(sbi->blob_dir.dentry, sbi->blob_dir.mnt,
-				   blob_id, O_RDONLY | O_LARGEFILE, 0);
-		if (IS_ERR(f)) {
-			erofs_err(sb, "failed to open blob file %s", blob_id);
-			err = PTR_ERR(f);
-			goto err_out;
-		}
-		dif->blobfile = f;
-		dif->blocks = le32_to_cpu(dis->blocks);
-		dif->mapped_blkaddr = le32_to_cpu(dis->mapped_blkaddr);
-		sbi->total_blocks += dif->blocks;
-		pos += sizeof(*dis);
-		++sbi->devs->extra_devices;
-	}
-	err = 0;
-err_out:
 	up_read(&sbi->devs->rwsem);
 	erofs_put_metabuf(&buf);
 	return err;
