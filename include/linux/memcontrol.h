@@ -292,11 +292,14 @@ struct mem_cgroup {
 	bool		oom_lock;
 	int		under_oom;
 
-	/* memcg priority */
+	/* memcg oom priority */
 	bool use_priority_oom;
 	int priority;
 	int num_oom_skip;
 	struct mem_cgroup *next_reset;
+
+	/* memcg swap priority */
+	bool use_priority_swap;
 
 	int	swappiness;
 	/* OOM-Killer disable */

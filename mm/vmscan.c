@@ -87,6 +87,12 @@ struct scan_control {
 	unsigned long	anon_cost;
 	unsigned long	file_cost;
 
+	/*
+	 * The swappiness limit of avoiding to shrink lower
+	 * swappiness memcg.
+	 */
+	int swappiness_limit;
+
 	/* Can active pages be deactivated as part of reclaim? */
 #define DEACTIVATE_ANON 1
 #define DEACTIVATE_FILE 2
@@ -1957,6 +1963,133 @@ static unsigned noinline_for_stack move_pages_to_lru(struct lruvec *lruvec,
 	return nr_moved;
 }
 
+#ifdef CONFIG_MEMCG
+
+/*
+ * Accumulate the size of anonymous pages belonging to a determined memcg.
+ */
+static unsigned long memcg_anon_size(pg_data_t *pgdat, struct mem_cgroup *memcg,
+				     struct scan_control *sc)
+{
+	struct lruvec *lruvec;
+	unsigned long anon = 0;
+
+	if (pgdat) {
+		lruvec = mem_cgroup_lruvec(memcg, pgdat);
+		anon += lruvec_page_state_local(lruvec, NR_ACTIVE_ANON);
+		anon += lruvec_page_state_local(lruvec, NR_INACTIVE_ANON);
+	} else {
+		anon += memcg_page_state_local(memcg, NR_ACTIVE_ANON);
+		anon += memcg_page_state_local(memcg, NR_INACTIVE_ANON);
+	}
+	return anon;
+}
+
+/*
+ * mem_cgroup_priority_iter - iterate over memory cgroup hierarchy
+ * based on swappiness priority.
+ * @root: hierarchy root
+ * @prev: previously returned memcg, NULL on first invocation
+ * @reclaim: cookie for shared reclaim walks, NULL for full walks
+ *
+ * Returns references to children of the hierarchy below @root, or
+ * @root itself, or %NULL after a full round-trip.
+ *
+ * Swap priority may degrade the limit if there is no more pages in current
+ * swappinss to swap. It's necessary to adjust the priority limit when walks
+ * the hierarchy of target memcg. Based on the swappiness, it changes the
+ * swappiness_limit of current scan_control to determine which lru list should
+ * be passed by shrink_list() whether there is in direct reclaim or not.
+ *
+ * Returns the cgroup of most anonymous pages in the same swappiness hierarchy.
+ * And the swappiness_limit should be degraded again, if there is not enough
+ * pages even though alreadly degraded.
+ *
+ * The refcount of returned memcg should be handled explicitly. If the
+ * swappiness_limit is not NULL, put it at the end of scan_control life cycle.
+ */
+static void mem_cgroup_priority_iter(pg_data_t *pgdat,
+				     struct scan_control *sc)
+{
+	struct mem_cgroup *root = sc->target_mem_cgroup;
+	struct mem_cgroup *memcg;
+	struct mem_cgroup *pos;
+	unsigned long max_anon, anon;
+	int cur_swappiness;
+	int upper_limit;
+
+	if (mem_cgroup_disabled())
+		return;
+
+	if (!root)
+		root = root_mem_cgroup;
+
+	if (!root->use_hierarchy && root != root_mem_cgroup)
+		return;
+
+	if (get_nr_swap_pages() == 0) {
+		sc->swappiness_limit = 0;
+		return;
+	}
+
+retry:
+	pos = NULL;
+	cur_swappiness = 0;
+	upper_limit = (sc->swappiness_limit) ? sc->swappiness_limit
+					     : MAX_SWAPPINESS;
+
+	memcg = mem_cgroup_iter(root, NULL, NULL);
+
+	/*
+	 * Full walks of memcg hierarchy to find the next swappiness level
+	 * and if some memcgs with equal swappiness, returns the memcg
+	 * behind all.
+	 */
+	do {
+		anon = memcg_anon_size(pgdat, memcg, sc);
+
+		if (memcg->swappiness > cur_swappiness &&
+		    memcg->swappiness < upper_limit) {
+			pos = memcg;
+			cur_swappiness = memcg->swappiness;
+			max_anon = anon;
+		} else if (memcg->swappiness == cur_swappiness) {
+			max_anon += anon;
+		}
+	} while ((memcg = mem_cgroup_iter(root, memcg, NULL)));
+
+	sc->swappiness_limit = (pos) ? pos->swappiness : 0;
+
+	/*
+	 * If the anonymous page is not enough and the swappiness_limit can be
+	 * degrade, retry to degrade the limit in advance.
+	 */
+	if (!(max_anon >> DEF_PRIORITY) && sc->swappiness_limit)
+		goto retry;
+}
+
+/*
+ * Returns the value of use_priority_swap. If target_memcg is not defined,
+ * choose the default root_mem_cgroup.
+ */
+static bool priority_swap_is_enabled(struct mem_cgroup *target_memcg)
+{
+	if (!target_memcg)
+		target_memcg = root_mem_cgroup;
+
+	return target_memcg->use_priority_swap;
+}
+#else
+static void mem_cgroup_priority_iter(pg_data_t *pgdat,
+				     struct scan_control *sc)
+{
+}
+static bool priority_swap_is_enabled(struct mem_cgroup *target_memcg)
+{
+	return false;
+}
+#endif
+
 /*
  * If a kernel thread (such as nfsd for loop-back mounts) services
  * a backing device by writing to the page cache it sets PF_LOCAL_THROTTLE.
@@ -2219,6 +2352,12 @@ unsigned long reclaim_pages(struct list_head *page_list)
 static unsigned long shrink_list(enum lru_list lru, unsigned long nr_to_scan,
 				 struct lruvec *lruvec, struct scan_control *sc)
 {
+	struct mem_cgroup *memcg = lruvec_memcg(lruvec);
+	int swappiness = mem_cgroup_swappiness(memcg);
+
+	if (memcg && lru < LRU_FILE && swappiness < sc->swappiness_limit)
+		return 0;
+
 	if (is_active_lru(lru)) {
 		if (sc->may_deactivate & (1 << is_file_lru(lru)))
 			shrink_active_list(nr_to_scan, lruvec, sc, lru);
@@ -3108,7 +3247,14 @@ static unsigned long do_try_to_free_pages(struct zonelist *zonelist,
 	pg_data_t *last_pgdat;
 	struct zoneref *z;
 	struct zone *zone;
+	bool should_degrade = sc->may_swap;
+
 retry:
+	if (should_degrade && priority_swap_is_enabled(sc->target_mem_cgroup)) {
+		mem_cgroup_priority_iter(NULL, sc);
+		should_degrade = !should_degrade;
+	}
+
 	delayacct_freepages_start();
 
 	if (!cgroup_reclaim(sc))
@@ -3195,6 +3341,21 @@ retry:
 		sc->force_deactivate = 0;
 		sc->memcg_low_reclaim = 1;
 		sc->memcg_low_skipped = 0;
+		goto retry;
+	}
+
+	/*
+	 * When priority swap is enabled, the limit of swappiness should degrade
+	 * if not enough pages are reclaimed.
+	 */
+	if (priority_swap_is_enabled(sc->target_mem_cgroup) &&
+	    sc->swappiness_limit) {
+		sc->priority = initial_priority;
+		sc->force_deactivate = 0;
+		sc->skipped_deactivate = 0;
+		sc->memcg_low_reclaim = 0;
+		sc->memcg_low_skipped = 0;
+		should_degrade = true;
 		goto retry;
 	}
 
@@ -3652,6 +3813,7 @@ static int balance_pgdat(pg_data_t *pgdat, int order, int highest_zoneidx)
 	unsigned long nr_boost_reclaim;
 	unsigned long zone_boosts[MAX_NR_ZONES] = { 0, };
 	bool boosted;
+	bool should_degrade = true;
 	struct zone *zone;
 	struct scan_control sc = {
 		.gfp_mask = GFP_KERNEL,
@@ -3683,6 +3845,12 @@ static int balance_pgdat(pg_data_t *pgdat, int order, int highest_zoneidx)
 
 restart:
 	sc.priority = DEF_PRIORITY;
+
+	if (should_degrade && priority_swap_is_enabled(sc.target_mem_cgroup)) {
+		mem_cgroup_priority_iter(pgdat, &sc);
+		should_degrade = !should_degrade;
+	}
+
 	do {
 		unsigned long nr_reclaimed = sc.nr_reclaimed;
 		bool raise_priority = true;
@@ -3810,6 +3978,13 @@ restart:
 		if (raise_priority || !nr_reclaimed)
 			sc.priority--;
 	} while (sc.priority >= 1);
+
+	if (!nr_boost_reclaim && priority_swap_is_enabled(sc.target_mem_cgroup) &&
+	    sc.swappiness_limit) {
+		sc.priority = DEF_PRIORITY;
+		should_degrade = true;
+		goto restart;
+	}
 
 	if (!sc.nr_reclaimed)
 		pgdat->kswapd_failures++;
