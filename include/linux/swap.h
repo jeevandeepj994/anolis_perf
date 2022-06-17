@@ -54,6 +54,12 @@ static inline int current_is_kswapd(void)
  */
 
 /*
+ * If the priority of memcg swap is enabled, MAX_SWAPPINESS is to limit the
+ * iteration of all memcgs.
+ */
+#define MAX_SWAPPINESS  300
+
+/*
  * Unaddressable device memory support. See include/linux/hmm.h and
  * Documentation/vm/hmm.rst. Short description is we need struct pages for
  * device memory that is unaddressable (inaccessible) by CPU, so that we can

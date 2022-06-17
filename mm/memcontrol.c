@@ -3928,6 +3928,28 @@ static int mem_cgroup_priority_oom_write(struct cgroup_subsys_state *css,
 	return 0;
 }
 
+static u64 mem_cgroup_priority_swap_read(struct cgroup_subsys_state *css,
+					 struct cftype *cft)
+{
+	struct mem_cgroup *memcg = mem_cgroup_from_css(css);
+
+	return memcg->use_priority_swap;
+}
+
+static int mem_cgroup_priority_swap_write(struct cgroup_subsys_state *css,
+					  struct cftype *cft, u64 val)
+{
+	struct mem_cgroup *memcg = mem_cgroup_from_css(css);
+
+	if (val > 1)
+		return -EINVAL;
+
+	memcg->use_priority_swap = val;
+
+	return 0;
+}
+
+
 static unsigned long mem_cgroup_usage(struct mem_cgroup *memcg, bool swap)
 {
 	unsigned long val;
@@ -6362,6 +6384,11 @@ static struct cftype mem_cgroup_legacy_files[] = {
 		.read_u64 = mem_cgroup_priority_oom_read,
 	},
 	{
+		.name = "use_priority_swap",
+		.write_u64 = mem_cgroup_priority_swap_write,
+		.read_u64 = mem_cgroup_priority_swap_read,
+	},
+	{
 		.name = "cgroup.event_control",		/* XXX: for compat */
 		.write = memcg_write_event_control,
 		.flags = CFTYPE_NO_PREFIX | CFTYPE_WORLD_WRITABLE,
@@ -8001,6 +8028,11 @@ static struct cftype memory_files[] = {
 		.name = "use_priority_oom",
 		.write_u64 = mem_cgroup_priority_oom_write,
 		.read_u64 = mem_cgroup_priority_oom_read,
+	},
+	{
+		.name = "use_priority_swap",
+		.write_u64 = mem_cgroup_priority_swap_write,
+		.read_u64 = mem_cgroup_priority_swap_read,
 	},
 	{
 		.name = "events",
