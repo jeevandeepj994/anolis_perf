@@ -58,7 +58,7 @@ xfs_get_extsz_hint(
 	 * No point in aligning allocations if we need to COW to actually
 	 * write to them.
 	 */
-	if (xfs_is_always_cow_inode(ip))
+	if (xfs_is_always_cow_inode(ip) && !xfs_is_atomic_write_inode(ip))
 		return 0;
 	if ((ip->i_d.di_flags & XFS_DIFLAG_EXTSIZE) && ip->i_d.di_extsize)
 		return ip->i_d.di_extsize;
@@ -80,7 +80,8 @@ xfs_get_cowextsz_hint(
 	xfs_extlen_t		a, b;
 
 	a = 0;
-	if (ip->i_d.di_flags2 & XFS_DIFLAG2_COWEXTSIZE)
+	if (!xfs_is_atomic_write_inode(ip) &&
+	    ip->i_d.di_flags2 & XFS_DIFLAG2_COWEXTSIZE)
 		a = ip->i_d.di_cowextsize;
 	b = xfs_get_extsz_hint(ip);
 
@@ -1524,6 +1525,16 @@ xfs_itruncate_extents_flags(
 	if (first_unmap_block >= XFS_MAX_FILEOFF) {
 		WARN_ON_ONCE(first_unmap_block > XFS_MAX_FILEOFF);
 		return 0;
+	}
+
+	/* don't split extents when truncating for atomic write files */
+	if (xfs_is_atomic_write_inode(ip)) {
+		first_unmap_block = roundup(first_unmap_block,
+			xfs_get_cowextsz_hint(ip));
+		if (first_unmap_block > XFS_B_TO_FSB(mp, XFS_ISIZE(ip))) {
+			ASSERT(0);
+			return -EIO;
+		}
 	}
 
 	unmap_len = XFS_MAX_FILEOFF - first_unmap_block + 1;

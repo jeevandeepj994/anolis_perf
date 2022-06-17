@@ -46,6 +46,7 @@ static struct kset *xfs_kset;		/* top-level xfs sysfs dir */
 #ifdef DEBUG
 static struct xfs_kobj xfs_dbg_kobj;	/* global debug sysfs attrs */
 #endif
+static struct xfs_kobj xfs_extra_kobj; /* extra global features sysfs attrs */
 
 enum xfs_dax_mode {
 	XFS_DAX_INODE = 0,
@@ -639,6 +640,9 @@ xfs_fs_destroy_inode(
 	XFS_STATS_INC(ip->i_mount, vn_rele);
 	XFS_STATS_INC(ip->i_mount, vn_remove);
 
+	if ((ip->i_d.di_flags2 & XFS_DIFLAG2_DIO_ATOMIC_WRITE) && !inode->i_nlink)
+		xfs_info(ip->i_mount, "atomic write inode %lld evicting",
+			 ip->i_ino);
 	xfs_inactive(ip);
 
 	if (!XFS_FORCED_SHUTDOWN(ip->i_mount) && ip->i_delayed_blks) {
@@ -2179,9 +2183,14 @@ init_xfs_fs(void)
 		goto out_remove_stats_kobj;
 #endif
 
-	error = xfs_qm_init();
+	xfs_extra_kobj.kobject.kset = xfs_kset;
+	error = xfs_sysfs_init(&xfs_extra_kobj, &xfs_extra_ktype, NULL, "extra");
 	if (error)
 		goto out_remove_dbg_kobj;
+
+	error = xfs_qm_init();
+	if (error)
+		goto out_remove_extra_kobj;
 
 	error = register_filesystem(&xfs_fs_type);
 	if (error)
@@ -2190,6 +2199,8 @@ init_xfs_fs(void)
 
  out_qm_exit:
 	xfs_qm_exit();
+ out_remove_extra_kobj:
+	xfs_sysfs_del(&xfs_extra_kobj);
  out_remove_dbg_kobj:
 #ifdef DEBUG
 	xfs_sysfs_del(&xfs_dbg_kobj);

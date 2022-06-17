@@ -6,8 +6,20 @@
 #ifndef __XFS_REFLINK_H
 #define __XFS_REFLINK_H 1
 
+static inline bool xfs_is_atomic_write_inode(struct xfs_inode *ip)
+{
+	if (!xfs_sb_version_hasreflink(&ip->i_mount->m_sb))
+		return false;
+	if (!S_ISREG(VFS_I(ip)->i_mode))
+		return false;
+	return ip->i_d.di_flags2 & XFS_DIFLAG2_DIO_ATOMIC_WRITE;
+}
+
 static inline bool xfs_is_always_cow_inode(struct xfs_inode *ip)
 {
+	if (xfs_is_atomic_write_inode(ip))
+		return true;
+
 	return ip->i_mount->m_always_cow &&
 		xfs_sb_version_hasreflink(&ip->i_mount->m_sb);
 }

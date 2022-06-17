@@ -302,6 +302,26 @@ struct kobj_type xfs_stats_ktype = {
 	.default_attrs = xfs_stats_attrs,
 };
 
+STATIC ssize_t
+atomic_write_show(
+	struct kobject	*kobject,
+	char		*buf)
+{
+	return snprintf(buf, PAGE_SIZE, "%d\n", xfs_globals.atomic_write);
+}
+XFS_SYSFS_ATTR_RO(atomic_write);
+
+static struct attribute *xfs_extra_attrs[] = {
+	ATTR_LIST(atomic_write),
+	NULL,
+};
+
+struct kobj_type xfs_extra_ktype = {
+	.release = xfs_sysfs_release,
+	.sysfs_ops = &xfs_sysfs_ops,
+	.default_attrs = xfs_extra_attrs,
+};
+
 /* xlog */
 
 static inline struct xlog *

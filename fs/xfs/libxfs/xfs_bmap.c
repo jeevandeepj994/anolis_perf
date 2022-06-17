@@ -32,6 +32,7 @@
 #include "xfs_filestream.h"
 #include "xfs_rmap.h"
 #include "xfs_ag_resv.h"
+#include "xfs_reflink.h"
 #include "xfs_refcount.h"
 #include "xfs_icache.h"
 #include "xfs_iomap.h"
@@ -2128,6 +2129,14 @@ xfs_bmap_add_extent_unwritten_real(
 			<= MAXEXTLEN))
 		state |= BMAP_RIGHT_CONTIG;
 
+	if (xfs_is_atomic_write_inode(ip)) {
+		xfs_extlen_t extsz __maybe_unused = xfs_get_cowextsz_hint(ip);
+
+		ASSERT(!(new->br_startoff % extsz));
+		ASSERT(!(new->br_blockcount % extsz));
+		state &= ~(BMAP_LEFT_CONTIG | BMAP_RIGHT_CONTIG);
+	}
+
 	/*
 	 * Switch out based on the FILLING and CONTIG state bits.
 	 */
@@ -2605,6 +2614,8 @@ xfs_bmap_add_extent_hole_delay(
 			state |= BMAP_RIGHT_DELAY;
 	}
 
+	ASSERT(!xfs_is_atomic_write_inode(ip));
+
 	/*
 	 * Set contiguity flags on the left and right neighbors.
 	 * Don't let extents get too large, even if the pieces are contiguous.
@@ -2754,6 +2765,14 @@ xfs_bmap_add_extent_hole_real(
 			state |= BMAP_RIGHT_DELAY;
 	}
 
+	if (xfs_is_atomic_write_inode(ip)) {
+		xfs_extlen_t extsz __maybe_unused = xfs_get_cowextsz_hint(ip);
+
+		ASSERT(!(new->br_startoff % extsz));
+		ASSERT(!(new->br_blockcount % extsz));
+		goto nomerge;
+	}
+
 	/*
 	 * We're inserting a real allocation between "left" and "right".
 	 * Set the contiguity flags.  Don't let extents get too large.
@@ -2774,6 +2793,7 @@ xfs_bmap_add_extent_hole_real(
 	     left.br_blockcount + new->br_blockcount +
 	     right.br_blockcount <= MAXEXTLEN))
 		state |= BMAP_RIGHT_CONTIG;
+nomerge:
 
 	error = 0;
 	/*
@@ -3508,6 +3528,8 @@ xfs_bmap_btalloc(
 		ASSERT(ap->length);
 	}
 
+	if (xfs_is_atomic_write_inode(ap->ip) && ap->length > align)
+		ap->length = align;
 
 	nullfb = ap->tp->t_firstblock == NULLFSBLOCK;
 	fb_agno = nullfb ? NULLAGNUMBER : XFS_FSB_TO_AGNO(mp,
@@ -4053,6 +4075,89 @@ out_unreserve_quota:
 	return error;
 }
 
+static bool
+xfs_atomic_staging_del(
+	struct xfs_mount	*mp,
+	struct xfs_bmalloca	*bma)
+{
+	xfs_agino_t agino = XFS_INO_TO_AGINO(mp, bma->ip->i_ino);
+	xfs_agnumber_t fb_agno, fst_agno, agno;
+
+	/* to avoid deadlock */
+	if (bma->tp->t_firstblock == NULLFSBLOCK) {
+		fb_agno = NULLAGNUMBER;
+		if (isnullstartblock(bma->prev.br_startblock))
+			fst_agno = 0;
+		else
+			fst_agno = XFS_FSB_TO_AGNO(mp,
+					bma->prev.br_startblock);
+	} else {
+		fb_agno = XFS_FSB_TO_AGNO(mp, bma->tp->t_firstblock);
+		fst_agno = fb_agno;
+	}
+
+	agno = fst_agno;
+	do {
+		struct xfs_perag *pag = xfs_perag_get(mp, agno);
+		struct xfs_atomic_staging *p, **pprev, *as = NULL, **asp = NULL;
+		bool found = false;
+
+		spin_lock(&pag->atomic_staging_lock);
+		pprev = &pag->atomic_staging;
+		for (p = pag->atomic_staging; p; pprev = &p->next, p = p->next) {
+			if (bma->offset == p->next_offset &&
+			    agino == p->agino) {
+				asp = pprev;
+				as = p;
+				break;
+			}
+
+			if (!as || p->aglen <= as->aglen) {
+				asp = pprev;
+				as = p;
+			}
+		}
+		if (as) {
+			bma->blkno = XFS_AGB_TO_FSB(mp, agno, as->agbno);
+			if (as->aglen <= bma->length) {
+				ASSERT(as->aglen == bma->length);
+				bma->length = as->aglen;
+				as->aglen = 0;
+			} else {
+				as->agino = agino;
+				as->next_offset = bma->offset + bma->length;
+				as->agbno += bma->length;
+				as->aglen -= bma->length;
+			}
+
+			if (!as->aglen) {
+				*asp = as->next;
+				atomic_dec(&pag->atomic_staging_count);
+			} else {
+				as = NULL;
+			}
+			found = true;
+		}
+		spin_unlock(&pag->atomic_staging_lock);
+		xfs_perag_put(pag);
+
+		kfree(as);
+		if (found) {
+			struct xfs_alloc_arg args;
+
+			bma->as = true;
+			args.len = bma->length;
+			xfs_bmap_btalloc_accounting(bma, &args);
+			return true;
+		}
+		if (fb_agno != NULLAGNUMBER)
+			break;
+		if (++agno >= mp->m_sb.sb_agcount)
+			agno = 0;
+	} while (agno != fst_agno);
+	return false;
+}
+
 static int
 xfs_bmap_alloc_userdata(
 	struct xfs_bmalloca	*bma)
@@ -4098,6 +4203,7 @@ xfs_bmapi_allocate(
 
 	ASSERT(bma->length > 0);
 
+	bma->as = false;
 	/*
 	 * For the wasdelay case, we could also just allocate the stuff asked
 	 * for in this bmap call but that wouldn't be as good.
@@ -4119,6 +4225,12 @@ xfs_bmapi_allocate(
 	else
 		bma->minlen = 1;
 
+	/* check out atomic staging first */
+	if (whichfork == XFS_COW_FORK && xfs_is_atomic_write_inode(bma->ip)) {
+		if (xfs_atomic_staging_del(mp, bma))
+			goto finish;
+	}
+
 	if (bma->flags & XFS_BMAPI_METADATA)
 		error = xfs_bmap_btalloc(bma);
 	else
@@ -4126,6 +4238,7 @@ xfs_bmapi_allocate(
 	if (error || bma->blkno == NULLFSBLOCK)
 		return error;
 
+finish:
 	if (bma->flags & XFS_BMAPI_ZERO) {
 		error = xfs_zero_extent(bma->ip, bma->blkno, bma->length);
 		if (error)
@@ -4425,7 +4538,10 @@ xfs_bmapi_write(
 			 * xfs_extlen_t and therefore 32 bits. Hence we have to
 			 * check for 32-bit overflows and handle them here.
 			 */
-			if (len > (xfs_filblks_t)MAXEXTLEN)
+			if (xfs_is_atomic_write_inode(ip)) {
+				bma.length = xfs_get_cowextsz_hint(ip);
+				bma.flags |= XFS_BMAPI_CONTIG;
+			} else if (len > (xfs_filblks_t)MAXEXTLEN)
 				bma.length = MAXEXTLEN;
 			else
 				bma.length = len;
@@ -4442,7 +4558,7 @@ xfs_bmapi_write(
 			 * If this is a CoW allocation, record the data in
 			 * the refcount btree for orphan recovery.
 			 */
-			if (whichfork == XFS_COW_FORK)
+			if (whichfork == XFS_COW_FORK && !bma.as)
 				xfs_refcount_alloc_cow_extent(tp, bma.blkno,
 						bma.length);
 		}
@@ -4596,7 +4712,7 @@ xfs_bmapi_convert_delalloc(
 	xfs_bmbt_to_iomap(ip, iomap, &bma.got, flags);
 	*seq = READ_ONCE(ifp->if_seq);
 
-	if (whichfork == XFS_COW_FORK)
+	if (whichfork == XFS_COW_FORK && !bma.as)
 		xfs_refcount_alloc_cow_extent(tp, bma.blkno, bma.length);
 
 	error = xfs_bmap_btree_to_extents(tp, ip, bma.cur, &bma.logflags,
@@ -4984,6 +5100,79 @@ xfs_bmap_del_extent_cow(
 	ip->i_delayed_blks -= del->br_blockcount;
 }
 
+#define XFS_MAX_ATOMIC_STAGING_COUNT		48
+
+void
+xfs_atomic_staging_add_post(
+	struct xfs_trans	*tp,
+	xfs_agnumber_t		agno,
+	struct xfs_atomic_staging *new)
+{
+	struct xfs_mount *mp = tp->t_mountp;
+	struct xfs_perag *pag;
+	struct xfs_atomic_staging *as;
+
+	pag = xfs_perag_get(mp, agno);
+	spin_lock(&pag->atomic_staging_lock);
+	/* extent merging */
+	for (as = pag->atomic_staging; as; as = as->next) {
+		if (new->agbno == as->agbno + as->aglen) {
+			as->aglen += new->aglen;
+			spin_unlock(&pag->atomic_staging_lock);
+			kfree(new);
+			goto out;
+		}
+		if (new->agbno + new->aglen == as->agbno) {
+			as->agbno = new->agbno;
+			as->aglen += new->aglen;
+			spin_unlock(&pag->atomic_staging_lock);
+			kfree(new);
+			goto out;
+		}
+	}
+	new->next = pag->atomic_staging;
+	pag->atomic_staging = new;
+	atomic_inc(&pag->atomic_staging_count);
+	spin_unlock(&pag->atomic_staging_lock);
+out:
+	xfs_perag_put(pag);
+}
+
+static int
+xfs_atomic_staging_add(
+	struct xfs_trans	*tp,
+	struct xfs_bmbt_irec	*del)
+{
+	struct xfs_mount *mp = tp->t_mountp;
+	xfs_agnumber_t	agno = XFS_FSB_TO_AGNO(mp, del->br_startblock);
+	struct xfs_perag *pag;
+	struct xfs_atomic_staging *as, *new;
+	int error = 0;
+
+	pag = xfs_perag_get(mp, agno);
+	if (atomic_read(&pag->atomic_staging_count) >=
+	    XFS_MAX_ATOMIC_STAGING_COUNT) {
+		error = -EBUSY;
+		goto out;
+	}
+
+	new = kmalloc(sizeof(*as), GFP_NOFS);
+	if (!new) {
+		error = -ENOMEM;
+		goto out;
+	}
+
+	new->agbno = XFS_FSB_TO_AGBNO(mp, del->br_startblock);
+	new->aglen = del->br_blockcount;
+	new->next_offset = -1;
+	new->agino = NULLAGINO;
+	xfs_refcount_alloc_atomic_staging(tp,
+			del->br_startblock, del->br_blockcount, new);
+out:
+	xfs_perag_put(pag);
+	return error;
+}
+
 /*
  * Called by xfs_bmapi to update file extent records and the btree
  * after removing space.
@@ -5220,6 +5409,14 @@ xfs_bmap_del_extent_real(
 	 * If we need to, add to list of extents to delete.
 	 */
 	if (do_fx && !(bflags & XFS_BMAPI_REMAP)) {
+		if (xfs_is_atomic_write_inode(ip) &&
+		    del->br_blockcount == xfs_get_cowextsz_hint(ip)) {
+			error = xfs_atomic_staging_add(tp, del);
+			if (!error)
+				goto finish;
+			error = 0;
+		}
+
 		if (xfs_is_reflink_inode(ip) && whichfork == XFS_DATA_FORK) {
 			xfs_refcount_decrease_extent(tp, del);
 		} else {
@@ -5230,6 +5427,7 @@ xfs_bmap_del_extent_real(
 		}
 	}
 
+finish:
 	/*
 	 * Adjust inode # blocks in the file.
 	 */

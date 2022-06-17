@@ -40,6 +40,7 @@ struct xfs_bmalloca {
 	bool			wasdel;	/* replacing a delayed allocation */
 	bool			aeof;	/* allocated space at eof */
 	bool			conv;	/* overwriting unwritten extents */
+	bool			as;	/* atomic staging */
 	int			datatype;/* data type being allocated */
 	int			flags;
 };
@@ -290,5 +291,11 @@ xfs_failaddr_t xfs_bmap_validate_extent(struct xfs_inode *ip, int whichfork,
 int	xfs_bmapi_remap(struct xfs_trans *tp, struct xfs_inode *ip,
 		xfs_fileoff_t bno, xfs_filblks_t len, xfs_fsblock_t startblock,
 		int flags);
+
+void
+xfs_atomic_staging_add_post(
+	struct xfs_trans	*tp,
+	xfs_agnumber_t		agno,
+	struct xfs_atomic_staging *new);
 
 #endif	/* __XFS_BMAP_H__ */

@@ -11,6 +11,7 @@ extern struct kobj_type xfs_mp_ktype;	/* xfs_mount */
 extern struct kobj_type xfs_dbg_ktype;	/* debug */
 extern struct kobj_type xfs_log_ktype;	/* xlog */
 extern struct kobj_type xfs_stats_ktype;	/* stats */
+extern struct kobj_type xfs_extra_ktype;	/* extra features */
 
 static inline struct xfs_kobj *
 to_kobj(struct kobject *kobject)

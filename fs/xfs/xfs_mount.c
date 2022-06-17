@@ -28,6 +28,7 @@
 #include "xfs_sysfs.h"
 #include "xfs_rmap_btree.h"
 #include "xfs_refcount_btree.h"
+#include "xfs_refcount.h"
 #include "xfs_reflink.h"
 #include "xfs_extent_busy.h"
 #include "xfs_health.h"
@@ -232,6 +233,7 @@ xfs_initialize_perag(
 		if (error)
 			goto out_hash_destroy;
 		spin_lock_init(&pag->pag_state_lock);
+		spin_lock_init(&pag->atomic_staging_lock);
 	}
 
 	index = xfs_set_inode_alloc(mp, agcount);
@@ -1043,6 +1045,54 @@ xfs_mountfs(
 	return error;
 }
 
+void
+xfs_atomic_staging_cancel_all(
+	struct xfs_mount	*mp)
+{
+	xfs_agnumber_t		agno;
+
+	for (agno = 0; agno < mp->m_sb.sb_agcount; agno++) {
+		struct xfs_perag *pag = xfs_perag_get(mp, agno);
+		struct xfs_trans *tp = NULL;
+
+		while (1) {
+			struct xfs_atomic_staging *as;
+			int error;
+
+			spin_lock(&pag->atomic_staging_lock);
+			as = pag->atomic_staging;
+			if (!as) {
+				spin_unlock(&pag->atomic_staging_lock);
+				break;
+			}
+			pag->atomic_staging = as->next;
+			spin_unlock(&pag->atomic_staging_lock);
+
+			if (!tp) {
+				/* Start a rolling transaction to remove the mappings */
+				error = xfs_trans_alloc(mp, &M_RES(mp)->tr_write,
+							0, 0, 0, &tp);
+				if (error)
+					break;
+			}
+
+			while (as->aglen) {
+				xfs_fsblock_t fsbno =
+					XFS_AGB_TO_FSB(mp, agno, as->agbno);
+
+				xfs_refcount_free_cow_extent(tp, fsbno,
+						XFS_ATOMIC_WRITE_EXTSZ_HINT);
+				as->agbno += XFS_ATOMIC_WRITE_EXTSZ_HINT;
+				as->aglen -= XFS_ATOMIC_WRITE_EXTSZ_HINT;
+			}
+			kfree(as);
+		}
+		if (tp)
+			xfs_trans_commit(tp);
+		xfs_perag_put(pag);
+	}
+}
+
 /*
  * This flushes out the inodes,dquots and the superblock, unmounts the
  * log and makes sure that incore structures are freed.
@@ -1059,6 +1109,8 @@ xfs_unmountfs(
 	xfs_qm_unmount_quotas(mp);
 	xfs_rtunmount_inodes(mp);
 	xfs_irele(mp->m_rootip);
+
+	xfs_atomic_staging_cancel_all(mp);
 
 	/*
 	 * We can potentially deadlock here if we have an inode cluster

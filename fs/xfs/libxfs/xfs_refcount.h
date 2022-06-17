@@ -22,11 +22,14 @@ enum xfs_refcount_intent_type {
 	XFS_REFCOUNT_FREE_COW,
 };
 
+struct xfs_atomic_staging;
+
 struct xfs_refcount_intent {
 	struct list_head			ri_list;
 	enum xfs_refcount_intent_type		ri_type;
 	xfs_fsblock_t				ri_startblock;
 	xfs_extlen_t				ri_blockcount;
+	struct xfs_atomic_staging		*ri_as;
 };
 
 void xfs_refcount_increase_extent(struct xfs_trans *tp,
@@ -49,6 +52,14 @@ void xfs_refcount_alloc_cow_extent(struct xfs_trans *tp, xfs_fsblock_t fsb,
 		xfs_extlen_t len);
 void xfs_refcount_free_cow_extent(struct xfs_trans *tp, xfs_fsblock_t fsb,
 		xfs_extlen_t len);
+
+void
+xfs_refcount_alloc_atomic_staging(
+	struct xfs_trans		*tp,
+	xfs_fsblock_t			fsb,
+	xfs_extlen_t			len,
+	struct xfs_atomic_staging	*as);
+
 extern int xfs_refcount_recover_cow_leftovers(struct xfs_mount *mp,
 		xfs_agnumber_t agno);
 

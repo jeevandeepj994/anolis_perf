@@ -2068,6 +2068,28 @@ xfs_fs_eofblocks_from_user(
 	return 0;
 }
 
+static int
+xfs_ioc_set_atomic_write(
+	struct xfs_inode	*ip)
+{
+	struct xfs_trans	*tp;
+	int			error;
+
+	tp = xfs_ioctl_setattr_get_trans(ip);
+	if (IS_ERR(tp)) {
+		error = PTR_ERR(tp);
+		goto out;
+	}
+
+	ip->i_d.di_flags2 |= XFS_DIFLAG2_DIO_ATOMIC_WRITE;
+	ip->i_d.di_flags |= XFS_DIFLAG_EXTSIZE;
+	ip->i_d.di_extsize = XFS_ATOMIC_WRITE_EXTSZ_HINT;
+
+	error = xfs_trans_commit(tp);
+out:
+	return error;
+}
+
 /*
  * Note: some of the ioctl's return positive numbers as a
  * byte count indicating success, such as readlink_by_handle.
@@ -2355,6 +2377,49 @@ xfs_file_ioctl(
 		return error;
 	}
 
+	case XFS_IOC_ATOMIC_WRITE_SET: {
+		uint32_t in;
+		bool set = false;
+		static const int enable = 1;
+
+		if (!S_ISREG(inode->i_mode))
+			return -EINVAL;
+		if (!xfs_sb_version_hasreflink(&mp->m_sb))
+			return -EOPNOTSUPP;
+
+		if (get_user(in, (uint32_t __user *)arg))
+			return -EFAULT;
+		if (in != enable)
+			return -EINVAL;
+
+		xfs_ilock(ip, XFS_IOLOCK_EXCL | XFS_MMAPLOCK_EXCL);
+		if (!i_size_read(inode) || !inode->i_blocks) {
+			/* set atomic write only after file is newly created */
+			xfs_info(mp, "set atomic write for inode %lld", ip->i_ino);
+			error = xfs_ioc_set_atomic_write(ip);
+			if (!error)
+				set = true;
+			goto out;
+		}
+
+		/* just return if previously already set */
+		if (ip->i_d.di_flags2 & XFS_DIFLAG2_DIO_ATOMIC_WRITE) {
+			error = 0;
+			goto out;
+		}
+
+		error = -EOPNOTSUPP;
+out:
+		xfs_iunlock(ip, XFS_IOLOCK_EXCL | XFS_MMAPLOCK_EXCL);
+
+		if (set && !xfs_sb_has_ro_compat_feature(&mp->m_sb,
+				XFS_SB_FEAT_RO_COMPAT_ATOMIC_FILE)) {
+			mp->m_sb.sb_features_ro_compat |=
+				XFS_SB_FEAT_RO_COMPAT_ATOMIC_FILE;
+			error = xfs_sync_sb(mp, true);
+		}
+		return error;
+	}
 	default:
 		return -ENOTTY;
 	}

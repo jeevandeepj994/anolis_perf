@@ -227,9 +227,11 @@ xfs_bmap_trim_cow(
 	struct xfs_bmbt_irec	*imap,
 	bool			*shared)
 {
+	/* always COW for atomic write */
 	/* We can't update any real extents in always COW mode. */
-	if (xfs_is_always_cow_inode(ip) &&
-	    !isnullstartblock(imap->br_startblock)) {
+	if (xfs_is_atomic_write_inode(ip) ||
+	    (xfs_is_always_cow_inode(ip) &&
+	     !isnullstartblock(imap->br_startblock))) {
 		*shared = true;
 		return 0;
 	}
@@ -434,7 +436,10 @@ convert:
 	if (!convert_now || cmap->br_state == XFS_EXT_NORM)
 		return 0;
 	trace_xfs_reflink_convert_cow(ip, cmap);
-	return xfs_reflink_convert_cow_locked(ip, offset_fsb, count_fsb);
+	error = xfs_reflink_convert_cow_locked(ip, offset_fsb, count_fsb);
+	if (!error)
+		cmap->br_state = XFS_EXT_NORM;
+	return error;
 
 out_unreserve:
 	xfs_trans_unreserve_quota_nblks(tp, ip, (long)resblks, 0,
@@ -669,6 +674,16 @@ xfs_reflink_end_cow_extent(
 	/* Trim the extent to whatever got unmapped. */
 	xfs_trim_extent(&del, del.br_startoff + rlen, del.br_blockcount - rlen);
 	trace_xfs_reflink_cow_remap(ip, &del);
+
+	if (xfs_is_atomic_write_inode(ip)) {
+		unsigned int extsz = xfs_get_cowextsz_hint(ip);
+
+		if ((del.br_startoff % extsz) || del.br_blockcount != extsz) {
+			xfs_alert(mp, "atomic write broken on offset %llu, "
+				"size %llu, inode %lld",
+				 del.br_startoff, del.br_blockcount, ip->i_ino);
+		}
+	}
 
 	/* Free the CoW orphan record. */
 	xfs_refcount_free_cow_extent(tp, del.br_startblock, del.br_blockcount);
