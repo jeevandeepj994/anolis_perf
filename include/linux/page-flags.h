@@ -193,6 +193,10 @@ enum pageflags {
 	/* Only valid for buddy pages. Used to track pages that are zeroed */
 	PG_zeroed = PG_dirty,
 #endif
+#ifdef CONFIG_MEMORY_HOTPLUG
+	/* For self-hosted memmap pages */
+	PG_vmemmap_self_hosted = PG_owner_priv_1,
+#endif
 };
 
 #ifndef __GENERATING_BOUNDS_H
@@ -543,6 +547,12 @@ PAGEFLAG(Idle, idle, PF_ANY)
  * any possible races on the setting or clearing of the bit.
  */
 __PAGEFLAG(Reported, reported, PF_NO_COMPOUND)
+
+#ifdef CONFIG_MEMORY_HOTPLUG
+PAGEFLAG(VmemmapSelfHosted, vmemmap_self_hosted, PF_ANY)
+#else
+PAGEFLAG_FALSE(VmemmapSelfHosted)
+#endif
 
 #ifdef CONFIG_PAGE_PREZERO
 __PAGEFLAG(Zeroed, zeroed, PF_NO_COMPOUND)
