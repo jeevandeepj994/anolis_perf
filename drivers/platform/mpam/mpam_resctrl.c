@@ -330,6 +330,8 @@ void resctrl_arch_reset_rmid(struct rdt_resource *r, struct rdt_domain *d,
 	cfg.match_pmg = true;
 	cfg.pmg = rmid;
 
+	dom = container_of(d, struct mpam_resctrl_dom, resctrl_dom);
+
 	if (cdp_enabled) {
 		cfg.partid = closid << 1;
 		mpam_msmon_reset_mbwu(dom->comp, &cfg);
