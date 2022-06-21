@@ -199,7 +199,7 @@ alternative_endif
 
 .macro user_alt, label, oldinstr, newinstr, cond
 9999:	alternative_insn "\oldinstr", "\newinstr", \cond
-	_asm_extable 9999b, \label
+	_asm_extable_uaccess 9999b, \label
 .endm
 
 #endif  /*  __ASSEMBLY__  */
