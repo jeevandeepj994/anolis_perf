@@ -1920,11 +1920,8 @@ static void smc_listen_out(struct smc_sock *new_smc)
 	struct smc_sock *lsmc = new_smc->listen_smc;
 	struct sock *newsmcsk = &new_smc->sk;
 
-	mutex_lock(&new_smc->clcsock_release_lock);
-	if (new_smc->clcsock && new_smc->clcsock->sk &&
-	    tcp_sk(new_smc->clcsock->sk)->syn_smc)
+	if (new_smc->smc_negotiated)
 		atomic_dec(&lsmc->queued_smc_hs);
-	mutex_unlock(&new_smc->clcsock_release_lock);
 
 	if (lsmc->sk.sk_state == SMC_LISTEN) {
 		lock_sock_nested(&lsmc->sk, SINGLE_DEPTH_NESTING);
@@ -2539,8 +2536,12 @@ static void smc_tcp_listen_work(struct work_struct *work)
 		if (!new_smc)
 			continue;
 
-		if (tcp_sk(new_smc->clcsock->sk)->syn_smc)
+		if (tcp_sk(new_smc->clcsock->sk)->syn_smc) {
+			new_smc->smc_negotiated = 1;
 			atomic_inc(&lsmc->queued_smc_hs);
+			/* memory barrier */
+			smp_mb__after_atomic();
+		}
 
 		new_smc->listen_smc = lsmc;
 		new_smc->use_fallback = lsmc->use_fallback;
