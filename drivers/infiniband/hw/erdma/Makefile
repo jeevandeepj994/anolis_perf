@@ -2,6 +2,5 @@
 obj-$(CONFIG_INFINIBAND_ERDMA) += erdma.o
 
 erdma-y :=\
-			erdma_ae.o erdma_cm.o erdma_common.o erdma_command.o \
-			erdma_debug.o erdma_ioctl.o erdma_main.o erdma_obj.o \
-			erdma_qp.o erdma_verbs.o erdma_sysfs.o
+		erdma_cm.o erdma_cq.o erdma_main.o  erdma_qp.o erdma_verbs.o \
+		erdma_cmdq.o erdma_eq.o erdma_ioctl.o erdma_stats.o

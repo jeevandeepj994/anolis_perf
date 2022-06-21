@@ -1,74 +1,74 @@
 /* SPDX-License-Identifier: GPL-2.0 OR Linux-OpenIB */
-/*
- * ElasticRDMA driver for Linux
- * Authors: Cheng You <chengyou@linux.alibaba.com>
- * Copyright (c) 2020-2021 Alibaba Group.
- *
- * This software is available to you under a choice of one of two
- * licenses.  You may choose to be licensed under the terms of the GNU
- * General Public License (GPL) Version 2, available from the file
- * COPYING in the main directory of this source tree, or the
- * OpenIB.org BSD license below:
- *
- *     Redistribution and use in source and binary forms, with or
- *     without modification, are permitted provided that the following
- *     conditions are met:
- *
- *      - Redistributions of source code must retain the above
- *        copyright notice, this list of conditions and the following
- *        disclaimer.
- *
- *      - Redistributions in binary form must reproduce the above
- *        copyright notice, this list of conditions and the following
- *        disclaimer in the documentation and/or other materials
- *        provided with the distribution.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
- * EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
- * MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
- * NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS
- * BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN
- * ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
- * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
- */
+
+/* Authors: Cheng Xu <chengyou@linux.alibaba.com> */
+/* Copyright (c) 2020-2022, Alibaba Group. */
 
 #ifndef __EADM_IOCTL_H__
 #define __EADM_IOCTL_H__
 
 #include <linux/ioctl.h>
 #include <linux/kernel.h>
+#ifdef __KERNEL__
+#include <linux/sched.h>
+#else
+#define TASK_COMM_LEN 16
+#endif
 
-#define EADM_DUMP_CMD        0x0
-#define EADM_TEST_CMD        0x1
-#define EADM_CTRL_CMD        0x2
-#define EADM_STAT_CMD        0x3
-#define EADM_INFO_CMD        0x4
+#define ERDMA_DEVICE_NAME_MAX_LEN 20
+
+enum erdma_cmd {
+	EADM_DUMP_CMD = 0x0,
+	EADM_TEST_CMD,
+	EADM_CTRL_CMD,
+	EADM_STAT_CMD,
+	EADM_INFO_CMD,
+	EADM_CONF_CMD,
+	EADM_VER_CMD,
+	EADM_CMD_MAX,
+};
 
 #define ERDMA_DUMP_OPCODE_CQE 0
 #define ERDMA_DUMP_OPCODE_SQE 1
 #define ERDMA_DUMP_OPCODE_RQE 2
 #define ERDMA_DUMP_OPCODE_EQE 3
 
-#define ERDMA_TEST_CMDQ       0
-#define ERDMA_TEST_SQ_DUMMY   1
-#define ERDMA_TEST_CI         2
+#define ERDMA_CM_TEST_SERVER       0
+#define ERDMA_CM_TEST_CLIENT   1
 
-#define ERDMA_CTRL_GET_CMDSQ_CI    0
-#define ERDMA_CTRL_SET_CMDSQ_CI    1
-#define ERDMA_CTRL_GET_CMDSQ_PI    2
-#define ERDMA_CTRL_SET_CMDSQ_PI    3
-#define ERDMA_CTRL_GET_CMDCQ_CI    4
-#define ERDMA_CTRL_SET_CMDCQ_CI    5
-#define ERDMA_CTRL_GET_CMDCQ_OWNER 6
-#define ERDMA_CTRL_SET_CMDCQ_OWNER 7
+#define ERDMA_TEST_DATA       3
+#define ERDMA_TEST_ECHO       4
+#define ERDMA_TEST_CONN       5
+#define ERDMA_TEST_ORDER      6
 
-#define ERDMA_STAT_OPCODE_QP   0
-#define ERDMA_STAT_OPCODE_CQ   1
-#define ERDMA_STAT_OPCODE_DEV  2
+enum erdma_stat_type {
+	ERDMA_STAT_TYPE_QP = 0,
+	ERDMA_STAT_TYPE_CQ,
+	ERDMA_STAT_TYPE_DEV,
+	ERDMA_STAT_TYPE_MAX,
+};
 
-#define ERDMA_INFO_OPCODE_DEV 0
-#define ERDMA_INFO_OPCODE_QP  1
+enum erdma_info_type {
+	ERDMA_INFO_TYPE_DEV = 0,
+	ERDMA_INFO_TYPE_QP,
+	ERDMA_INFO_TYPE_CQ,
+	ERDMA_INFO_TYPE_ALLOCED_QP,
+	ERDMA_INFO_TYPE_EQ,
+	ERDMA_INFO_TYPE_CEP,
+	ERDMA_INFO_TYPE_MAX,
+};
+
+enum erdma_config_type {
+	ERDMA_CONFIG_TYPE_CC = 0,
+	ERDMA_CONFIG_TYPE_LOGLEVEL,
+	ERDMA_CONFIG_MAX
+};
+
+enum erdma_dump_type {
+	ERDMA_DUMP_TYPE_SQE = 0,
+	ERDMA_DUMP_TYPE_RQE,
+	ERDMA_DUMP_TYPE_CQE,
+	ERDMA_DUMP_MAX = ERDMA_DUMP_TYPE_CQE + 1,
+};
 
 struct erdma_dev_info {
 	__u32 devid;
@@ -78,6 +78,7 @@ struct erdma_dev_info {
 struct erdma_qp_info {
 	__u32 qpn;
 	__u32 qp_state;
+	__u32 ref_cnt;
 
 	__u32 sip;
 	__u32 dip;
@@ -89,20 +90,80 @@ struct erdma_qp_info {
 	__u16 sq_depth;
 	__u16 rq_depth;
 
-	__u32 remote_qpn;
+	__u32 cookie;
+	__u8 cc;
+	__u8 is_user;
+	__u8 sq_mtt_type;
+	__u8 rq_mtt_type;
+
+	__u32 pid;
+	char buf[TASK_COMM_LEN];
+
+	struct {
+		__u32 page_size;
+		__u32 page_offset;
+		__u32 page_cnt;
+		__u32 mtt_nents;
+		__u64 mtt_entry[4];
+		__u64 va;
+		__u64 len;
+	} sq_mtt, rq_mtt;
+};
+
+struct erdma_eq_info {
+	__u32 eqn;
+	__u8 ready;
+	__u8 rsvd[3];
+
+	__u64 event_cnt;
+	__u64 notify_cnt;
+
+	__u32 depth;
+	__u32 ci;
+	__u64 qbuf_dma;
+	__u64 qbuf_va;
 };
 
 struct erdma_ioctl_inbuf {
 	__u32 opcode;
-	__u32 qn;
-	__u32 idx;
-	__u32 data;
+	char ibdev_name[ERDMA_DEVICE_NAME_MAX_LEN + 1];
+	union {
+		struct {
+			__u32 value;
+			__u32 is_set;
+		} config_req;
+
+		struct {
+			__u32 qn;
+			__u32 qe_idx;
+		} dump_req;
+		struct {
+			__u32 qn;
+			__u32 max_result_cnt;
+		} info_req;
+		struct {
+			__u32 qn;
+		} stat_req;
+	};
 };
 
 struct erdma_ioctl_outbuf {
 	__u32 status;
 	__u32 length;
-	char data[256];
+	union {
+		char data[4096];
+		struct {
+			__u32 value;
+		} config_resp;
+
+		__u32 allocted_qpn[1024];
+
+		struct erdma_qp_info qp_info;
+		/* 0: AEQ, 1: Cmd-EQ, 2-32: Completion-EQ */
+		struct erdma_eq_info eq_info[33];
+
+		__u32 version;
+	};
 };
 
 struct erdma_ioctl_msg {
@@ -110,23 +171,26 @@ struct erdma_ioctl_msg {
 	struct erdma_ioctl_outbuf out;
 };
 
+/* 定义幻数 */
 #define ERDMA_IOC_MAGIC  'k'
 
-#define ERDMA_DUMP           _IOWR(ERDMA_IOC_MAGIC, EADM_DUMP_CMD, struct erdma_ioctl_msg)
-#define ERDMA_TEST           _IOWR(ERDMA_IOC_MAGIC, EADM_TEST_CMD, struct erdma_ioctl_msg)
-#define ERDMA_CTRL           _IOWR(ERDMA_IOC_MAGIC, EADM_CTRL_CMD, struct erdma_ioctl_msg)
-#define ERDMA_STAT           _IOWR(ERDMA_IOC_MAGIC, EADM_STAT_CMD, struct erdma_ioctl_msg)
-#define ERDMA_INFO           _IOWR(ERDMA_IOC_MAGIC, EADM_INFO_CMD, struct erdma_ioctl_msg)
+/* 定义命令 */
+#define ERDMA_DUMP _IOWR(ERDMA_IOC_MAGIC, EADM_DUMP_CMD, struct erdma_ioctl_msg)
+#define ERDMA_TEST _IOWR(ERDMA_IOC_MAGIC, EADM_TEST_CMD, struct erdma_ioctl_msg)
+#define ERDMA_CTRL _IOWR(ERDMA_IOC_MAGIC, EADM_CTRL_CMD, struct erdma_ioctl_msg)
+#define ERDMA_STAT _IOWR(ERDMA_IOC_MAGIC, EADM_STAT_CMD, struct erdma_ioctl_msg)
+#define ERDMA_INFO _IOWR(ERDMA_IOC_MAGIC, EADM_INFO_CMD, struct erdma_ioctl_msg)
+#define ERDMA_CONF _IOWR(ERDMA_IOC_MAGIC, EADM_CONF_CMD, struct erdma_ioctl_msg)
+#define ERDMA_VER _IOWR(ERDMA_IOC_MAGIC, EADM_VER_CMD, struct erdma_ioctl_msg)
 
-#define ERDMA_IOC_MAXNR 5
+#define ERDMA_IOC_MAXNR EADM_CMD_MAX
 
 #ifdef __KERNEL__
-long chardev_ioctl(struct file *filp,
-		   unsigned int cmd, unsigned long arg);
-long do_ioctl(void *edev, unsigned int cmd, unsigned long arg);
+long chardev_ioctl(struct file *filp, unsigned int cmd, unsigned long arg);
+long do_ioctl(unsigned int cmd, unsigned long arg);
 #else
 
 #endif
-int exec_ioctl_cmd(int cmd, struct erdma_ioctl_msg *msg);
+int exec_ioctl_cmd(char *dev_path, int cmd, struct erdma_ioctl_msg *msg);
 
 #endif
