@@ -279,6 +279,11 @@ struct smc_sock {				/* smc sock container */
 						 * started, waiting for unsent
 						 * data to be sent
 						 */
+	u8			smc_negotiated : 1;
+						/* whether the smc_sock
+						 * was successfully negotiated
+						 * via TCP options.
+						 */
 	u8			connect_nonblock : 1;
 						/* non-blocking connect in
 						 * flight
