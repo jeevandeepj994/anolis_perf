@@ -5359,6 +5359,25 @@ void memcg_check_wmark_min_adj(struct task_struct *curr,
 	}
 }
 
+#ifdef CONFIG_FAST_COPY_MM
+static u64 mem_cgroup_fast_copy_mm_read(struct cgroup_subsys_state *css,
+					struct cftype *cft)
+{
+	struct mem_cgroup *memcg = mem_cgroup_from_css(css);
+
+	return memcg->fast_copy_mm;
+}
+
+static int mem_cgroup_fast_copy_mm_write(struct cgroup_subsys_state *css,
+					 struct cftype *cft, u64 val)
+{
+	struct mem_cgroup *memcg = mem_cgroup_from_css(css);
+
+	memcg->fast_copy_mm = val;
+	return 0;
+}
+#endif
+
 static void __mem_cgroup_threshold(struct mem_cgroup *memcg, bool swap)
 {
 	struct mem_cgroup_threshold_ary *t;
@@ -6525,6 +6544,13 @@ static struct cftype mem_cgroup_legacy_files[] = {
 		.write_u64 = mem_cgroup_allow_duptext_write,
 	},
 #endif
+#ifdef CONFIG_FAST_COPY_MM
+	{
+		.name = "fast_copy_mm",
+		.read_u64 = mem_cgroup_fast_copy_mm_read,
+		.write_u64 = mem_cgroup_fast_copy_mm_write,
+	},
+#endif
 	{ },	/* terminate */
 };
 
@@ -6791,6 +6817,9 @@ mem_cgroup_css_alloc(struct cgroup_subsys_state *parent_css)
 		memcg->reap_background = parent->reap_background;
 #ifdef CONFIG_DUPTEXT
 		memcg->allow_duptext = parent->allow_duptext;
+#endif
+#ifdef CONFIG_FAST_COPY_MM
+		memcg->fast_copy_mm = parent->fast_copy_mm;
 #endif
 	}
 	if (!parent) {
@@ -8086,6 +8115,13 @@ static struct cftype memory_files[] = {
 		.read_u64 = memcg_reap_background_read,
 		.write_u64 = memcg_reap_background_write,
 	},
+#ifdef CONFIG_FAST_COPY_MM
+	{
+		.name = "fast_copy_mm",
+		.read_u64 = mem_cgroup_fast_copy_mm_read,
+		.write_u64 = mem_cgroup_fast_copy_mm_write,
+	},
+#endif
 	{ }	/* terminate */
 };
 

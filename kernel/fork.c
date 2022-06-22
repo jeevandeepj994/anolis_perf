@@ -362,6 +362,8 @@ struct vm_area_struct *vm_area_dup(struct vm_area_struct *orig)
 {
 	struct vm_area_struct *new = kmem_cache_alloc(vm_area_cachep, GFP_KERNEL);
 
+	fcm_fixup_vma(orig);
+
 	if (new) {
 		ASSERT_EXCLUSIVE_WRITER(orig->vm_flags);
 		ASSERT_EXCLUSIVE_WRITER(orig->vm_file);
@@ -481,12 +483,23 @@ static __latent_entropy int dup_mmap(struct mm_struct *mm,
 	int retval;
 	unsigned long charge;
 	LIST_HEAD(uf);
+#ifdef CONFIG_FAST_COPY_MM
+	unsigned long fast_copy_mm;
+#endif
 
 	uprobe_start_dup_mmap();
 	if (mmap_write_lock_killable(oldmm)) {
 		retval = -EINTR;
 		goto fail_uprobe_end;
 	}
+#ifdef CONFIG_FAST_COPY_MM
+	/* Get task_fast_copy_mm with oldmm's mmap write lock hold. */
+	rcu_read_lock();
+	fast_copy_mm = task_fast_copy_mm(current);
+	if (fast_copy_mm)
+		set_bit(FCM_CANDIDATE, &oldmm->fcm_flags);
+	rcu_read_unlock();
+#endif
 	flush_cache_dup_mm(oldmm);
 	uprobe_dup_mmap(oldmm, mm);
 	/*
@@ -596,8 +609,16 @@ static __latent_entropy int dup_mmap(struct mm_struct *mm,
 		rb_parent = &tmp->vm_rb;
 
 		mm->map_count++;
-		if (!(tmp->vm_flags & VM_WIPEONFORK))
+		if (!(tmp->vm_flags & VM_WIPEONFORK)) {
+#ifdef CONFIG_FAST_COPY_MM
+			if (fast_copy_mm)
+				retval = fcm_cpr_fast(tmp, mpnt);
+			else
+				retval = copy_page_range(tmp, mpnt);
+#else
 			retval = copy_page_range(tmp, mpnt);
+#endif
+		}
 
 		if (tmp->vm_ops && tmp->vm_ops->open)
 			tmp->vm_ops->open(tmp);
@@ -610,6 +631,10 @@ static __latent_entropy int dup_mmap(struct mm_struct *mm,
 out:
 	mmap_write_unlock(mm);
 	flush_tlb_mm(oldmm);
+#ifdef CONFIG_FAST_COPY_MM
+	if (fast_copy_mm)
+		fcm_cpr_bind(oldmm, mm, retval);
+#endif
 	mmap_write_unlock(oldmm);
 	dup_userfaultfd_complete(&uf);
 fail_uprobe_end:
@@ -692,6 +717,9 @@ void __mmdrop(struct mm_struct *mm)
 	BUG_ON(mm == &init_mm);
 	WARN_ON_ONCE(mm == current->mm);
 	WARN_ON_ONCE(mm == current->active_mm);
+#ifdef CONFIG_FAST_COPY_MM
+	BUG_ON(mm->fcm_mm);
+#endif
 	mm_free_pgd(mm);
 	destroy_context(mm);
 	mmu_notifier_subscriptions_destroy(mm);
@@ -1048,6 +1076,11 @@ static struct mm_struct *mm_init(struct mm_struct *mm, struct task_struct *p,
 #endif
 	mm_init_uprobes_state(mm);
 	hugetlb_count_init(mm);
+
+#ifdef CONFIG_FAST_COPY_MM
+	mm->fcm_mm = NULL;
+	mm->fcm_flags = 0;
+#endif
 
 	if (current->mm) {
 		mm->flags = current->mm->flags & MMF_INIT_MASK;
@@ -2358,6 +2391,12 @@ bad_fork_cleanup_namespaces:
 	exit_task_namespaces(p);
 bad_fork_cleanup_mm:
 	if (p->mm) {
+#ifdef CONFIG_FAST_COPY_MM
+		if (p->mm->fcm_mm) {
+			WARN_ON_ONCE(clone_flags & CLONE_VM);
+			fcm_cpr_done(p->mm, true, false);
+		}
+#endif
 		mm_clear_owner(p->mm, p);
 		mmput(p->mm);
 	}

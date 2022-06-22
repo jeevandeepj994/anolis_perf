@@ -379,6 +379,10 @@ struct vm_area_struct {
 #endif
 	struct vm_userfaultfd_ctx vm_userfaultfd_ctx;
 
+#ifdef CONFIG_FAST_COPY_MM
+	struct vm_area_struct *fcm_vma;
+#endif
+
 	CK_HOTFIX_RESERVE(1)
 	CK_HOTFIX_RESERVE(2)
 	CK_HOTFIX_RESERVE(3)
@@ -587,6 +591,11 @@ struct mm_struct {
 
 #ifdef CONFIG_IOMMU_SVA
 		u32 pasid;
+#endif
+
+#ifdef CONFIG_FAST_COPY_MM
+		struct mm_struct *fcm_mm;
+		unsigned long fcm_flags;
 #endif
 	} __randomize_layout;
 
