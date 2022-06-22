@@ -459,6 +459,10 @@ struct mem_cgroup {
 	struct reclaim_coldpgs_stats __percpu *coldpgs_stats;
 #endif
 
+#ifdef CONFIG_FAST_COPY_MM
+	unsigned long fast_copy_mm;
+#endif
+
 	CK_HOTFIX_RESERVE(1)
 	CK_HOTFIX_RESERVE(2)
 	CK_HOTFIX_RESERVE(3)
@@ -1543,6 +1547,30 @@ static inline void memcg_lat_stat_end(enum mem_lat_stat_item sidx, u64 start)
 {
 }
 #endif /* CONFIG_MEMSLI */
+
+#ifdef CONFIG_FAST_COPY_MM
+static inline unsigned long task_fast_copy_mm(struct task_struct *p)
+{
+	struct mem_cgroup *task_memcg;
+	unsigned long fast_copy_mm = 0UL;
+
+	if (!fcm_enabled() || mem_cgroup_disabled())
+		return 0UL;
+
+	rcu_read_lock();
+	task_memcg = mem_cgroup_from_task(p);
+	if (task_memcg)
+		fast_copy_mm = task_memcg->fast_copy_mm;
+	rcu_read_unlock();
+
+	return fast_copy_mm;
+}
+#else
+static inline unsigned long task_fast_copy_mm(struct task_struct *p)
+{
+	return 0UL;
+}
+#endif
 
 /* idx can be of type enum memcg_stat_item or node_stat_item */
 static inline void __inc_memcg_state(struct mem_cgroup *memcg,

@@ -933,4 +933,16 @@ config RECLAIM_COLDPGS
 	  will be reclaimed so that they can be reused by somebody else, like
 	  newly created cgroups to increase the whole system density.
 
+config FAST_COPY_MM
+	bool "Support fast copy mm when fork"
+	depends on MMU && MEMCG
+	default y
+	help
+	  This introduces a new mechanism to reduce block duration when parent
+	  process calls fork(2). It will be very effective for processes with
+	  large memory usage. For example, DB uses fork(2) to create a memory
+	  snapshot, and wants fork(2) returns as soon as possible to reduce
+	  unserviceable duration.  Note that it won't speed up child's return
+	  from fork(2).
+
 endmenu
