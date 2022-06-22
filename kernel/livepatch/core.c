@@ -798,9 +798,14 @@ static int klp_init_object_loaded(struct klp_patch *patch,
 		 * written earlier during the initialization of the klp module
 		 * itself.
 		 */
+		module_disable_ro(patch->mod);
 		ret = klp_apply_object_relocs(patch, obj);
-		if (ret)
+		if (ret) {
+			pr_err("apply object relocations failed, ret=%d\n", ret);
+			module_enable_ro(patch->mod, true);
 			return ret;
+		}
+		module_enable_ro(patch->mod, true);
 	}
 
 	klp_for_each_func(obj, func) {
