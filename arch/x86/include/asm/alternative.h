@@ -142,6 +142,19 @@ static inline int alternatives_text_reserved(void *start, void *end)
 	ALTINSTR_REPLACEMENT(newinstr, feature, 1)			\
 	".popsection\n"
 
+/* alternative c code primitive: */
+#define ALTERNATIVE_C_CODE(oldinstr, newinstr, feature)                 \
+        asm volatile("661:\n\t");                                       \
+        oldinstr;                                                       \
+        asm volatile("\n662:\n"                                         \
+                    alt_end_marker ":\n"                                \
+                    ".pushsection .altinstructions,\"a\"\n"             \
+                    ALTINSTR_ENTRY(feature, 1)                          \
+                    ".popsection\n"                                     \
+                    ".pushsection .altinstr_replacement, \"ax\"\n"      \
+                    ALTINSTR_REPLACEMENT(newinstr, feature, 1)          \
+                    ".popsection\n");
+
 #define ALTERNATIVE_2(oldinstr, newinstr1, feature1, newinstr2, feature2)\
 	OLDINSTR_2(oldinstr, 1, 2)					\
 	".pushsection .altinstructions,\"a\"\n"				\

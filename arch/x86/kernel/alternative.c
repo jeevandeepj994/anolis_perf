@@ -352,6 +352,8 @@ static void __init_or_module noinline optimize_nops(struct alt_instr *a, u8 *ins
 		   instr, a->instrlen - a->padlen, a->padlen);
 }
 
+extern bool pv_is_native_vcpu_is_preempted(void);
+
 /*
  * Replace instructions with better alternatives for this CPU type. This runs
  * before SMP is initialized to avoid SMP problems with self modifying code.
@@ -384,6 +386,16 @@ void __init_or_module noinline apply_alternatives(struct alt_instr *start,
 
 		instr = (u8 *)&a->instr_offset + a->instr_offset;
 		replacement = (u8 *)&a->repl_offset + a->repl_offset;
+
+                if (*replacement == 0x90 && a->replacementlen == 1) {
+#if defined(CONFIG_PARAVIRT_SPINLOCKS)
+                        if (pv_is_native_vcpu_is_preempted()) {
+                            add_nops(instr, a->instrlen);
+                        }
+#endif
+                        continue;
+                }
+
 		BUG_ON(a->instrlen > sizeof(insnbuf));
 		BUG_ON(a->cpuid >= (NCAPINTS + NBUGINTS) * 32);
 		if (!boot_cpu_has(a->cpuid)) {

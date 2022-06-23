@@ -24,7 +24,11 @@ static inline int encode_cpu(int cpu_nr)
 
 static inline int node_cpu(struct optimistic_spin_node *node)
 {
-	return node->cpu - 1;
+	int cpu = 0;
+
+	OSQ_ALTERNATIVE_C_CODE(cpu = node->cpu - 1, "nop", 0);
+
+	return cpu;
 }
 
 static inline struct optimistic_spin_node *decode_cpu(int encoded_cpu_val)
