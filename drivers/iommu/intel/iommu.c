@@ -3202,7 +3202,7 @@ static ioasid_t intel_vcmd_ioasid_alloc(ioasid_t min, ioasid_t max, void *data)
 	 * PASID range. Host can partition guest PASID range based on
 	 * policies but it is out of guest's control.
 	 */
-	if (min < PASID_MIN || max > intel_pasid_max_id)
+	if (min < IOASID_ALLOC_BASE || max > intel_pasid_max_id)
 		return INVALID_IOASID;
 
 	if (vcmd_alloc_pasid(iommu, &ioasid))
@@ -4832,7 +4832,7 @@ static int aux_domain_add_dev(struct dmar_domain *domain,
 		u32 pasid;
 
 		/* No private data needed for the default pasid */
-		pasid = ioasid_alloc(host_pasid_set, PASID_MIN,
+		pasid = ioasid_alloc(host_pasid_set, IOASID_ALLOC_BASE,
 				     pci_max_pasids(to_pci_dev(dev)) - 1,
 				     NULL);
 		if (pasid == INVALID_IOASID) {
@@ -5081,6 +5081,7 @@ intel_iommu_sva_invalidate(struct iommu_domain *domain, struct device *dev,
 	u16 did, sid;
 	int ret = 0;
 	u64 size = 0;
+	bool default_pasid = false;
 
 	if (!inv_info || !dmar_domain)
 		return -EINVAL;
@@ -5128,12 +5129,31 @@ intel_iommu_sva_invalidate(struct iommu_domain *domain, struct device *dev,
 		 * PASID is stored in different locations based on the
 		 * granularity.
 		 */
-		if (inv_info->granularity == IOMMU_INV_GRANU_PASID &&
-		    (inv_info->granu.pasid_info.flags & IOMMU_INV_PASID_FLAGS_PASID))
-			pasid = inv_info->granu.pasid_info.pasid;
-		else if (inv_info->granularity == IOMMU_INV_GRANU_ADDR &&
-			 (inv_info->granu.addr_info.flags & IOMMU_INV_ADDR_FLAGS_PASID))
-			pasid = inv_info->granu.addr_info.pasid;
+		if (inv_info->granularity == IOMMU_INV_GRANU_PASID) {
+			if (inv_info->granu.pasid_info.flags &
+			    IOMMU_INV_PASID_FLAGS_PASID) {
+				pasid = inv_info->granu.pasid_info.pasid;
+			} else {
+				pasid = domain_get_pasid(domain, dev);
+				default_pasid = true;
+			}
+		} else if (inv_info->granularity == IOMMU_INV_GRANU_ADDR) {
+			if (inv_info->granu.addr_info.flags &
+			    IOMMU_INV_ADDR_FLAGS_PASID) {
+				pasid = inv_info->granu.addr_info.pasid;
+			} else {
+				pasid = domain_get_pasid(domain, dev);
+				default_pasid = true;
+			}
+		}
+
+		if (default_pasid)
+			ret = ioasid_get(NULL, pasid);
+		else
+			ret = ioasid_get_if_owned(pasid);
+
+		if (ret)
+			goto out_unlock;
 
 		switch (BIT(cache_type)) {
 		case IOMMU_CACHE_INV_TYPE_IOTLB:
@@ -5191,6 +5211,7 @@ intel_iommu_sva_invalidate(struct iommu_domain *domain, struct device *dev,
 					    cache_type);
 			ret = -EINVAL;
 		}
+		ioasid_put(NULL, pasid);
 	}
 out_unlock:
 	spin_unlock(&iommu->lock);
