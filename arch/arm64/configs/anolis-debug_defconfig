@@ -466,7 +466,7 @@ CONFIG_AS_HAS_PAC=y
 #
 # CONFIG_ARM64_AMU_EXTN is not set
 CONFIG_AS_HAS_ARMV8_4=y
-# CONFIG_ARM64_TLB_RANGE is not set
+CONFIG_ARM64_TLB_RANGE=y
 # end of ARMv8.4 architectural features
 
 #
