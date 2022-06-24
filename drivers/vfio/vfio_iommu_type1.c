@@ -71,6 +71,9 @@ struct vfio_iommu {
 	struct blocking_notifier_head notifier;
 	unsigned int		dma_avail;
 	uint64_t		pgsize_bitmap;
+	uint64_t		num_non_pinned_groups;
+	wait_queue_head_t	vaddr_wait;
+	struct iommu_nesting_info	*nesting_info;
 	bool			v2;
 	bool			nesting;
 	bool			dirty_page_tracking;
@@ -133,6 +136,9 @@ struct vfio_regions {
 #define IS_IOMMU_CAP_DOMAIN_IN_CONTAINER(iommu)	\
 					(!list_empty(&iommu->domain_list))
 
+#define CONTAINER_HAS_DOMAIN(iommu)	(((iommu)->external_domain) || \
+					 (!list_empty(&(iommu)->domain_list)))
+
 #define DIRTY_BITMAP_BYTES(n)	(ALIGN(n, BITS_PER_TYPE(u64)) / BITS_PER_BYTE)
 
 /*
@@ -154,6 +160,26 @@ struct domain_capsule {
 	bool			user;
 	u64			flags;
 };
+
+/* iommu->lock must be held */
+static int vfio_prepare_nesting_domain_capsule(struct vfio_iommu *iommu,
+					       struct domain_capsule *dc)
+{
+	struct vfio_domain *domain;
+	struct vfio_group *group;
+
+	if (!iommu->nesting_info)
+		return -EINVAL;
+
+	domain = list_first_entry(&iommu->domain_list,
+				  struct vfio_domain, next);
+	group = list_first_entry(&domain->group_list,
+				 struct vfio_group, next);
+	dc->group = group;
+	dc->domain = domain->domain;
+	dc->user = true;
+	return 0;
+}
 
 static int put_pfn(unsigned long pfn, int prot);
 
@@ -2112,6 +2138,12 @@ static void vfio_iommu_iova_insert_copy(struct vfio_iommu *iommu,
 	list_splice_tail(iova_copy, iova);
 }
 
+static void vfio_iommu_release_nesting_info(struct vfio_iommu *iommu)
+{
+	kfree(iommu->nesting_info);
+	iommu->nesting_info = NULL;
+}
+
 static int vfio_iommu_type1_attach_group(void *iommu_data,
 					 struct iommu_group *iommu_group)
 {
@@ -2130,6 +2162,12 @@ static int vfio_iommu_type1_attach_group(void *iommu_data,
 
 	/* Check for duplicates */
 	if (vfio_iommu_find_iommu_group(iommu, iommu_group)) {
+		mutex_unlock(&iommu->lock);
+		return -EINVAL;
+	}
+
+	/* Nesting type container can include only one group */
+	if (iommu->nesting && CONTAINER_HAS_DOMAIN(iommu)) {
 		mutex_unlock(&iommu->lock);
 		return -EINVAL;
 	}
@@ -2203,6 +2241,31 @@ static int vfio_iommu_type1_attach_group(void *iommu_data,
 	ret = vfio_iommu_attach_group(domain, group);
 	if (ret)
 		goto out_domain;
+
+	/* Nesting cap info is available only after attaching */
+	if (iommu->nesting) {
+		int size = sizeof(struct iommu_nesting_info);
+
+		iommu->nesting_info = kzalloc(size, GFP_KERNEL);
+		if (!iommu->nesting_info) {
+			ret = -ENOMEM;
+			goto out_detach;
+		}
+
+		/* Now get the nesting info */
+		iommu->nesting_info->argsz = size;
+		ret = iommu_domain_get_attr(domain->domain,
+					    DOMAIN_ATTR_NESTING,
+					    iommu->nesting_info);
+		if (ret)
+			goto out_detach;
+
+		/* when @format of nesting_info is 0, fail the attach */
+		if (iommu->nesting_info->format == 0) {
+			ret = -ENOENT;
+			goto out_detach;
+		}
+	}
 
 	/* Get aperture info */
 	iommu_domain_get_attr(domain->domain, DOMAIN_ATTR_GEOMETRY, &geo);
@@ -2319,6 +2382,7 @@ done:
 	return 0;
 
 out_detach:
+	vfio_iommu_release_nesting_info(iommu);
 	vfio_iommu_detach_group(domain, group);
 out_domain:
 	iommu_domain_free(domain->domain);
@@ -2442,6 +2506,79 @@ done:
 	return ret;
 }
 
+static int vfio_dev_bind_gpasid_fn(struct device *dev, void *data)
+{
+	struct domain_capsule *dc = (struct domain_capsule *)data;
+	unsigned long arg = *(unsigned long *)dc->data;
+	struct mdev_device *mdev = to_mdev_device(dev);
+	struct device *iommu_device;
+	void *iommu_fault_data = NULL;
+
+	iommu_device = vfio_get_iommu_device(dc->group, dev);
+	if (!iommu_device)
+		return -EINVAL;
+
+	if (iommu_device != dev)
+		iommu_fault_data = mdev_get_iommu_fault_data(mdev);
+
+	return iommu_uapi_sva_bind_gpasid(dc->domain, iommu_device,
+					  (void __user *)arg,
+					  iommu_fault_data);
+}
+
+static int vfio_dev_unbind_gpasid_fn(struct device *dev, void *data)
+{
+	struct domain_capsule *dc = (struct domain_capsule *)data;
+	struct device *iommu_device;
+
+	iommu_device = vfio_get_iommu_device(dc->group, dev);
+	if (!iommu_device)
+		return -EINVAL;
+
+	/*
+	 * dc->user is a toggle for the unbind operation. When user
+	 * set, the dc->data passes in a __user pointer and requires
+	 * to use iommu_uapi_sva_unbind_gpasid(), in which it will
+	 * copy the unbind data from the user buffer. When user is
+	 * clear, the dc->data passes in a pasid which is going to
+	 * be unbind no need to copy data from userspace.
+	 */
+	if (dc->user) {
+		unsigned long arg = *(unsigned long *)dc->data;
+
+		iommu_uapi_sva_unbind_gpasid(dc->domain, iommu_device,
+					     (void __user *)arg);
+	} else {
+		ioasid_t pasid = *(ioasid_t *)dc->data;
+
+		iommu_sva_unbind_gpasid(dc->domain, iommu_device, pasid, dc->flags);
+	}
+	return 0;
+}
+
+static void vfio_group_unbind_gpasid_fn(ioasid_t pasid, void *data)
+{
+	struct domain_capsule *dc = (struct domain_capsule *)data;
+
+	dc->user = false;
+	dc->data = &pasid;
+
+	iommu_group_for_each_dev(dc->group->iommu_group,
+				 dc, vfio_dev_unbind_gpasid_fn);
+}
+
+static void vfio_group_unbind_default_gpasid(ioasid_t pasid, void *data)
+{
+	struct domain_capsule *dc = (struct domain_capsule *)data;
+
+	dc->user = false;
+	dc->data = &pasid;
+	dc->flags = IOMMU_SVA_HPASID_DEF;
+
+	iommu_group_for_each_dev(dc->group->iommu_group,
+				 dc, vfio_dev_unbind_gpasid_fn);
+}
+
 static void vfio_iommu_type1_detach_group(void *iommu_data,
 					  struct iommu_group *iommu_group)
 {
@@ -2486,6 +2623,32 @@ static void vfio_iommu_type1_detach_group(void *iommu_data,
 		if (!group)
 			continue;
 
+		if (iommu->nesting_info &&
+		    iommu->nesting_info->features &
+					IOMMU_NESTING_FEAT_BIND_PGTBL) {
+			struct domain_capsule dc = { .group = group,
+						     .domain = domain->domain,
+						     .data = NULL };
+			struct ioasid_user *iuser;
+
+			/*
+			 * For devices attached to nesting type iommu,
+			 * VFIO should unbind page tables bound with the
+			 * devices in the iommu group before detaching.
+			 */
+			iuser = ioasid_user_get_from_task(current);
+			if (!(IS_ERR(iuser) || !iuser)) {
+				ioasid_user_for_each_id(iuser, &dc,
+					       vfio_group_unbind_gpasid_fn);
+				ioasid_user_put(iuser);
+			}
+			/*
+			 * We should explicitly call interface to unbind default pasid gIOVA
+			 * page table here.
+			 */
+			vfio_group_unbind_default_gpasid(0, &dc);
+		}
+
 		vfio_iommu_detach_group(domain, group);
 		update_dirty_scope = !group->pinned_page_dirty_scope;
 		update_iommu_hwdbm = !group->iommu_hwdbm;
@@ -2506,6 +2669,8 @@ static void vfio_iommu_type1_detach_group(void *iommu_data,
 				} else {
 					vfio_iommu_unmap_unpin_reaccount(iommu);
 				}
+
+				vfio_iommu_release_nesting_info(iommu);
 			}
 			iommu_domain_free(domain->domain);
 			list_del(&domain->next);
@@ -2732,6 +2897,28 @@ static int vfio_iommu_dma_avail_build_caps(struct vfio_iommu *iommu,
 					sizeof(cap_dma_avail));
 }
 
+static int vfio_iommu_nesting_build_caps(struct vfio_iommu *iommu,
+					 struct vfio_info_cap *caps)
+{
+	struct vfio_iommu_type1_info_cap_nesting nesting_cap;
+	size_t size;
+
+	/* when nesting_info is null, no need to go further */
+	if (!iommu->nesting_info)
+		return 0;
+
+	size = offsetof(struct vfio_iommu_type1_info_cap_nesting, info) +
+	       iommu->nesting_info->argsz;
+
+	nesting_cap.header.id = VFIO_IOMMU_TYPE1_INFO_CAP_NESTING;
+	nesting_cap.header.version = 1;
+
+	memcpy(&nesting_cap.info, iommu->nesting_info,
+	       iommu->nesting_info->argsz);
+
+	return vfio_info_add_capability(caps, &nesting_cap.header, size);
+}
+
 static int vfio_iommu_type1_get_info(struct vfio_iommu *iommu,
 				     unsigned long arg)
 {
@@ -2769,6 +2956,9 @@ static int vfio_iommu_type1_get_info(struct vfio_iommu *iommu,
 
 	if (!ret)
 		ret = vfio_iommu_iova_build_caps(iommu, &caps);
+
+	if (!ret)
+		ret = vfio_iommu_nesting_build_caps(iommu, &caps);
 
 	mutex_unlock(&iommu->lock);
 
@@ -2996,6 +3186,153 @@ out_unlock:
 	return -EINVAL;
 }
 
+static long vfio_iommu_handle_pgtbl_op(struct vfio_iommu *iommu,
+				       bool is_bind, unsigned long arg)
+{
+	struct domain_capsule dc = { .data = &arg, .user = true };
+	struct iommu_nesting_info *info;
+	int ret;
+
+	mutex_lock(&iommu->lock);
+
+	info = iommu->nesting_info;
+	if (!info || !(info->features & IOMMU_NESTING_FEAT_BIND_PGTBL)) {
+		ret = -EOPNOTSUPP;
+		goto out_unlock;
+	}
+
+	ret = vfio_prepare_nesting_domain_capsule(iommu, &dc);
+	if (ret)
+		goto out_unlock;
+
+	if (is_bind)
+		ret = iommu_group_for_each_dev(dc.group->iommu_group, &dc,
+					       vfio_dev_bind_gpasid_fn);
+	if (ret || !is_bind)
+		iommu_group_for_each_dev(dc.group->iommu_group,
+					 &dc, vfio_dev_unbind_gpasid_fn);
+
+out_unlock:
+	mutex_unlock(&iommu->lock);
+	return ret;
+}
+
+static int vfio_dev_cache_invalidate_fn(struct device *dev, void *data)
+{
+	struct domain_capsule *dc = (struct domain_capsule *)data;
+	unsigned long arg = *(unsigned long *)dc->data;
+	struct device *iommu_device;
+
+	iommu_device = vfio_get_iommu_device(dc->group, dev);
+	if (!iommu_device)
+		return -EINVAL;
+
+	iommu_uapi_cache_invalidate(dc->domain, iommu_device,
+				    (void __user *)arg);
+	return 0;
+}
+
+static long vfio_iommu_invalidate_cache(struct vfio_iommu *iommu,
+					unsigned long arg)
+{
+	struct domain_capsule dc = { .data = &arg };
+	struct iommu_nesting_info *info;
+	int ret;
+
+	mutex_lock(&iommu->lock);
+	info = iommu->nesting_info;
+	if (!info || !(info->features & IOMMU_NESTING_FEAT_CACHE_INVLD)) {
+		ret = -EOPNOTSUPP;
+		goto out_unlock;
+	}
+
+	ret = vfio_prepare_nesting_domain_capsule(iommu, &dc);
+	if (ret)
+		goto out_unlock;
+
+	iommu_group_for_each_dev(dc.group->iommu_group, &dc,
+				 vfio_dev_cache_invalidate_fn);
+
+out_unlock:
+	mutex_unlock(&iommu->lock);
+	return ret;
+}
+
+static int vfio_dev_page_resp_fn(struct device *dev, void *data)
+{
+	struct domain_capsule *dc = (struct domain_capsule *)data;
+	unsigned long arg = *(unsigned long *) dc->data;
+	struct device *iommu_device;
+
+	iommu_device = vfio_get_iommu_device(dc->group, dev);
+	if (!iommu_device)
+		return -EINVAL;
+
+	return iommu_page_response(dc->domain, iommu_device,
+				   (void __user *) arg);
+}
+
+static long vfio_iommu_page_response(struct vfio_iommu *iommu,
+				     unsigned long arg)
+{
+	struct domain_capsule dc = { .data = &arg };
+	struct iommu_nesting_info *info;
+	int ret;
+
+	mutex_lock(&iommu->lock);
+	info = iommu->nesting_info;
+	if (!info || !(info->features & IOMMU_NESTING_FEAT_PAGE_RESP)) {
+		ret = -EOPNOTSUPP;
+		goto out_unlock;
+	}
+
+	ret = vfio_prepare_nesting_domain_capsule(iommu, &dc);
+	if (ret)
+		goto out_unlock;
+
+	ret = iommu_group_for_each_dev(dc.group->iommu_group, &dc,
+				       vfio_dev_page_resp_fn);
+
+out_unlock:
+	mutex_unlock(&iommu->lock);
+	return ret;
+}
+
+static long vfio_iommu_type1_nesting_op(struct vfio_iommu *iommu,
+					unsigned long arg)
+{
+	struct vfio_iommu_type1_nesting_op hdr;
+	unsigned int minsz;
+	int ret;
+
+	minsz = offsetofend(struct vfio_iommu_type1_nesting_op, flags);
+
+	if (copy_from_user(&hdr, (void __user *)arg, minsz))
+		return -EFAULT;
+
+	if (hdr.argsz < minsz || hdr.flags & ~VFIO_NESTING_OP_MASK)
+		return -EINVAL;
+
+	switch (hdr.flags & VFIO_NESTING_OP_MASK) {
+	case VFIO_IOMMU_NESTING_OP_BIND_PGTBL:
+		ret = vfio_iommu_handle_pgtbl_op(iommu, true, arg + minsz);
+		break;
+	case VFIO_IOMMU_NESTING_OP_UNBIND_PGTBL:
+		ret = vfio_iommu_handle_pgtbl_op(iommu, false, arg + minsz);
+		break;
+	case VFIO_IOMMU_NESTING_OP_CACHE_INVLD:
+		ret = vfio_iommu_invalidate_cache(iommu, arg + minsz);
+		break;
+	case VFIO_IOMMU_NESTING_OP_PAGE_RESP:
+		ret = vfio_iommu_page_response(iommu, arg + minsz);
+		break;
+	default:
+		ret = -EINVAL;
+	}
+
+	return ret;
+}
+
 static long vfio_iommu_type1_ioctl(void *iommu_data,
 				   unsigned int cmd, unsigned long arg)
 {
@@ -3012,6 +3349,8 @@ static long vfio_iommu_type1_ioctl(void *iommu_data,
 		return vfio_iommu_type1_unmap_dma(iommu, arg);
 	case VFIO_IOMMU_DIRTY_PAGES:
 		return vfio_iommu_type1_dirty_pages(iommu, arg);
+	case VFIO_IOMMU_NESTING_OP:
+		return vfio_iommu_type1_nesting_op(iommu, arg);
 	default:
 		return -ENOTTY;
 	}

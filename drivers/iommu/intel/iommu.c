@@ -50,6 +50,7 @@
 
 #include "../irq_remapping.h"
 #include "pasid.h"
+#include "cap_audit.h"
 
 #define ROOT_SIZE		VTD_PAGE_SIZE
 #define CONTEXT_SIZE		VTD_PAGE_SIZE
@@ -3469,7 +3470,7 @@ static int __init init_dmars(void)
 				goto free_iommu;
 		}
 #endif
-		ret = dmar_set_interrupt(iommu);
+		ret = dmar_set_interrupt(iommu, true);
 		if (ret)
 			goto free_iommu;
 	}
@@ -3984,7 +3985,7 @@ static int intel_iommu_add(struct dmar_drhd_unit *dmaru)
 			goto disable_iommu;
 	}
 #endif
-	ret = dmar_set_interrupt(iommu);
+	ret = dmar_set_interrupt(iommu, true);
 	if (ret)
 		goto disable_iommu;
 
@@ -4752,8 +4753,8 @@ static void intel_iommu_domain_free(struct iommu_domain *domain)
  * Check whether a @domain could be attached to the @dev through the
  * aux-domain attach/detach APIs.
  */
-static inline bool
-is_aux_domain(struct device *dev, struct iommu_domain *domain)
+inline bool is_aux_domain(struct device *dev,
+			  struct iommu_domain *domain)
 {
 	struct device_domain_info *info = get_domain_info(dev);
 
@@ -5081,6 +5082,7 @@ intel_iommu_sva_invalidate(struct iommu_domain *domain, struct device *dev,
 	u16 did, sid;
 	int ret = 0;
 	u64 size = 0;
+	bool default_pasid = false;
 
 	if (!inv_info || !dmar_domain)
 		return -EINVAL;
@@ -5128,12 +5130,31 @@ intel_iommu_sva_invalidate(struct iommu_domain *domain, struct device *dev,
 		 * PASID is stored in different locations based on the
 		 * granularity.
 		 */
-		if (inv_info->granularity == IOMMU_INV_GRANU_PASID &&
-		    (inv_info->granu.pasid_info.flags & IOMMU_INV_PASID_FLAGS_PASID))
-			pasid = inv_info->granu.pasid_info.pasid;
-		else if (inv_info->granularity == IOMMU_INV_GRANU_ADDR &&
-			 (inv_info->granu.addr_info.flags & IOMMU_INV_ADDR_FLAGS_PASID))
-			pasid = inv_info->granu.addr_info.pasid;
+		if (inv_info->granularity == IOMMU_INV_GRANU_PASID) {
+			if (inv_info->granu.pasid_info.flags &
+			    IOMMU_INV_PASID_FLAGS_PASID) {
+				pasid = inv_info->granu.pasid_info.pasid;
+			} else {
+				pasid = domain_get_pasid(domain, dev);
+				default_pasid = true;
+			}
+		} else if (inv_info->granularity == IOMMU_INV_GRANU_ADDR) {
+			if (inv_info->granu.addr_info.flags &
+			    IOMMU_INV_ADDR_FLAGS_PASID) {
+				pasid = inv_info->granu.addr_info.pasid;
+			} else {
+				pasid = domain_get_pasid(domain, dev);
+				default_pasid = true;
+			}
+		}
+
+		if (default_pasid)
+			ret = ioasid_get(NULL, pasid);
+		else
+			ret = ioasid_get_if_owned(pasid);
+
+		if (ret)
+			goto out_unlock;
 
 		switch (BIT(cache_type)) {
 		case IOMMU_CACHE_INV_TYPE_IOTLB:
@@ -5191,6 +5212,7 @@ intel_iommu_sva_invalidate(struct iommu_domain *domain, struct device *dev,
 					    cache_type);
 			ret = -EINVAL;
 		}
+		ioasid_put(NULL, pasid);
 	}
 out_unlock:
 	spin_unlock(&iommu->lock);
@@ -5752,17 +5774,126 @@ intel_iommu_domain_set_attr(struct iommu_domain *domain,
 	return ret;
 }
 
+static bool domain_use_flush_queue(void)
+{
+	struct dmar_drhd_unit *drhd;
+	struct intel_iommu *iommu;
+	bool r = true;
+
+	if (intel_iommu_strict)
+		return false;
+
+	/*
+	 * The flush queue implementation does not perform page-selective
+	 * invalidations that are required for efficient TLB flushes in virtual
+	 * environments. The benefit of batching is likely to be much lower than
+	 * the overhead of synchronizing the virtual and physical IOMMU
+	 * page-tables.
+	 */
+	rcu_read_lock();
+	for_each_active_iommu(iommu, drhd) {
+		if (!cap_caching_mode(iommu->cap))
+			continue;
+
+		pr_warn_once("IOMMU batching is disabled due to virtualization");
+		r = false;
+		break;
+	}
+	rcu_read_unlock();
+
+	return r;
+}
+
+static int intel_iommu_get_nesting_info(struct iommu_domain *domain,
+					struct iommu_nesting_info *info)
+{
+	struct dmar_domain *dmar_domain = to_dmar_domain(domain);
+	u64 cap = VTD_CAP_MASK, ecap = VTD_ECAP_MASK;
+	struct device_domain_info *domain_info;
+	struct iommu_nesting_info_vtd vtd;
+	unsigned int size;
+
+	if (!info)
+		return -EINVAL;
+
+	if (!(dmar_domain->flags & DOMAIN_FLAG_NESTING_MODE))
+		return -ENODEV;
+
+	size = sizeof(struct iommu_nesting_info);
+	/*
+	 * if provided buffer size is smaller than expected, should
+	 * return 0 and also the expected buffer size to caller.
+	 */
+	if (info->argsz < size) {
+		info->argsz = size;
+		return 0;
+	}
+
+	/*
+	 * arbitrary select the first domain_info as all nesting
+	 * related capabilities should be consistent across iommu
+	 * units.
+	 */
+	/*
+	 * Check full-device list first, and then sub-device list
+	 */
+	if (!list_empty(&dmar_domain->devices))
+		domain_info = list_first_entry(&dmar_domain->devices,
+					struct device_domain_info, link);
+	else if (!list_empty(&dmar_domain->subdevices)) {
+		struct subdev_domain_info *sinfo;
+
+		sinfo = list_first_entry(&dmar_domain->subdevices,
+					struct subdev_domain_info, link_domain);
+		domain_info = get_domain_info(sinfo->pdev);
+	} else
+		return -ENODEV;
+
+	cap &= domain_info->iommu->cap;
+	ecap &= domain_info->iommu->ecap;
+
+	info->addr_width = dmar_domain->gaw;
+	info->format = IOMMU_PASID_FORMAT_INTEL_VTD;
+	info->features = IOMMU_NESTING_FEAT_BIND_PGTBL |
+			 IOMMU_NESTING_FEAT_CACHE_INVLD;
+	info->pasid_bits = ilog2(intel_pasid_max_id);
+	memset(&info->padding, 0x0, 12);
+
+	vtd.flags = 0;
+	memset(&vtd.padding, 0x0, 12);
+	vtd.cap_reg = cap & VTD_CAP_MASK;
+	vtd.ecap_reg = ecap & VTD_ECAP_MASK;
+
+	memcpy(&info->vendor.vtd, &vtd, sizeof(vtd));
+	return 0;
+}
+
 static int
 intel_iommu_domain_get_attr(struct iommu_domain *domain,
 			    enum iommu_attr attr, void *data)
 {
 	switch (domain->type) {
 	case IOMMU_DOMAIN_UNMANAGED:
-		return -ENODEV;
+		switch (attr) {
+		case DOMAIN_ATTR_NESTING:
+		{
+			struct iommu_nesting_info *info =
+				(struct iommu_nesting_info *)data;
+			unsigned long flags;
+			int ret;
+
+			spin_lock_irqsave(&device_domain_lock, flags);
+			ret = intel_iommu_get_nesting_info(domain, info);
+			spin_unlock_irqrestore(&device_domain_lock, flags);
+			return ret;
+		}
+		default:
+			return -ENODEV;
+		}
 	case IOMMU_DOMAIN_DMA:
 		switch (attr) {
 		case DOMAIN_ATTR_DMA_USE_FLUSH_QUEUE:
-			*(int *)data = !intel_iommu_strict;
+			*(int *)data = domain_use_flush_queue();
 			return 0;
 		default:
 			return -ENODEV;

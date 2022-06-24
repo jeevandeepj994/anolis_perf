@@ -471,6 +471,7 @@ enum {
 #define VTD_FLAG_TRANS_PRE_ENABLED	(1 << 0)
 #define VTD_FLAG_IRQ_REMAP_PRE_ENABLED	(1 << 1)
 #define VTD_FLAG_SVM_CAPABLE		(1 << 2)
+#define VTD_FLAG_PGTT_SL_ONLY		(1 << 3)
 
 extern int intel_iommu_sm;
 extern spinlock_t device_domain_lock;
@@ -610,6 +611,7 @@ struct intel_iommu {
 	struct iommu_device iommu;  /* IOMMU core code handle */
 	int		node;
 	u32		flags;      /* Software defined flags */
+	struct workqueue_struct *fault_wq; /* Reporting IOMMU fault to device */
 
 	struct dmar_drhd_unit *drhd;
 };
@@ -748,19 +750,25 @@ int intel_iommu_enable_pasid(struct intel_iommu *iommu, struct device *dev);
 struct dmar_domain *find_domain(struct device *dev);
 struct device_domain_info *get_domain_info(struct device *dev);
 struct intel_iommu *device_to_iommu(struct device *dev, u8 *bus, u8 *devfn);
+int domain_get_pasid(struct iommu_domain *domain, struct device *dev);
 
 #ifdef CONFIG_INTEL_IOMMU_SVM
 extern void intel_svm_check(struct intel_iommu *iommu);
 extern int intel_svm_enable_prq(struct intel_iommu *iommu);
 extern int intel_svm_finish_prq(struct intel_iommu *iommu);
+inline bool is_aux_domain(struct device *dev,
+			  struct iommu_domain *domain);
 int intel_svm_bind_gpasid(struct iommu_domain *domain, struct device *dev,
-			  struct iommu_gpasid_bind_data *data);
-int intel_svm_unbind_gpasid(struct device *dev, u32 pasid);
+			  struct iommu_gpasid_bind_data *data,
+			  void *fault_data);
+int intel_svm_unbind_gpasid(struct iommu_domain *domain,
+			    struct device *dev, u32 pasid, u64 user_flags);
 struct iommu_sva *intel_svm_bind(struct device *dev, struct mm_struct *mm,
 				 void *drvdata);
 void intel_svm_unbind(struct iommu_sva *handle);
 u32 intel_svm_get_pasid(struct iommu_sva *handle);
-int intel_svm_page_response(struct device *dev, struct iommu_fault_event *evt,
+int intel_svm_page_response(struct iommu_domain *domain, struct device *dev,
+			    struct iommu_fault_event *evt,
 			    struct iommu_page_response *msg);
 void intel_svm_add_pasid_notifier(void);
 

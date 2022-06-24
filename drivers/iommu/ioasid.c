@@ -9,6 +9,7 @@
 #include <linux/slab.h>
 #include <linux/spinlock.h>
 #include <linux/xarray.h>
+#include <linux/sched/mm.h>
 
 /*
  * An IOASID can have multiple consumers where each consumer may have
@@ -716,6 +717,8 @@ static int ioasid_set_free_locked(struct ioasid_set *set)
 
 	if (atomic_read(&set->nr_ioasids)) {
 		ret = -EBUSY;
+		set->free_pending = true;
+		pr_info("Set marked as free_pending, will be released when the last ioasid reclaimed!\n");
 		goto exit_done;
 	}
 
@@ -784,6 +787,9 @@ ioasid_t ioasid_alloc(struct ioasid_set *set, ioasid_t min, ioasid_t max,
 	if (!set || !ioasid_set_is_valid(set))
 		goto done_unlock;
 
+	if (set->type == IOASID_SET_TYPE_MM && ioasid_cg_charge(set))
+		goto done_unlock;
+
 	if (set->quota <= atomic_read(&set->nr_ioasids)) {
 		pr_err_ratelimited("IOASID set out of quota %d\n",
 				   set->quota);
@@ -831,6 +837,7 @@ ioasid_t ioasid_alloc(struct ioasid_set *set, ioasid_t min, ioasid_t max,
 	goto done_unlock;
 exit_free:
 	kfree(data);
+	ioasid_cg_uncharge(set);
 done_unlock:
 	spin_unlock(&ioasid_allocator_lock);
 	return id;
@@ -848,10 +855,13 @@ static void ioasid_do_free_locked(struct ioasid_data *data)
 		kfree_rcu(ioasid_data, rcu);
 	}
 	atomic_dec(&data->set->nr_ioasids);
+	ioasid_cg_uncharge(data->set);
 	xa_erase(&data->set->xa, data->id);
 	/* Destroy the set if empty */
-	if (!atomic_read(&data->set->nr_ioasids))
+	if (data->set->free_pending && !atomic_read(&data->set->nr_ioasids)) {
+		pr_info("%s free set set->id: %u\n", __func__, data->set->id);
 		ioasid_set_free_locked(data->set);
+	}
 }
 
 static void ioasid_free_locked(struct ioasid_set *set, ioasid_t ioasid)
@@ -1031,6 +1041,42 @@ int ioasid_get(struct ioasid_set *set, ioasid_t ioasid)
 }
 EXPORT_SYMBOL_GPL(ioasid_get);
 
+/**
+ * ioasid_get_if_owned - obtain a reference to the IOASID if the IOASID belongs
+ * 		to the ioasid_set with the current mm as token
+ * @ioasid:	the IOASID to get reference
+ *
+ *
+ * Return: 0 on success, error if failed.
+ */
+int ioasid_get_if_owned(ioasid_t ioasid)
+{
+	struct ioasid_set *set;
+	int ret;
+
+	spin_lock(&ioasid_allocator_lock);
+	set = ioasid_find_set(ioasid);
+	if (IS_ERR_OR_NULL(set)) {
+		ret = -ENOENT;
+		goto done_unlock;
+	}
+	if (set->type != IOASID_SET_TYPE_MM) {
+		ret = -EINVAL;
+		goto done_unlock;
+	}
+	if (current->mm != set->token) {
+		ret = -EPERM;
+		goto done_unlock;
+	}
+
+	ret = ioasid_get_locked(set, ioasid);
+done_unlock:
+	spin_unlock(&ioasid_allocator_lock);
+
+	return ret;
+}
+EXPORT_SYMBOL_GPL(ioasid_get_if_owned);
+
 bool ioasid_put_locked(struct ioasid_set *set, ioasid_t ioasid)
 {
 	struct ioasid_data *data;
@@ -1208,11 +1254,16 @@ int ioasid_register_notifier_mm(struct mm_struct *mm, struct notifier_block *nb)
 			goto exit_unlock;
 		}
 	}
+
 	curr = kzalloc(sizeof(*curr), GFP_ATOMIC);
 	if (!curr) {
 		ret = -ENOMEM;
 		goto exit_unlock;
 	}
+
+	curr->token = mm;
+	curr->nb = nb;
+
 	/* Check if the token has an existing set */
 	set = ioasid_find_mm_set(mm);
 	if (!set) {
@@ -1228,8 +1279,6 @@ int ioasid_register_notifier_mm(struct mm_struct *mm, struct notifier_block *nb)
 			ret = -EBUSY;
 			goto exit_free;
 		}
-		curr->token = mm;
-		curr->nb = nb;
 		curr->active = true;
 		curr->set = set;
 

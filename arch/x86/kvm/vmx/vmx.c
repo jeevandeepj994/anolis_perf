@@ -15,6 +15,7 @@
 
 #include <linux/highmem.h>
 #include <linux/hrtimer.h>
+#include <linux/ioasid.h>
 #include <linux/kernel.h>
 #include <linux/kvm_host.h>
 #include <linux/module.h>
@@ -23,6 +24,7 @@
 #include <linux/mm.h>
 #include <linux/objtool.h>
 #include <linux/sched.h>
+#include <linux/sched/mm.h>
 #include <linux/sched/smt.h>
 #include <linux/slab.h>
 #include <linux/tboot.h>
@@ -173,6 +175,7 @@ static u32 vmx_possible_passthrough_msrs[MAX_POSSIBLE_PASSTHROUGH_MSRS] = {
 	MSR_CORE_C3_RESIDENCY,
 	MSR_CORE_C6_RESIDENCY,
 	MSR_CORE_C7_RESIDENCY,
+	MSR_IA32_PASID,
 };
 
 /*
@@ -2534,6 +2537,8 @@ static __init int setup_vmcs_config(struct vmcs_config *vmcs_conf,
 			SECONDARY_EXEC_ENABLE_VMFUNC;
 		if (cpu_has_sgx())
 			opt2 |= SECONDARY_EXEC_ENCLS_EXITING;
+		if (boot_cpu_has(X86_FEATURE_ENQCMD))
+			opt2 |= SECONDARY_EXEC_PASID_TRANSLATION;
 		if (adjust_vmx_controls(min2, opt2,
 					MSR_IA32_VMX_PROCBASED_CTLS2,
 					&_cpu_based_2nd_exec_control) < 0)
@@ -4359,6 +4364,11 @@ static void vmx_compute_secondary_exec_control(struct vcpu_vmx *vmx)
 						  xsaves_enabled, false);
 	}
 
+	if (cpu_has_vmx_pasid_trans()) {
+		if (!guest_cpuid_has(vcpu, X86_FEATURE_ENQCMD))
+			exec_control &= ~SECONDARY_EXEC_PASID_TRANSLATION;
+	}
+
 	vmx_adjust_sec_exec_feature(vmx, &exec_control, rdtscp, RDTSCP);
 
 	/*
@@ -5766,6 +5776,27 @@ static int handle_encls(struct kvm_vcpu *vcpu)
 }
 #endif /* CONFIG_X86_SGX_KVM */
 
+static int handle_enqcmd_pasid(struct kvm_vcpu *vcpu)
+{
+	unsigned long flags;
+
+	kvm_debug_ratelimited("[%s] VM exit_qualification=0x%lx\n", __func__,
+			      vmcs_readl(EXIT_QUALIFICATION));
+
+	/*
+	 * Valid PASID translation should exist before the guest attempts to do
+	 * ENQCMD/ENQCMDS. Otherwise, VM exit is triggered if CPU executes
+	 * ENQCMD/ENQCMDS in non-root mode but fails to translate the guest
+	 * PASID latched in IA32_PASID MSR. In such case, set the EFLAGS.ZF to
+	 * indicate the failure to the guest and skip the instruction.
+	 */
+	flags = vmx_get_rflags(vcpu);
+	flags |= X86_EFLAGS_ZF;
+	vmx_set_rflags(vcpu, flags);
+
+	return kvm_skip_emulated_instruction(vcpu);
+}
+
 /*
  * The exit handlers return 1 if the exit was handled fully and guest execution
  * may resume.  Otherwise they set the kvm_run parameter to indicate what needs
@@ -5822,6 +5853,8 @@ static int (*kvm_vmx_exit_handlers[])(struct kvm_vcpu *vcpu) = {
 	[EXIT_REASON_VMFUNC]		      = handle_vmx_instruction,
 	[EXIT_REASON_PREEMPTION_TIMER]	      = handle_preemption_timer,
 	[EXIT_REASON_ENCLS]		      = handle_encls,
+	[EXIT_REASON_ENQCMD_PASID]            = handle_enqcmd_pasid,
+	[EXIT_REASON_ENQCMDS_PASID]           = handle_enqcmd_pasid,
 };
 
 static const int kvm_vmx_max_exit_handlers =
@@ -7089,6 +7122,9 @@ static int vmx_create_vcpu(struct kvm_vcpu *vcpu)
 	}
 	vmx->msr_bitmap_mode = 0;
 
+	if (cpu_has_vmx_pasid_trans())
+		vmx_disable_intercept_for_msr(vcpu, MSR_IA32_PASID, MSR_TYPE_RW);
+
 	vmx->loaded_vmcs = &vmx->vmcs01;
 	cpu = get_cpu();
 	vmx_vcpu_load(vcpu, cpu);
@@ -7144,9 +7180,253 @@ free_vpid:
 #define L1TF_MSG_SMT "L1TF CPU bug present and SMT on, data leak possible. See CVE-2018-3646 and https://www.kernel.org/doc/html/latest/admin-guide/hw-vuln/l1tf.html for details.\n"
 #define L1TF_MSG_L1D "L1TF CPU bug present and virtualization mitigation disabled, data leak possible. See CVE-2018-3646 and https://www.kernel.org/doc/html/latest/admin-guide/hw-vuln/l1tf.html for details.\n"
 
+static inline struct page *vmx_pasid_dir_page(struct kvm_vmx *kvm_vmx,
+					      ioasid_t gpasid)
+{
+	if (!kvm_vmx->pasid_dirs)
+		return NULL;
+
+	return pasid_high_dir_select(gpasid) ?
+			&kvm_vmx->pasid_dirs[1] : &kvm_vmx->pasid_dirs[0];
+}
+
+/* hold pasid_lock when invoke this function */
+static u32 *vmx_find_pasid_table_entry(struct kvm_vmx *kvm_vmx, ioasid_t gpasid)
+{
+	struct page *pd_page = vmx_pasid_dir_page(kvm_vmx, gpasid);
+	u64 *pd_base, *pde;
+	u32 *pt_base;
+
+	if (!pd_page) {
+		kvm_err("%s: PASID directory not found\n", __func__);
+		return ERR_PTR(-ENOENT);
+	}
+
+	pd_base = page_address(pd_page);
+	pde = pd_base + pasid_de_idx(gpasid);
+
+	if (!pasid_de_table_present(pde))
+		return NULL;
+
+	pt_base = __va(pasid_de_table_ptr(pde));
+	return pt_base + pasid_te_idx(gpasid);
+}
+
+/* hold pasid_lock when invoke this function */
+static u32 *vmx_alloc_pasid_table_entry(struct kvm_vmx *kvm_vmx,
+					ioasid_t gpasid)
+{
+	struct page *pt_page, *pd_page = vmx_pasid_dir_page(kvm_vmx, gpasid);
+	u64 *pd_base, *pde;
+	u32 *pt_base;
+
+	if (!pd_page) {
+		kvm_err("%s: PASID directory not found\n", __func__);
+		return ERR_PTR(-ENOENT);
+	}
+
+	pd_base = page_address(pd_page);
+	pde = pd_base + pasid_de_idx(gpasid);
+
+	pt_page = alloc_page(GFP_ATOMIC | __GFP_ZERO);
+	if (!pt_page) {
+		kvm_err("%s: fail to allocate PASID table entry\n", __func__);
+		return ERR_PTR(-ENOMEM);
+	}
+
+	pt_base = page_address(pt_page);
+	*pde = (u64)page_to_phys(pt_page) | PASID_DE_TAB_PRESENT;
+	return pt_base + pasid_te_idx(gpasid);
+}
+
+static int vmx_set_pasid_trans(struct kvm_vmx *kvm_vmx, ioasid_t gpasid,
+			       ioasid_t hpasid)
+{
+	int ret = 0;
+	u32 *pte;
+
+	spin_lock(&kvm_vmx->pasid_lock);
+
+	pte = vmx_find_pasid_table_entry(kvm_vmx, gpasid);
+	if (IS_ERR(pte)) {
+		ret = PTR_ERR(pte);
+		goto done;
+	} else if (!pte) {
+		pte = vmx_alloc_pasid_table_entry(kvm_vmx, gpasid);
+		if (IS_ERR(pte)) {
+			ret = PTR_ERR(pte);
+			goto done;
+		}
+	}
+
+	WARN_ON(pasid_te_hpasid_valid(pte));
+
+	ioasid_get_locked(NULL, hpasid);
+	*pte = hpasid | PASID_TE_VALID;
+
+done:
+	kvm_clear_block_vmentry_request(&kvm_vmx->kvm);
+	spin_unlock(&kvm_vmx->pasid_lock);
+	return ret;
+}
+
+static int vmx_clear_pasid_trans(struct kvm_vmx *kvm_vmx, ioasid_t gpasid,
+				 ioasid_t hpasid)
+{
+	ioasid_t old_hpasid;
+	int ret = 0;
+	u32 *pte;
+
+	spin_lock(&kvm_vmx->pasid_lock);
+
+	kvm_make_block_vmentry_request(&kvm_vmx->kvm);
+
+	pte = vmx_find_pasid_table_entry(kvm_vmx, gpasid);
+	if (IS_ERR(pte)) {
+		ret = PTR_ERR(pte);
+		goto done;
+	} else if (!pte || !pasid_te_hpasid_valid(pte)) {
+		WARN_ON(1);
+		goto done;
+	}
+
+	old_hpasid = pasid_te_hpasid(pte);
+	WARN_ON(old_hpasid != hpasid);
+
+	kvm_make_block_vmentry_request(&kvm_vmx->kvm);
+
+	*pte = 0;
+	ioasid_put_locked(NULL, old_hpasid);
+
+	kvm_clear_block_vmentry_request(&kvm_vmx->kvm);
+done:
+	spin_unlock(&kvm_vmx->pasid_lock);
+	return ret;
+}
+
+static int vmx_handle_ioasid_event(struct notifier_block *nb,
+				   unsigned long event, void *data)
+{
+	struct ioasid_nb_args *args = (struct ioasid_nb_args *)data;
+	struct kvm_vmx *kvm_vmx = container_of(nb, struct kvm_vmx, pasid_nb);
+	ioasid_t gpasid = args->spid;
+	ioasid_t hpasid = args->id;
+	int r = -1;
+
+	kvm_debug("%s: event %lu hpasid %u gpasid %u\n", __func__,
+		  event, hpasid, gpasid);
+
+	if (hpasid > MAX_PASID || gpasid > MAX_PASID)
+		return NOTIFY_DONE;
+
+	switch (event) {
+	case IOASID_NOTIFY_BIND:
+		r = vmx_set_pasid_trans(kvm_vmx, gpasid, hpasid);
+		break;
+	case IOASID_NOTIFY_UNBIND:
+		r = vmx_clear_pasid_trans(kvm_vmx, gpasid, hpasid);
+		break;
+	}
+
+	return r ? NOTIFY_DONE : NOTIFY_OK;
+}
+
+#define PASID_DIRS_ORDER 1
+
+static void vmx_vcpu_pasid_trans_init(struct kvm_vcpu *vcpu)
+{
+	struct kvm_vmx *kvm_vmx = to_kvm_vmx(vcpu->kvm);
+	struct mm_struct *mm = get_task_mm(current);
+	int ret = 0;
+
+	/*
+	 * initialize a per-vm PASID translation table and start monitoring
+	 * IOASID events.
+	 */
+	spin_lock(&kvm_vmx->pasid_lock);
+	if (kvm_vmx->pasid_dirs) {
+		/* skip this as table has already been initialized */
+		goto done;
+	}
+
+	kvm_vmx->pasid_dirs = alloc_pages(GFP_ATOMIC | __GFP_ZERO,
+					  PASID_DIRS_ORDER);
+	if (!kvm_vmx->pasid_dirs) {
+		kvm_err("%s: fail to alloc PASID Directory\n", __func__);
+		ret = -ENOMEM;
+		goto done;
+	}
+
+	kvm_vmx->pasid_nb.notifier_call = vmx_handle_ioasid_event;
+	kvm_vmx->pasid_nb.priority = IOASID_PRIO_CPU;
+	kvm_vmx->mm = mm;
+
+	ret = ioasid_register_notifier_mm(kvm_vmx->mm, &kvm_vmx->pasid_nb);
+	if (ret) {
+		__free_pages(kvm_vmx->pasid_dirs, PASID_DIRS_ORDER);
+		kvm_vmx->pasid_dirs = NULL;
+	}
+
+done:
+	spin_unlock(&kvm_vmx->pasid_lock);
+	mmput(mm);
+
+	if (!ret) {
+		vmcs_write64(PASID_DIR0, page_to_phys(&kvm_vmx->pasid_dirs[0]));
+		vmcs_write64(PASID_DIR1, page_to_phys(&kvm_vmx->pasid_dirs[1]));
+	}
+}
+
+static void vmx_vm_pasid_tables_free(struct page *pd_page)
+{
+	u64 *pde, *pd_base = page_address(pd_page);
+	u32 *pte, *pt_base;
+	ioasid_t hpasid;
+
+	/*
+	 * before free the PASID translation table, traverse all table entries
+	 * to make sure that kvm doesn't hold reference count of any hpasid.
+	 */
+	for (pde = pd_base; pde < pd_base + PASID_DE_NUM; pde++) {
+		if (!pasid_de_table_present(pde))
+			continue;
+
+		pt_base = __va(pasid_de_table_ptr(pde));
+
+		for (pte = pt_base; pte < pt_base + PASID_TE_NUM; pte++) {
+			if (pasid_te_hpasid_valid(pte)) {
+				hpasid = pasid_te_hpasid(pte);
+
+				/*
+				 * decrease the reference of this hpasid, and
+				 * remove it from the PASID translation table.
+				 */
+				*pte = 0;
+				ioasid_put(NULL, hpasid);
+			}
+		}
+
+		*pde = 0;
+		free_page((unsigned long)pt_base);
+	}
+}
+
+static void vmx_vm_pasid_trans_destroy(struct kvm_vmx *kvm_vmx)
+{
+	if (!kvm_vmx->pasid_dirs)
+		return;
+
+	ioasid_unregister_notifier_mm(kvm_vmx->mm, &kvm_vmx->pasid_nb);
+
+	vmx_vm_pasid_tables_free(&kvm_vmx->pasid_dirs[0]);
+	vmx_vm_pasid_tables_free(&kvm_vmx->pasid_dirs[1]);
+	__free_pages(kvm_vmx->pasid_dirs, PASID_DIRS_ORDER);
+}
+
 static int vmx_vm_init(struct kvm *kvm)
 {
 	spin_lock_init(&to_kvm_vmx(kvm)->ept_pointer_lock);
+	spin_lock_init(&to_kvm_vmx(kvm)->pasid_lock);
 
 	if (!ple_gap)
 		kvm->arch.pause_in_guest = true;
@@ -7176,6 +7456,12 @@ static int vmx_vm_init(struct kvm *kvm)
 	}
 	kvm_apicv_init(kvm, enable_apicv);
 	return 0;
+}
+
+static void vmx_vm_destroy(struct kvm *kvm)
+{
+	if (cpu_has_vmx_pasid_trans())
+		vmx_vm_pasid_trans_destroy(to_kvm_vmx(kvm));
 }
 
 static int __init vmx_check_processor_compat(void)
@@ -7443,6 +7729,10 @@ static void vmx_vcpu_after_set_cpuid(struct kvm_vcpu *vcpu)
 		vmx_set_intercept_for_msr(vcpu, MSR_IA32_XFD_ERR, MSR_TYPE_R,
 						!guest_cpuid_has(vcpu, X86_FEATURE_XFD));
 
+	if (cpu_has_vmx_pasid_trans() &&
+		guest_cpuid_has(vcpu, X86_FEATURE_ENQCMD))
+		vmx_vcpu_pasid_trans_init(vcpu);
+
 	set_cr4_guest_host_mask(vmx);
 
 	vmx_write_encls_bitmap(vcpu, NULL);
@@ -7501,6 +7791,11 @@ static __init void vmx_set_cpu_caps(void)
 
 	if (cpu_has_vmx_waitpkg())
 		kvm_cpu_cap_check_and_set(X86_FEATURE_WAITPKG);
+
+	if (!cpu_has_vmx_pasid_trans())
+		kvm_cpu_cap_clear(X86_FEATURE_ENQCMD);
+	else if (kvm_cpu_cap_has(X86_FEATURE_ENQCMD))
+		supported_xss |= XFEATURE_MASK_PASID;
 }
 
 static void vmx_request_immediate_exit(struct kvm_vcpu *vcpu)
@@ -7807,6 +8102,7 @@ static struct kvm_x86_ops vmx_x86_ops __initdata = {
 
 	.vm_size = sizeof(struct kvm_vmx),
 	.vm_init = vmx_vm_init,
+	.vm_destroy = vmx_vm_destroy,
 
 	.vcpu_create = vmx_create_vcpu,
 	.vcpu_free = vmx_free_vcpu,
