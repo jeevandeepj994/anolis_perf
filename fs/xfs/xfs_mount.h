@@ -439,4 +439,10 @@ struct xfs_error_cfg * xfs_error_get_cfg(struct xfs_mount *mp,
 void xfs_force_summary_recalc(struct xfs_mount *mp);
 void xfs_mod_delalloc(struct xfs_mount *mp, int64_t delta);
 
+void
+xfs_atomic_staging_cancel_one(
+	struct xfs_mount	*mp,
+	xfs_agnumber_t		agno,
+	bool			dontfree);
+
 #endif	/* __XFS_MOUNT_H__ */
