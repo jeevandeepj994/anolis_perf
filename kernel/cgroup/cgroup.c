@@ -1294,6 +1294,7 @@ static void cgroup_destroy_root(struct cgroup_root *root)
 	mutex_unlock(&cgroup_mutex);
 
 	kernfs_destroy_root(root->kf_root);
+	kernfs_destroy_root(root->orphanage);
 	cgroup_free_root(root);
 }
 
@@ -2039,6 +2040,8 @@ int cgroup_setup_root(struct cgroup_root *root, u16 ss_mask, int ref_flags)
 destroy_root:
 	kernfs_destroy_root(root->kf_root);
 	root->kf_root = NULL;
+	kernfs_destroy_root(root->orphanage);
+	root->orphanage = NULL;
 exit_root_id:
 	cgroup_exit_root_id(root);
 cancel_ref:
