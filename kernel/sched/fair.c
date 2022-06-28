@@ -7467,7 +7467,8 @@ static int select_idle_smt(struct task_struct *p, struct sched_domain *sd, int t
 
 	is_expellee = is_expellee_task(p);
 	for_each_cpu(cpu, cpu_smt_mask(target)) {
-		if (!cpumask_test_cpu(cpu, &p->cpus_allowed))
+		if (!cpumask_test_cpu(cpu, &p->cpus_allowed) ||
+		    !cpumask_test_cpu(cpu, sched_domain_span(sd)))
 			continue;
 		if (id_idle_cpu(p, cpu, is_expellee, NULL))
 			return cpu;
