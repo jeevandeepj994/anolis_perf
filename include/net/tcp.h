@@ -196,6 +196,8 @@ void tcp_time_wait(struct sock *sk, int state, int timeo);
  */
 #define TCPOPT_FASTOPEN_MAGIC	0xF989
 #define TCPOPT_SMC_MAGIC	0xE2D4C3D9
+/* "SMCO" in EBCDIC encoding */
+#define TCPOPT_SMC_OK_MAGIC	0xE2D4C3D6
 
 /*
  *     TCP option lengths
