@@ -2083,7 +2083,7 @@ xfs_ioc_set_atomic_write(
 
 	ip->i_d.di_flags2 |= XFS_DIFLAG2_DIO_ATOMIC_WRITE;
 	ip->i_d.di_flags |= XFS_DIFLAG_EXTSIZE;
-	ip->i_d.di_extsize = XFS_ATOMIC_WRITE_EXTSZ_HINT;
+	ip->i_d.di_extsize = XFS_B_TO_FSBT(ip->i_mount, XFS_ATOMIC_WRITE_EXTSZ_BYTES);
 
 	error = xfs_trans_commit(tp);
 out:

@@ -1079,11 +1079,13 @@ xfs_atomic_staging_cancel_all(
 			while (as->aglen) {
 				xfs_fsblock_t fsbno =
 					XFS_AGB_TO_FSB(mp, agno, as->agbno);
+				xfs_extlen_t blockcount = XFS_B_TO_FSBT(mp,
+						XFS_ATOMIC_WRITE_EXTSZ_BYTES);
 
 				xfs_refcount_free_cow_extent(tp, fsbno,
-						XFS_ATOMIC_WRITE_EXTSZ_HINT);
-				as->agbno += XFS_ATOMIC_WRITE_EXTSZ_HINT;
-				as->aglen -= XFS_ATOMIC_WRITE_EXTSZ_HINT;
+						blockcount);
+				as->agbno += blockcount;
+				as->aglen -= blockcount;
 			}
 			kfree(as);
 		}
