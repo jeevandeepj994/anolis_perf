@@ -115,6 +115,15 @@ static struct ctl_table smc_table[] = {
 		.extra1		= SYSCTL_ZERO,
 		.extra2		= SYSCTL_ONE,
 	},
+	{
+		.procname	= "sysctl_smc_experiments",
+		.data		= &init_net.smc.sysctl_smc_experiments,
+		.maxlen		= sizeof(init_net.smc.sysctl_smc_experiments),
+		.mode		= 0644,
+		.proc_handler	= proc_dointvec_minmax,
+		.extra1		= SYSCTL_ZERO,
+		.extra2		= SYSCTL_ONE,
+	},
 	{  }
 };
 
@@ -149,6 +158,8 @@ int __net_init smc_sysctl_net_init(struct net *net)
 	/* default on */
 	net->smc.sysctl_simplify_rkey_exhcange = 1;
 	net->smc.sysctl_smc_fastopen = 1;
+	/* default off */
+	net->smc.sysctl_smc_experiments = 0;
 	return 0;
 
 err_reg:
