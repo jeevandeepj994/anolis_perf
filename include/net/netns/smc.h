@@ -35,5 +35,7 @@ struct netns_smc {
 	/* allow simplify rkey exchange when single link */
 	unsigned int			sysctl_simplify_rkey_exhcange;
 	unsigned int			sysctl_smc_fastopen;
+	/* use diff TCP experiment magic code */
+	unsigned int			sysctl_smc_experiments;
 };
 #endif
