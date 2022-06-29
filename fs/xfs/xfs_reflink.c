@@ -785,6 +785,8 @@ xfs_reflink_recover_cow(
 		return 0;
 
 	for (agno = 0; agno < mp->m_sb.sb_agcount; agno++) {
+		xfs_atomic_staging_cancel_one(mp, agno, true);
+
 		error = xfs_refcount_recover_cow_leftovers(mp, agno);
 		if (error)
 			break;

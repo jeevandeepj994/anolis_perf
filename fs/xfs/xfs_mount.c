@@ -1046,28 +1046,28 @@ xfs_mountfs(
 }
 
 void
-xfs_atomic_staging_cancel_all(
-	struct xfs_mount	*mp)
+xfs_atomic_staging_cancel_one(
+	struct xfs_mount	*mp,
+	xfs_agnumber_t		agno,
+	bool			dontfree)
 {
-	xfs_agnumber_t		agno;
+	struct xfs_perag *pag = xfs_perag_get(mp, agno);
+	struct xfs_trans *tp = NULL;
 
-	for (agno = 0; agno < mp->m_sb.sb_agcount; agno++) {
-		struct xfs_perag *pag = xfs_perag_get(mp, agno);
-		struct xfs_trans *tp = NULL;
+	while (1) {
+		struct xfs_atomic_staging *as;
+		int error;
 
-		while (1) {
-			struct xfs_atomic_staging *as;
-			int error;
-
-			spin_lock(&pag->atomic_staging_lock);
-			as = pag->atomic_staging;
-			if (!as) {
-				spin_unlock(&pag->atomic_staging_lock);
-				break;
-			}
-			pag->atomic_staging = as->next;
+		spin_lock(&pag->atomic_staging_lock);
+		as = pag->atomic_staging;
+		if (!as) {
 			spin_unlock(&pag->atomic_staging_lock);
+			break;
+		}
+		pag->atomic_staging = as->next;
+		spin_unlock(&pag->atomic_staging_lock);
 
+		if (!dontfree) {
 			if (!tp) {
 				/* Start a rolling transaction to remove the mappings */
 				error = xfs_trans_alloc(mp, &M_RES(mp)->tr_write,
@@ -1087,12 +1087,22 @@ xfs_atomic_staging_cancel_all(
 				as->agbno += blockcount;
 				as->aglen -= blockcount;
 			}
-			kfree(as);
 		}
-		if (tp)
-			xfs_trans_commit(tp);
-		xfs_perag_put(pag);
+		kfree(as);
 	}
+	if (tp)
+		xfs_trans_commit(tp);
+	xfs_perag_put(pag);
+}
+
+void
+xfs_atomic_staging_cancel_all(
+	struct xfs_mount	*mp)
+{
+	xfs_agnumber_t		agno;
+
+	for (agno = 0; agno < mp->m_sb.sb_agcount; agno++)
+		xfs_atomic_staging_cancel_one(mp, agno, false);
 }
 
 /*
