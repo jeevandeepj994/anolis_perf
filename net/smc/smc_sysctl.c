@@ -86,6 +86,14 @@ static struct ctl_table smc_table[] = {
 		.mode		= 0644,
 		.proc_handler	= proc_douintvec,
 	},
+	{
+		.procname	= "experiment_syn_smc",
+		.data		= &init_net.smc.sysctl_experiment_syn_smc,
+		.maxlen		= sizeof(init_net.smc.sysctl_experiment_syn_smc),
+		.proc_handler   = proc_dointvec_minmax,
+		.extra1         = SYSCTL_ZERO,
+		.extra2         = SYSCTL_ONE,
+	},
 	{  }
 };
 
@@ -118,6 +126,8 @@ int __net_init smc_sysctl_net_init(struct net *net)
 	net->smc.sysctl_tcp2smc = 0;
 	/* enable handshake limitation by default */
 	net->smc.limit_smc_hs = 1;
+	/* enable experiment_syn_smc by default */
+	net->smc.sysctl_experiment_syn_smc = 1;
 	return 0;
 
 err_reg:

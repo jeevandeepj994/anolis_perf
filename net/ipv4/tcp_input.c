@@ -3912,15 +3912,26 @@ static void tcp_parse_fastopen_option(int len, const unsigned char *cookie,
 static bool smc_parse_options(const struct tcphdr *th,
 			      struct tcp_options_received *opt_rx,
 			      const unsigned char *ptr,
+			      const struct net *net,
 			      int opsize)
 {
 #if IS_ENABLED(CONFIG_SMC)
 	if (static_branch_unlikely(&tcp_have_smc)) {
 		if (th->syn && !(opsize & 1) &&
-		    opsize >= TCPOLEN_EXP_SMC_BASE &&
-		    get_unaligned_be32(ptr) == TCPOPT_SMC_MAGIC) {
-			opt_rx->smc_ok = 1;
-			return true;
+		    opsize >= TCPOLEN_EXP_SMC_BASE) {
+			/* syn ack */
+			if (th->ack && net->smc.sysctl_experiment_syn_smc) {
+				if (get_unaligned_be32(ptr) == TCPOPT_SMC_OK_MAGIC) {
+					opt_rx->smc_ok = 1;
+					return true;
+				}
+				return false;
+			}
+			/* syn only */
+			if (get_unaligned_be32(ptr) == TCPOPT_SMC_MAGIC) {
+				opt_rx->smc_ok = 1;
+				return true;
+			}
 		}
 	}
 #endif
@@ -4083,7 +4094,7 @@ void tcp_parse_options(const struct net *net,
 					break;
 				}
 
-				if (smc_parse_options(th, opt_rx, ptr, opsize))
+				if (smc_parse_options(th, opt_rx, ptr, net, opsize))
 					break;
 
 				opt_rx->saw_unknown = 1;

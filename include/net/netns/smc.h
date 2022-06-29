@@ -28,8 +28,8 @@ struct netns_smc {
 	int				sysctl_wmem;
 	int				sysctl_rmem;
 	int				sysctl_tcp2smc;
-
-	CK_KABI_RESERVE(1)
+	/* use diff TCP experiment magic code */
+	CK_KABI_USE_SPLIT(1, unsigned int sysctl_experiment_syn_smc)
 	CK_KABI_RESERVE(2)
 	CK_KABI_RESERVE(3)
 	CK_KABI_RESERVE(4)
@@ -61,5 +61,6 @@ struct netns_smc {
 	CK_KABI_RESERVE(30)
 	CK_KABI_RESERVE(31)
 	CK_KABI_RESERVE(32)
+
 };
 #endif
