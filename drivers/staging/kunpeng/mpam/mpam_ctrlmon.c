@@ -280,7 +280,7 @@ next:
 	dom = strsep(&line, ";");
 	id = strsep(&dom, "=");
 	if (!dom || kstrtoul(id, 10, &dom_id)) {
-		rdt_last_cmd_puts("Missing '=' or non-numeric domain\n");
+		kunpeng_rdt_last_cmd_puts("Missing '=' or non-numeric domain\n");
 		return -EINVAL;
 	}
 	dom = strim(dom);
@@ -329,7 +329,7 @@ resctrl_group_parse_schema_resource(char *resname, char *tok, u32 closid)
 			}
 		}
 	}
-	rdt_last_cmd_printf("unknown/unsupported resource name '%s'\n", resname);
+	kunpeng_rdt_last_cmd_printf("unknown/unsupported resource name '%s'\n", resname);
 
 	return -EINVAL;
 }
@@ -358,7 +358,7 @@ ssize_t resctrl_group_schemata_write(struct kernfs_open_file *of,
 		return -ENOENT;
 	}
 
-	rdt_last_cmd_clear();
+	kunpeng_rdt_last_cmd_clear();
 
 	closid = rdtgrp->closid.intpartid;
 
@@ -379,12 +379,12 @@ ssize_t resctrl_group_schemata_write(struct kernfs_open_file *of,
 	while ((tok = strsep(&buf, "\n")) != NULL) {
 		resname = strim(strsep(&tok, ":"));
 		if (!tok) {
-			rdt_last_cmd_puts("Missing ':'\n");
+			kunpeng_rdt_last_cmd_puts("Missing ':'\n");
 			ret = -EINVAL;
 			goto out;
 		}
 		if (tok[0] == '\0') {
-			rdt_last_cmd_printf("Missing '%s' value\n", resname);
+			kunpeng_rdt_last_cmd_printf("Missing '%s' value\n", resname);
 			ret = -EINVAL;
 			goto out;
 		}
@@ -430,7 +430,7 @@ static void show_doms(struct seq_file *s, struct resctrl_resource *r,
 	if (r->dom_num > RESCTRL_SHOW_DOM_MAX_NUM)
 		rg = true;
 
-	seq_printf(s, "%*s:", max_name_width, schema_name);
+	seq_printf(s, "%*s:", kunpeng_max_name_width, schema_name);
 	list_for_each_entry(dom, &r->domains, list) {
 		reg_val = rr->msr_read(r, dom, &para);
 
@@ -445,7 +445,7 @@ static void show_doms(struct seq_file *s, struct resctrl_resource *r,
 			seq_puts(s, "S");
 		} else {
 			seq_printf(s, rr->format_str, dom->id,
-				max_data_width, reg_val);
+				kunpeng_max_data_width, reg_val);
 		}
 		sep = true;
 	}
@@ -891,8 +891,8 @@ static int rdtgroup_init_cat(struct resctrl_schema *s, u32 closid)
 		tmp_cbm = cfg->new_ctrl[SCHEMA_COMM];
 		if (bitmap_weight(&tmp_cbm, r->cache.cbm_len) <
 			r->cache.min_cbm_bits) {
-			rdt_last_cmd_printf("No space on %s:%d\n",
-				r->name, d->id);
+			kunpeng_rdt_last_cmd_printf("No space on %s:%d\n",
+						    r->name, d->id);
 			return -ENOSPC;
 		}
 
@@ -931,7 +931,7 @@ int resctrl_group_init_alloc(struct rdtgroup *rdtgrp)
 
 		ret = resctrl_group_update_domains(rdtgrp, r);
 		if (ret < 0) {
-			rdt_last_cmd_puts("Failed to initialize allocations\n");
+			kunpeng_rdt_last_cmd_puts("Failed to initialize allocations\n");
 			return ret;
 		}
 	}

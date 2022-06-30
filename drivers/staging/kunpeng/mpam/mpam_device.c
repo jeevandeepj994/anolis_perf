@@ -48,7 +48,7 @@ static DEFINE_MUTEX(mpam_devices_lock);
 static LIST_HEAD(mpam_all_devices);
 
 /* Classes are the set of MSCs that make up components of the same type. */
-LIST_HEAD(mpam_classes);
+LIST_HEAD(kunpeng_mpam_classes);
 
 static DEFINE_MUTEX(mpam_cpuhp_lock);
 static int mpam_cpuhp_state;
@@ -341,7 +341,7 @@ static void mpam_enable_squash_features(void)
 
 	lockdep_assert_held(&mpam_devices_lock);
 
-	list_for_each_entry(class, &mpam_classes, classes_list) {
+	list_for_each_entry(class, &kunpeng_mpam_classes, classes_list) {
 		/*
 		 * Copy the first component's first device's properties and
 		 * features to the class. __device_class_feature_mismatch()
@@ -394,7 +394,7 @@ static int mpam_allocate_config(void)
 
 	lockdep_assert_held(&mpam_devices_lock);
 
-	list_for_each_entry(class, &mpam_classes, classes_list) {
+	list_for_each_entry(class, &kunpeng_mpam_classes, classes_list) {
 		list_for_each_entry(comp, &class->components, class_list) {
 			comp->cfg = kcalloc(mpam_sysprops_num_partid(), sizeof(*comp->cfg),
 				GFP_KERNEL);
@@ -583,7 +583,7 @@ static void __init mpam_enable(struct work_struct *work)
 	cpuhp_remove_state(mpam_cpuhp_state);
 
 	mutex_lock(&mpam_devices_lock);
-	err = mpam_resctrl_setup();
+	err = kunpeng_mpam_resctrl_setup();
 	if (!err) {
 		err = mpam_resctrl_init();
 		if (!err)
@@ -709,7 +709,7 @@ static struct mpam_class * __init mpam_class_alloc(u8 level_idx,
 	class->level = level_idx;
 	class->type = type;
 
-	list_add(&class->classes_list, &mpam_classes);
+	list_add(&class->classes_list, &kunpeng_mpam_classes);
 
 	return class;
 }
@@ -738,7 +738,7 @@ static struct mpam_class * __init mpam_class_get(u8 level_idx,
 
 	lockdep_assert_held(&mpam_devices_lock);
 
-	list_for_each_entry(class, &mpam_classes, classes_list) {
+	list_for_each_entry(class, &kunpeng_mpam_classes, classes_list) {
 		if (class->type == type && class->level == level_idx) {
 			found = true;
 			break;
@@ -1035,7 +1035,7 @@ static int mpam_cpu_online(unsigned int cpu)
 
 	mutex_lock(&mpam_devices_lock);
 
-	list_for_each_entry(class, &mpam_classes, classes_list) {
+	list_for_each_entry(class, &kunpeng_mpam_classes, classes_list) {
 		mpam_sync_cpu_cache_component_fw_affinity(class, cpu);
 
 		list_for_each_entry(comp, &class->components, class_list) {
@@ -1114,7 +1114,7 @@ void __init mpam_discovery_failed(void)
 	struct mpam_class *class, *tmp;
 
 	mutex_lock(&mpam_devices_lock);
-	list_for_each_entry_safe(class, tmp, &mpam_classes, classes_list) {
+	list_for_each_entry_safe(class, tmp, &kunpeng_mpam_classes, classes_list) {
 		mpam_class_destroy(class);
 		list_del(&class->classes_list);
 		kfree(class);
@@ -1526,7 +1526,7 @@ void mpam_reset_devices(void)
 	struct mpam_component *comp;
 
 	mutex_lock(&mpam_devices_lock);
-	list_for_each_entry(class, &mpam_classes, classes_list) {
+	list_for_each_entry(class, &kunpeng_mpam_classes, classes_list) {
 		list_for_each_entry(comp, &class->components, class_list)
 			mpam_component_config(comp, NULL);
 	}
