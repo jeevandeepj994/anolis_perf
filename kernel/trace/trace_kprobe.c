@@ -1393,8 +1393,7 @@ __kprobe_trace_func(struct trace_kprobe *tk, struct pt_regs *regs,
 	if (trace_trigger_soft_disabled(trace_file))
 		return;
 
-	local_save_flags(fbuffer.flags);
-	fbuffer.pc = preempt_count();
+	fbuffer.trace_ctx = tracing_gen_ctx();
 	fbuffer.trace_file = trace_file;
 
 	dsize = __get_data_size(&tk->tp, regs);
@@ -1403,7 +1402,7 @@ __kprobe_trace_func(struct trace_kprobe *tk, struct pt_regs *regs,
 		trace_event_buffer_lock_reserve(&fbuffer.buffer, trace_file,
 					call->event.type,
 					sizeof(*entry) + tk->tp.size + dsize,
-					fbuffer.flags, fbuffer.pc);
+					fbuffer.trace_ctx);
 	if (!fbuffer.event)
 		return;
 
@@ -1441,8 +1440,7 @@ __kretprobe_trace_func(struct trace_kprobe *tk, struct kretprobe_instance *ri,
 	if (trace_trigger_soft_disabled(trace_file))
 		return;
 
-	local_save_flags(fbuffer.flags);
-	fbuffer.pc = preempt_count();
+	fbuffer.trace_ctx = tracing_gen_ctx();
 	fbuffer.trace_file = trace_file;
 
 	dsize = __get_data_size(&tk->tp, regs);
@@ -1450,7 +1448,7 @@ __kretprobe_trace_func(struct trace_kprobe *tk, struct kretprobe_instance *ri,
 		trace_event_buffer_lock_reserve(&fbuffer.buffer, trace_file,
 					call->event.type,
 					sizeof(*entry) + tk->tp.size + dsize,
-					fbuffer.flags, fbuffer.pc);
+					fbuffer.trace_ctx);
 	if (!fbuffer.event)
 		return;
 
@@ -1933,16 +1931,16 @@ static __init int init_kprobe_trace(void)
 	if (ret)
 		return 0;
 
-	entry = tracefs_create_file("kprobe_events", 0644, NULL,
-				    NULL, &kprobe_events_ops);
+	entry = tracefs_create_file("kprobe_events", TRACE_MODE_WRITE,
+				    NULL, NULL, &kprobe_events_ops);
 
 	/* Event list interface */
 	if (!entry)
 		pr_warn("Could not create tracefs 'kprobe_events' entry\n");
 
 	/* Profile interface */
-	entry = tracefs_create_file("kprobe_profile", 0444, NULL,
-				    NULL, &kprobe_profile_ops);
+	entry = tracefs_create_file("kprobe_profile", TRACE_MODE_READ,
+				    NULL, NULL, &kprobe_profile_ops);
 
 	if (!entry)
 		pr_warn("Could not create tracefs 'kprobe_profile' entry\n");
