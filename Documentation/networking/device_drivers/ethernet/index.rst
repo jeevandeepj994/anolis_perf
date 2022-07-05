@@ -51,6 +51,7 @@ Contents:
    ti/cpsw_switchdev
    ti/tlan
    toshiba/spider_net
+   wangxun/txgbe
 
 .. only::  subproject and html
 
