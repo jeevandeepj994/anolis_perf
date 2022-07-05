@@ -473,7 +473,7 @@ CONFIG_ARM64_TLB_RANGE=y
 # ARMv8.5 architectural features
 #
 # CONFIG_ARM64_BTI is not set
-# CONFIG_ARM64_E0PD is not set
+CONFIG_ARM64_E0PD=y
 # CONFIG_ARCH_RANDOM is not set
 # end of ARMv8.5 architectural features
 
