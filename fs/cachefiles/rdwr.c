@@ -237,12 +237,13 @@ static int cachefiles_read_backing_file_one(struct cachefiles_object *object,
 	struct cachefiles_one_read *monitor;
 	struct address_space *bmapping;
 	struct page *newpage, *backpage;
+	pgoff_t index = op->offset >> PAGE_SHIFT;
 	int ret;
 
 	_enter("");
 
 	_debug("read back %p{%lu,%d}",
-	       netpage, netpage->index, page_count(netpage));
+	       netpage, index, page_count(netpage));
 
 	monitor = kzalloc(sizeof(*monitor), cachefiles_gfp);
 	if (!monitor)
@@ -258,7 +259,7 @@ static int cachefiles_read_backing_file_one(struct cachefiles_object *object,
 	newpage = NULL;
 
 	for (;;) {
-		backpage = find_get_page(bmapping, netpage->index);
+		backpage = find_get_page(bmapping, index);
 		if (backpage)
 			goto backing_page_already_present;
 
@@ -269,7 +270,7 @@ static int cachefiles_read_backing_file_one(struct cachefiles_object *object,
 		}
 
 		ret = add_to_page_cache_lru(newpage, bmapping,
-					    netpage->index, cachefiles_gfp);
+					    index, cachefiles_gfp);
 		if (ret == 0)
 			goto installed_new_backing_page;
 		if (ret != -EEXIST)
@@ -403,6 +404,8 @@ int cachefiles_read_or_alloc_page(struct fscache_retrieval *op,
 	sector_t block0, block;
 	unsigned shift;
 	int ret;
+	bool again = true;
+	loff_t pos = op->offset;
 
 	object = container_of(op->op.object,
 			      struct cachefiles_object, fscache);
@@ -432,9 +435,10 @@ int cachefiles_read_or_alloc_page(struct fscache_retrieval *op,
 	 *   enough for this as it doesn't indicate errors, but it's all we've
 	 *   got for the moment
 	 */
-	block0 = page->index;
+	block0 = pos >> PAGE_SHIFT;
 	block0 <<= shift;
 
+retry:
 	block = inode->i_mapping->a_ops->bmap(inode->i_mapping, block0);
 	_debug("%llx -> %llx",
 	       (unsigned long long) block0,
@@ -445,6 +449,13 @@ int cachefiles_read_or_alloc_page(struct fscache_retrieval *op,
 		 * read from disk */
 		ret = cachefiles_read_backing_file_one(object, op, page);
 	} else if (cachefiles_has_space(cache, 0, 1) == 0) {
+		if (cachefiles_in_ondemand_mode(cache) && again) {
+			ret = cachefiles_ondemand_read(object, pos, PAGE_SIZE);
+			if (!ret) {
+				again = false;
+				goto retry;
+			}
+		}
 		/* there's space in the cache we can use */
 		fscache_mark_page_cached(op, page);
 		fscache_retrieval_complete(op, 1);

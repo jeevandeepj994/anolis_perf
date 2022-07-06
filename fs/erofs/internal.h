@@ -50,6 +50,7 @@ typedef u32 erofs_blk_t;
 
 struct erofs_device_info {
 	char *path;
+	struct erofs_fscache *fscache;
 	struct block_device *bdev;
 	struct file *blobfile;
 
@@ -62,6 +63,11 @@ struct erofs_dev_context {
 	struct rw_semaphore rwsem;
 
 	unsigned int extra_devices;
+};
+
+struct erofs_fscache {
+	struct fscache_cookie *cookie;
+	struct inode *inode;
 };
 
 struct erofs_sb_info {
@@ -115,6 +121,11 @@ struct erofs_sb_info {
 	u32 feature_incompat;
 
 	unsigned int mount_opt;
+	char *fsid;
+
+	/* fscache support */
+	struct fscache_cookie *volume;
+	struct erofs_fscache *s_fscache;
 };
 
 #define EROFS_SB(sb) ((struct erofs_sb_info *)(sb)->s_fs_info)
@@ -127,6 +138,11 @@ struct erofs_sb_info {
 #define clear_opt(sbi, option)	((sbi)->mount_opt &= ~EROFS_MOUNT_##option)
 #define set_opt(sbi, option)	((sbi)->mount_opt |= EROFS_MOUNT_##option)
 #define test_opt(sbi, option)	((sbi)->mount_opt & EROFS_MOUNT_##option)
+
+static inline bool erofs_is_fscache_mode(struct super_block *sb)
+{
+	return IS_ENABLED(CONFIG_EROFS_FS_ONDEMAND) && !sb->s_bdev;
+}
 
 #ifdef CONFIG_EROFS_FS_ZIP
 enum {
@@ -409,6 +425,7 @@ static inline int z_erofs_map_blocks_iter(struct inode *inode,
 #endif	/* !CONFIG_EROFS_FS_ZIP */
 
 struct erofs_map_dev {
+	struct erofs_fscache *m_fscache;
 	struct block_device *m_bdev;
 	struct file *m_fp;
 
@@ -494,6 +511,42 @@ static inline void erofs_exit_shrinker(void) {}
 static inline int z_erofs_init_zip_subsystem(void) { return 0; }
 static inline void z_erofs_exit_zip_subsystem(void) {}
 #endif	/* !CONFIG_EROFS_FS_ZIP */
+
+/* fscache.c */
+#ifdef CONFIG_EROFS_FS_ONDEMAND
+int erofs_fscache_register(void);
+void erofs_fscache_unregister(void);
+int erofs_fscache_register_fs(struct super_block *sb);
+void erofs_fscache_unregister_fs(struct super_block *sb);
+
+int erofs_fscache_register_cookie(struct super_block *sb,
+				  struct erofs_fscache **fscache,
+				  char *name, bool need_inode);
+void erofs_fscache_unregister_cookie(struct erofs_fscache **fscache);
+extern const struct address_space_operations erofs_fscache_access_aops;
+#else
+static inline int erofs_fscache_register(void)
+{
+	return 0;
+}
+static inline void erofs_fscache_unregister(void) {}
+static inline int erofs_fscache_register_fs(struct super_block *sb)
+{
+	return 0;
+}
+static inline void erofs_fscache_unregister_fs(struct super_block *sb) {}
+
+static inline int erofs_fscache_register_cookie(struct super_block *sb,
+						struct erofs_fscache **fscache,
+						char *name, bool need_inode)
+{
+	return -EOPNOTSUPP;
+}
+
+static inline void erofs_fscache_unregister_cookie(struct erofs_fscache **fscache)
+{
+}
+#endif
 
 #define EFSCORRUPTED    EUCLEAN         /* Filesystem is corrupted */
 
