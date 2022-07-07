@@ -222,7 +222,6 @@ int vidxd_mmio_write(struct vdcm_idxd *vidxd, u64 pos, void *buf, unsigned int s
 	case VIDXD_MSIX_PERM_OFFSET ...  VIDXD_MSIX_PERM_OFFSET + VIDXD_MSIX_PERM_TBL_SZ - 1: {
 		int index;
 		u32 msix_perm;
-		u32 pasid, pasid_en;
 
 		if (size != sizeof(u32) || !IS_ALIGNED(offset, sizeof(u64))) {
 			dev_warn(dev, "XXX unaligned MSIX PERM access\n");
@@ -744,11 +743,11 @@ static void vidxd_mmio_init_opcap(struct vdcm_idxd *vidxd)
 		opcap++;
 		opcode = OPCAP_BIT(IAX_OPCODE_DECOMPRESS) | OPCAP_BIT(IAX_OPCODE_COMPRESS) |
 			 OPCAP_BIT(IAX_OPCODE_CRC64) | OPCAP_BIT(IAX_OPCODE_ZERO_DECOMP_32) |
-			 OPCAP_BIT(IAX_OPCODE_ZERO_DECOMP_16) | OPCAP_BIT(IAX_OPCODE_DECOMP_32) |
-			 OPCAP_BIT(IAX_OPCODE_DECOMP_16) | OPCAP_BIT(IAX_OPCODE_SCAN) |
+			 OPCAP_BIT(IAX_OPCODE_ZERO_DECOMP_16) | OPCAP_BIT(IAX_OPCODE_ZERO_COMP_32) |
+			 OPCAP_BIT(IAX_OPCODE_ZERO_COMP_16) | OPCAP_BIT(IAX_OPCODE_SCAN) |
 			 OPCAP_BIT(IAX_OPCODE_SET_MEMBER) | OPCAP_BIT(IAX_OPCODE_EXTRACT) |
 			 OPCAP_BIT(IAX_OPCODE_SELECT) | OPCAP_BIT(IAX_OPCODE_RLE_BURST) |
-			 OPCAP_BIT(IAX_OPCDE_FIND_UNIQUE) | OPCAP_BIT(IAX_OPCODE_EXPAND);
+			 OPCAP_BIT(IAX_OPCODE_FIND_UNIQUE) | OPCAP_BIT(IAX_OPCODE_EXPAND);
 		*opcap = opcode;
 	}
 }
