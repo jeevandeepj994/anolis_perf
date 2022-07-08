@@ -35,6 +35,11 @@ struct txgbe_mac_addr {
 #define TXGBE_MAC_STATE_MODIFIED        0x2
 #define TXGBE_MAC_STATE_IN_USE          0x4
 
+/**
+ * txgbe_adapter.flag2
+ **/
+#define TXGBE_FLAG2_MNG_REG_ACCESS_DISABLED     BIT(0)
+
 /* board specific private data structure */
 struct txgbe_adapter {
 	u8 __iomem *io_addr;
@@ -69,6 +74,7 @@ struct txgbe_adapter {
 	struct work_struct service_task;
 	u32 atr_sample_rate;
 
+	char eeprom_id[32];
 	bool netdev_registered;
 
 	struct txgbe_mac_addr *mac_table;
