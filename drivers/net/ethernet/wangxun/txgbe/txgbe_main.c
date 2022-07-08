@@ -481,6 +481,12 @@ static int txgbe_probe(struct pci_dev *pdev,
 	struct txgbe_hw *hw = NULL;
 	struct net_device *netdev;
 	int err, expected_gts;
+	u16 offset = 0;
+	u16 eeprom_verh = 0, eeprom_verl = 0;
+	u16 eeprom_cfg_blkh = 0, eeprom_cfg_blkl = 0;
+	u32 etrack_id = 0;
+	u16 build = 0, major = 0, patch = 0;
+	u8 part_str[TXGBE_PBANUM_LENGTH];
 	bool disable_dev = false;
 
 	err = pci_enable_device_mem(pdev);
@@ -559,6 +565,14 @@ static int txgbe_probe(struct pci_dev *pdev,
 
 	netdev->features |= NETIF_F_HIGHDMA;
 
+	/* make sure the EEPROM is good */
+	if (TCALL(hw, eeprom.ops.validate_checksum, NULL)) {
+		dev_err(&pdev->dev, "The EEPROM Checksum Is Not Valid\n");
+		wr32(hw, TXGBE_MIS_RST, TXGBE_MIS_RST_SW_RST);
+		err = -EIO;
+		goto err_free_mac_table;
+	}
+
 	memcpy(netdev->dev_addr, hw->mac.perm_addr, netdev->addr_len);
 
 	if (!is_valid_ether_addr(netdev->dev_addr)) {
@@ -578,6 +592,43 @@ static int txgbe_probe(struct pci_dev *pdev,
 	INIT_WORK(&adapter->service_task, txgbe_service_task);
 	set_bit(__TXGBE_SERVICE_INITED, &adapter->state);
 	clear_bit(__TXGBE_SERVICE_SCHED, &adapter->state);
+
+	/* Save off EEPROM version number and Option Rom version which
+	 * together make a unique identify for the eeprom
+	 */
+	TCALL(hw, eeprom.ops.read,
+	      hw->eeprom.sw_region_offset + TXGBE_EEPROM_VERSION_H,
+	      &eeprom_verh);
+	TCALL(hw, eeprom.ops.read,
+	      hw->eeprom.sw_region_offset + TXGBE_EEPROM_VERSION_L,
+	      &eeprom_verl);
+	etrack_id = (eeprom_verh << 16) | eeprom_verl;
+
+	TCALL(hw, eeprom.ops.read,
+	      hw->eeprom.sw_region_offset + TXGBE_ISCSI_BOOT_CONFIG, &offset);
+
+	/* Make sure offset to SCSI block is valid */
+	if (!(offset == 0x0) && !(offset == 0xffff)) {
+		TCALL(hw, eeprom.ops.read, offset + 0x84, &eeprom_cfg_blkh);
+		TCALL(hw, eeprom.ops.read, offset + 0x83, &eeprom_cfg_blkl);
+
+		/* Only display Option Rom if exist */
+		if (eeprom_cfg_blkl && eeprom_cfg_blkh) {
+			major = eeprom_cfg_blkl >> 8;
+			build = (eeprom_cfg_blkl << 8) | (eeprom_cfg_blkh >> 8);
+			patch = eeprom_cfg_blkh & 0x00ff;
+
+			snprintf(adapter->eeprom_id, sizeof(adapter->eeprom_id),
+				 "0x%08x, %d.%d.%d", etrack_id, major, build,
+				 patch);
+		} else {
+			snprintf(adapter->eeprom_id, sizeof(adapter->eeprom_id),
+				 "0x%08x", etrack_id);
+		}
+	} else {
+		snprintf(adapter->eeprom_id, sizeof(adapter->eeprom_id),
+			 "0x%08x", etrack_id);
+	}
 
 	/* reset the hardware with the new settings */
 	err = TCALL(hw, mac.ops.start_hw);
@@ -617,10 +668,17 @@ static int txgbe_probe(struct pci_dev *pdev,
 	else
 		netif_info(adapter, probe, netdev, "NCSI : unsupported");
 
+	/* First try to read PBA as a string */
+	err = txgbe_read_pba_string(hw, part_str, TXGBE_PBANUM_LENGTH);
+	if (err)
+		strncpy(part_str, "Unknown", TXGBE_PBANUM_LENGTH);
 	dev_info(&pdev->dev, "%02x:%02x:%02x:%02x:%02x:%02x\n",
 		 netdev->dev_addr[0], netdev->dev_addr[1],
 		 netdev->dev_addr[2], netdev->dev_addr[3],
 		 netdev->dev_addr[4], netdev->dev_addr[5]);
+
+	/* firmware requires blank driver version */
+	TCALL(hw, mac.ops.set_fw_drv_ver, 0xFF, 0xFF, 0xFF, 0xFF);
 
 	/* add san mac addr to netdev */
 	txgbe_add_sanmac_netdev(netdev);
