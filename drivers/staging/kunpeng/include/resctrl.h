@@ -6,7 +6,7 @@
 
 #include "mpam.h"
 
-#if defined(CONFIG_RESCTRL) && defined(CONFIG_MPAM)
+#if defined(CONFIG_ARM64_MPAM)
 
 #define resctrl_group rdtgroup
 #define resctrl_alloc_capable rdt_alloc_capable
