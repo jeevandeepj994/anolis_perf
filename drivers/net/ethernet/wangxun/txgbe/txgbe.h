@@ -35,10 +35,21 @@ struct txgbe_mac_addr {
 #define TXGBE_MAC_STATE_MODIFIED        0x2
 #define TXGBE_MAC_STATE_IN_USE          0x4
 
+/* default to trying for four seconds */
+#define TXGBE_TRY_LINK_TIMEOUT  (4 * HZ)
+#define TXGBE_SFP_POLL_JIFFIES  (2 * HZ)        /* SFP poll every 2 seconds */
+
+/**
+ * txgbe_adapter.flag
+ **/
+#define TXGBE_FLAG_NEED_LINK_UPDATE             BIT(0)
+#define TXGBE_FLAG_NEED_LINK_CONFIG             BIT(1)
+
 /**
  * txgbe_adapter.flag2
  **/
 #define TXGBE_FLAG2_MNG_REG_ACCESS_DISABLED     BIT(0)
+#define TXGBE_FLAG2_SFP_NEEDS_RESET             BIT(1)
 
 /* board specific private data structure */
 struct txgbe_adapter {
@@ -52,6 +63,7 @@ struct txgbe_adapter {
 	/* Some features need tri-state capability,
 	 * thus the additional *_CAPABLE flags.
 	 */
+	u32 flags;
 	u32 flags2;
 	/* Tx fast path data */
 	int num_tx_queues;
@@ -69,6 +81,11 @@ struct txgbe_adapter {
 	/* structs defined in txgbe_hw.h */
 	struct txgbe_hw hw;
 	u16 msg_enable;
+
+	u32 link_speed;
+	bool link_up;
+	unsigned long sfp_poll_time;
+	unsigned long link_check_timeout;
 
 	struct timer_list service_timer;
 	struct work_struct service_task;
