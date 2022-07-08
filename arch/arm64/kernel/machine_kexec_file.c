@@ -85,6 +85,15 @@ static int setup_dtb(struct kimage *image,
 				crashk_res.end - crashk_res.start + 1);
 		if (ret)
 			return (ret == -FDT_ERR_NOSPACE ? -ENOMEM : -EINVAL);
+
+		if (crashk_low_res.end) {
+			ret = fdt_appendprop_addrrange(dtb, 0, off,
+				FDT_PROP_MEM_RANGE,
+				crashk_low_res.start,
+				crashk_low_res.end - crashk_low_res.start + 1);
+			if (ret)
+				return (ret == -FDT_ERR_NOSPACE ? -ENOMEM : -EINVAL);
+		}
 	}
 
 	/* add bootargs */
@@ -234,10 +243,18 @@ static int prepare_elf_headers(void **addr, unsigned long *sz)
 
 	/* Exclude crashkernel region */
 	ret = crash_exclude_mem_range(cmem, crashk_res.start, crashk_res.end);
+	if (ret)
+		goto out;
 
-	if (!ret)
-		ret =  crash_prepare_elf64_headers(cmem, true, addr, sz);
+	if (crashk_low_res.end) {
+		ret = crash_exclude_mem_range(cmem, crashk_low_res.start, crashk_low_res.end);
+		if (ret)
+			goto out;
+	}
 
+	ret = crash_prepare_elf64_headers(cmem, true, addr, sz);
+
+out:
 	kfree(cmem);
 	return ret;
 }
