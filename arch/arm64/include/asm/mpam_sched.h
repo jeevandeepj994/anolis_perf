@@ -2,7 +2,7 @@
 #ifndef _ASM_ARM64_MPAM_SCHED_H
 #define _ASM_ARM64_MPAM_SCHED_H
 
-#ifdef CONFIG_MPAM
+#ifdef CONFIG_ARM64_MPAM
 
 #include <linux/sched.h>
 #include <linux/jump_label.h>
@@ -44,6 +44,6 @@ static inline void mpam_sched_in(void)
 
 static inline void mpam_sched_in(void) {}
 
-#endif /* CONFIG_MPAM */
+#endif /* CONFIG_ARM64_MPAM */
 
 #endif

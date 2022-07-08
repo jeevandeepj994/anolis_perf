@@ -832,7 +832,7 @@ void __init mpam_device_set_overflow_irq(struct mpam_device *dev, u32 irq,
 
 static int mpam_cpus_have_feature(void)
 {
-	if (!cpus_have_const_cap(ARM64_HAS_MPAM))
+	if (!cpus_have_const_cap(ARM64_MPAM))
 		return 0;
 	return 1;
 }

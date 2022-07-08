@@ -245,7 +245,7 @@ int __init kunpeng_acpi_mpam_parse(void)
 	acpi_status status;
 	int ret;
 
-	if (!cpus_have_const_cap(ARM64_HAS_MPAM))
+	if (!cpus_have_const_cap(ARM64_MPAM))
 		return 0;
 
 	if (acpi_disabled || kunpeng_mpam_enabled != MPAM_ENABLE_ACPI)
