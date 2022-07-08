@@ -1521,8 +1521,92 @@ enum TXGBE_MSCA_CMD_value {
 #define TXGBE_PCIDEVCTRL2_4_8s          0xd
 #define TXGBE_PCIDEVCTRL2_17_34s        0xe
 
+/****************** Manageablility Host Interface defines ********************/
+#define TXGBE_HI_MAX_BLOCK_BYTE_LENGTH  256 /* Num of bytes in range */
+#define TXGBE_HI_MAX_BLOCK_DWORD_LENGTH 64 /* Num of dwords in range */
+#define TXGBE_HI_COMMAND_TIMEOUT        5000 /* Process HI command limit */
+
+/* CEM Support */
+#define FW_CEM_HDR_LEN                  0x4
+#define FW_CEM_CMD_DRIVER_INFO          0xDD
+#define FW_CEM_CMD_DRIVER_INFO_LEN      0x5
+#define FW_CEM_CMD_RESERVED             0X0
+#define FW_CEM_MAX_RETRIES              3
+#define FW_CEM_RESP_STATUS_SUCCESS      0x1
+#define FW_READ_SHADOW_RAM_CMD          0x31
+#define FW_READ_SHADOW_RAM_LEN          0x6
+#define FW_DEFAULT_CHECKSUM             0xFF /* checksum always 0xFF */
+#define FW_NVM_DATA_OFFSET              3
+#define FW_MAX_READ_BUFFER_SIZE         244
+#define FW_RESET_CMD                    0xDF
+#define FW_RESET_LEN                    0x2
+
+/* Host Interface Command Structures */
+struct txgbe_hic_hdr {
+	u8 cmd;
+	u8 buf_len;
+	union {
+		u8 cmd_resv;
+		u8 ret_status;
+	} cmd_or_resp;
+	u8 checksum;
+};
+
+struct txgbe_hic_hdr2_req {
+	u8 cmd;
+	u8 buf_lenh;
+	u8 buf_lenl;
+	u8 checksum;
+};
+
+struct txgbe_hic_hdr2_rsp {
+	u8 cmd;
+	u8 buf_lenl;
+	u8 buf_lenh_status;     /* 7-5: high bits of buf_len, 4-0: status */
+	u8 checksum;
+};
+
+union txgbe_hic_hdr2 {
+	struct txgbe_hic_hdr2_req req;
+	struct txgbe_hic_hdr2_rsp rsp;
+};
+
+struct txgbe_hic_drv_info {
+	struct txgbe_hic_hdr hdr;
+	u8 port_num;
+	u8 ver_sub;
+	u8 ver_build;
+	u8 ver_min;
+	u8 ver_maj;
+	u8 pad; /* end spacing to ensure length is mult. of dword */
+	u16 pad2; /* end spacing to ensure length is mult. of dword2 */
+};
+
+/* These need to be dword aligned */
+struct txgbe_hic_read_shadow_ram {
+	union txgbe_hic_hdr2 hdr;
+	u32 address;
+	u16 length;
+	u16 pad2;
+	u16 data;
+	u16 pad3;
+};
+
+struct txgbe_hic_reset {
+	struct txgbe_hic_hdr hdr;
+	u16 lan_id;
+	u16 reset_type;
+};
+
 /* Number of 100 microseconds we wait for PCI Express master disable */
 #define TXGBE_PCI_MASTER_DISABLE_TIMEOUT        800
+enum txgbe_eeprom_type {
+	txgbe_eeprom_uninitialized = 0,
+	txgbe_eeprom_spi,
+	txgbe_flash,
+	txgbe_eeprom_none /* No NVM support */
+};
+
 
 /* PCI bus types */
 enum txgbe_bus_type {
@@ -1581,15 +1665,29 @@ struct txgbe_bus_info {
 /* forward declaration */
 struct txgbe_hw;
 
+/* Function pointer table */
+struct txgbe_eeprom_operations {
+	s32 (*init_params)(struct txgbe_hw *hw);
+	s32 (*read)(struct txgbe_hw *hw, u16 offset, u16 *data);
+	s32 (*read_buffer)(struct txgbe_hw *hw,
+			   u16 offset, u16 words, u16 *data);
+	s32 (*validate_checksum)(struct txgbe_hw *hw, u16 *checksum_val);
+	s32 (*calc_checksum)(struct txgbe_hw *hw);
+};
+
 struct txgbe_mac_operations {
 	s32 (*init_hw)(struct txgbe_hw *hw);
 	s32 (*reset_hw)(struct txgbe_hw *hw);
 	s32 (*start_hw)(struct txgbe_hw *hw);
 	s32 (*get_mac_addr)(struct txgbe_hw *hw, u8 *mac_addr);
 	s32 (*get_san_mac_addr)(struct txgbe_hw *hw, u8 *san_mac_addr);
+	s32 (*get_wwn_prefix)(struct txgbe_hw *hw, u16 *wwnn_prefix,
+			      u16 *wwpn_prefix);
 	s32 (*stop_adapter)(struct txgbe_hw *hw);
 	s32 (*get_bus_info)(struct txgbe_hw *hw);
 	s32 (*set_lan_id)(struct txgbe_hw *hw);
+	s32 (*acquire_swfw_sync)(struct txgbe_hw *hw, u32 mask);
+	s32 (*release_swfw_sync)(struct txgbe_hw *hw, u32 mask);
 
 	/* RAR */
 	s32 (*set_rar)(struct txgbe_hw *hw, u32 index, u8 *addr, u64 pools,
@@ -1601,8 +1699,18 @@ struct txgbe_mac_operations {
 	s32 (*init_uta_tables)(struct txgbe_hw *hw);
 
 	/* Manageability interface */
+	s32 (*set_fw_drv_ver)(struct txgbe_hw *hw, u8 maj, u8 min,
+			      u8 build, u8 ver);
 	s32 (*init_thermal_sensor_thresh)(struct txgbe_hw *hw);
 	s32 (*disable_rx)(struct txgbe_hw *hw);
+};
+
+struct txgbe_eeprom_info {
+	struct txgbe_eeprom_operations ops;
+	enum txgbe_eeprom_type type;
+	u32 semaphore_delay;
+	u16 word_size;
+	u16 sw_region_offset;
 };
 
 struct txgbe_mac_info {
@@ -1610,6 +1718,10 @@ struct txgbe_mac_info {
 	u8 addr[TXGBE_ETH_LENGTH_OF_ADDRESS];
 	u8 perm_addr[TXGBE_ETH_LENGTH_OF_ADDRESS];
 	u8 san_addr[TXGBE_ETH_LENGTH_OF_ADDRESS];
+	/* prefix for World Wide Node Name (WWNN) */
+	u16 wwnn_prefix;
+	/* prefix for World Wide Port Name (WWPN) */
+	u16 wwpn_prefix;
 	s32 mc_filter_type;
 	u32 mcft_size;
 	u32 num_rar_entries;
@@ -1631,6 +1743,7 @@ struct txgbe_hw {
 	u8 __iomem *hw_addr;
 	struct txgbe_mac_info mac;
 	struct txgbe_addr_filter_info addr_ctrl;
+	struct txgbe_eeprom_info eeprom;
 	struct txgbe_bus_info bus;
 	u16 device_id;
 	u16 vendor_id;
