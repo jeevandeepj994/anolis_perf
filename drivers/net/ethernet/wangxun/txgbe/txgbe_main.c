@@ -13,6 +13,7 @@
 
 #include "txgbe.h"
 #include "txgbe_hw.h"
+#include "txgbe_phy.h"
 
 char txgbe_driver_name[] = "txgbe";
 
@@ -34,6 +35,8 @@ static const struct pci_device_id txgbe_pci_tbl[] = {
 #define DEFAULT_DEBUG_LEVEL_SHIFT 3
 
 static struct workqueue_struct *txgbe_wq;
+
+static bool txgbe_is_sfp(struct txgbe_hw *hw);
 
 static void txgbe_check_minimum_link(struct txgbe_adapter *adapter,
 				     int expected_gts)
@@ -125,6 +128,20 @@ static bool txgbe_check_cfg_remove(struct txgbe_hw *hw, struct pci_dev *pdev)
 	return false;
 }
 
+static void txgbe_release_hw_control(struct txgbe_adapter *adapter)
+{
+	/* Let firmware take over control of hw */
+	wr32m(&adapter->hw, TXGBE_CFG_PORT_CTL,
+	      TXGBE_CFG_PORT_CTL_DRV_LOAD, 0);
+}
+
+static void txgbe_get_hw_control(struct txgbe_adapter *adapter)
+{
+	/* Let firmware know the driver has taken over */
+	wr32m(&adapter->hw, TXGBE_CFG_PORT_CTL,
+	      TXGBE_CFG_PORT_CTL_DRV_LOAD, TXGBE_CFG_PORT_CTL_DRV_LOAD);
+}
+
 static void txgbe_sync_mac_table(struct txgbe_adapter *adapter)
 {
 	struct txgbe_hw *hw = &adapter->hw;
@@ -176,6 +193,95 @@ static void txgbe_flush_sw_mac_table(struct txgbe_adapter *adapter)
 	txgbe_sync_mac_table(adapter);
 }
 
+static bool txgbe_is_sfp(struct txgbe_hw *hw)
+{
+	switch (TCALL(hw, mac.ops.get_media_type)) {
+	case txgbe_media_type_fiber:
+		return true;
+	default:
+		return false;
+	}
+}
+
+static bool txgbe_is_backplane(struct txgbe_hw *hw)
+{
+	switch (TCALL(hw, mac.ops.get_media_type)) {
+	case txgbe_media_type_backplane:
+		return true;
+	default:
+		return false;
+	}
+}
+
+/**
+ * txgbe_sfp_link_config - set up SFP+ link
+ * @adapter: pointer to private adapter struct
+ **/
+static void txgbe_sfp_link_config(struct txgbe_adapter *adapter)
+{
+	/* We are assuming the worst case scenerio here, and that
+	 * is that an SFP was inserted/removed after the reset
+	 * but before SFP detection was enabled.  As such the best
+	 * solution is to just start searching as soon as we start
+	 */
+
+	adapter->flags2 |= TXGBE_FLAG2_SFP_NEEDS_RESET;
+	adapter->sfp_poll_time = 0;
+}
+
+static void txgbe_up_complete(struct txgbe_adapter *adapter)
+{
+	struct txgbe_hw *hw = &adapter->hw;
+	u32 links_reg;
+
+	txgbe_get_hw_control(adapter);
+
+	/* enable the optics for SFP+ fiber */
+	TCALL(hw, mac.ops.enable_tx_laser);
+
+	/* make sure to complete pre-operations */
+	smp_mb__before_atomic();
+	clear_bit(__TXGBE_DOWN, &adapter->state);
+
+	if (txgbe_is_sfp(hw)) {
+		txgbe_sfp_link_config(adapter);
+	} else if (txgbe_is_backplane(hw)) {
+		adapter->flags |= TXGBE_FLAG_NEED_LINK_CONFIG;
+		txgbe_service_event_schedule(adapter);
+	}
+
+	links_reg = rd32(hw, TXGBE_CFG_PORT_ST);
+	if (links_reg & TXGBE_CFG_PORT_ST_LINK_UP) {
+		if (links_reg & TXGBE_CFG_PORT_ST_LINK_10G) {
+			wr32(hw, TXGBE_MAC_TX_CFG,
+			     (rd32(hw, TXGBE_MAC_TX_CFG) &
+			      ~TXGBE_MAC_TX_CFG_SPEED_MASK) |
+			     TXGBE_MAC_TX_CFG_SPEED_10G);
+		} else if (links_reg & (TXGBE_CFG_PORT_ST_LINK_1G | TXGBE_CFG_PORT_ST_LINK_100M)) {
+			wr32(hw, TXGBE_MAC_TX_CFG,
+			     (rd32(hw, TXGBE_MAC_TX_CFG) &
+			      ~TXGBE_MAC_TX_CFG_SPEED_MASK) |
+			     TXGBE_MAC_TX_CFG_SPEED_1G);
+		}
+	}
+
+	if (hw->bus.lan_id == 0) {
+		wr32m(hw, TXGBE_MIS_PRB_CTL,
+		      TXGBE_MIS_PRB_CTL_LAN0_UP, TXGBE_MIS_PRB_CTL_LAN0_UP);
+	} else if (hw->bus.lan_id == 1) {
+		wr32m(hw, TXGBE_MIS_PRB_CTL,
+		      TXGBE_MIS_PRB_CTL_LAN1_UP, TXGBE_MIS_PRB_CTL_LAN1_UP);
+	} else {
+		netif_err(adapter, probe, adapter->netdev,
+			  "%s:invalid bus lan id %d\n",
+			  __func__, hw->bus.lan_id);
+	}
+
+	/* Set PF Reset Done bit so PF/VF Mail Ops can work */
+	wr32m(hw, TXGBE_CFG_PORT_CTL,
+	      TXGBE_CFG_PORT_CTL_PFRSTD, TXGBE_CFG_PORT_CTL_PFRSTD);
+}
+
 void txgbe_reset(struct txgbe_adapter *adapter)
 {
 	struct txgbe_hw *hw = &adapter->hw;
@@ -185,10 +291,19 @@ void txgbe_reset(struct txgbe_adapter *adapter)
 
 	if (TXGBE_REMOVED(hw->hw_addr))
 		return;
+	/* lock SFP init bit to prevent race conditions with the watchdog */
+	while (test_and_set_bit(__TXGBE_IN_SFP_INIT, &adapter->state))
+		usleep_range(1000, 2000);
+
+	/* clear all SFP and link config related flags while holding SFP_INIT */
+	adapter->flags2 &= ~TXGBE_FLAG2_SFP_NEEDS_RESET;
+	adapter->flags &= ~TXGBE_FLAG_NEED_LINK_CONFIG;
 
 	err = TCALL(hw, mac.ops.init_hw);
 	switch (err) {
 	case 0:
+	case TXGBE_ERR_SFP_NOT_PRESENT:
+	case TXGBE_ERR_SFP_NOT_SUPPORTED:
 		break;
 	case TXGBE_ERR_MASTER_REQUESTS_PENDING:
 		dev_err(&adapter->pdev->dev, "master disable timed out\n");
@@ -197,6 +312,7 @@ void txgbe_reset(struct txgbe_adapter *adapter)
 		dev_err(&adapter->pdev->dev, "Hardware Error: %d\n", err);
 	}
 
+	clear_bit(__TXGBE_IN_SFP_INIT, &adapter->state);
 	/* do not flush user set addresses */
 	memcpy(old_addr, &adapter->mac_table[0].addr, netdev->addr_len);
 	txgbe_flush_sw_mac_table(adapter);
@@ -223,6 +339,8 @@ void txgbe_disable_device(struct txgbe_adapter *adapter)
 	/* call carrier off first to avoid false dev_watchdog timeouts */
 	netif_carrier_off(netdev);
 	netif_tx_disable(netdev);
+
+	adapter->flags &= ~TXGBE_FLAG_NEED_LINK_UPDATE;
 
 	del_timer_sync(&adapter->service_timer);
 
@@ -253,8 +371,14 @@ void txgbe_disable_device(struct txgbe_adapter *adapter)
 
 void txgbe_down(struct txgbe_adapter *adapter)
 {
+	struct txgbe_hw *hw = &adapter->hw;
+
 	txgbe_disable_device(adapter);
 	txgbe_reset(adapter);
+
+	if (!(((hw->subsystem_device_id & TXGBE_NCSI_MASK) == TXGBE_NCSI_SUP)))
+		/* power down the optics for SFP+ fiber */
+		TCALL(&adapter->hw, mac.ops.disable_tx_laser);
 }
 
 /**
@@ -332,10 +456,38 @@ static int txgbe_sw_init(struct txgbe_adapter *adapter)
  * @netdev: network interface device structure
  *
  * Returns 0 on success, negative value on failure
+ *
+ * The open entry point is called when a network interface is made
+ * active by the system (IFF_UP).  At this point all resources needed
+ * for transmit and receive operations are allocated, the interrupt
+ * handler is registered with the OS, the watchdog timer is started,
+ * and the stack is notified that the interface is ready.
  **/
 int txgbe_open(struct net_device *netdev)
 {
+	struct txgbe_adapter *adapter = netdev_priv(netdev);
+
+	netif_carrier_off(netdev);
+
+	txgbe_up_complete(adapter);
+
 	return 0;
+}
+
+/**
+ * txgbe_close_suspend - actions necessary to both suspend and close flows
+ * @adapter: the private adapter struct
+ *
+ * This function should contain the necessary work common to both suspending
+ * and closing of the device.
+ */
+static void txgbe_close_suspend(struct txgbe_adapter *adapter)
+{
+	struct txgbe_hw *hw = &adapter->hw;
+
+	txgbe_disable_device(adapter);
+	if (!((hw->subsystem_device_id & TXGBE_NCSI_MASK) == TXGBE_NCSI_SUP))
+		TCALL(hw, mac.ops.disable_tx_laser);
 }
 
 /**
@@ -343,9 +495,20 @@ int txgbe_open(struct net_device *netdev)
  * @netdev: network interface device structure
  *
  * Returns 0, this is not allowed to fail
+ *
+ * The close entry point is called when an interface is de-activated
+ * by the OS.  The hardware is still under the drivers control, but
+ * needs to be disabled.  A global MAC reset is issued to stop the
+ * hardware, and all transmit and receive resources are freed.
  **/
 int txgbe_close(struct net_device *netdev)
 {
+	struct txgbe_adapter *adapter = netdev_priv(netdev);
+
+	txgbe_down(adapter);
+
+	txgbe_release_hw_control(adapter);
+
 	return 0;
 }
 
@@ -355,6 +518,13 @@ static void txgbe_dev_shutdown(struct pci_dev *pdev, bool *enable_wake)
 	struct net_device *netdev = adapter->netdev;
 
 	netif_device_detach(netdev);
+
+	rtnl_lock();
+	if (netif_running(netdev))
+		txgbe_close_suspend(adapter);
+	rtnl_unlock();
+
+	txgbe_release_hw_control(adapter);
 
 	if (!test_and_set_bit(__TXGBE_DISABLED, &adapter->state))
 		pci_disable_device(pdev);
@@ -372,12 +542,264 @@ static void txgbe_shutdown(struct pci_dev *pdev)
 	}
 }
 
+/**
+ * txgbe_watchdog_update_link - update the link status
+ * @adapter: pointer to the device adapter structure
+ **/
+static void txgbe_watchdog_update_link(struct txgbe_adapter *adapter)
+{
+	struct txgbe_hw *hw = &adapter->hw;
+	u32 link_speed = adapter->link_speed;
+	bool link_up = adapter->link_up;
+	u32 reg;
+	u32 i = 1;
+
+	if (!(adapter->flags & TXGBE_FLAG_NEED_LINK_UPDATE))
+		return;
+
+	link_speed = TXGBE_LINK_SPEED_10GB_FULL;
+	link_up = true;
+	TCALL(hw, mac.ops.check_link, &link_speed, &link_up, false);
+
+	if (link_up || time_after(jiffies, (adapter->link_check_timeout +
+		TXGBE_TRY_LINK_TIMEOUT))) {
+		adapter->flags &= ~TXGBE_FLAG_NEED_LINK_UPDATE;
+	}
+
+	for (i = 0; i < 3; i++) {
+		TCALL(hw, mac.ops.check_link, &link_speed, &link_up, false);
+		msleep(20);
+	}
+
+	adapter->link_up = link_up;
+	adapter->link_speed = link_speed;
+
+	if (link_up) {
+		if (link_speed & TXGBE_LINK_SPEED_10GB_FULL) {
+			wr32(hw, TXGBE_MAC_TX_CFG,
+			     (rd32(hw, TXGBE_MAC_TX_CFG) &
+			      ~TXGBE_MAC_TX_CFG_SPEED_MASK) | TXGBE_MAC_TX_CFG_TE |
+			     TXGBE_MAC_TX_CFG_SPEED_10G);
+		} else if (link_speed & (TXGBE_LINK_SPEED_1GB_FULL |
+			   TXGBE_LINK_SPEED_100_FULL | TXGBE_LINK_SPEED_10_FULL)) {
+			wr32(hw, TXGBE_MAC_TX_CFG,
+			     (rd32(hw, TXGBE_MAC_TX_CFG) &
+			      ~TXGBE_MAC_TX_CFG_SPEED_MASK) | TXGBE_MAC_TX_CFG_TE |
+			     TXGBE_MAC_TX_CFG_SPEED_1G);
+		}
+
+		/* Re configure MAC RX */
+		reg = rd32(hw, TXGBE_MAC_RX_CFG);
+		wr32(hw, TXGBE_MAC_RX_CFG, reg);
+		wr32(hw, TXGBE_MAC_PKT_FLT, TXGBE_MAC_PKT_FLT_PR);
+		reg = rd32(hw, TXGBE_MAC_WDG_TIMEOUT);
+		wr32(hw, TXGBE_MAC_WDG_TIMEOUT, reg);
+	}
+}
+
+/**
+ * txgbe_watchdog_link_is_up - update netif_carrier status and
+ *                             print link up message
+ * @adapter: pointer to the device adapter structure
+ **/
+static void txgbe_watchdog_link_is_up(struct txgbe_adapter *adapter)
+{
+	struct net_device *netdev = adapter->netdev;
+	struct txgbe_hw *hw = &adapter->hw;
+	u32 link_speed = adapter->link_speed;
+	bool flow_rx, flow_tx;
+
+	/* only continue if link was previously down */
+	if (netif_carrier_ok(netdev))
+		return;
+
+	/* flow_rx, flow_tx report link flow control status */
+	flow_rx = (rd32(hw, TXGBE_MAC_RX_FLOW_CTRL) & 0x101) == 0x1;
+	flow_tx = !!(TXGBE_RDB_RFCC_RFCE_802_3X &
+		     rd32(hw, TXGBE_RDB_RFCC));
+
+	netif_info(adapter, drv, netdev,
+		   "NIC Link is Up %s, Flow Control: %s\n",
+		   (link_speed == TXGBE_LINK_SPEED_10GB_FULL ?
+		    "10 Gbps" :
+		    (link_speed == TXGBE_LINK_SPEED_1GB_FULL ?
+		     "1 Gbps" :
+		     (link_speed == TXGBE_LINK_SPEED_100_FULL ?
+		      "100 Mbps" :
+		      (link_speed == TXGBE_LINK_SPEED_10_FULL ?
+		       "10 Mbps" :
+		       "unknown speed")))),
+		  ((flow_rx && flow_tx) ? "RX/TX" :
+		   (flow_rx ? "RX" :
+		    (flow_tx ? "TX" : "None"))));
+
+	netif_carrier_on(netdev);
+}
+
+/**
+ * txgbe_watchdog_link_is_down - update netif_carrier status and
+ *                               print link down message
+ * @adapter: pointer to the adapter structure
+ **/
+static void txgbe_watchdog_link_is_down(struct txgbe_adapter *adapter)
+{
+	struct net_device *netdev = adapter->netdev;
+
+	adapter->link_up = false;
+	adapter->link_speed = 0;
+
+	/* only continue if link was up previously */
+	if (!netif_carrier_ok(netdev))
+		return;
+
+	netif_info(adapter, drv, netdev, "NIC Link is Down\n");
+	netif_carrier_off(netdev);
+}
+
+/**
+ * txgbe_watchdog_subtask - check and bring link up
+ * @adapter: pointer to the device adapter structure
+ **/
+static void txgbe_watchdog_subtask(struct txgbe_adapter *adapter)
+{
+	/* if interface is down do nothing */
+	if (test_bit(__TXGBE_DOWN, &adapter->state) ||
+	    test_bit(__TXGBE_REMOVING, &adapter->state) ||
+	    test_bit(__TXGBE_RESETTING, &adapter->state))
+		return;
+
+	txgbe_watchdog_update_link(adapter);
+
+	if (adapter->link_up)
+		txgbe_watchdog_link_is_up(adapter);
+	else
+		txgbe_watchdog_link_is_down(adapter);
+}
+
+/**
+ * txgbe_sfp_detection_subtask - poll for SFP+ cable
+ * @adapter: the txgbe adapter structure
+ **/
+static void txgbe_sfp_detection_subtask(struct txgbe_adapter *adapter)
+{
+	struct txgbe_hw *hw = &adapter->hw;
+	struct txgbe_mac_info *mac = &hw->mac;
+	s32 err;
+
+	/* not searching for SFP so there is nothing to do here */
+	if (!(adapter->flags2 & TXGBE_FLAG2_SFP_NEEDS_RESET))
+		return;
+
+	if (adapter->sfp_poll_time &&
+	    time_after(adapter->sfp_poll_time, jiffies))
+		return; /* If not yet time to poll for SFP */
+
+	/* someone else is in init, wait until next service event */
+	if (test_and_set_bit(__TXGBE_IN_SFP_INIT, &adapter->state))
+		return;
+
+	adapter->sfp_poll_time = jiffies + TXGBE_SFP_POLL_JIFFIES - 1;
+
+	err = TCALL(hw, phy.ops.identify_sfp);
+	if (err == TXGBE_ERR_SFP_NOT_SUPPORTED)
+		goto sfp_out;
+
+	if (err == TXGBE_ERR_SFP_NOT_PRESENT) {
+		/* If no cable is present, then we need to reset
+		 * the next time we find a good cable.
+		 */
+		adapter->flags2 |= TXGBE_FLAG2_SFP_NEEDS_RESET;
+	}
+
+	/* exit on error */
+	if (err)
+		goto sfp_out;
+
+	/* exit if reset not needed */
+	if (!(adapter->flags2 & TXGBE_FLAG2_SFP_NEEDS_RESET))
+		goto sfp_out;
+
+	adapter->flags2 &= ~TXGBE_FLAG2_SFP_NEEDS_RESET;
+
+	if (hw->phy.multispeed_fiber) {
+		/* Set up dual speed SFP+ support */
+		mac->ops.setup_link = txgbe_setup_mac_link_multispeed_fiber;
+		mac->ops.setup_mac_link = txgbe_setup_mac_link;
+		mac->ops.set_rate_select_speed = txgbe_set_hard_rate_select_speed;
+	} else {
+		mac->ops.setup_link = txgbe_setup_mac_link;
+		mac->ops.set_rate_select_speed = txgbe_set_hard_rate_select_speed;
+		hw->phy.autoneg_advertised = 0;
+	}
+
+	adapter->flags |= TXGBE_FLAG_NEED_LINK_CONFIG;
+	netif_info(adapter, probe, adapter->netdev,
+		   "detected SFP+: %d\n", hw->phy.sfp_type);
+
+sfp_out:
+	clear_bit(__TXGBE_IN_SFP_INIT, &adapter->state);
+
+	if (err == TXGBE_ERR_SFP_NOT_SUPPORTED && adapter->netdev_registered)
+		dev_err(&adapter->pdev->dev,
+			"failed to initialize because an unsupported SFP+ module type was detected.\n");
+}
+
+/**
+ * txgbe_sfp_link_config_subtask - set up link SFP after module install
+ * @adapter: the txgbe adapter structure
+ **/
+static void txgbe_sfp_link_config_subtask(struct txgbe_adapter *adapter)
+{
+	struct txgbe_hw *hw = &adapter->hw;
+	u32 speed;
+	bool autoneg = false;
+	u8 device_type = hw->subsystem_device_id & 0xF0;
+
+	if (!(adapter->flags & TXGBE_FLAG_NEED_LINK_CONFIG))
+		return;
+
+	/* someone else is in init, wait until next service event */
+	if (test_and_set_bit(__TXGBE_IN_SFP_INIT, &adapter->state))
+		return;
+
+	adapter->flags &= ~TXGBE_FLAG_NEED_LINK_CONFIG;
+
+	if (device_type == TXGBE_ID_MAC_SGMII) {
+		speed = TXGBE_LINK_SPEED_1GB_FULL;
+	} else {
+		speed = hw->phy.autoneg_advertised;
+		if (!speed && hw->mac.ops.get_link_capabilities) {
+			TCALL(hw, mac.ops.get_link_capabilities, &speed, &autoneg);
+			/* setup the highest link when no autoneg */
+			if (!autoneg) {
+				if (speed & TXGBE_LINK_SPEED_10GB_FULL)
+					speed = TXGBE_LINK_SPEED_10GB_FULL;
+			}
+		}
+	}
+
+	TCALL(hw, mac.ops.setup_link, speed, false);
+
+	adapter->flags |= TXGBE_FLAG_NEED_LINK_UPDATE;
+	adapter->link_check_timeout = jiffies;
+	clear_bit(__TXGBE_IN_SFP_INIT, &adapter->state);
+}
+
 static void txgbe_service_timer(struct timer_list *t)
 {
 	struct txgbe_adapter *adapter = from_timer(adapter, t, service_timer);
 	unsigned long next_event_offset;
+	struct txgbe_hw *hw = &adapter->hw;
 
-	next_event_offset = HZ * 2;
+	/* poll faster when waiting for link */
+	if (adapter->flags & TXGBE_FLAG_NEED_LINK_UPDATE) {
+		if ((hw->subsystem_device_id & 0xF0) == TXGBE_ID_KR_KX_KX4)
+			next_event_offset = HZ;
+		else
+			next_event_offset = HZ / 10;
+	} else {
+		next_event_offset = HZ * 2;
+	}
 
 	/* Reset the timer */
 	mod_timer(&adapter->service_timer, next_event_offset + jiffies);
@@ -403,6 +825,10 @@ static void txgbe_service_task(struct work_struct *work)
 		txgbe_service_event_complete(adapter);
 		return;
 	}
+
+	txgbe_sfp_detection_subtask(adapter);
+	txgbe_sfp_link_config_subtask(adapter);
+	txgbe_watchdog_subtask(adapter);
 
 	txgbe_service_event_complete(adapter);
 }
@@ -558,7 +984,15 @@ static int txgbe_probe(struct pci_dev *pdev,
 		goto err_free_mac_table;
 
 	err = TCALL(hw, mac.ops.reset_hw);
-	if (err) {
+	if (err == TXGBE_ERR_SFP_NOT_PRESENT) {
+		err = 0;
+	} else if (err == TXGBE_ERR_SFP_NOT_SUPPORTED) {
+		dev_err(&pdev->dev,
+			"failed to load because an unsupported SFP+ module type was detected.\n");
+		dev_err(&pdev->dev,
+			"Reload the driver after installing a supported module.\n");
+		goto err_free_mac_table;
+	} else if (err) {
 		dev_err(&pdev->dev, "HW Init failed: %d\n", err);
 		goto err_free_mac_table;
 	}
@@ -648,6 +1082,10 @@ static int txgbe_probe(struct pci_dev *pdev,
 	pci_set_drvdata(pdev, adapter);
 	adapter->netdev_registered = true;
 
+	if (!((hw->subsystem_device_id & TXGBE_NCSI_MASK) == TXGBE_NCSI_SUP))
+		/* power down the optics for SFP+ fiber */
+		TCALL(hw, mac.ops.disable_tx_laser);
+
 	/* carrier off reporting is important to ethtool even BEFORE open */
 	netif_carrier_off(netdev);
 
@@ -672,6 +1110,15 @@ static int txgbe_probe(struct pci_dev *pdev,
 	err = txgbe_read_pba_string(hw, part_str, TXGBE_PBANUM_LENGTH);
 	if (err)
 		strncpy(part_str, "Unknown", TXGBE_PBANUM_LENGTH);
+	if (txgbe_is_sfp(hw) && hw->phy.sfp_type != txgbe_sfp_type_not_present)
+		netif_info(adapter, probe, netdev,
+			   "PHY: %d, SFP+: %d, PBA No: %s\n",
+			   hw->phy.type, hw->phy.sfp_type, part_str);
+	else
+		netif_info(adapter, probe, netdev,
+			   "PHY: %d, PBA No: %s\n",
+			   hw->phy.type, part_str);
+
 	dev_info(&pdev->dev, "%02x:%02x:%02x:%02x:%02x:%02x\n",
 		 netdev->dev_addr[0], netdev->dev_addr[1],
 		 netdev->dev_addr[2], netdev->dev_addr[3],
@@ -683,9 +1130,20 @@ static int txgbe_probe(struct pci_dev *pdev,
 	/* add san mac addr to netdev */
 	txgbe_add_sanmac_netdev(netdev);
 
+	netif_info(adapter, probe, netdev,
+		   "WangXun(R) 10 Gigabit Network Connection\n");
+
+	/* setup link for SFP devices with MNG FW, else wait for TXGBE_UP */
+	if (txgbe_mng_present(hw) && txgbe_is_sfp(hw) &&
+	    ((hw->subsystem_device_id & TXGBE_NCSI_MASK) == TXGBE_NCSI_SUP))
+		TCALL(hw, mac.ops.setup_link,
+		      TXGBE_LINK_SPEED_10GB_FULL | TXGBE_LINK_SPEED_1GB_FULL,
+		      true);
+
 	return 0;
 
 err_release_hw:
+	txgbe_release_hw_control(adapter);
 err_free_mac_table:
 	kfree(adapter->mac_table);
 err_pci_release_regions:
@@ -724,6 +1182,8 @@ static void txgbe_remove(struct pci_dev *pdev)
 		unregister_netdev(netdev);
 		adapter->netdev_registered = false;
 	}
+
+	txgbe_release_hw_control(adapter);
 
 	pci_release_selected_regions(pdev,
 				     pci_select_bars(pdev, IORESOURCE_MEM));
