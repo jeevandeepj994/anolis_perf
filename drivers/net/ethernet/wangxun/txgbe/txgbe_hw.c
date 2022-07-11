@@ -57,6 +57,40 @@ void txgbe_wr32_epcs(struct txgbe_hw *hw, u32 addr, u32 data)
 	wr32(hw, offset, data);
 }
 
+/**
+ *  txgbe_get_pcie_msix_count - Gets MSI-X vector count
+ *  @hw: pointer to hardware structure
+ *
+ *  Read PCIe configuration space, and get the MSI-X vector count from
+ *  the capabilities table.
+ **/
+u16 txgbe_get_pcie_msix_count(struct txgbe_hw *hw)
+{
+	struct txgbe_adapter *adapter = container_of(hw, struct txgbe_adapter, hw);
+	u16 msix_count = 1;
+	u16 max_msix_count;
+	u32 pos;
+
+	max_msix_count = TXGBE_MAX_MSIX_VECTORS_SAPPHIRE;
+	pos = pci_find_capability(adapter->pdev, PCI_CAP_ID_MSIX);
+	if (!pos)
+		return msix_count;
+	pci_read_config_word(adapter->pdev,
+			     pos + PCI_MSIX_FLAGS, &msix_count);
+
+	if (TXGBE_REMOVED(hw->hw_addr))
+		msix_count = 0;
+	msix_count &= TXGBE_PCIE_MSIX_TBL_SZ_MASK;
+
+	/* MSI-X count is zero-based in HW */
+	msix_count++;
+
+	if (msix_count > max_msix_count)
+		msix_count = max_msix_count;
+
+	return msix_count;
+}
+
 s32 txgbe_init_hw(struct txgbe_hw *hw)
 {
 	s32 status;
@@ -1582,6 +1616,7 @@ s32 txgbe_init_ops(struct txgbe_hw *hw)
 	phy->ops.read_i2c_byte = txgbe_read_i2c_byte;
 	phy->ops.read_i2c_eeprom = txgbe_read_i2c_eeprom;
 	phy->ops.identify_sfp = txgbe_identify_module;
+	phy->ops.check_overtemp = txgbe_check_overtemp;
 	phy->ops.identify = txgbe_identify_phy;
 	phy->ops.init = txgbe_init_phy_ops;
 
@@ -1617,6 +1652,7 @@ s32 txgbe_init_ops(struct txgbe_hw *hw)
 	mac->num_rar_entries    = TXGBE_SP_RAR_ENTRIES;
 	mac->max_rx_queues      = TXGBE_SP_MAX_RX_QUEUES;
 	mac->max_tx_queues      = TXGBE_SP_MAX_TX_QUEUES;
+	mac->max_msix_vectors   = txgbe_get_pcie_msix_count(hw);
 
 	/* EEPROM */
 	eeprom->ops.init_params = txgbe_init_eeprom_params;
