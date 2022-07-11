@@ -16,6 +16,7 @@
 #define SPI_H_DAT_REG_ADDR           0x10108  /* SPI Data register address */
 #define SPI_H_STA_REG_ADDR           0x1010c  /* SPI Status register address */
 
+u16 txgbe_get_pcie_msix_count(struct txgbe_hw *hw);
 s32 txgbe_init_hw(struct txgbe_hw *hw);
 s32 txgbe_start_hw(struct txgbe_hw *hw);
 s32 txgbe_read_pba_string(struct txgbe_hw *hw, u8 *pba_num,
