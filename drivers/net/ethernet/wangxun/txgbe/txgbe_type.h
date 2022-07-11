@@ -1930,6 +1930,7 @@ struct txgbe_mac_operations {
 	s32 (*init_hw)(struct txgbe_hw *hw);
 	s32 (*reset_hw)(struct txgbe_hw *hw);
 	s32 (*start_hw)(struct txgbe_hw *hw);
+	s32 (*clear_hw_cntrs)(struct txgbe_hw *hw);
 	enum txgbe_media_type (*get_media_type)(struct txgbe_hw *hw);
 	s32 (*get_mac_addr)(struct txgbe_hw *hw, u8 *mac_addr);
 	s32 (*get_san_mac_addr)(struct txgbe_hw *hw, u8 *san_mac_addr);
@@ -1983,6 +1984,7 @@ struct txgbe_phy_operations {
 			     u8 dev_addr, u8 *data);
 	s32 (*read_i2c_eeprom)(struct txgbe_hw *hw, u8 byte_offset,
 			       u8 *eeprom_data);
+	s32 (*check_overtemp)(struct txgbe_hw *hw);
 };
 
 struct txgbe_eeprom_info {
@@ -2013,6 +2015,7 @@ struct txgbe_mac_info {
 	u32 orig_sr_an_mmd_adv_reg2;
 	u32 orig_vr_xs_or_pcs_mmd_digi_ctl1;
 	u8  san_mac_rar_index;
+	u16 max_msix_vectors;
 	bool orig_link_settings_stored;
 	bool autotry_restart;
 	struct txgbe_thermal_sensor_data  thermal_sensor_data;
