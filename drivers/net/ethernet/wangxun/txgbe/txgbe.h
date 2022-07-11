@@ -15,6 +15,13 @@
 #include "txgbe_type.h"
 
 struct txgbe_ring {
+	struct txgbe_ring *next;        /* pointer to next ring in q_vector */
+	struct txgbe_q_vector *q_vector; /* backpointer to host q_vector */
+	struct net_device *netdev;      /* netdev ring belongs to */
+	struct device *dev;             /* device for DMA mapping */
+	u16 count;                      /* amount of descriptors */
+
+	u8 queue_index; /* needed for multiqueue queue management */
 	u8 reg_idx;
 } ____cacheline_internodealigned_in_smp;
 
@@ -22,6 +29,51 @@ struct txgbe_ring {
 
 #define TXGBE_MAX_RX_QUEUES   (TXGBE_MAX_FDIR_INDICES + 1)
 #define TXGBE_MAX_TX_QUEUES   (TXGBE_MAX_FDIR_INDICES + 1)
+
+struct txgbe_ring_container {
+	struct txgbe_ring *ring;        /* pointer to linked list of rings */
+	u16 work_limit;                 /* total work allowed per interrupt */
+	u8 count;                       /* total number of rings in vector */
+};
+
+/* iterator for handling rings in ring container */
+#define txgbe_for_each_ring(pos, head) \
+	for (pos = (head).ring; pos; pos = pos->next)
+
+/* MAX_MSIX_Q_VECTORS of these are allocated,
+ * but we only use one per queue-specific vector.
+ */
+struct txgbe_q_vector {
+	struct txgbe_adapter *adapter;
+	int cpu;
+	u16 v_idx;      /* index of q_vector within array, also used for
+			 * finding the bit in EICR and friends that
+			 * represents the vector for this ring
+			 */
+	u16 itr;        /* Interrupt throttle rate written to EITR */
+	struct txgbe_ring_container rx, tx;
+
+	struct napi_struct napi;
+	cpumask_t affinity_mask;
+	int numa_node;
+	struct rcu_head rcu;    /* to avoid race with update stats on free */
+	char name[IFNAMSIZ + 17];
+
+	/* for dynamic allocation of rings associated with this q_vector */
+	struct txgbe_ring ring[0] ____cacheline_internodealigned_in_smp;
+};
+
+/* microsecond values for various ITR rates shifted by 2 to fit itr register
+ * with the first 3 bits reserved 0
+ */
+#define TXGBE_100K_ITR          40
+#define TXGBE_20K_ITR           200
+#define TXGBE_16K_ITR           248
+#define TXGBE_12K_ITR           336
+
+#define TCP_TIMER_VECTOR        0
+#define OTHER_VECTOR    1
+#define NON_Q_VECTORS   (OTHER_VECTOR + TCP_TIMER_VECTOR)
 
 #define TXGBE_MAX_MSIX_Q_VECTORS_SAPPHIRE       64
 
@@ -35,6 +87,12 @@ struct txgbe_mac_addr {
 #define TXGBE_MAC_STATE_MODIFIED        0x2
 #define TXGBE_MAC_STATE_IN_USE          0x4
 
+#define MAX_MSIX_Q_VECTORS      TXGBE_MAX_MSIX_Q_VECTORS_SAPPHIRE
+#define MAX_MSIX_COUNT          TXGBE_MAX_MSIX_VECTORS_SAPPHIRE
+
+#define MIN_MSIX_Q_VECTORS      1
+#define MIN_MSIX_COUNT          (MIN_MSIX_Q_VECTORS + NON_Q_VECTORS)
+
 /* default to trying for four seconds */
 #define TXGBE_TRY_LINK_TIMEOUT  (4 * HZ)
 #define TXGBE_SFP_POLL_JIFFIES  (2 * HZ)        /* SFP poll every 2 seconds */
@@ -44,12 +102,26 @@ struct txgbe_mac_addr {
  **/
 #define TXGBE_FLAG_NEED_LINK_UPDATE             BIT(0)
 #define TXGBE_FLAG_NEED_LINK_CONFIG             BIT(1)
+#define TXGBE_FLAG_MSI_ENABLED                  BIT(2)
+#define TXGBE_FLAG_MSIX_ENABLED                 BIT(3)
 
 /**
  * txgbe_adapter.flag2
  **/
 #define TXGBE_FLAG2_MNG_REG_ACCESS_DISABLED     BIT(0)
 #define TXGBE_FLAG2_SFP_NEEDS_RESET             BIT(1)
+#define TXGBE_FLAG2_TEMP_SENSOR_EVENT           BIT(2)
+#define TXGBE_FLAG2_PF_RESET_REQUESTED          BIT(3)
+#define TXGBE_FLAG2_RESET_INTR_RECEIVED         BIT(4)
+#define TXGBE_FLAG2_GLOBAL_RESET_REQUESTED      BIT(5)
+
+enum txgbe_isb_idx {
+	TXGBE_ISB_HEADER,
+	TXGBE_ISB_MISC,
+	TXGBE_ISB_VEC0,
+	TXGBE_ISB_VEC1,
+	TXGBE_ISB_MAX
+};
 
 /* board specific private data structure */
 struct txgbe_adapter {
@@ -68,19 +140,32 @@ struct txgbe_adapter {
 	/* Tx fast path data */
 	int num_tx_queues;
 	u16 tx_itr_setting;
+	u16 tx_work_limit;
 
 	/* Rx fast path data */
 	int num_rx_queues;
 	u16 rx_itr_setting;
+	u16 rx_work_limit;
 
 	/* TX */
 	struct txgbe_ring *tx_ring[TXGBE_MAX_TX_QUEUES] ____cacheline_aligned_in_smp;
 
+	u64 lsc_int;
+
+	/* RX */
+	struct txgbe_ring *rx_ring[TXGBE_MAX_RX_QUEUES];
+	struct txgbe_q_vector *q_vector[MAX_MSIX_Q_VECTORS];
+
+	int num_q_vectors;      /* current number of q_vectors for device */
 	int max_q_vectors;      /* upper limit of q_vectors for device */
+	struct msix_entry *msix_entries;
 
 	/* structs defined in txgbe_hw.h */
 	struct txgbe_hw hw;
 	u16 msg_enable;
+
+	unsigned int tx_ring_count;
+	unsigned int rx_ring_count;
 
 	u32 link_speed;
 	bool link_up;
@@ -93,10 +178,27 @@ struct txgbe_adapter {
 
 	char eeprom_id[32];
 	bool netdev_registered;
+	u32 interrupt_event;
 
 	struct txgbe_mac_addr *mac_table;
 
+	/* misc interrupt status block */
+	dma_addr_t isb_dma;
+	u32 *isb_mem;
+	u32 isb_tag[TXGBE_ISB_MAX];
 };
+
+static inline u32 txgbe_misc_isb(struct txgbe_adapter *adapter,
+				 enum txgbe_isb_idx idx)
+{
+	u32 cur_tag = 0;
+
+	cur_tag = adapter->isb_mem[TXGBE_ISB_HEADER];
+
+	adapter->isb_tag[idx] = cur_tag;
+
+	return adapter->isb_mem[idx];
+}
 
 enum txgbe_state_t {
 	__TXGBE_TESTING,
@@ -116,12 +218,21 @@ enum txgbe_state_t {
 void txgbe_service_event_schedule(struct txgbe_adapter *adapter);
 void txgbe_assign_netdev_ops(struct net_device *netdev);
 
+void txgbe_irq_disable(struct txgbe_adapter *adapter);
+void txgbe_irq_enable(struct txgbe_adapter *adapter, bool queues, bool flush);
 int txgbe_open(struct net_device *netdev);
 int txgbe_close(struct net_device *netdev);
+void txgbe_up(struct txgbe_adapter *adapter);
 void txgbe_down(struct txgbe_adapter *adapter);
+void txgbe_reinit_locked(struct txgbe_adapter *adapter);
 void txgbe_reset(struct txgbe_adapter *adapter);
 s32 txgbe_init_shared_code(struct txgbe_hw *hw);
 void txgbe_disable_device(struct txgbe_adapter *adapter);
+int txgbe_init_interrupt_scheme(struct txgbe_adapter *adapter);
+void txgbe_reset_interrupt_capability(struct txgbe_adapter *adapter);
+void txgbe_set_interrupt_capability(struct txgbe_adapter *adapter);
+void txgbe_clear_interrupt_scheme(struct txgbe_adapter *adapter);
+void txgbe_write_eitr(struct txgbe_q_vector *q_vector);
 
 /**
  * interrupt masking operations. each bit in PX_ICn correspond to a interrupt.
