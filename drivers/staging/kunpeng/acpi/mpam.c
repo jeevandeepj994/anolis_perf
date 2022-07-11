@@ -92,12 +92,12 @@ static int acpi_mpam_label_memory_component_id(u8 proximity_domain,
 	return 0;
 }
 
-static int __init kunpeng_acpi_mpam_parse_memory(struct acpi_mpam_header *h)
+static int __init kunpeng_acpi_mpam_parse_memory(struct kunpeng_acpi_mpam_header *h)
 {
 	int ret;
 	u32 component_id;
 	struct mpam_device *dev;
-	struct acpi_mpam_node_memory *node = (struct acpi_mpam_node_memory *)h;
+	struct kunpeng_acpi_mpam_node_memory *node = (struct kunpeng_acpi_mpam_node_memory *)h;
 
 	ret = acpi_mpam_label_memory_component_id(node->proximity_domain,
 							&component_id);
@@ -118,7 +118,7 @@ static int __init kunpeng_acpi_mpam_parse_memory(struct acpi_mpam_header *h)
 		node->header.error_interrupt, node->header.error_interrupt_flags);
 }
 
-static int __init kunpeng_acpi_mpam_parse_cache(struct acpi_mpam_header *h,
+static int __init kunpeng_acpi_mpam_parse_cache(struct kunpeng_acpi_mpam_header *h,
 						struct acpi_table_header *pptt)
 {
 	int ret = 0;
@@ -128,7 +128,7 @@ static int __init kunpeng_acpi_mpam_parse_cache(struct acpi_mpam_header *h,
 	struct cacheinfo *ci;
 	struct acpi_pptt_cache *pptt_cache;
 	struct acpi_pptt_processor *pptt_cpu_node;
-	struct acpi_mpam_node_cache *node = (struct acpi_mpam_node_cache *)h;
+	struct kunpeng_acpi_mpam_node_cache *node = (struct kunpeng_acpi_mpam_node_cache *)h;
 
 	if (!pptt) {
 		pr_err("No PPTT table found, MPAM cannot be configured\n");
@@ -191,7 +191,7 @@ static int __init kunpeng_acpi_mpam_parse_table(struct acpi_table_header *table,
 {
 	char *table_offset = (char *)(table + 1);
 	char *table_end = (char *)table + table->length;
-	struct acpi_mpam_header *node_hdr;
+	struct kunpeng_acpi_mpam_header *node_hdr;
 	int ret = 0;
 
 	ret = mpam_discovery_start();
@@ -199,14 +199,14 @@ static int __init kunpeng_acpi_mpam_parse_table(struct acpi_table_header *table,
 	if (ret)
 		return ret;
 
-	node_hdr = (struct acpi_mpam_header *)table_offset;
+	node_hdr = (struct kunpeng_acpi_mpam_header *)table_offset;
 	while (table_offset < table_end) {
 		switch (node_hdr->type) {
 
-		case ACPI_MPAM_TYPE_CACHE:
+		case KUNPENG_ACPI_MPAM_TYPE_CACHE:
 			ret = kunpeng_acpi_mpam_parse_cache(node_hdr, pptt);
 			break;
-		case ACPI_MPAM_TYPE_MEMORY:
+		case KUNPENG_ACPI_MPAM_TYPE_MEMORY:
 			ret = kunpeng_acpi_mpam_parse_memory(node_hdr);
 			break;
 		default:
@@ -214,17 +214,17 @@ static int __init kunpeng_acpi_mpam_parse_table(struct acpi_table_header *table,
 					node_hdr->type,
 					(table_offset-(char *)table));
 			/* fall through */
-		case ACPI_MPAM_TYPE_SMMU:
+		case KUNPENG_ACPI_MPAM_TYPE_SMMU:
 			/* not yet supported */
 			/* fall through */
-		case ACPI_MPAM_TYPE_UNKNOWN:
+		case KUNPENG_ACPI_MPAM_TYPE_UNKNOWN:
 			break;
 		}
 		if (ret)
 			break;
 
 		table_offset += node_hdr->length;
-		node_hdr = (struct acpi_mpam_header *)table_offset;
+		node_hdr = (struct kunpeng_acpi_mpam_header *)table_offset;
 	}
 
 	if (ret) {
