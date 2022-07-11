@@ -325,6 +325,9 @@ static int bpf_trampoline_update(struct bpf_trampoline *tr)
 
 	if (tprogs[BPF_TRAMP_FEXIT].nr_progs ||
 	    tprogs[BPF_TRAMP_MODIFY_RETURN].nr_progs)
+		/* NOTE: BPF_TRAMP_F_RESTORE_REGS and BPF_TRAMP_F_SKIP_FRAME
+		 * should not be set together.
+		 */
 		flags = BPF_TRAMP_F_CALL_ORIG | BPF_TRAMP_F_SKIP_FRAME;
 
 	err = arch_prepare_bpf_trampoline(im, im->image, im->image + PAGE_SIZE,
