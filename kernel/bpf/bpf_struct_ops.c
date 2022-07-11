@@ -431,6 +431,9 @@ static int bpf_struct_ops_map_update_elem(struct bpf_map *map, void *key,
 
 		tprogs[BPF_TRAMP_FENTRY].progs[0] = prog;
 		tprogs[BPF_TRAMP_FENTRY].nr_progs = 1;
+		/* BPF_TRAMP_F_RET_FENTRY_RET is only used by bpf_struct_ops,
+		* and it must be used alone.
+		*/
 		flags = st_ops->func_models[i].ret_size > 0 ?
 			BPF_TRAMP_F_RET_FENTRY_RET : 0;
 		err = arch_prepare_bpf_trampoline(NULL, image,
