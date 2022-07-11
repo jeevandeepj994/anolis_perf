@@ -43,6 +43,7 @@ s32 txgbe_check_reset_blocked(struct txgbe_hw *hw);
 
 s32 txgbe_identify_module(struct txgbe_hw *hw);
 s32 txgbe_identify_sfp_module(struct txgbe_hw *hw);
+s32 txgbe_check_overtemp(struct txgbe_hw *hw);
 s32 txgbe_init_i2c(struct txgbe_hw *hw);
 s32 txgbe_switch_i2c_slave_addr(struct txgbe_hw *hw, u8 dev_addr);
 s32 txgbe_read_i2c_byte(struct txgbe_hw *hw, u8 byte_offset,
