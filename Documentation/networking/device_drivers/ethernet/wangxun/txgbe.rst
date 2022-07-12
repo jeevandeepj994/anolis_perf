@@ -12,6 +12,7 @@ Contents
 ========
 
 - Identifying Your Adapter
+- Additional Features and Configurations
 - Support
 
 
@@ -56,6 +57,45 @@ Laser turns off for SFP+ when ifconfig ethX down
 "ifconfig ethX down" turns off the laser for SFP+ fiber adapters.
 "ifconfig ethX up" turns on the laser.
 
+
+Additional Features and Configurations
+======================================
+
+Jumbo Frames
+------------
+Jumbo Frames support is enabled by changing the Maximum Transmission Unit
+(MTU) to a value larger than the default value of 1500.
+
+Use the ifconfig command to increase the MTU size. For example, enter the
+following where <x> is the interface number::
+
+  ifconfig eth<x> mtu 9000 up
+
+NOTES:
+- The maximum MTU setting for Jumbo Frames is 9710. This value coincides
+  with the maximum Jumbo Frames size of 9728 bytes.
+- This driver will attempt to use multiple page sized buffers to receive
+  each jumbo packet. This should help to avoid buffer starvation issues
+  when allocating receive packets.
+
+Hardware Receive Side Coalescing (HW RSC)
+-----------------------------------------
+Sapphire adapters support HW RSC, which can merge multiple
+frames from the same IPv4 TCP/IP flow into a single structure that can span
+one or more descriptors. It works similarly to Software Large Receive Offload
+technique.
+
+VXLAN Overlay HW Offloading
+---------------------------
+Virtual Extensible LAN (VXLAN) allows you to extend an L2 network over an L3
+network, which may be useful in a virtualized or cloud environment. Some WangXun(R)
+Ethernet Network devices perform VXLAN processing, offloading it from the
+operating system. This reduces CPU utilization.
+
+VXLAN offloading is controlled by the tx and rx checksum offload options
+provided by ethtool. That is, if tx checksum offload is enabled, and the adapter
+has the capability, VXLAN offloading is also enabled. If rx checksum offload is
+enabled, then the VXLAN packets rx checksum will be offloaded.
 
 Support
 =======

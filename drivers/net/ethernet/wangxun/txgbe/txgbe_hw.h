@@ -16,9 +16,72 @@
 #define SPI_H_DAT_REG_ADDR           0x10108  /* SPI Data register address */
 #define SPI_H_STA_REG_ADDR           0x1010c  /* SPI Status register address */
 
+/**
+ * Packet Type decoding
+ **/
+/* txgbe_dptype.mac: outer mac */
+enum txgbe_dec_ptype_mac {
+	TXGBE_DEC_PTYPE_MAC_IP = 0,
+	TXGBE_DEC_PTYPE_MAC_L2 = 2,
+	TXGBE_DEC_PTYPE_MAC_FCOE = 3,
+};
+
+/* txgbe_dptype.[e]ip: outer&encaped ip */
+#define TXGBE_DEC_PTYPE_IP_FRAG (0x4)
+enum txgbe_dec_ptype_ip {
+	TXGBE_DEC_PTYPE_IP_NONE = 0,
+	TXGBE_DEC_PTYPE_IP_IPV4 = 1,
+	TXGBE_DEC_PTYPE_IP_IPV6 = 2,
+	TXGBE_DEC_PTYPE_IP_FGV4 =
+		(TXGBE_DEC_PTYPE_IP_FRAG | TXGBE_DEC_PTYPE_IP_IPV4),
+	TXGBE_DEC_PTYPE_IP_FGV6 =
+		(TXGBE_DEC_PTYPE_IP_FRAG | TXGBE_DEC_PTYPE_IP_IPV6),
+};
+
+/* txgbe_dptype.etype: encaped type */
+enum txgbe_dec_ptype_etype {
+	TXGBE_DEC_PTYPE_ETYPE_NONE = 0,
+	TXGBE_DEC_PTYPE_ETYPE_IPIP = 1, /* IP+IP */
+	TXGBE_DEC_PTYPE_ETYPE_IG = 2, /* IP+GRE */
+	TXGBE_DEC_PTYPE_ETYPE_IGM = 3, /* IP+GRE+MAC */
+	TXGBE_DEC_PTYPE_ETYPE_IGMV = 4, /* IP+GRE+MAC+VLAN */
+};
+
+/* txgbe_dptype.proto: payload proto */
+enum txgbe_dec_ptype_prot {
+	TXGBE_DEC_PTYPE_PROT_NONE = 0,
+	TXGBE_DEC_PTYPE_PROT_UDP = 1,
+	TXGBE_DEC_PTYPE_PROT_TCP = 2,
+	TXGBE_DEC_PTYPE_PROT_SCTP = 3,
+	TXGBE_DEC_PTYPE_PROT_ICMP = 4,
+	TXGBE_DEC_PTYPE_PROT_TS = 5, /* time sync */
+};
+
+/* txgbe_dptype.layer: payload layer */
+enum txgbe_dec_ptype_layer {
+	TXGBE_DEC_PTYPE_LAYER_NONE = 0,
+	TXGBE_DEC_PTYPE_LAYER_PAY2 = 1,
+	TXGBE_DEC_PTYPE_LAYER_PAY3 = 2,
+	TXGBE_DEC_PTYPE_LAYER_PAY4 = 3,
+};
+
+struct txgbe_dptype {
+	u32 ptype:8;
+	u32 known:1;
+	u32 mac:2; /* outer mac */
+	u32 ip:3; /* outer ip*/
+	u32 etype:3; /* encaped type */
+	u32 eip:3; /* encaped ip */
+	u32 prot:4; /* payload proto */
+	u32 layer:3; /* payload layer */
+};
+
+extern struct txgbe_dptype txgbe_ptype_lookup[256];
+
 u16 txgbe_get_pcie_msix_count(struct txgbe_hw *hw);
 s32 txgbe_init_hw(struct txgbe_hw *hw);
 s32 txgbe_start_hw(struct txgbe_hw *hw);
+s32 txgbe_clear_hw_cntrs(struct txgbe_hw *hw);
 s32 txgbe_read_pba_string(struct txgbe_hw *hw, u8 *pba_num,
 			  u32 pba_num_size);
 s32 txgbe_get_mac_addr(struct txgbe_hw *hw, u8 *mac_addr);
@@ -34,6 +97,11 @@ s32 txgbe_set_rar(struct txgbe_hw *hw, u32 index, u8 *addr, u64 pools,
 		  u32 enable_addr);
 s32 txgbe_clear_rar(struct txgbe_hw *hw, u32 index);
 s32 txgbe_init_rx_addrs(struct txgbe_hw *hw);
+s32 txgbe_update_mc_addr_list(struct txgbe_hw *hw, u8 *mc_addr_list,
+			      u32 mc_addr_count,
+			      txgbe_mc_addr_itr func, bool clear);
+s32 txgbe_disable_sec_rx_path(struct txgbe_hw *hw);
+s32 txgbe_enable_sec_rx_path(struct txgbe_hw *hw);
 
 s32 txgbe_acquire_swfw_sync(struct txgbe_hw *hw, u32 mask);
 s32 txgbe_release_swfw_sync(struct txgbe_hw *hw, u32 mask);
@@ -44,10 +112,15 @@ s32 txgbe_get_san_mac_addr(struct txgbe_hw *hw, u8 *san_mac_addr);
 s32 txgbe_set_vmdq_san_mac(struct txgbe_hw *hw, u32 vmdq);
 s32 txgbe_clear_vmdq(struct txgbe_hw *hw, u32 rar, u32 vmdq);
 s32 txgbe_init_uta_tables(struct txgbe_hw *hw);
+s32 txgbe_set_vfta(struct txgbe_hw *hw, u32 vlan,
+		   u32 vind, bool vlan_on);
+s32 txgbe_clear_vfta(struct txgbe_hw *hw);
 
 s32 txgbe_get_wwn_prefix(struct txgbe_hw *hw, u16 *wwnn_prefix,
 			 u16 *wwpn_prefix);
 
+s32 txgbe_set_rxpba(struct txgbe_hw *hw, int num_pb, u32 headroom,
+		    int strategy);
 s32 txgbe_set_fw_drv_ver(struct txgbe_hw *hw, u8 maj, u8 min,
 			 u8 build, u8 ver);
 s32 txgbe_reset_hostif(struct txgbe_hw *hw);
@@ -59,6 +132,7 @@ bool txgbe_mng_present(struct txgbe_hw *hw);
 bool txgbe_check_mng_access(struct txgbe_hw *hw);
 
 s32 txgbe_init_thermal_sensor_thresh(struct txgbe_hw *hw);
+s32 txgbe_enable_rx(struct txgbe_hw *hw);
 s32 txgbe_disable_rx(struct txgbe_hw *hw);
 s32 txgbe_setup_mac_link_multispeed_fiber(struct txgbe_hw *hw,
 					  u32 speed,
@@ -81,6 +155,7 @@ int txgbe_reset_misc(struct txgbe_hw *hw);
 s32 txgbe_reset_hw(struct txgbe_hw *hw);
 s32 txgbe_identify_phy(struct txgbe_hw *hw);
 s32 txgbe_init_phy_ops(struct txgbe_hw *hw);
+s32 txgbe_enable_rx_dma(struct txgbe_hw *hw, u32 regval);
 s32 txgbe_init_ops(struct txgbe_hw *hw);
 
 s32 txgbe_init_eeprom_params(struct txgbe_hw *hw);

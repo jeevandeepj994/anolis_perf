@@ -25,6 +25,39 @@ static void txgbe_cache_ring_register(struct txgbe_adapter *adapter)
 		adapter->tx_ring[i]->reg_idx = i;
 }
 
+#define TXGBE_RSS_64Q_MASK      0x3F
+#define TXGBE_RSS_16Q_MASK      0xF
+#define TXGBE_RSS_8Q_MASK       0x7
+#define TXGBE_RSS_4Q_MASK       0x3
+#define TXGBE_RSS_2Q_MASK       0x1
+#define TXGBE_RSS_DISABLED_MASK 0x0
+
+/**
+ * txgbe_set_rss_queues: Allocate queues for RSS
+ * @adapter: board private structure to initialize
+ *
+ * This is our "base" multiqueue mode.  RSS (Receive Side Scaling) will try
+ * to allocate one Rx queue per CPU, and if available, one Tx queue per CPU.
+ *
+ **/
+static bool txgbe_set_rss_queues(struct txgbe_adapter *adapter)
+{
+	struct txgbe_ring_feature *f;
+	u16 rss_i;
+
+	/* set mask for 16 queue limit of RSS */
+	f = &adapter->ring_feature[RING_F_RSS];
+	rss_i = f->limit;
+
+	f->indices = rss_i;
+	f->mask = TXGBE_RSS_64Q_MASK;
+
+	adapter->num_rx_queues = rss_i;
+	adapter->num_tx_queues = rss_i;
+
+	return true;
+}
+
 /**
  * txgbe_set_num_queues: Allocate queues for device, feature dependent
  * @adapter: board private structure to initialize
@@ -34,6 +67,8 @@ static void txgbe_set_num_queues(struct txgbe_adapter *adapter)
 	/* Start with base case */
 	adapter->num_rx_queues = 1;
 	adapter->num_tx_queues = 1;
+
+	txgbe_set_rss_queues(adapter);
 }
 
 /**
@@ -166,6 +201,10 @@ static int txgbe_alloc_q_vector(struct txgbe_adapter *adapter,
 	/* initialize CPU for DCA */
 	q_vector->cpu = -1;
 
+	/* initialize NAPI */
+	netif_napi_add(adapter->netdev, &q_vector->napi,
+		       txgbe_poll, 64);
+
 	/* tie q_vector and adapter together */
 	adapter->q_vector[v_idx] = q_vector;
 	q_vector->adapter = adapter;
@@ -269,6 +308,7 @@ static void txgbe_free_q_vector(struct txgbe_adapter *adapter, int v_idx)
 		adapter->rx_ring[ring->queue_index] = NULL;
 
 	adapter->q_vector[v_idx] = NULL;
+	netif_napi_del(&q_vector->napi);
 	kfree_rcu(q_vector, rcu);
 }
 
@@ -379,6 +419,10 @@ void txgbe_set_interrupt_capability(struct txgbe_adapter *adapter)
 	if (!txgbe_acquire_msix_vectors(adapter))
 		return;
 
+	/* Disable RSS */
+	dev_warn(&adapter->pdev->dev, "Disabling RSS support\n");
+	adapter->ring_feature[RING_F_RSS].limit = 1;
+
 	/* recalculate number of queues now that many features have been
 	 * changed or disabled.
 	 */
@@ -441,4 +485,23 @@ void txgbe_clear_interrupt_scheme(struct txgbe_adapter *adapter)
 {
 	txgbe_free_q_vectors(adapter);
 	txgbe_reset_interrupt_capability(adapter);
+}
+
+void txgbe_tx_ctxtdesc(struct txgbe_ring *tx_ring, u32 vlan_macip_lens,
+		       u32 fcoe_sof_eof, u32 type_tucmd, u32 mss_l4len_idx)
+{
+	struct txgbe_tx_context_desc *context_desc;
+	u16 i = tx_ring->next_to_use;
+
+	context_desc = TXGBE_TX_CTXTDESC(tx_ring, i);
+
+	i++;
+	tx_ring->next_to_use = (i < tx_ring->count) ? i : 0;
+
+	/* set bits to identify this as an advanced context descriptor */
+	type_tucmd |= TXGBE_TXD_DTYP_CTXT;
+	context_desc->vlan_macip_lens   = cpu_to_le32(vlan_macip_lens);
+	context_desc->seqnum_seed       = cpu_to_le32(fcoe_sof_eof);
+	context_desc->type_tucmd_mlhl   = cpu_to_le32(type_tucmd);
+	context_desc->mss_l4len_idx     = cpu_to_le32(mss_l4len_idx);
 }
