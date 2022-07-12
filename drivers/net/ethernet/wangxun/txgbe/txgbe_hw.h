@@ -103,6 +103,10 @@ s32 txgbe_update_mc_addr_list(struct txgbe_hw *hw, u8 *mc_addr_list,
 s32 txgbe_disable_sec_rx_path(struct txgbe_hw *hw);
 s32 txgbe_enable_sec_rx_path(struct txgbe_hw *hw);
 
+s32 txgbe_fc_enable(struct txgbe_hw *hw);
+void txgbe_fc_autoneg(struct txgbe_hw *hw);
+s32 txgbe_setup_fc(struct txgbe_hw *hw);
+
 s32 txgbe_acquire_swfw_sync(struct txgbe_hw *hw, u32 mask);
 s32 txgbe_release_swfw_sync(struct txgbe_hw *hw, u32 mask);
 s32 txgbe_disable_pcie_master(struct txgbe_hw *hw);

@@ -2066,6 +2066,50 @@ typedef u32 txgbe_physical_layer;
 #define TXGBE_PHYSICAL_LAYER_10GBASE_XAUI       0x1000
 #define TXGBE_PHYSICAL_LAYER_SFP_ACTIVE_DA      0x2000
 #define TXGBE_PHYSICAL_LAYER_1000BASE_SX        0x4000
+/* Flow Control Data Sheet defined values
+ * Calculation and defines taken from 802.1bb Annex O
+ */
+
+/* BitTimes (BT) conversion */
+#define TXGBE_BT2KB(BT)         (((BT) + (8 * 1024 - 1)) / (8 * 1024))
+#define TXGBE_B2BT(BT)          ((BT) * 8)
+
+/* Calculate Delay to respond to PFC */
+#define TXGBE_PFC_D     672
+
+/* Calculate Cable Delay */
+#define TXGBE_CABLE_DC  5556
+
+/* Calculate Interface Delay */
+#define TXGBE_PHY_D     12800
+#define TXGBE_MAC_D     4096
+#define TXGBE_XAUI_D    (2 * 1024)
+
+#define TXGBE_ID        (TXGBE_MAC_D + TXGBE_XAUI_D + TXGBE_PHY_D)
+
+/* Calculate Delay incurred from higher layer */
+#define TXGBE_HD        6144
+
+/* Calculate PCI Bus delay for low thresholds */
+#define TXGBE_PCI_DELAY 10000
+
+/* Calculate delay value in bit times */
+#define TXGBE_DV(_max_frame_link, _max_frame_tc) \
+			((36 * \
+			  (TXGBE_B2BT(_max_frame_link) + \
+			   TXGBE_PFC_D + \
+			   (2 * TXGBE_CABLE_DC) + \
+			   (2 * TXGBE_ID) + \
+			   TXGBE_HD) / 25 + 1) + \
+			 2 * TXGBE_B2BT(_max_frame_tc))
+
+/* Calculate low threshold delay values */
+#define TXGBE_LOW_DV_SP(_max_frame_tc) \
+			(2 * TXGBE_B2BT(_max_frame_tc) + \
+			(36 * TXGBE_PCI_DELAY / 25) + 1)
+
+#define TXGBE_LOW_DV(_max_frame_tc) \
+			(2 * TXGBE_LOW_DV_SP(_max_frame_tc))
 
 enum txgbe_eeprom_type {
 	txgbe_eeprom_uninitialized = 0,
@@ -2135,6 +2179,15 @@ enum txgbe_media_type {
 	txgbe_media_type_virtual
 };
 
+/* Flow Control Settings */
+enum txgbe_fc_mode {
+	txgbe_fc_none = 0,
+	txgbe_fc_rx_pause,
+	txgbe_fc_tx_pause,
+	txgbe_fc_full,
+	txgbe_fc_default
+};
+
 /* PCI bus types */
 enum txgbe_bus_type {
 	txgbe_bus_type_unknown = 0,
@@ -2187,6 +2240,17 @@ struct txgbe_bus_info {
 
 	u16 func;
 	u16 lan_id;
+};
+
+/* Flow control parameters */
+struct txgbe_fc_info {
+	u32 high_water; /* Flow Ctrl High-water */
+	u32 low_water; /* Flow Ctrl Low-water */
+	u16 pause_time; /* Flow Control Pause timer */
+	bool disable_fc_autoneg; /* Do not autonegotiate FC */
+	bool fc_was_autonegged; /* Is current_mode the result of autonegging? */
+	enum txgbe_fc_mode current_mode; /* FC mode in effect */
+	enum txgbe_fc_mode requested_mode; /* FC mode requested by caller */
 };
 
 /* Statistics counters collected by the MAC */
@@ -2330,6 +2394,10 @@ struct txgbe_mac_operations {
 	s32 (*set_vfta)(struct txgbe_hw *hw, u32 vlan, u32 vind, bool vlan_on);
 	s32 (*init_uta_tables)(struct txgbe_hw *hw);
 
+	/* Flow Control */
+	s32 (*fc_enable)(struct txgbe_hw *hw);
+	s32 (*setup_fc)(struct txgbe_hw *hw);
+
 	/* Manageability interface */
 	s32 (*set_fw_drv_ver)(struct txgbe_hw *hw, u8 maj, u8 min,
 			      u8 build, u8 ver);
@@ -2417,6 +2485,7 @@ struct txgbe_hw {
 	u8 __iomem *hw_addr;
 	struct txgbe_mac_info mac;
 	struct txgbe_addr_filter_info addr_ctrl;
+	struct txgbe_fc_info fc;
 	struct txgbe_phy_info phy;
 	struct txgbe_eeprom_info eeprom;
 	struct txgbe_bus_info bus;
