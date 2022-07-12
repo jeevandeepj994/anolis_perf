@@ -1570,7 +1570,7 @@ bool kvm_msr_allowed(struct kvm_vcpu *vcpu, u32 index, u32 type)
 	u32 i;
 
 	/* x2APIC MSRs do not support filtering. */
-	if (index >= 0x800 && index <= 0x8ff)
+	if ((index >= 0x800 && index <= 0x8ff) || index == MSR_IA32_PASID)
 		return true;
 
 	idx = srcu_read_lock(&kvm->srcu);
@@ -10546,6 +10546,9 @@ int kvm_arch_hardware_setup(void *opaque)
 		supported_xss = 0;
 	else
 		supported_xss &= host_xss;
+
+	if (!kvm_pasid_supported())
+		kvm_cpu_cap_clear(X86_FEATURE_ENQCMD);
 
 #define __kvm_cpu_cap_has(UNUSED_, f) kvm_cpu_cap_has(f)
 	cr4_reserved_bits = __cr4_reserved_bits(__kvm_cpu_cap_has, UNUSED_);
