@@ -4,6 +4,7 @@ config CRYPTO_DEV_YCC
 	default n
 	select CRYPTO_SKCIPHER
 	select CRYPTO_LIB_DES
+	select CRYPTO_AEAD
 	select CRYPTO_AES
 	select CRYPTO_CBC
 	select CRYPTO_ECB
