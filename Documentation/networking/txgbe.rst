@@ -97,6 +97,12 @@ provided by ethtool. That is, if tx checksum offload is enabled, and the adapter
 has the capability, VXLAN offloading is also enabled. If rx checksum offload is
 enabled, then the VXLAN packets rx checksum will be offloaded.
 
+IEEE 1588 Precision Time Protocol (PTP) Hardware Clock (PHC)
+------------------------------------------------------------
+Precision Time Protocol (PTP) is used to synchronize clocks in a computer
+network and is supported in the txgbe driver.
+
+
 Support
 =======
 If you got any problem, contact Wangxun support team via support@trustnetic.com

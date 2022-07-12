@@ -19,6 +19,7 @@ if NET_VENDOR_WANGXUN
 config TXGBE
 	tristate "Wangxun(R) 10GbE PCI Express adapters support"
 	depends on PCI
+	imply PTP_1588_CLOCK
 	help
 	  This driver supports Wangxun(R) 10GbE PCI Express family of
 	  adapters.

@@ -463,11 +463,13 @@ static bool txgbe_clean_tx_irq(struct txgbe_q_vector *q_vector,
 			  "  next_to_use          <%x>\n"
 			  "  next_to_clean        <%x>\n"
 			  "tx_buffer_info[next_to_clean]\n"
+			  "  time_stamp           <%lx>\n"
 			  "  jiffies              <%lx>\n",
 			  tx_ring->queue_index,
 			  rd32(hw, TXGBE_PX_TR_RP(tx_ring->reg_idx)),
 			  rd32(hw, TXGBE_PX_TR_WP(tx_ring->reg_idx)),
-			  tx_ring->next_to_use, i, jiffies);
+			  tx_ring->next_to_use, i,
+			  tx_ring->tx_buffer_info[i].time_stamp, jiffies);
 
 		pci_read_config_word(adapter->pdev, PCI_VENDOR_ID, &value);
 		if (value == TXGBE_FAILED_READ_CFG_WORD)
@@ -739,16 +741,24 @@ static void txgbe_rx_vlan(struct txgbe_ring *ring,
  * @skb: pointer to current skb being populated
  *
  * This function checks the ring, descriptor, and packet information in
- * order to populate the hash, checksum, VLAN, protocol, and
+ * order to populate the hash, checksum, VLAN, timestamp, protocol, and
  * other fields within the skb.
  **/
 static void txgbe_process_skb_fields(struct txgbe_ring *rx_ring,
 				     union txgbe_rx_desc *rx_desc,
 				     struct sk_buff *skb)
 {
+	u32 flags = rx_ring->q_vector->adapter->flags;
+
 	txgbe_update_rsc_stats(rx_ring, skb);
 	txgbe_rx_hash(rx_ring, rx_desc, skb);
 	txgbe_rx_checksum(rx_ring, rx_desc, skb);
+
+	if (unlikely(flags & TXGBE_FLAG_RX_HWTSTAMP_ENABLED) &&
+	    unlikely(txgbe_test_staterr(rx_desc, TXGBE_RXD_STAT_TS))) {
+		txgbe_ptp_rx_hwtstamp(rx_ring->q_vector->adapter, skb);
+		rx_ring->last_rx_timestamp = jiffies;
+	}
 
 	txgbe_rx_vlan(rx_ring, rx_desc, skb);
 
@@ -1498,6 +1508,8 @@ void txgbe_irq_enable(struct txgbe_adapter *adapter, bool queues, bool flush)
 	if ((adapter->flags & TXGBE_FLAG_FDIR_HASH_CAPABLE) &&
 	    !(adapter->flags2 & TXGBE_FLAG2_FDIR_REQUIRES_REINIT))
 		mask |= TXGBE_PX_MISC_IEN_FLOW_DIR;
+
+	mask |= TXGBE_PX_MISC_IEN_TIMESYNC;
 
 	wr32(&adapter->hw, TXGBE_PX_MISC_IEN, mask);
 
@@ -3235,6 +3247,9 @@ void txgbe_reset(struct txgbe_adapter *adapter)
 
 	/* update SAN MAC vmdq pool selection */
 	TCALL(hw, mac.ops.set_vmdq_san_mac, 0);
+
+	if (test_bit(__TXGBE_PTP_RUNNING, &adapter->state))
+		txgbe_ptp_reset(adapter);
 }
 
 /**
@@ -3905,6 +3920,8 @@ int txgbe_open(struct net_device *netdev)
 	if (err)
 		goto err_set_queues;
 
+	txgbe_ptp_init(adapter);
+
 	txgbe_up_complete(adapter);
 
 	txgbe_clear_vxlan_port(adapter);
@@ -3938,6 +3955,8 @@ static void txgbe_close_suspend(struct txgbe_adapter *adapter)
 {
 	struct txgbe_hw *hw = &adapter->hw;
 
+	txgbe_ptp_suspend(adapter);
+
 	txgbe_disable_device(adapter);
 	if (!((hw->subsystem_device_id & TXGBE_NCSI_MASK) == TXGBE_NCSI_SUP))
 		TCALL(hw, mac.ops.disable_tx_laser);
@@ -3965,6 +3984,8 @@ static void txgbe_close_suspend(struct txgbe_adapter *adapter)
 int txgbe_close(struct net_device *netdev)
 {
 	struct txgbe_adapter *adapter = netdev_priv(netdev);
+
+	txgbe_ptp_stop(adapter);
 
 	txgbe_down(adapter);
 	txgbe_free_irq(adapter);
@@ -4302,6 +4323,11 @@ static void txgbe_watchdog_update_link(struct txgbe_adapter *adapter)
 		TCALL(hw, mac.ops.fc_enable);
 		txgbe_set_rx_drop_en(adapter);
 
+		adapter->last_rx_ptp_check = jiffies;
+
+		if (test_bit(__TXGBE_PTP_RUNNING, &adapter->state))
+			txgbe_ptp_start_cyclecounter(adapter);
+
 		if (link_speed & TXGBE_LINK_SPEED_10GB_FULL) {
 			wr32(hw, TXGBE_MAC_TX_CFG,
 			     (rd32(hw, TXGBE_MAC_TX_CFG) &
@@ -4379,6 +4405,9 @@ static void txgbe_watchdog_link_is_down(struct txgbe_adapter *adapter)
 	/* only continue if link was up previously */
 	if (!netif_carrier_ok(netdev))
 		return;
+
+	if (test_bit(__TXGBE_PTP_RUNNING, &adapter->state))
+		txgbe_ptp_start_cyclecounter(adapter);
 
 	netif_info(adapter, drv, netdev, "NIC Link is Down\n");
 	netif_carrier_off(netdev);
@@ -4678,6 +4707,12 @@ static void txgbe_service_task(struct work_struct *work)
 	txgbe_watchdog_subtask(adapter);
 	txgbe_fdir_reinit_subtask(adapter);
 	txgbe_check_hang_subtask(adapter);
+	if (test_bit(__TXGBE_PTP_RUNNING, &adapter->state)) {
+		txgbe_ptp_overflow_check(adapter);
+		if (unlikely(adapter->flags &
+			     TXGBE_FLAG_RX_HWTSTAMP_IN_REGISTER))
+			txgbe_ptp_rx_hang(adapter);
+	}
 
 	txgbe_service_event_complete(adapter);
 }
@@ -5139,6 +5174,10 @@ static u32 txgbe_tx_cmd_type(u32 tx_flags)
 	cmd_type |= TXGBE_SET_FLAG(tx_flags, TXGBE_TX_FLAGS_TSO,
 				   TXGBE_TXD_TSE);
 
+	/* set timestamp bit if present */
+	cmd_type |= TXGBE_SET_FLAG(tx_flags, TXGBE_TX_FLAGS_TSTAMP,
+				   TXGBE_TXD_MAC_TSTAMP);
+
 	cmd_type |= TXGBE_SET_FLAG(tx_flags, TXGBE_TX_FLAGS_LINKSEC,
 				   TXGBE_TXD_LINKSEC);
 
@@ -5291,6 +5330,11 @@ static int txgbe_tx_map(struct txgbe_ring *tx_ring,
 	tx_desc->read.cmd_type_len = cpu_to_le32(cmd_type);
 
 	netdev_tx_sent_queue(txring_txq(tx_ring), first->bytecount);
+
+	/* set the timestamp */
+	first->time_stamp = jiffies;
+
+	skb_tx_timestamp(skb);
 
 	/* Force memory writes to complete before letting h/w know there
 	 * are new descriptors to fetch.  (Only applicable for weak-ordered
@@ -5546,6 +5590,22 @@ netdev_tx_t txgbe_xmit_frame_ring(struct sk_buff *skb,
 		vlan_addlen += VLAN_HLEN;
 	}
 
+	if (unlikely(skb_shinfo(skb)->tx_flags & SKBTX_HW_TSTAMP) &&
+	    adapter->ptp_clock) {
+		if (!test_and_set_bit_lock(__TXGBE_PTP_TX_IN_PROGRESS,
+					   &adapter->state)) {
+			skb_shinfo(skb)->tx_flags |= SKBTX_IN_PROGRESS;
+			tx_flags |= TXGBE_TX_FLAGS_TSTAMP;
+
+			/* schedule check for Tx timestamp */
+			adapter->ptp_tx_skb = skb_get(skb);
+			adapter->ptp_tx_start = jiffies;
+			schedule_work(&adapter->ptp_tx_work);
+		} else {
+			adapter->tx_hwtstamp_skipped++;
+		}
+	}
+
 	/* record initial flags and protocol */
 	first->tx_flags = tx_flags;
 	first->protocol = protocol;
@@ -5562,13 +5622,22 @@ netdev_tx_t txgbe_xmit_frame_ring(struct sk_buff *skb,
 	if (test_bit(__TXGBE_TX_FDIR_INIT_DONE, &tx_ring->state))
 		txgbe_atr(tx_ring, first, dptype);
 
-	txgbe_tx_map(tx_ring, first, hdr_len);
+	if (txgbe_tx_map(tx_ring, first, hdr_len))
+		goto cleanup_tx_tstamp;
 
 	return NETDEV_TX_OK;
 
 out_drop:
 	dev_kfree_skb_any(first->skb);
 	first->skb = NULL;
+
+cleanup_tx_tstamp:
+	if (unlikely(tx_flags & TXGBE_TX_FLAGS_TSTAMP)) {
+		dev_kfree_skb_any(adapter->ptp_tx_skb);
+		adapter->ptp_tx_skb = NULL;
+		cancel_work_sync(&adapter->ptp_tx_work);
+		clear_bit_unlock(__TXGBE_PTP_TX_IN_PROGRESS, &adapter->state);
+	}
 
 	return NETDEV_TX_OK;
 }
@@ -5667,6 +5736,20 @@ static int txgbe_del_sanmac_netdev(struct net_device *dev)
 		rtnl_unlock();
 	}
 	return err;
+}
+
+static int txgbe_ioctl(struct net_device *netdev, struct ifreq *ifr, int cmd)
+{
+	struct txgbe_adapter *adapter = netdev_priv(netdev);
+
+	switch (cmd) {
+	case SIOCGHWTSTAMP:
+		return txgbe_ptp_get_ts_config(adapter, ifr);
+	case SIOCSHWTSTAMP:
+		return txgbe_ptp_set_ts_config(adapter, ifr);
+	default:
+		return -EOPNOTSUPP;
+	}
 }
 
 void txgbe_do_reset(struct net_device *netdev)
@@ -5842,6 +5925,7 @@ static const struct net_device_ops txgbe_netdev_ops = {
 	.ndo_tx_timeout         = txgbe_tx_timeout,
 	.ndo_vlan_rx_add_vid    = txgbe_vlan_rx_add_vid,
 	.ndo_vlan_rx_kill_vid   = txgbe_vlan_rx_kill_vid,
+	.ndo_do_ioctl           = txgbe_ioctl,
 	.ndo_get_stats64        = txgbe_get_stats64,
 	.ndo_fdb_add            = txgbe_ndo_fdb_add,
 	.ndo_features_check     = txgbe_features_check,
