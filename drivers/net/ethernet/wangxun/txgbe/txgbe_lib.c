@@ -52,6 +52,23 @@ static bool txgbe_set_rss_queues(struct txgbe_adapter *adapter)
 	f->indices = rss_i;
 	f->mask = TXGBE_RSS_64Q_MASK;
 
+	/* disable ATR by default, it will be configured below */
+	adapter->flags &= ~TXGBE_FLAG_FDIR_HASH_CAPABLE;
+
+	/* Use Flow Director in addition to RSS to ensure the best
+	 * distribution of flows across cores, even when an FDIR flow
+	 * isn't matched.
+	 */
+	if (rss_i > 1 && adapter->atr_sample_rate) {
+		f = &adapter->ring_feature[RING_F_FDIR];
+
+		f->indices = f->limit;
+		rss_i = f->indices;
+
+		if (!(adapter->flags & TXGBE_FLAG_FDIR_PERFECT_CAPABLE))
+			adapter->flags |= TXGBE_FLAG_FDIR_HASH_CAPABLE;
+	}
+
 	adapter->num_rx_queues = rss_i;
 	adapter->num_tx_queues = rss_i;
 
@@ -180,11 +197,21 @@ static int txgbe_alloc_q_vector(struct txgbe_adapter *adapter,
 	int node = -1;
 	int cpu = -1;
 	int ring_count, size;
+	u16 rss_i = 0;
 
 	/* note this will allocate space for the ring structure as well! */
 	ring_count = txr_count + rxr_count;
 	size = sizeof(struct txgbe_q_vector) +
 	       (sizeof(struct txgbe_ring) * ring_count);
+
+	/* customize cpu for Flow Director mapping */
+	rss_i = adapter->ring_feature[RING_F_RSS].indices;
+	if (rss_i > 1 && adapter->atr_sample_rate) {
+		if (cpu_online(v_idx)) {
+			cpu = v_idx;
+			node = cpu_to_node(cpu);
+		}
+	}
 
 	/* allocate q_vector and rings */
 	q_vector = kzalloc_node(size, GFP_KERNEL, node);
