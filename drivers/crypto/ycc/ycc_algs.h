@@ -3,6 +3,7 @@
 #define __YCC_ALG_H
 
 #include <crypto/skcipher.h>
+#include <crypto/aead.h>
 
 #include "ycc_ring.h"
 #include "ycc_dev.h"
@@ -70,6 +71,11 @@ enum ycc_ske_alg_mode {
 enum ycc_cmd_id {
 	YCC_CMD_SKE_ENC = 0x23,
 	YCC_CMD_SKE_DEC,
+
+	YCC_CMD_GCM_ENC = 0x25,
+	YCC_CMD_GCM_DEC,
+	YCC_CMD_CCM_ENC,
+	YCC_CMD_CCM_DEC, /* 0x28 */
 };
 
 struct ycc_crypto_ctx {
@@ -92,8 +98,10 @@ struct ycc_crypto_req {
 	dma_addr_t key_paddr;
 
 	struct ycc_cmd_desc desc;
-	struct skcipher_request *ske_req;
-	struct skcipher_request ske_subreq;
+	union {
+		struct skcipher_request *ske_req;
+		struct aead_request *aead_req;
+	};
 
 	void *src_vaddr;
 	dma_addr_t src_paddr;
@@ -105,10 +113,18 @@ struct ycc_crypto_req {
 	int aad_offset;
 	struct ycc_crypto_ctx *ctx;
 	u8 last_block[16]; /* used to store iv out when decrypt */
+
+	/* soft request for fallback, keep at the end */
+	union {
+		struct skcipher_request ske_subreq;
+		struct aead_request aead_subreq;
+	};
 };
 
 #define YCC_DEV(ctx)		(&(ctx)->ring->ydev->pdev->dev)
 
 int ycc_sym_register(void);
 void ycc_sym_unregister(void);
+int ycc_aead_register(void);
+void ycc_aead_unregister(void);
 #endif

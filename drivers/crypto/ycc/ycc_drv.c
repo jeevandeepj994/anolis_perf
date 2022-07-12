@@ -63,8 +63,14 @@ int ycc_algorithm_register(void)
 	if (ret)
 		goto err;
 
+	ret = ycc_aead_register();
+	if (ret)
+		goto unregister_sym;
+
 	return 0;
 
+unregister_sym:
+	ycc_sym_unregister();
 err:
 	atomic_dec(&ycc_algs_refcnt);
 	return ret;
@@ -78,6 +84,7 @@ void ycc_algorithm_unregister(void)
 	if (atomic_dec_return(&ycc_algs_refcnt))
 		return;
 
+	ycc_aead_unregister();
 	ycc_sym_unregister();
 }
 

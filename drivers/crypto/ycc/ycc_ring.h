@@ -73,8 +73,22 @@ struct ycc_skcipher_cmd {
 	u8 padding;
 } __packed;
 
+struct ycc_aead_cmd {
+	u8 cmd_id;
+	u8 mode;
+	u64 sptr:48;	/* include aad + payload */
+	u64 dptr:48;	/* encrypted/decrypted + tag */
+	u32 dlen;	/* data size */
+	u16 key_idx;
+	u16 kek_idx;
+	u64 keyptr:48;
+	u16 aadlen;
+	u8 taglen;	/* authenc size */
+} __packed;
+
 union ycc_real_cmd {
 	struct ycc_skcipher_cmd ske_cmd;
+	struct ycc_aead_cmd aead_cmd;
 	u8 padding[32];
 };
 
