@@ -1964,12 +1964,13 @@ void txgbe_set_rx_drop_en(struct txgbe_adapter *adapter)
 	int i;
 
 	/* We should set the drop enable bit if:
-	 *  Number of Rx queues > 1
+	 *  Number of Rx queues > 1 and flow control is disabled
 	 *
 	 *  This allows us to avoid head of line blocking for security
 	 *  and performance reasons.
 	 */
-	if (adapter->num_rx_queues > 1) {
+	if ((adapter->num_rx_queues > 1 &&
+	     !(adapter->hw.fc.current_mode & txgbe_fc_tx_pause))) {
 		for (i = 0; i < adapter->num_rx_queues; i++)
 			txgbe_enable_rx_drop(adapter, adapter->rx_ring[i]);
 	} else {
@@ -2806,11 +2807,96 @@ void txgbe_clear_vxlan_port(struct txgbe_adapter *adapter)
 				    NETIF_F_GSO_UDP_TUNNEL | \
 				    NETIF_F_GSO_UDP_TUNNEL_CSUM)
 
+/* Additional bittime to account for TXGBE framing */
+#define TXGBE_ETH_FRAMING 20
+
+/**
+ * txgbe_hpbthresh - calculate high water mark for flow control
+ *
+ * @adapter: board private structure to calculate for
+ * @pb: packet buffer to calculate
+ **/
+static int txgbe_hpbthresh(struct txgbe_adapter *adapter, int pb)
+{
+	struct txgbe_hw *hw = &adapter->hw;
+	struct net_device *dev = adapter->netdev;
+	int link, tc, kb, marker;
+	u32 dv_id, rx_pba;
+
+	/* Calculate max LAN frame size */
+	link = dev->mtu + ETH_HLEN + ETH_FCS_LEN + TXGBE_ETH_FRAMING;
+	tc = link;
+
+	/* Calculate delay value for device */
+	dv_id = TXGBE_DV(link, tc);
+
+	/* Delay value is calculated in bit times convert to KB */
+	kb = TXGBE_BT2KB(dv_id);
+	rx_pba = rd32(hw, TXGBE_RDB_PB_SZ(pb)) >> TXGBE_RDB_PB_SZ_SHIFT;
+
+	marker = rx_pba - kb;
+
+	/* It is possible that the packet buffer is not large enough
+	 * to provide required headroom. In this case throw an error
+	 * to user and a do the best we can.
+	 */
+	if (marker < 0) {
+		netif_warn(adapter, drv, adapter->netdev,
+			   "Packet Buffer(%i) can not provide enough headroom to support flow control. Decrease MTU or number of traffic classes\n",
+			   pb);
+		marker = tc + 1;
+	}
+
+	return marker;
+}
+
+/**
+ * txgbe_lpbthresh - calculate low water mark for flow control
+ *
+ * @adapter: board private structure to calculate for
+ * @pb: packet buffer to calculate
+ **/
+static int txgbe_lpbthresh(struct txgbe_adapter *adapter, int __maybe_unused pb)
+{
+	struct net_device *dev = adapter->netdev;
+	int tc;
+	u32 dv_id;
+
+	/* Calculate max LAN frame size */
+	tc = dev->mtu + ETH_HLEN + ETH_FCS_LEN;
+
+	/* Calculate delay value for device */
+	dv_id = TXGBE_LOW_DV(tc);
+
+	/* Delay value is calculated in bit times convert to KB */
+	return TXGBE_BT2KB(dv_id);
+}
+
+/**
+ * txgbe_pbthresh_setup - calculate and setup high low water marks
+ *
+ * @adapter: board private structure to calculate for
+ **/
+static void txgbe_pbthresh_setup(struct txgbe_adapter *adapter)
+{
+	struct txgbe_hw *hw = &adapter->hw;
+
+	hw->fc.high_water = txgbe_hpbthresh(adapter, 0);
+	hw->fc.low_water = txgbe_lpbthresh(adapter, 0);
+
+	/* Low water marks must not be larger than high water marks */
+	if (hw->fc.low_water > hw->fc.high_water)
+		hw->fc.low_water = 0;
+
+	hw->fc.high_water = 0;
+}
+
 static void txgbe_configure_pb(struct txgbe_adapter *adapter)
 {
 	struct txgbe_hw *hw = &adapter->hw;
 
 	TCALL(hw, mac.ops.setup_rxpba, 0, 0, PBA_STRATEGY_EQUAL);
+	txgbe_pbthresh_setup(adapter);
 }
 
 static void txgbe_configure_isb(struct txgbe_adapter *adapter)
@@ -3330,6 +3416,13 @@ static int txgbe_sw_init(struct txgbe_adapter *adapter)
 	adapter->flags2 |= TXGBE_FLAG2_RSC_CAPABLE;
 
 	adapter->max_q_vectors = TXGBE_MAX_MSIX_Q_VECTORS_SAPPHIRE;
+
+	/* default flow control settings */
+	hw->fc.requested_mode = txgbe_fc_full;
+	hw->fc.current_mode = txgbe_fc_full;
+
+	hw->fc.pause_time = TXGBE_DEFAULT_FCPAUSE;
+	hw->fc.disable_fc_autoneg = false;
 
 	/* set default ring sizes */
 	adapter->tx_ring_count = TXGBE_DEFAULT_TXD;
@@ -4040,6 +4133,7 @@ static void txgbe_watchdog_update_link(struct txgbe_adapter *adapter)
 	adapter->link_speed = link_speed;
 
 	if (link_up) {
+		TCALL(hw, mac.ops.fc_enable);
 		txgbe_set_rx_drop_en(adapter);
 
 		if (link_speed & TXGBE_LINK_SPEED_10GB_FULL) {
