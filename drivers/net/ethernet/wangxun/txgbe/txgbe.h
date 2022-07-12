@@ -152,6 +152,7 @@ struct txgbe_rx_queue_stats {
 
 enum txgbe_ring_state_t {
 	__TXGBE_RX_BUILD_SKB_ENABLED,
+	__TXGBE_TX_FDIR_INIT_DONE,
 	__TXGBE_TX_XPS_INIT_DONE,
 	__TXGBE_TX_DETECT_HANG,
 	__TXGBE_HANG_CHECK_ARMED,
@@ -202,7 +203,14 @@ struct txgbe_ring {
 	u16 next_to_use;
 	u16 next_to_clean;
 	u16 rx_buf_len;
-	u16 next_to_alloc;
+	union {
+		u16 next_to_alloc;
+		struct {
+			u8 atr_sample_rate;
+			u8 atr_count;
+		};
+	};
+
 	struct txgbe_queue_stats stats;
 	struct u64_stats_sync syncp;
 
@@ -215,6 +223,7 @@ struct txgbe_ring {
 enum txgbe_ring_f_enum {
 	RING_F_NONE = 0,
 	RING_F_RSS,
+	RING_F_FDIR,
 	RING_F_ARRAY_SIZE  /* must be last in enum set */
 };
 
@@ -354,6 +363,8 @@ struct txgbe_mac_addr {
 #define TXGBE_FLAG_MSIX_ENABLED                 BIT(3)
 #define TXGBE_FLAG_VXLAN_OFFLOAD_CAPABLE        BIT(4)
 #define TXGBE_FLAG_VXLAN_OFFLOAD_ENABLE         BIT(5)
+#define TXGBE_FLAG_FDIR_HASH_CAPABLE            BIT(6)
+#define TXGBE_FLAG_FDIR_PERFECT_CAPABLE         BIT(7)
 
 /**
  * txgbe_adapter.flag2
@@ -369,6 +380,7 @@ struct txgbe_mac_addr {
 #define TXGBE_FLAG2_RSS_FIELD_IPV4_UDP          BIT(8)
 #define TXGBE_FLAG2_RSS_FIELD_IPV6_UDP          BIT(9)
 #define TXGBE_FLAG2_RSS_ENABLED                 BIT(10)
+#define TXGBE_FLAG2_FDIR_REQUIRES_REINIT        BIT(11)
 
 #define TXGBE_SET_FLAG(_input, _flag, _result) \
 	((_flag <= _result) ? \
@@ -398,6 +410,9 @@ struct txgbe_adapter {
 	 */
 	u32 flags;
 	u32 flags2;
+
+	bool cloud_mode;
+
 	/* Tx fast path data */
 	int num_tx_queues;
 	u16 tx_itr_setting;
@@ -449,7 +464,13 @@ struct txgbe_adapter {
 
 	struct timer_list service_timer;
 	struct work_struct service_task;
+	struct hlist_head fdir_filter_list;
+	unsigned long fdir_overflow; /* number of times ATR was backed off */
+	union txgbe_atr_input fdir_mask;
+	int fdir_filter_count;
+	u32 fdir_pballoc;
 	u32 atr_sample_rate;
+	spinlock_t fdir_perfect_lock; /*spinlock for FDIR */
 
 	char eeprom_id[32];
 	bool netdev_registered;
@@ -482,6 +503,13 @@ static inline u32 txgbe_misc_isb(struct txgbe_adapter *adapter,
 
 	return adapter->isb_mem[idx];
 }
+
+struct txgbe_fdir_filter {
+	struct  hlist_node fdir_node;
+	union txgbe_atr_input filter;
+	u16 sw_idx;
+	u16 action;
+};
 
 enum txgbe_state_t {
 	__TXGBE_TESTING,
