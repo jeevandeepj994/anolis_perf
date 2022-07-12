@@ -742,9 +742,17 @@ __SYSCALL(__NR_io_uring_setup, sys_io_uring_setup)
 __SYSCALL(__NR_io_uring_enter, sys_io_uring_enter)
 #define __NR_io_uring_register 427
 __SYSCALL(__NR_io_uring_register, sys_io_uring_register)
+#define __NR_open_tree 428
+__SYSCALL(__NR_open_tree, sys_open_tree)
+#define __NR_move_mount 429
+__SYSCALL(__NR_move_mount, sys_move_mount)
+#define __NR_pidfd_open 434
+__SYSCALL(__NR_pidfd_open, sys_pidfd_open)
+#define __NR_openat2 437
+__SYSCALL(__NR_openat2, sys_openat2)
 
 #undef __NR_syscalls
-#define __NR_syscalls 428
+#define __NR_syscalls 438
 
 /*
  * 32 bit systems traditionally used different
