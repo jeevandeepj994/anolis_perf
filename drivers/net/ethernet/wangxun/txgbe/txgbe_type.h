@@ -1664,6 +1664,282 @@ enum TXGBE_MSCA_CMD_value {
 #define TXGBE_PCIDEVCTRL2_4_8s          0xd
 #define TXGBE_PCIDEVCTRL2_17_34s        0xe
 
+/******************* Receive Descriptor bit definitions **********************/
+#define TXGBE_RXD_NEXTP_MASK            0x000FFFF0U /* Next Descriptor Index */
+#define TXGBE_RXD_NEXTP_SHIFT           0x00000004U
+#define TXGBE_RXD_STAT_MASK             0x000fffffU /* Stat/NEXTP: bit 0-19 */
+#define TXGBE_RXD_STAT_DD               0x00000001U /* Done */
+#define TXGBE_RXD_STAT_EOP              0x00000002U /* End of Packet */
+#define TXGBE_RXD_STAT_CLASS_ID_MASK    0x0000001CU
+#define TXGBE_RXD_STAT_CLASS_ID_TC_RSS  0x00000000U
+#define TXGBE_RXD_STAT_CLASS_ID_FLM     0x00000004U /* FDir Match */
+#define TXGBE_RXD_STAT_CLASS_ID_SYN     0x00000008U
+#define TXGBE_RXD_STAT_CLASS_ID_5_TUPLE 0x0000000CU
+#define TXGBE_RXD_STAT_CLASS_ID_L2_ETYPE 0x00000010U
+#define TXGBE_RXD_STAT_VP               0x00000020U /* IEEE VLAN Pkt */
+#define TXGBE_RXD_STAT_UDPCS            0x00000040U /* UDP xsum calculated */
+#define TXGBE_RXD_STAT_L4CS             0x00000080U /* L4 xsum calculated */
+#define TXGBE_RXD_STAT_IPCS             0x00000100U /* IP xsum calculated */
+#define TXGBE_RXD_STAT_PIF              0x00000200U /* passed in-exact filter */
+#define TXGBE_RXD_STAT_OUTERIPCS        0x00000400U /* Cloud IP xsum calculated*/
+#define TXGBE_RXD_STAT_VEXT             0x00000800U /* 1st VLAN found */
+#define TXGBE_RXD_STAT_LLINT            0x00002000U /* Pkt caused Low Latency Int */
+#define TXGBE_RXD_STAT_TS               0x00004000U /* IEEE1588 Time Stamp */
+#define TXGBE_RXD_STAT_SECP             0x00008000U /* Security Processing */
+#define TXGBE_RXD_STAT_LB               0x00010000U /* Loopback Status */
+#define TXGBE_RXD_STAT_FCEOFS           0x00020000U /* FCoE EOF/SOF Stat */
+#define TXGBE_RXD_STAT_FCSTAT           0x000C0000U /* FCoE Pkt Stat */
+#define TXGBE_RXD_STAT_FCSTAT_NOMTCH    0x00000000U /* 00: No Ctxt Match */
+#define TXGBE_RXD_STAT_FCSTAT_NODDP     0x00040000U /* 01: Ctxt w/o DDP */
+#define TXGBE_RXD_STAT_FCSTAT_FCPRSP    0x00080000U /* 10: Recv. FCP_RSP */
+#define TXGBE_RXD_STAT_FCSTAT_DDP       0x000C0000U /* 11: Ctxt w/ DDP */
+
+#define TXGBE_RXD_ERR_MASK              0xfff00000U /* RDESC.ERRORS mask */
+#define TXGBE_RXD_ERR_SHIFT             20         /* RDESC.ERRORS shift */
+#define TXGBE_RXD_ERR_FCEOFE            0x80000000U /* FCEOFe/IPE */
+#define TXGBE_RXD_ERR_FCERR             0x00700000U /* FCERR/FDIRERR */
+#define TXGBE_RXD_ERR_FDIR_LEN          0x00100000U /* FDIR Length error */
+#define TXGBE_RXD_ERR_FDIR_DROP         0x00200000U /* FDIR Drop error */
+#define TXGBE_RXD_ERR_FDIR_COLL         0x00400000U /* FDIR Collision error */
+#define TXGBE_RXD_ERR_HBO               0x00800000U /*Header Buffer Overflow */
+#define TXGBE_RXD_ERR_OUTERIPER         0x04000000U /* CRC IP Header error */
+#define TXGBE_RXD_ERR_SECERR_MASK       0x18000000U
+#define TXGBE_RXD_ERR_RXE               0x20000000U /* Any MAC Error */
+#define TXGBE_RXD_ERR_TCPE              0x40000000U /* TCP/UDP Checksum Error */
+#define TXGBE_RXD_ERR_IPE               0x80000000U /* IP Checksum Error */
+
+#define TXGBE_RXD_RSSTYPE_MASK          0x0000000FU
+#define TXGBE_RXD_TPID_MASK             0x000001C0U
+#define TXGBE_RXD_TPID_SHIFT            6
+#define TXGBE_RXD_HDRBUFLEN_MASK        0x00007FE0U
+#define TXGBE_RXD_RSCCNT_MASK           0x001E0000U
+#define TXGBE_RXD_RSCCNT_SHIFT          17
+#define TXGBE_RXD_HDRBUFLEN_SHIFT       5
+#define TXGBE_RXD_SPLITHEADER_EN        0x00001000U
+#define TXGBE_RXD_SPH                   0x8000
+
+/* RSS Hash results */
+#define TXGBE_RXD_RSSTYPE_NONE          0x00000000U
+#define TXGBE_RXD_RSSTYPE_IPV4_TCP      0x00000001U
+#define TXGBE_RXD_RSSTYPE_IPV4          0x00000002U
+#define TXGBE_RXD_RSSTYPE_IPV6_TCP      0x00000003U
+#define TXGBE_RXD_RSSTYPE_IPV4_SCTP     0x00000004U
+#define TXGBE_RXD_RSSTYPE_IPV6          0x00000005U
+#define TXGBE_RXD_RSSTYPE_IPV6_SCTP     0x00000006U
+#define TXGBE_RXD_RSSTYPE_IPV4_UDP      0x00000007U
+#define TXGBE_RXD_RSSTYPE_IPV6_UDP      0x00000008U
+
+/**
+ * receive packet type
+ * PTYPE:8 = TUN:2 + PKT:2 + TYP:4
+ **/
+/* TUN */
+#define TXGBE_PTYPE_TUN_IPV4            (0x80)
+#define TXGBE_PTYPE_TUN_IPV6            (0xC0)
+
+/* PKT for TUN */
+#define TXGBE_PTYPE_PKT_IPIP            (0x00) /* IP+IP */
+#define TXGBE_PTYPE_PKT_IG              (0x10) /* IP+GRE */
+#define TXGBE_PTYPE_PKT_IGM             (0x20) /* IP+GRE+MAC */
+#define TXGBE_PTYPE_PKT_IGMV            (0x30) /* IP+GRE+MAC+VLAN */
+/* PKT for !TUN */
+#define TXGBE_PTYPE_PKT_MAC             (0x10)
+#define TXGBE_PTYPE_PKT_IP              (0x20)
+#define TXGBE_PTYPE_PKT_FCOE            (0x30)
+
+/* TYP for PKT=mac */
+#define TXGBE_PTYPE_TYP_MAC             (0x01)
+#define TXGBE_PTYPE_TYP_TS              (0x02) /* time sync */
+#define TXGBE_PTYPE_TYP_FIP             (0x03)
+#define TXGBE_PTYPE_TYP_LLDP            (0x04)
+#define TXGBE_PTYPE_TYP_CNM             (0x05)
+#define TXGBE_PTYPE_TYP_EAPOL           (0x06)
+#define TXGBE_PTYPE_TYP_ARP             (0x07)
+/* TYP for PKT=ip */
+#define TXGBE_PTYPE_PKT_IPV6            (0x08)
+#define TXGBE_PTYPE_TYP_IPFRAG          (0x01)
+#define TXGBE_PTYPE_TYP_IP              (0x02)
+#define TXGBE_PTYPE_TYP_UDP             (0x03)
+#define TXGBE_PTYPE_TYP_TCP             (0x04)
+#define TXGBE_PTYPE_TYP_SCTP            (0x05)
+/* TYP for PKT=fcoe */
+#define TXGBE_PTYPE_PKT_VFT             (0x08)
+#define TXGBE_PTYPE_TYP_FCOE            (0x00)
+#define TXGBE_PTYPE_TYP_FCDATA          (0x01)
+#define TXGBE_PTYPE_TYP_FCRDY           (0x02)
+#define TXGBE_PTYPE_TYP_FCRSP           (0x03)
+#define TXGBE_PTYPE_TYP_FCOTHER         (0x04)
+
+/* Packet type non-ip values */
+enum txgbe_l2_ptypes {
+	TXGBE_PTYPE_L2_ABORTED = (TXGBE_PTYPE_PKT_MAC),
+	TXGBE_PTYPE_L2_MAC = (TXGBE_PTYPE_PKT_MAC | TXGBE_PTYPE_TYP_MAC),
+	TXGBE_PTYPE_L2_TS = (TXGBE_PTYPE_PKT_MAC | TXGBE_PTYPE_TYP_TS),
+	TXGBE_PTYPE_L2_FIP = (TXGBE_PTYPE_PKT_MAC | TXGBE_PTYPE_TYP_FIP),
+	TXGBE_PTYPE_L2_LLDP = (TXGBE_PTYPE_PKT_MAC | TXGBE_PTYPE_TYP_LLDP),
+	TXGBE_PTYPE_L2_CNM = (TXGBE_PTYPE_PKT_MAC | TXGBE_PTYPE_TYP_CNM),
+	TXGBE_PTYPE_L2_EAPOL = (TXGBE_PTYPE_PKT_MAC | TXGBE_PTYPE_TYP_EAPOL),
+	TXGBE_PTYPE_L2_ARP = (TXGBE_PTYPE_PKT_MAC | TXGBE_PTYPE_TYP_ARP),
+
+	TXGBE_PTYPE_L2_IPV4_FRAG = (TXGBE_PTYPE_PKT_IP |
+				    TXGBE_PTYPE_TYP_IPFRAG),
+	TXGBE_PTYPE_L2_IPV4 = (TXGBE_PTYPE_PKT_IP | TXGBE_PTYPE_TYP_IP),
+	TXGBE_PTYPE_L2_IPV4_UDP = (TXGBE_PTYPE_PKT_IP | TXGBE_PTYPE_TYP_UDP),
+	TXGBE_PTYPE_L2_IPV4_TCP = (TXGBE_PTYPE_PKT_IP | TXGBE_PTYPE_TYP_TCP),
+	TXGBE_PTYPE_L2_IPV4_SCTP = (TXGBE_PTYPE_PKT_IP | TXGBE_PTYPE_TYP_SCTP),
+	TXGBE_PTYPE_L2_IPV6_FRAG = (TXGBE_PTYPE_PKT_IP | TXGBE_PTYPE_PKT_IPV6 |
+				    TXGBE_PTYPE_TYP_IPFRAG),
+	TXGBE_PTYPE_L2_IPV6 = (TXGBE_PTYPE_PKT_IP | TXGBE_PTYPE_PKT_IPV6 |
+			       TXGBE_PTYPE_TYP_IP),
+	TXGBE_PTYPE_L2_IPV6_UDP = (TXGBE_PTYPE_PKT_IP | TXGBE_PTYPE_PKT_IPV6 |
+				   TXGBE_PTYPE_TYP_UDP),
+	TXGBE_PTYPE_L2_IPV6_TCP = (TXGBE_PTYPE_PKT_IP | TXGBE_PTYPE_PKT_IPV6 |
+				   TXGBE_PTYPE_TYP_TCP),
+	TXGBE_PTYPE_L2_IPV6_SCTP = (TXGBE_PTYPE_PKT_IP | TXGBE_PTYPE_PKT_IPV6 |
+				    TXGBE_PTYPE_TYP_SCTP),
+
+	TXGBE_PTYPE_L2_FCOE = (TXGBE_PTYPE_PKT_FCOE | TXGBE_PTYPE_TYP_FCOE),
+	TXGBE_PTYPE_L2_FCOE_FCDATA = (TXGBE_PTYPE_PKT_FCOE |
+				      TXGBE_PTYPE_TYP_FCDATA),
+	TXGBE_PTYPE_L2_FCOE_FCRDY = (TXGBE_PTYPE_PKT_FCOE |
+				     TXGBE_PTYPE_TYP_FCRDY),
+	TXGBE_PTYPE_L2_FCOE_FCRSP = (TXGBE_PTYPE_PKT_FCOE |
+				     TXGBE_PTYPE_TYP_FCRSP),
+	TXGBE_PTYPE_L2_FCOE_FCOTHER = (TXGBE_PTYPE_PKT_FCOE |
+				       TXGBE_PTYPE_TYP_FCOTHER),
+	TXGBE_PTYPE_L2_FCOE_VFT = (TXGBE_PTYPE_PKT_FCOE | TXGBE_PTYPE_PKT_VFT),
+	TXGBE_PTYPE_L2_FCOE_VFT_FCDATA = (TXGBE_PTYPE_PKT_FCOE |
+				TXGBE_PTYPE_PKT_VFT | TXGBE_PTYPE_TYP_FCDATA),
+	TXGBE_PTYPE_L2_FCOE_VFT_FCRDY = (TXGBE_PTYPE_PKT_FCOE |
+				TXGBE_PTYPE_PKT_VFT | TXGBE_PTYPE_TYP_FCRDY),
+	TXGBE_PTYPE_L2_FCOE_VFT_FCRSP = (TXGBE_PTYPE_PKT_FCOE |
+				TXGBE_PTYPE_PKT_VFT | TXGBE_PTYPE_TYP_FCRSP),
+	TXGBE_PTYPE_L2_FCOE_VFT_FCOTHER = (TXGBE_PTYPE_PKT_FCOE |
+				TXGBE_PTYPE_PKT_VFT | TXGBE_PTYPE_TYP_FCOTHER),
+
+	TXGBE_PTYPE_L2_TUN4_MAC = (TXGBE_PTYPE_TUN_IPV4 | TXGBE_PTYPE_PKT_IGM),
+	TXGBE_PTYPE_L2_TUN6_MAC = (TXGBE_PTYPE_TUN_IPV6 | TXGBE_PTYPE_PKT_IGM),
+};
+
+#define TXGBE_RXD_PKTTYPE(_rxd) \
+	((le32_to_cpu((_rxd)->wb.lower.lo_dword.data) >> 9) & 0xFF)
+#define TXGBE_PTYPE_TUN(_pt) ((_pt) & 0xC0)
+#define TXGBE_PTYPE_PKT(_pt) ((_pt) & 0x30)
+#define TXGBE_PTYPE_TYP(_pt) ((_pt) & 0x0F)
+#define TXGBE_PTYPE_TYPL4(_pt) ((_pt) & 0x07)
+
+#define TXGBE_RXD_IPV6EX(_rxd) \
+	((le32_to_cpu((_rxd)->wb.lower.lo_dword.data) >> 6) & 0x1)
+
+/* Masks to determine if packets should be dropped due to frame errors */
+#define TXGBE_RXD_ERR_FRAME_ERR_MASK    TXGBE_RXD_ERR_RXE
+
+/*********************** Transmit Descriptor Config Masks ****************/
+#define TXGBE_TXD_DTALEN_MASK           0x0000FFFFU /* Data buf length(bytes) */
+#define TXGBE_TXD_MAC_LINKSEC           0x00040000U /* Insert LinkSec */
+#define TXGBE_TXD_MAC_TSTAMP            0x00080000U /* IEEE1588 time stamp */
+#define TXGBE_TXD_IPSEC_SA_INDEX_MASK   0x000003FFU /* IPSec SA index */
+#define TXGBE_TXD_IPSEC_ESP_LEN_MASK    0x000001FFU /* IPSec ESP length */
+#define TXGBE_TXD_DTYP_MASK             0x00F00000U /* DTYP mask */
+#define TXGBE_TXD_DTYP_CTXT             0x00100000U /* Adv Context Desc */
+#define TXGBE_TXD_DTYP_DATA             0x00000000U /* Adv Data Descriptor */
+#define TXGBE_TXD_EOP                   0x01000000U  /* End of Packet */
+#define TXGBE_TXD_IFCS                  0x02000000U /* Insert FCS */
+#define TXGBE_TXD_LINKSEC               0x04000000U /* Enable linksec */
+#define TXGBE_TXD_RS                    0x08000000U /* Report Status */
+#define TXGBE_TXD_ECU                   0x10000000U /* DDP hdr type or iSCSI */
+#define TXGBE_TXD_QCN                   0x20000000U /* cntag insertion enable */
+#define TXGBE_TXD_VLE                   0x40000000U /* VLAN pkt enable */
+#define TXGBE_TXD_TSE                   0x80000000U /* TCP Seg enable */
+#define TXGBE_TXD_STAT_DD               0x00000001U /* Descriptor Done */
+#define TXGBE_TXD_IDX_SHIFT             4 /* Desc Index shift */
+#define TXGBE_TXD_CC                    0x00000080U /* Check Context */
+#define TXGBE_TXD_IPSEC                 0x00000100U /* Enable ipsec esp */
+#define TXGBE_TXD_IIPCS                 0x00000400U
+#define TXGBE_TXD_EIPCS                 0x00000800U
+#define TXGBE_TXD_L4CS                  0x00000200U
+#define TXGBE_TXD_PAYLEN_SHIFT          13 /* Desc PAYLEN shift */
+#define TXGBE_TXD_MACLEN_SHIFT          9  /* ctxt desc mac len shift */
+#define TXGBE_TXD_VLAN_SHIFT            16 /* ctxt vlan tag shift */
+#define TXGBE_TXD_TAG_TPID_SEL_SHIFT    11
+#define TXGBE_TXD_IPSEC_TYPE_SHIFT      14
+#define TXGBE_TXD_ENC_SHIFT             15
+
+#define TXGBE_TXD_TUCMD_IPSEC_TYPE_ESP  0x00004000U /* IPSec Type ESP */
+#define TXGBE_TXD_TUCMD_IPSEC_ENCRYPT_EN 0x00008000/* ESP Encrypt Enable */
+#define TXGBE_TXD_TUCMD_FCOE            0x00010000U /* FCoE Frame Type */
+#define TXGBE_TXD_FCOEF_EOF_MASK        (0x3 << 10) /* FC EOF index */
+#define TXGBE_TXD_FCOEF_SOF             ((1 << 2) << 10) /* FC SOF index */
+#define TXGBE_TXD_FCOEF_PARINC          ((1 << 3) << 10) /* Rel_Off in F_CTL */
+#define TXGBE_TXD_FCOEF_ORIE            ((1 << 4) << 10) /* Orientation End */
+#define TXGBE_TXD_FCOEF_ORIS            ((1 << 5) << 10) /* Orientation Start */
+#define TXGBE_TXD_FCOEF_EOF_N           (0x0 << 10) /* 00: EOFn */
+#define TXGBE_TXD_FCOEF_EOF_T           (0x1 << 10) /* 01: EOFt */
+#define TXGBE_TXD_FCOEF_EOF_NI          (0x2 << 10) /* 10: EOFni */
+#define TXGBE_TXD_FCOEF_EOF_A           (0x3 << 10) /* 11: EOFa */
+#define TXGBE_TXD_L4LEN_SHIFT           8  /* ctxt L4LEN shift */
+#define TXGBE_TXD_MSS_SHIFT             16  /* ctxt MSS shift */
+
+#define TXGBE_TXD_OUTER_IPLEN_SHIFT     12 /* ctxt OUTERIPLEN shift */
+#define TXGBE_TXD_TUNNEL_LEN_SHIFT      21 /* ctxt TUNNELLEN shift */
+#define TXGBE_TXD_TUNNEL_TYPE_SHIFT     11 /* Tx Desc Tunnel Type shift */
+#define TXGBE_TXD_TUNNEL_DECTTL_SHIFT   27 /* ctxt DECTTL shift */
+#define TXGBE_TXD_TUNNEL_UDP            (0x0ULL << TXGBE_TXD_TUNNEL_TYPE_SHIFT)
+#define TXGBE_TXD_TUNNEL_GRE            (0x1ULL << TXGBE_TXD_TUNNEL_TYPE_SHIFT)
+
+/* Transmit Descriptor */
+union txgbe_tx_desc {
+	struct {
+		__le64 buffer_addr; /* Address of descriptor's data buf */
+		__le32 cmd_type_len;
+		__le32 olinfo_status;
+	} read;
+	struct {
+		__le64 rsvd; /* Reserved */
+		__le32 nxtseq_seed;
+		__le32 status;
+	} wb;
+};
+
+/* Receive Descriptor */
+union txgbe_rx_desc {
+	struct {
+		__le64 pkt_addr; /* Packet buffer address */
+		__le64 hdr_addr; /* Header buffer address */
+	} read;
+	struct {
+		struct {
+			union {
+				__le32 data;
+				struct {
+					__le16 pkt_info; /* RSS, Pkt type */
+					__le16 hdr_info; /* Splithdr, hdrlen */
+				} hs_rss;
+			} lo_dword;
+			union {
+				__le32 rss; /* RSS Hash */
+				struct {
+					__le16 ip_id; /* IP id */
+					__le16 csum; /* Packet Checksum */
+				} csum_ip;
+			} hi_dword;
+		} lower;
+		struct {
+			__le32 status_error; /* ext status/error */
+			__le16 length; /* Packet length */
+			__le16 vlan; /* VLAN tag */
+		} upper;
+	} wb;  /* writeback */
+};
+
+/* Context descriptors */
+struct txgbe_tx_context_desc {
+	__le32 vlan_macip_lens;
+	__le32 seqnum_seed;
+	__le32 type_tucmd_mlhl;
+	__le32 mss_l4len_idx;
+};
+
 /****************** Manageablility Host Interface defines ********************/
 #define TXGBE_HI_MAX_BLOCK_BYTE_LENGTH  256 /* Num of bytes in range */
 #define TXGBE_HI_MAX_BLOCK_DWORD_LENGTH 64 /* Num of dwords in range */
@@ -1913,8 +2189,79 @@ struct txgbe_bus_info {
 	u16 lan_id;
 };
 
+/* Statistics counters collected by the MAC */
+struct txgbe_hw_stats {
+	u64 crcerrs;
+	u64 illerrc;
+	u64 errbc;
+	u64 mspdc;
+	u64 mpctotal;
+	u64 mpc[8];
+	u64 mlfc;
+	u64 mrfc;
+	u64 rlec;
+	u64 lxontxc;
+	u64 lxonrxc;
+	u64 lxofftxc;
+	u64 lxoffrxc;
+	u64 pxontxc[8];
+	u64 pxonrxc[8];
+	u64 pxofftxc[8];
+	u64 pxoffrxc[8];
+	u64 prc64;
+	u64 prc127;
+	u64 prc255;
+	u64 prc511;
+	u64 prc1023;
+	u64 prc1522;
+	u64 gprc;
+	u64 bprc;
+	u64 mprc;
+	u64 gptc;
+	u64 gorc;
+	u64 gotc;
+	u64 rnbc[8];
+	u64 ruc;
+	u64 rfc;
+	u64 roc;
+	u64 rjc;
+	u64 mngprc;
+	u64 mngpdc;
+	u64 mngptc;
+	u64 tor;
+	u64 tpr;
+	u64 tpt;
+	u64 ptc64;
+	u64 ptc127;
+	u64 ptc255;
+	u64 ptc511;
+	u64 ptc1023;
+	u64 ptc1522;
+	u64 mptc;
+	u64 bptc;
+	u64 xec;
+	u64 qprc[16];
+	u64 qptc[16];
+	u64 qbrc[16];
+	u64 qbtc[16];
+	u64 qprdc[16];
+	u64 pxon2offc[8];
+	u64 fccrc;
+	u64 fclast;
+	u64 ldpcec;
+	u64 pcrc8ec;
+	u64 b2ospc;
+	u64 b2ogprc;
+	u64 o2bgptc;
+	u64 o2bspc;
+};
+
 /* forward declaration */
 struct txgbe_hw;
+
+/* iterator type for walking multicast address lists */
+typedef u8* (*txgbe_mc_addr_itr) (struct txgbe_hw *hw, u8 **mc_addr_ptr,
+				  u32 *vmdq);
 
 /* Function pointer table */
 struct txgbe_eeprom_operations {
@@ -1939,6 +2286,9 @@ struct txgbe_mac_operations {
 	s32 (*stop_adapter)(struct txgbe_hw *hw);
 	s32 (*get_bus_info)(struct txgbe_hw *hw);
 	s32 (*set_lan_id)(struct txgbe_hw *hw);
+	s32 (*enable_rx_dma)(struct txgbe_hw *hw, u32 regval);
+	s32 (*disable_sec_rx_path)(struct txgbe_hw *hw);
+	s32 (*enable_sec_rx_path)(struct txgbe_hw *hw);
 	s32 (*acquire_swfw_sync)(struct txgbe_hw *hw, u32 mask);
 	s32 (*release_swfw_sync)(struct txgbe_hw *hw, u32 mask);
 
@@ -1956,17 +2306,28 @@ struct txgbe_mac_operations {
 				     bool *autoneg);
 	s32 (*set_rate_select_speed)(struct txgbe_hw *hw, u32 speed);
 
+	/* Packet Buffer manipulation */
+	s32 (*setup_rxpba)(struct txgbe_hw *hw, int num_pb, u32 headroom,
+			   int strategy);
+
 	/* LED */
 	s32 (*led_on)(struct txgbe_hw *hw, u32 index);
 	s32 (*led_off)(struct txgbe_hw *hw, u32 index);
 
-	/* RAR */
+	/* RAR, Multicast, VLAN */
 	s32 (*set_rar)(struct txgbe_hw *hw, u32 index, u8 *addr, u64 pools,
 		       u32 enable_addr);
 	s32 (*clear_rar)(struct txgbe_hw *hw, u32 index);
 	s32 (*set_vmdq_san_mac)(struct txgbe_hw *hw, u32 vmdq);
 	s32 (*clear_vmdq)(struct txgbe_hw *hw, u32 rar, u32 vmdq);
 	s32 (*init_rx_addrs)(struct txgbe_hw *hw);
+	s32 (*update_uc_addr_list)(struct txgbe_hw *hw, u8 *addr_list,
+				   u32 addr_count, txgbe_mc_addr_itr func);
+	s32 (*update_mc_addr_list)(struct txgbe_hw *hw, u8 *mc_addr_list,
+				   u32 mc_addr_count,
+				   txgbe_mc_addr_itr func, bool clear);
+	s32 (*clear_vfta)(struct txgbe_hw *hw);
+	s32 (*set_vfta)(struct txgbe_hw *hw, u32 vlan, u32 vind, bool vlan_on);
 	s32 (*init_uta_tables)(struct txgbe_hw *hw);
 
 	/* Manageability interface */
@@ -1974,6 +2335,7 @@ struct txgbe_mac_operations {
 			      u8 build, u8 ver);
 	s32 (*init_thermal_sensor_thresh)(struct txgbe_hw *hw);
 	s32 (*disable_rx)(struct txgbe_hw *hw);
+	s32 (*enable_rx)(struct txgbe_hw *hw);
 };
 
 struct txgbe_phy_operations {
@@ -2004,9 +2366,15 @@ struct txgbe_mac_info {
 	u16 wwnn_prefix;
 	/* prefix for World Wide Port Name (WWPN) */
 	u16 wwpn_prefix;
+#define TXGBE_MAX_MTA                   128
+#define TXGBE_MAX_VFTA_ENTRIES          128
+	u32 mta_shadow[TXGBE_MAX_MTA];
 	s32 mc_filter_type;
 	u32 mcft_size;
+	u32 vft_shadow[TXGBE_MAX_VFTA_ENTRIES];
+	u32 vft_size;
 	u32 num_rar_entries;
+	u32 rx_pb_size;
 	u32 max_tx_queues;
 	u32 max_rx_queues;
 	u32 orig_sr_pcs_ctl2;
@@ -2061,6 +2429,7 @@ struct txgbe_hw {
 	enum txgbe_reset_type reset_type;
 	bool force_full_reset;
 	enum txgbe_link_status link_status;
+	u16 tpid[8];
 	u16 oem_ssid;
 	u16 oem_svid;
 };
