@@ -41,6 +41,9 @@
 #define TXGBE_MAX_RXD                   8192
 #define TXGBE_MIN_RXD                   128
 
+/* flow control */
+#define TXGBE_DEFAULT_FCPAUSE   0xFFFF
+
 /* Supported Rx Buffer Sizes */
 #define TXGBE_RXBUFFER_256       256  /* Used for skb receive header */
 #define TXGBE_RXBUFFER_2K       2048
