@@ -12,6 +12,8 @@
 #include <linux/etherdevice.h>
 #include <linux/timecounter.h>
 #include <linux/clocksource.h>
+#include <linux/net_tstamp.h>
+#include <linux/ptp_clock_kernel.h>
 #include <linux/aer.h>
 
 #include "txgbe_type.h"
@@ -112,6 +114,7 @@ enum txgbe_tx_flags {
  */
 struct txgbe_tx_buffer {
 	union txgbe_tx_desc *next_to_watch;
+	unsigned long time_stamp;
 	struct sk_buff *skb;
 	unsigned int bytecount;
 	unsigned short gso_segs;
@@ -202,6 +205,7 @@ struct txgbe_ring {
 	u8 reg_idx;
 	u16 next_to_use;
 	u16 next_to_clean;
+	unsigned long last_rx_timestamp;
 	u16 rx_buf_len;
 	union {
 		u16 next_to_alloc;
@@ -365,6 +369,8 @@ struct txgbe_mac_addr {
 #define TXGBE_FLAG_VXLAN_OFFLOAD_ENABLE         BIT(5)
 #define TXGBE_FLAG_FDIR_HASH_CAPABLE            BIT(6)
 #define TXGBE_FLAG_FDIR_PERFECT_CAPABLE         BIT(7)
+#define TXGBE_FLAG_RX_HWTSTAMP_ENABLED          BIT(8)
+#define TXGBE_FLAG_RX_HWTSTAMP_IN_REGISTER      BIT(9)
 
 /**
  * txgbe_adapter.flag2
@@ -475,6 +481,22 @@ struct txgbe_adapter {
 	char eeprom_id[32];
 	bool netdev_registered;
 	u32 interrupt_event;
+
+	struct ptp_clock *ptp_clock;
+	struct ptp_clock_info ptp_caps;
+	struct work_struct ptp_tx_work;
+	struct sk_buff *ptp_tx_skb;
+	struct hwtstamp_config tstamp_config;
+	unsigned long ptp_tx_start;
+	unsigned long last_overflow_check;
+	unsigned long last_rx_ptp_check;
+	spinlock_t tmreg_lock; /* spinlock for ptp */
+	struct cyclecounter hw_cc;
+	struct timecounter hw_tc;
+	u32 base_incval;
+	u32 tx_hwtstamp_timeouts;
+	u32 tx_hwtstamp_skipped;
+	u32 rx_hwtstamp_cleared;
 
 	struct txgbe_mac_addr *mac_table;
 
@@ -595,6 +617,17 @@ int txgbe_add_mac_filter(struct txgbe_adapter *adapter, u8 *addr, u16 pool);
 int txgbe_del_mac_filter(struct txgbe_adapter *adapter, u8 *addr, u16 pool);
 int txgbe_available_rars(struct txgbe_adapter *adapter);
 void txgbe_vlan_mode(struct net_device *netdev, u32 features);
+
+void txgbe_ptp_init(struct txgbe_adapter *adapter);
+void txgbe_ptp_stop(struct txgbe_adapter *adapter);
+void txgbe_ptp_suspend(struct txgbe_adapter *adapter);
+void txgbe_ptp_overflow_check(struct txgbe_adapter *adapter);
+void txgbe_ptp_rx_hang(struct txgbe_adapter *adapter);
+void txgbe_ptp_rx_hwtstamp(struct txgbe_adapter *adapter, struct sk_buff *skb);
+int txgbe_ptp_set_ts_config(struct txgbe_adapter *adapter, struct ifreq *ifr);
+int txgbe_ptp_get_ts_config(struct txgbe_adapter *adapter, struct ifreq *ifr);
+void txgbe_ptp_start_cyclecounter(struct txgbe_adapter *adapter);
+void txgbe_ptp_reset(struct txgbe_adapter *adapter);
 
 void txgbe_set_rx_drop_en(struct txgbe_adapter *adapter);
 
