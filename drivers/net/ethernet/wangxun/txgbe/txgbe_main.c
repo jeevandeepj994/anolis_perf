@@ -1495,6 +1495,10 @@ void txgbe_irq_enable(struct txgbe_adapter *adapter, bool queues, bool flush)
 
 	mask |= TXGBE_PX_MISC_IEN_OVER_HEAT;
 
+	if ((adapter->flags & TXGBE_FLAG_FDIR_HASH_CAPABLE) &&
+	    !(adapter->flags2 & TXGBE_FLAG2_FDIR_REQUIRES_REINIT))
+		mask |= TXGBE_PX_MISC_IEN_FLOW_DIR;
+
 	wr32(&adapter->hw, TXGBE_PX_MISC_IEN, mask);
 
 	/* unmask interrupt */
@@ -1537,6 +1541,28 @@ static irqreturn_t txgbe_msix_other(int __always_unused irq, void *data)
 	    (eicr & TXGBE_PX_MISC_IC_ETH_EVENT)) {
 		adapter->flags2 |= TXGBE_FLAG2_PF_RESET_REQUESTED;
 		txgbe_service_event_schedule(adapter);
+	}
+
+	/* Handle Flow Director Full threshold interrupt */
+	if (eicr & TXGBE_PX_MISC_IC_FLOW_DIR) {
+		int reinit_count = 0;
+		int i;
+
+		for (i = 0; i < adapter->num_tx_queues; i++) {
+			struct txgbe_ring *ring = adapter->tx_ring[i];
+
+			if (test_and_clear_bit(__TXGBE_TX_FDIR_INIT_DONE,
+					       &ring->state))
+				reinit_count++;
+		}
+		if (reinit_count) {
+			/* no more flow director interrupts until after init */
+			wr32m(hw, TXGBE_PX_MISC_IEN,
+			      TXGBE_PX_MISC_IEN_FLOW_DIR, 0);
+			adapter->flags2 |=
+				TXGBE_FLAG2_FDIR_REQUIRES_REINIT;
+			txgbe_service_event_schedule(adapter);
+		}
 	}
 
 	txgbe_check_sfp_event(adapter, eicr);
@@ -1655,6 +1681,13 @@ static int txgbe_request_msix_irqs(struct txgbe_adapter *adapter)
 				  "request_irq failed for MSIX interrupt '%s' Error: %d\n",
 				  q_vector->name, err);
 			goto free_queue_irqs;
+		}
+
+		/* If Flow Director is enabled, set interrupt affinity */
+		if (adapter->flags & TXGBE_FLAG_FDIR_HASH_CAPABLE) {
+			/* assign the mask for this irq */
+			irq_set_affinity_hint(entry->vector,
+					      &q_vector->affinity_mask);
 		}
 	}
 
@@ -1882,6 +1915,15 @@ void txgbe_configure_tx_ring(struct txgbe_adapter *adapter,
 	 */
 
 	txdctl |= 0x20 << TXGBE_PX_TR_CFG_WTHRESH_SHIFT;
+
+	/* reinitialize flowdirector state */
+	if (adapter->flags & TXGBE_FLAG_FDIR_HASH_CAPABLE) {
+		ring->atr_sample_rate = adapter->atr_sample_rate;
+		ring->atr_count = 0;
+		set_bit(__TXGBE_TX_FDIR_INIT_DONE, &ring->state);
+	} else {
+		ring->atr_sample_rate = 0;
+	}
 
 	/* initialize XPS */
 	if (!test_and_set_bit(__TXGBE_TX_XPS_INIT_DONE, &ring->state)) {
@@ -2894,9 +2936,57 @@ static void txgbe_pbthresh_setup(struct txgbe_adapter *adapter)
 static void txgbe_configure_pb(struct txgbe_adapter *adapter)
 {
 	struct txgbe_hw *hw = &adapter->hw;
+	int hdrm;
 
-	TCALL(hw, mac.ops.setup_rxpba, 0, 0, PBA_STRATEGY_EQUAL);
+	if (adapter->flags & TXGBE_FLAG_FDIR_HASH_CAPABLE ||
+	    adapter->flags & TXGBE_FLAG_FDIR_PERFECT_CAPABLE)
+		hdrm = 32 << adapter->fdir_pballoc;
+	else
+		hdrm = 0;
+
+	TCALL(hw, mac.ops.setup_rxpba, 0, hdrm, PBA_STRATEGY_EQUAL);
 	txgbe_pbthresh_setup(adapter);
+}
+
+static void txgbe_fdir_filter_restore(struct txgbe_adapter *adapter)
+{
+	struct txgbe_hw *hw = &adapter->hw;
+	struct hlist_node *node;
+	struct txgbe_fdir_filter *filter;
+	u8 queue = 0;
+
+	spin_lock(&adapter->fdir_perfect_lock);
+
+	if (!hlist_empty(&adapter->fdir_filter_list))
+		txgbe_fdir_set_input_mask(hw, &adapter->fdir_mask,
+					  adapter->cloud_mode);
+
+	hlist_for_each_entry_safe(filter, node,
+				  &adapter->fdir_filter_list, fdir_node) {
+		if (filter->action == TXGBE_RDB_FDIR_DROP_QUEUE) {
+			queue = TXGBE_RDB_FDIR_DROP_QUEUE;
+		} else {
+			u32 ring = ethtool_get_flow_spec_ring(filter->action);
+
+			if (ring >= adapter->num_rx_queues) {
+				netif_err(adapter, drv, adapter->netdev,
+					  "FDIR restore failed, ring:%u\n",
+					  ring);
+				continue;
+			}
+
+			/* Map the ring onto the absolute queue index */
+			queue = adapter->rx_ring[ring]->reg_idx;
+		}
+
+		txgbe_fdir_write_perfect_filter(hw,
+						&filter->filter,
+						filter->sw_idx,
+						queue,
+						adapter->cloud_mode);
+	}
+
+	spin_unlock(&adapter->fdir_perfect_lock);
 }
 
 static void txgbe_configure_isb(struct txgbe_adapter *adapter)
@@ -2943,6 +3033,16 @@ static void txgbe_configure(struct txgbe_adapter *adapter)
 	txgbe_restore_vlan(adapter);
 
 	TCALL(hw, mac.ops.disable_sec_rx_path);
+
+	if (adapter->flags & TXGBE_FLAG_FDIR_HASH_CAPABLE) {
+		txgbe_init_fdir_signature(&adapter->hw,
+					  adapter->fdir_pballoc);
+	} else if (adapter->flags & TXGBE_FLAG_FDIR_PERFECT_CAPABLE) {
+		txgbe_init_fdir_perfect(&adapter->hw,
+					adapter->fdir_pballoc,
+					adapter->cloud_mode);
+		txgbe_fdir_filter_restore(adapter);
+	}
 
 	TCALL(hw, mac.ops.enable_sec_rx_path);
 
@@ -3260,6 +3360,23 @@ static void txgbe_clean_all_tx_rings(struct txgbe_adapter *adapter)
 		txgbe_clean_tx_ring(adapter->tx_ring[i]);
 }
 
+static void txgbe_fdir_filter_exit(struct txgbe_adapter *adapter)
+{
+	struct hlist_node *node;
+	struct txgbe_fdir_filter *filter;
+
+	spin_lock(&adapter->fdir_perfect_lock);
+
+	hlist_for_each_entry_safe(filter, node,
+				  &adapter->fdir_filter_list, fdir_node) {
+		hlist_del(&filter->fdir_node);
+		kfree(filter);
+	}
+	adapter->fdir_filter_count = 0;
+
+	spin_unlock(&adapter->fdir_perfect_lock);
+}
+
 void txgbe_disable_device(struct txgbe_adapter *adapter)
 {
 	struct net_device *netdev = adapter->netdev;
@@ -3289,7 +3406,8 @@ void txgbe_disable_device(struct txgbe_adapter *adapter)
 
 	txgbe_napi_disable_all(adapter);
 
-	adapter->flags2 &= ~(TXGBE_FLAG2_PF_RESET_REQUESTED |
+	adapter->flags2 &= ~(TXGBE_FLAG2_FDIR_REQUIRES_REINIT |
+			     TXGBE_FLAG2_PF_RESET_REQUESTED |
 			     TXGBE_FLAG2_GLOBAL_RESET_REQUESTED);
 	adapter->flags &= ~TXGBE_FLAG_NEED_LINK_UPDATE;
 
@@ -3357,7 +3475,7 @@ static int txgbe_sw_init(struct txgbe_adapter *adapter)
 {
 	struct txgbe_hw *hw = &adapter->hw;
 	struct pci_dev *pdev = adapter->pdev;
-	unsigned int rss;
+	unsigned int fdir, rss;
 	u32 ssid = 0;
 	int err = 0;
 
@@ -3415,7 +3533,13 @@ static int txgbe_sw_init(struct txgbe_adapter *adapter)
 	adapter->flags |= TXGBE_FLAG_VXLAN_OFFLOAD_CAPABLE;
 	adapter->flags2 |= TXGBE_FLAG2_RSC_CAPABLE;
 
+	fdir = min_t(int, TXGBE_MAX_FDIR_INDICES, num_online_cpus());
+	adapter->ring_feature[RING_F_FDIR].limit = fdir;
+	adapter->fdir_pballoc = TXGBE_FDIR_PBALLOC_64K;
 	adapter->max_q_vectors = TXGBE_MAX_MSIX_Q_VECTORS_SAPPHIRE;
+
+	/* n-tuple support exists, always init our spinlock */
+	spin_lock_init(&adapter->fdir_perfect_lock);
 
 	/* default flow control settings */
 	hw->fc.requested_mode = txgbe_fc_full;
@@ -3849,6 +3973,8 @@ int txgbe_close(struct net_device *netdev)
 	txgbe_free_all_rx_resources(adapter);
 	txgbe_free_all_tx_resources(adapter);
 
+	txgbe_fdir_filter_exit(adapter);
+
 	txgbe_release_hw_control(adapter);
 
 	return 0;
@@ -4043,6 +4169,9 @@ void txgbe_update_stats(struct txgbe_adapter *adapter)
 				     rd32(hw, TXGBE_RDM_DRP_PKT);
 	hwstats->lxonrxc += rd32(hw, TXGBE_MAC_LXONRXC);
 
+	hwstats->fdirmatch += rd32(hw, TXGBE_RDB_FDIR_MATCH);
+	hwstats->fdirmiss += rd32(hw, TXGBE_RDB_FDIR_MISS);
+
 	bprc = rd32(hw, TXGBE_RX_BC_FRAMES_GOOD_LOW);
 	hwstats->bprc += bprc;
 	hwstats->mprc = 0;
@@ -4072,6 +4201,43 @@ void txgbe_update_stats(struct txgbe_adapter *adapter)
 	net_stats->rx_length_errors = hwstats->rlec;
 	net_stats->rx_crc_errors = hwstats->crcerrs;
 	net_stats->rx_missed_errors = total_mpc;
+}
+
+/**
+ * txgbe_fdir_reinit_subtask - worker thread to reinit FDIR filter table
+ * @adapter: pointer to the device adapter structure
+ **/
+static void txgbe_fdir_reinit_subtask(struct txgbe_adapter *adapter)
+{
+	struct txgbe_hw *hw = &adapter->hw;
+	int i;
+
+	if (!(adapter->flags2 & TXGBE_FLAG2_FDIR_REQUIRES_REINIT))
+		return;
+
+	adapter->flags2 &= ~TXGBE_FLAG2_FDIR_REQUIRES_REINIT;
+
+	/* if interface is down do nothing */
+	if (test_bit(__TXGBE_DOWN, &adapter->state))
+		return;
+
+	/* do nothing if we are not using signature filters */
+	if (!(adapter->flags & TXGBE_FLAG_FDIR_HASH_CAPABLE))
+		return;
+
+	adapter->fdir_overflow++;
+
+	if (txgbe_reinit_fdir_tables(hw) == 0) {
+		for (i = 0; i < adapter->num_tx_queues; i++)
+			set_bit(__TXGBE_TX_FDIR_INIT_DONE,
+				&adapter->tx_ring[i]->state);
+		/* re-enable flow director interrupts */
+		wr32m(hw, TXGBE_PX_MISC_IEN,
+		      TXGBE_PX_MISC_IEN_FLOW_DIR, TXGBE_PX_MISC_IEN_FLOW_DIR);
+	} else {
+		netif_err(adapter, probe, adapter->netdev,
+			  "failed to finish FDIR re-initialization, ignored adding FDIR ATR filters\n");
+	}
 }
 
 /**
@@ -4510,6 +4676,7 @@ static void txgbe_service_task(struct work_struct *work)
 	txgbe_sfp_link_config_subtask(adapter);
 	txgbe_check_overtemp_subtask(adapter);
 	txgbe_watchdog_subtask(adapter);
+	txgbe_fdir_reinit_subtask(adapter);
 	txgbe_check_hang_subtask(adapter);
 
 	txgbe_service_event_complete(adapter);
@@ -5176,6 +5343,89 @@ dma_error:
 	return -1;
 }
 
+static void txgbe_atr(struct txgbe_ring *ring,
+		      struct txgbe_tx_buffer *first,
+		      struct txgbe_dptype dptype)
+{
+	struct txgbe_q_vector *q_vector = ring->q_vector;
+	union txgbe_atr_hash_dword input = { .dword = 0 };
+	union txgbe_atr_hash_dword common = { .dword = 0 };
+	union network_header hdr;
+	struct tcphdr *th;
+
+	/* if ring doesn't have a interrupt vector, cannot perform ATR */
+	if (!q_vector)
+		return;
+
+	/* do nothing if sampling is disabled */
+	if (!ring->atr_sample_rate)
+		return;
+
+	ring->atr_count++;
+
+	if (dptype.etype) {
+		if (TXGBE_PTYPE_TYPL4(dptype.ptype) != TXGBE_PTYPE_TYP_TCP)
+			return;
+		hdr.raw = (void *)skb_inner_network_header(first->skb);
+		th = inner_tcp_hdr(first->skb);
+	} else {
+		if (TXGBE_PTYPE_PKT(dptype.ptype) != TXGBE_PTYPE_PKT_IP ||
+		    TXGBE_PTYPE_TYPL4(dptype.ptype) != TXGBE_PTYPE_TYP_TCP)
+			return;
+		hdr.raw = (void *)skb_network_header(first->skb);
+		th = tcp_hdr(first->skb);
+	}
+
+	/* skip this packet since it is invalid or the socket is closing */
+	if (!th || th->fin)
+		return;
+
+	/* sample on all syn packets or once every atr sample count */
+	if (!th->syn && ring->atr_count < ring->atr_sample_rate)
+		return;
+
+	/* reset sample count */
+	ring->atr_count = 0;
+
+	/* src and dst are inverted, think how the receiver sees them
+	 *
+	 * The input is broken into two sections, a non-compressed section
+	 * containing vm_pool, vlan_id, and flow_type.  The rest of the data
+	 * is XORed together and stored in the compressed dword.
+	 */
+	input.formatted.vlan_id = htons((u16)dptype.ptype);
+
+	/* since src port and flex bytes occupy the same word XOR them together
+	 * and write the value to source port portion of compressed dword
+	 */
+	if (first->tx_flags & TXGBE_TX_FLAGS_SW_VLAN)
+		common.port.src ^= th->dest ^ first->skb->protocol;
+	else if (first->tx_flags & TXGBE_TX_FLAGS_HW_VLAN)
+		common.port.src ^= th->dest ^ first->skb->vlan_proto;
+	else
+		common.port.src ^= th->dest ^ first->protocol;
+	common.port.dst ^= th->source;
+
+	if (TXGBE_PTYPE_PKT_IPV6 & TXGBE_PTYPE_PKT(dptype.ptype)) {
+		input.formatted.flow_type = TXGBE_ATR_FLOW_TYPE_TCPV6;
+		common.ip ^= hdr.ipv6->saddr.s6_addr32[0] ^
+					 hdr.ipv6->saddr.s6_addr32[1] ^
+					 hdr.ipv6->saddr.s6_addr32[2] ^
+					 hdr.ipv6->saddr.s6_addr32[3] ^
+					 hdr.ipv6->daddr.s6_addr32[0] ^
+					 hdr.ipv6->daddr.s6_addr32[1] ^
+					 hdr.ipv6->daddr.s6_addr32[2] ^
+					 hdr.ipv6->daddr.s6_addr32[3];
+	} else {
+		input.formatted.flow_type = TXGBE_ATR_FLOW_TYPE_TCPV4;
+		common.ip ^= hdr.ipv4->saddr ^ hdr.ipv4->daddr;
+	}
+
+	/* This assumes the Rx queue and Tx queue are bound to the same CPU */
+	txgbe_fdir_add_signature_filter(&q_vector->adapter->hw,
+					input, common, ring->queue_index);
+}
+
 /**
  * skb_pad - zero pad the tail of an skb
  * @skb: buffer to pad
@@ -5307,6 +5557,10 @@ netdev_tx_t txgbe_xmit_frame_ring(struct sk_buff *skb,
 		goto out_drop;
 	else if (!tso)
 		txgbe_tx_csum(tx_ring, first, dptype);
+
+	/* add the ATR filter if ATR is on */
+	if (test_bit(__TXGBE_TX_FDIR_INIT_DONE, &tx_ring->state))
+		txgbe_atr(tx_ring, first, dptype);
 
 	txgbe_tx_map(tx_ring, first, hdr_len);
 
@@ -5462,6 +5716,37 @@ static int txgbe_set_features(struct net_device *netdev,
 			netif_info(adapter, probe, netdev,
 				   "rx-usecs set too low, disabling RSC\n");
 		}
+	}
+
+	/* Check if Flow Director n-tuple support was enabled or disabled.  If
+	 * the state changed, we need to reset.
+	 */
+	switch (features & NETIF_F_NTUPLE) {
+	case NETIF_F_NTUPLE:
+		/* turn off ATR, enable perfect filters and reset */
+		if (!(adapter->flags & TXGBE_FLAG_FDIR_PERFECT_CAPABLE))
+			need_reset = true;
+
+		adapter->flags &= ~TXGBE_FLAG_FDIR_HASH_CAPABLE;
+		adapter->flags |= TXGBE_FLAG_FDIR_PERFECT_CAPABLE;
+		break;
+	default:
+		/* turn off perfect filters, enable ATR and reset */
+		if (adapter->flags & TXGBE_FLAG_FDIR_PERFECT_CAPABLE)
+			need_reset = true;
+
+		adapter->flags &= ~TXGBE_FLAG_FDIR_PERFECT_CAPABLE;
+
+		/* We cannot enable ATR if RSS is disabled */
+		if (adapter->ring_feature[RING_F_RSS].limit <= 1)
+			break;
+
+		/* A sample rate of 0 indicates ATR disabled */
+		if (!adapter->atr_sample_rate)
+			break;
+
+		adapter->flags |= TXGBE_FLAG_FDIR_HASH_CAPABLE;
+		break;
 	}
 
 	if (features & NETIF_F_HW_VLAN_CTAG_RX)
@@ -5873,6 +6158,8 @@ static int txgbe_probe(struct pci_dev *pdev,
 	i_s_var += sprintf(info_string, "Enabled Features: ");
 	i_s_var += sprintf(i_s_var, "RxQ: %d TxQ: %d ",
 			   adapter->num_rx_queues, adapter->num_tx_queues);
+	if (adapter->flags & TXGBE_FLAG_FDIR_HASH_CAPABLE)
+		i_s_var += sprintf(i_s_var, "FdirHash ");
 	if (adapter->flags2 & TXGBE_FLAG2_RSC_ENABLED)
 		i_s_var += sprintf(i_s_var, "RSC ");
 	if (adapter->flags & TXGBE_FLAG_VXLAN_OFFLOAD_ENABLE)

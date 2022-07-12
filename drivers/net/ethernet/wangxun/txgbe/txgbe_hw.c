@@ -4110,6 +4110,617 @@ reset_hw_out:
 }
 
 /**
+ * txgbe_fdir_check_cmd_complete - poll to check whether FDIRCMD is complete
+ * @hw: pointer to hardware structure
+ * @fdircmd: current value of FDIRCMD register
+ */
+static s32 txgbe_fdir_check_cmd_complete(struct txgbe_hw *hw, u32 *fdircmd)
+{
+	int i;
+
+	for (i = 0; i < TXGBE_RDB_FDIR_CMD_CMD_POLL; i++) {
+		*fdircmd = rd32(hw, TXGBE_RDB_FDIR_CMD);
+		if (!(*fdircmd & TXGBE_RDB_FDIR_CMD_CMD_MASK))
+			return 0;
+		usec_delay(10);
+	}
+
+	return TXGBE_ERR_FDIR_CMD_INCOMPLETE;
+}
+
+/**
+ *  txgbe_reinit_fdir_tables - Reinitialize Flow Director tables.
+ *  @hw: pointer to hardware structure
+ **/
+s32 txgbe_reinit_fdir_tables(struct txgbe_hw *hw)
+{
+	s32 err;
+	int i;
+	u32 fdirctrl = rd32(hw, TXGBE_RDB_FDIR_CTL);
+	u32 fdircmd;
+
+	fdirctrl &= ~TXGBE_RDB_FDIR_CTL_INIT_DONE;
+
+	/* Before starting reinitialization process,
+	 * FDIRCMD.CMD must be zero.
+	 */
+	err = txgbe_fdir_check_cmd_complete(hw, &fdircmd);
+	if (err) {
+		txgbe_dbg(hw, "Flow Director previous command did not complete, aborting table re-initialization.\n");
+		return err;
+	}
+
+	wr32(hw, TXGBE_RDB_FDIR_FREE, 0);
+	TXGBE_WRITE_FLUSH(hw);
+	/* Sapphire adapters flow director init flow cannot be restarted,
+	 * workaround sapphire silicon errata by performing the following steps
+	 * before re-writing the FDIRCTRL control register with the same value.
+	 * - write 1 to bit 8 of FDIRCMD register &
+	 * - write 0 to bit 8 of FDIRCMD register
+	 */
+	wr32m(hw, TXGBE_RDB_FDIR_CMD,
+	      TXGBE_RDB_FDIR_CMD_CLEARHT, TXGBE_RDB_FDIR_CMD_CLEARHT);
+	TXGBE_WRITE_FLUSH(hw);
+	wr32m(hw, TXGBE_RDB_FDIR_CMD,
+	      TXGBE_RDB_FDIR_CMD_CLEARHT, 0);
+	TXGBE_WRITE_FLUSH(hw);
+	/* Clear FDIR Hash register to clear any leftover hashes
+	 * waiting to be programmed.
+	 */
+	wr32(hw, TXGBE_RDB_FDIR_HASH, 0x00);
+	TXGBE_WRITE_FLUSH(hw);
+
+	wr32(hw, TXGBE_RDB_FDIR_CTL, fdirctrl);
+	TXGBE_WRITE_FLUSH(hw);
+
+	/* Poll init-done after we write FDIRCTRL register */
+	for (i = 0; i < TXGBE_FDIR_INIT_DONE_POLL; i++) {
+		if (rd32(hw, TXGBE_RDB_FDIR_CTL) &
+		    TXGBE_RDB_FDIR_CTL_INIT_DONE)
+			break;
+		msec_delay(1);
+	}
+	if (i >= TXGBE_FDIR_INIT_DONE_POLL) {
+		txgbe_dbg(hw, "Flow Director Signature poll time exceeded!\n");
+		return TXGBE_ERR_FDIR_REINIT_FAILED;
+	}
+
+	/* Clear FDIR statistics registers (read to clear) */
+	rd32(hw, TXGBE_RDB_FDIR_USE_ST);
+	rd32(hw, TXGBE_RDB_FDIR_FAIL_ST);
+	rd32(hw, TXGBE_RDB_FDIR_MATCH);
+	rd32(hw, TXGBE_RDB_FDIR_MISS);
+	rd32(hw, TXGBE_RDB_FDIR_LEN);
+
+	return 0;
+}
+
+/**
+ *  txgbe_fdir_enable - Initialize Flow Director control registers
+ *  @hw: pointer to hardware structure
+ *  @fdirctrl: value to write to flow director control register
+ **/
+static void txgbe_fdir_enable(struct txgbe_hw *hw, u32 fdirctrl)
+{
+	int i;
+
+	/* Prime the keys for hashing */
+	wr32(hw, TXGBE_RDB_FDIR_HKEY, TXGBE_ATR_BUCKET_HASH_KEY);
+	wr32(hw, TXGBE_RDB_FDIR_SKEY, TXGBE_ATR_SIGNATURE_HASH_KEY);
+
+	/* Poll init-done after we write the register.  Estimated times:
+	 *      10G: PBALLOC = 11b, timing is 60us
+	 *       1G: PBALLOC = 11b, timing is 600us
+	 *     100M: PBALLOC = 11b, timing is 6ms
+	 *
+	 *     Multiple these timings by 4 if under full Rx load
+	 *
+	 * So we'll poll for TXGBE_FDIR_INIT_DONE_POLL times, sleeping for
+	 * 1 msec per poll time.  If we're at line rate and drop to 100M, then
+	 * this might not finish in our poll time, but we can live with that
+	 * for now.
+	 */
+	wr32(hw, TXGBE_RDB_FDIR_CTL, fdirctrl);
+	TXGBE_WRITE_FLUSH(hw);
+	for (i = 0; i < TXGBE_RDB_FDIR_INIT_DONE_POLL; i++) {
+		if (rd32(hw, TXGBE_RDB_FDIR_CTL) &
+		    TXGBE_RDB_FDIR_CTL_INIT_DONE)
+			break;
+		msec_delay(1);
+	}
+
+	if (i >= TXGBE_RDB_FDIR_INIT_DONE_POLL)
+		txgbe_dbg(hw, "Flow Director poll time exceeded!\n");
+}
+
+/**
+ *  txgbe_init_fdir_signature -Initialize Flow Director sig filters
+ *  @hw: pointer to hardware structure
+ *  @fdirctrl: value to write to flow director control register, initially
+ *           contains just the value of the Rx packet buffer allocation
+ **/
+s32 txgbe_init_fdir_signature(struct txgbe_hw *hw, u32 fdirctrl)
+{
+	u32 flex = 0;
+
+	flex = rd32m(hw, TXGBE_RDB_FDIR_FLEX_CFG(0),
+		     ~(TXGBE_RDB_FDIR_FLEX_CFG_BASE_MSK |
+		       TXGBE_RDB_FDIR_FLEX_CFG_MSK |
+		       TXGBE_RDB_FDIR_FLEX_CFG_OFST));
+
+	flex |= (TXGBE_RDB_FDIR_FLEX_CFG_BASE_MAC |
+		 0x6 << TXGBE_RDB_FDIR_FLEX_CFG_OFST_SHIFT);
+	wr32(hw, TXGBE_RDB_FDIR_FLEX_CFG(0), flex);
+
+	/* Continue setup of fdirctrl register bits:
+	 *  Move the flexible bytes to use the ethertype - shift 6 words
+	 *  Set the maximum length per hash bucket to 0xA filters
+	 *  Send interrupt when 64 filters are left
+	 */
+	fdirctrl |= (0xF << TXGBE_RDB_FDIR_CTL_HASH_BITS_SHIFT) |
+		    (0xA << TXGBE_RDB_FDIR_CTL_MAX_LENGTH_SHIFT) |
+		    (4 << TXGBE_RDB_FDIR_CTL_FULL_THRESH_SHIFT);
+
+	/* write hashes and fdirctrl register, poll for completion */
+	txgbe_fdir_enable(hw, fdirctrl);
+
+	if (hw->revision_id == TXGBE_SP_MPW) {
+		/* errata 1: disable RSC of drop ring 0 */
+		wr32m(hw, TXGBE_PX_RR_CFG(0),
+		      TXGBE_PX_RR_CFG_RSC, ~TXGBE_PX_RR_CFG_RSC);
+	}
+	return 0;
+}
+
+/**
+ *  txgbe_init_fdir_perfect - Initialize Flow Director perfect filters
+ *  @hw: pointer to hardware structure
+ *  @fdirctrl: value to write to flow director control register, initially
+ *           contains just the value of the Rx packet buffer allocation
+ *  @cloud_mode: true - cloud mode, false - other mode
+ **/
+s32 txgbe_init_fdir_perfect(struct txgbe_hw *hw, u32 fdirctrl,
+			    bool __maybe_unused cloud_mode)
+{
+	struct txgbe_adapter *adapter = container_of(hw, struct txgbe_adapter, hw);
+
+	/* Continue setup of fdirctrl register bits:
+	 *  Turn perfect match filtering on
+	 *  Report hash in RSS field of Rx wb descriptor
+	 *  Initialize the drop queue
+	 *  Move the flexible bytes to use the ethertype - shift 6 words
+	 *  Set the maximum length per hash bucket to 0xA filters
+	 *  Send interrupt when 64 (0x4 * 16) filters are left
+	 */
+	fdirctrl |= TXGBE_RDB_FDIR_CTL_PERFECT_MATCH |
+		    (TXGBE_RDB_FDIR_DROP_QUEUE <<
+		     TXGBE_RDB_FDIR_CTL_DROP_Q_SHIFT) |
+		    (0xF << TXGBE_RDB_FDIR_CTL_HASH_BITS_SHIFT) |
+		    (0xA << TXGBE_RDB_FDIR_CTL_MAX_LENGTH_SHIFT) |
+		    (4 << TXGBE_RDB_FDIR_CTL_FULL_THRESH_SHIFT);
+
+	/* write hashes and fdirctrl register, poll for completion */
+	txgbe_fdir_enable(hw, fdirctrl);
+
+	if (hw->revision_id == TXGBE_SP_MPW) {
+		if (adapter->num_rx_queues > TXGBE_RDB_FDIR_DROP_QUEUE)
+			/* errata 1: disable RSC of drop ring */
+			wr32m(hw,
+			      TXGBE_PX_RR_CFG(TXGBE_RDB_FDIR_DROP_QUEUE),
+			      TXGBE_PX_RR_CFG_RSC, ~TXGBE_PX_RR_CFG_RSC);
+	}
+	return 0;
+}
+
+/* These defines allow us to quickly generate all of the necessary instructions
+ * in the function below by simply calling out TXGBE_COMPUTE_SIG_HASH_ITERATION
+ * for values 0 through 15
+ */
+#define TXGBE_ATR_COMMON_HASH_KEY \
+		(TXGBE_ATR_BUCKET_HASH_KEY & TXGBE_ATR_SIGNATURE_HASH_KEY)
+#define TXGBE_COMPUTE_SIG_HASH_ITERATION(_n) \
+do { \
+	u32 n = (_n); \
+	if (TXGBE_ATR_COMMON_HASH_KEY & (0x01 << n)) \
+		common_hash ^= lo_hash_dword >> n; \
+	else if (TXGBE_ATR_BUCKET_HASH_KEY & (0x01 << n)) \
+		bucket_hash ^= lo_hash_dword >> n; \
+	else if (TXGBE_ATR_SIGNATURE_HASH_KEY & (0x01 << n)) \
+		sig_hash ^= lo_hash_dword << (16 - n); \
+	if (TXGBE_ATR_COMMON_HASH_KEY & (0x01 << (n + 16))) \
+		common_hash ^= hi_hash_dword >> n; \
+	else if (TXGBE_ATR_BUCKET_HASH_KEY & (0x01 << (n + 16))) \
+		bucket_hash ^= hi_hash_dword >> n; \
+	else if (TXGBE_ATR_SIGNATURE_HASH_KEY & (0x01 << (n + 16))) \
+		sig_hash ^= hi_hash_dword << (16 - n); \
+} while (0)
+
+/**
+ *  txgbe_atr_compute_sig_hash - Compute the signature hash
+ *  @input: input bitstream to compute the hash on
+ *  @common: compressed common input dword
+ *
+ *  This function is almost identical to the function above but contains
+ *  several optimizations such as unwinding all of the loops, letting the
+ *  compiler work out all of the conditional ifs since the keys are static
+ *  defines, and computing two keys at once since the hashed dword stream
+ *  will be the same for both keys.
+ **/
+u32 txgbe_atr_compute_sig_hash(union txgbe_atr_hash_dword input,
+			       union txgbe_atr_hash_dword common)
+{
+	u32 hi_hash_dword, lo_hash_dword, flow_vm_vlan;
+	u32 sig_hash = 0, bucket_hash = 0, common_hash = 0;
+
+	/* record the flow_vm_vlan bits as they are a key part to the hash */
+	flow_vm_vlan = ntohl(input.dword);
+
+	/* generate common hash dword */
+	hi_hash_dword = ntohl(common.dword);
+
+	/* low dword is word swapped version of common */
+	lo_hash_dword = (hi_hash_dword >> 16) | (hi_hash_dword << 16);
+
+	/* apply flow ID/VM pool/VLAN ID bits to hash words */
+	hi_hash_dword ^= flow_vm_vlan ^ (flow_vm_vlan >> 16);
+
+	/* Process bits 0 and 16 */
+	TXGBE_COMPUTE_SIG_HASH_ITERATION(0);
+
+	/* apply flow ID/VM pool/VLAN ID bits to lo hash dword, we had to
+	 * delay this because bit 0 of the stream should not be processed
+	 * so we do not add the VLAN until after bit 0 was processed
+	 */
+	lo_hash_dword ^= flow_vm_vlan ^ (flow_vm_vlan << 16);
+
+	/* Process remaining 30 bit of the key */
+	TXGBE_COMPUTE_SIG_HASH_ITERATION(1);
+	TXGBE_COMPUTE_SIG_HASH_ITERATION(2);
+	TXGBE_COMPUTE_SIG_HASH_ITERATION(3);
+	TXGBE_COMPUTE_SIG_HASH_ITERATION(4);
+	TXGBE_COMPUTE_SIG_HASH_ITERATION(5);
+	TXGBE_COMPUTE_SIG_HASH_ITERATION(6);
+	TXGBE_COMPUTE_SIG_HASH_ITERATION(7);
+	TXGBE_COMPUTE_SIG_HASH_ITERATION(8);
+	TXGBE_COMPUTE_SIG_HASH_ITERATION(9);
+	TXGBE_COMPUTE_SIG_HASH_ITERATION(10);
+	TXGBE_COMPUTE_SIG_HASH_ITERATION(11);
+	TXGBE_COMPUTE_SIG_HASH_ITERATION(12);
+	TXGBE_COMPUTE_SIG_HASH_ITERATION(13);
+	TXGBE_COMPUTE_SIG_HASH_ITERATION(14);
+	TXGBE_COMPUTE_SIG_HASH_ITERATION(15);
+
+	/* combine common_hash result with signature and bucket hashes */
+	bucket_hash ^= common_hash;
+	bucket_hash &= TXGBE_ATR_HASH_MASK;
+
+	sig_hash ^= common_hash << 16;
+	sig_hash &= TXGBE_ATR_HASH_MASK << 16;
+
+	/* return completed signature hash */
+	return sig_hash ^ bucket_hash;
+}
+
+/**
+ *  txgbe_atr_add_signature_filter - Adds a signature hash filter
+ *  @hw: pointer to hardware structure
+ *  @input: unique input dword
+ *  @common: compressed common input dword
+ *  @queue: queue index to direct traffic to
+ **/
+s32 txgbe_fdir_add_signature_filter(struct txgbe_hw *hw,
+				    union txgbe_atr_hash_dword input,
+				    union txgbe_atr_hash_dword common,
+				    u8 queue)
+{
+	u32 fdirhashcmd = 0;
+	u8 flow_type;
+	u32 fdircmd;
+	s32 err;
+
+	/* Get the flow_type in order to program FDIRCMD properly
+	 * lowest 2 bits are FDIRCMD.L4TYPE, third lowest bit is FDIRCMD.IPV6
+	 * fifth is FDIRCMD.TUNNEL_FILTER
+	 */
+	flow_type = input.formatted.flow_type;
+	switch (flow_type) {
+	case TXGBE_ATR_FLOW_TYPE_TCPV4:
+	case TXGBE_ATR_FLOW_TYPE_UDPV4:
+	case TXGBE_ATR_FLOW_TYPE_SCTPV4:
+	case TXGBE_ATR_FLOW_TYPE_TCPV6:
+	case TXGBE_ATR_FLOW_TYPE_UDPV6:
+	case TXGBE_ATR_FLOW_TYPE_SCTPV6:
+		break;
+	default:
+		txgbe_dbg(hw, " Error on flow type input\n");
+		return TXGBE_ERR_CONFIG;
+	}
+
+	/* configure FDIRCMD register */
+	fdircmd = TXGBE_RDB_FDIR_CMD_CMD_ADD_FLOW |
+		  TXGBE_RDB_FDIR_CMD_FILTER_UPDATE |
+		  TXGBE_RDB_FDIR_CMD_LAST | TXGBE_RDB_FDIR_CMD_QUEUE_EN;
+	fdircmd |= (u32)flow_type << TXGBE_RDB_FDIR_CMD_FLOW_TYPE_SHIFT;
+	fdircmd |= (u32)queue << TXGBE_RDB_FDIR_CMD_RX_QUEUE_SHIFT;
+
+	fdirhashcmd |= txgbe_atr_compute_sig_hash(input, common);
+	fdirhashcmd |= 0x1 << TXGBE_RDB_FDIR_HASH_BUCKET_VALID_SHIFT;
+	wr32(hw, TXGBE_RDB_FDIR_HASH, fdirhashcmd);
+
+	wr32(hw, TXGBE_RDB_FDIR_CMD, fdircmd);
+
+	err = txgbe_fdir_check_cmd_complete(hw, &fdircmd);
+	if (err) {
+		txgbe_dbg(hw, "Flow Director command did not complete!\n");
+		return err;
+	}
+
+	txgbe_dbg(hw, "Tx Queue=%x hash=%x\n", queue, (u32)fdirhashcmd);
+
+	return 0;
+}
+
+#define TXGBE_COMPUTE_BKT_HASH_ITERATION(_n) \
+do { \
+	u32 n = (_n); \
+	if (TXGBE_ATR_BUCKET_HASH_KEY & (0x01 << n)) \
+		bucket_hash ^= lo_hash_dword >> n; \
+	if (TXGBE_ATR_BUCKET_HASH_KEY & (0x01 << (n + 16))) \
+		bucket_hash ^= hi_hash_dword >> n; \
+} while (0)
+
+/**
+ *  txgbe_atr_compute_perfect_hash - Compute the perfect filter hash
+ *  @input: input bitstream to compute the hash on
+ *  @input_mask: mask for the input bitstream
+ *
+ *  This function serves two main purposes.  First it applies the input_mask
+ *  to the atr_input resulting in a cleaned up atr_input data stream.
+ *  Secondly it computes the hash and stores it in the bkt_hash field at
+ *  the end of the input byte stream.  This way it will be available for
+ *  future use without needing to recompute the hash.
+ **/
+void txgbe_atr_compute_perfect_hash(union txgbe_atr_input *input,
+				    union txgbe_atr_input *input_mask)
+{
+	u32 hi_hash_dword, lo_hash_dword, flow_vm_vlan;
+	u32 bucket_hash = 0;
+	__be32 hi_dword = 0;
+	u32 i = 0;
+
+	/* Apply masks to input data */
+	for (i = 0; i < 11; i++)
+		input->dword_stream[i] &= input_mask->dword_stream[i];
+
+	/* record the flow_vm_vlan bits as they are a key part to the hash */
+	flow_vm_vlan = ntohl(input->dword_stream[0]);
+
+	/* generate common hash dword */
+	for (i = 1; i <= 10; i++)
+		hi_dword ^= input->dword_stream[i];
+	hi_hash_dword = ntohl(hi_dword);
+
+	/* low dword is word swapped version of common */
+	lo_hash_dword = (hi_hash_dword >> 16) | (hi_hash_dword << 16);
+
+	/* apply flow ID/VM pool/VLAN ID bits to hash words */
+	hi_hash_dword ^= flow_vm_vlan ^ (flow_vm_vlan >> 16);
+
+	/* Process bits 0 and 16 */
+	TXGBE_COMPUTE_BKT_HASH_ITERATION(0);
+
+	/* apply flow ID/VM pool/VLAN ID bits to lo hash dword, we had to
+	 * delay this because bit 0 of the stream should not be processed
+	 * so we do not add the VLAN until after bit 0 was processed
+	 */
+	lo_hash_dword ^= flow_vm_vlan ^ (flow_vm_vlan << 16);
+
+	/* Process remaining 30 bit of the key */
+	for (i = 1; i <= 15; i++)
+		TXGBE_COMPUTE_BKT_HASH_ITERATION(i);
+
+	/* Limit hash to 13 bits since max bucket count is 8K.
+	 * Store result at the end of the input stream.
+	 */
+	input->formatted.bkt_hash = (__force __be16)(bucket_hash & 0x1FFF);
+}
+
+/**
+ *  txgbe_get_fdirtcpm - generate a TCP port from atr_input_masks
+ *  @input_mask: mask to be bit swapped
+ *
+ *  The source and destination port masks for flow director are bit swapped
+ *  in that bit 15 effects bit 0, 14 effects 1, 13, 2 etc.  In order to
+ *  generate a correctly swapped value we need to bit swap the mask and that
+ *  is what is accomplished by this function.
+ **/
+static u32 txgbe_get_fdirtcpm(union txgbe_atr_input *input_mask)
+{
+	u32 mask = ntohs(input_mask->formatted.dst_port);
+
+	mask <<= TXGBE_RDB_FDIR_TCP_MSK_DPORTM_SHIFT;
+	mask |= ntohs(input_mask->formatted.src_port);
+
+	return mask;
+}
+
+/* These two macros are meant to address the fact that we have registers
+ * that are either all or in part big-endian.  As a result on big-endian
+ * systems we will end up byte swapping the value to little-endian before
+ * it is byte swapped again and written to the hardware in the original
+ * big-endian format.
+ */
+#define TXGBE_STORE_AS_BE32(_value) \
+	(((u32)(_value) >> 24) | (((u32)(_value) & 0x00FF0000) >> 8) | \
+	 (((u32)(_value) & 0x0000FF00) << 8) | ((u32)(_value) << 24))
+
+#define TXGBE_WRITE_REG_BE32(a, reg, value) \
+	wr32((a), (reg), TXGBE_STORE_AS_BE32(ntohl(value)))
+
+#define TXGBE_STORE_AS_BE16(_value) \
+	ntohs(((u16)(_value) >> 8) | ((u16)(_value) << 8))
+
+s32 txgbe_fdir_set_input_mask(struct txgbe_hw *hw,
+			      union txgbe_atr_input *input_mask,
+			      bool __maybe_unused cloud_mode)
+{
+	/* mask IPv6 since it is currently not supported */
+	u32 fdirm = 0;
+	u32 fdirtcpm;
+	u32 flex = 0;
+
+	/* Program the relevant mask registers.  If src/dst_port or src/dst_addr
+	 * are zero, then assume a full mask for that field.  Also assume that
+	 * a VLAN of 0 is unspecified, so mask that out as well.  L4type
+	 * cannot be masked out in this implementation.
+	 *
+	 * This also assumes IPv4 only.  IPv6 masking isn't supported at this
+	 * point in time.
+	 */
+
+	/* verify bucket hash is cleared on hash generation */
+	if (input_mask->formatted.bkt_hash)
+		txgbe_dbg(hw, " bucket hash should always be 0 in mask\n");
+
+	/* Program FDIRM and verify partial masks */
+	switch (input_mask->formatted.vm_pool & 0x7F) {
+	case 0x0:
+		fdirm |= TXGBE_RDB_FDIR_OTHER_MSK_POOL;
+	case 0x7F:
+		break;
+	default:
+		txgbe_dbg(hw, " Error on vm pool mask\n");
+		return TXGBE_ERR_CONFIG;
+	}
+
+	switch (input_mask->formatted.flow_type & TXGBE_ATR_L4TYPE_MASK) {
+	case 0x0:
+		fdirm |= TXGBE_RDB_FDIR_OTHER_MSK_L4P;
+		if (input_mask->formatted.dst_port ||
+		    input_mask->formatted.src_port) {
+			txgbe_dbg(hw, " Error on src/dst port mask\n");
+			return TXGBE_ERR_CONFIG;
+		}
+	case TXGBE_ATR_L4TYPE_MASK:
+		break;
+	default:
+		txgbe_dbg(hw, " Error on flow type mask\n");
+		return TXGBE_ERR_CONFIG;
+	}
+
+	/* Now mask VM pool and destination IPv6 - bits 5 and 2 */
+	wr32(hw, TXGBE_RDB_FDIR_OTHER_MSK, fdirm);
+
+	flex = rd32m(hw, TXGBE_RDB_FDIR_FLEX_CFG(0),
+		     ~(TXGBE_RDB_FDIR_FLEX_CFG_BASE_MSK |
+		       TXGBE_RDB_FDIR_FLEX_CFG_MSK |
+		       TXGBE_RDB_FDIR_FLEX_CFG_OFST));
+	flex |= (TXGBE_RDB_FDIR_FLEX_CFG_BASE_MAC |
+		 0x6 << TXGBE_RDB_FDIR_FLEX_CFG_OFST_SHIFT);
+
+	switch ((__force u16)input_mask->formatted.flex_bytes & 0xFFFF) {
+	case 0x0000:
+		/* Mask Flex Bytes */
+		flex |= TXGBE_RDB_FDIR_FLEX_CFG_MSK;
+	case 0xFFFF:
+		break;
+	default:
+		txgbe_dbg(hw, "Error on flexible byte mask\n");
+		return TXGBE_ERR_CONFIG;
+	}
+	wr32(hw, TXGBE_RDB_FDIR_FLEX_CFG(0), flex);
+
+	/* store the TCP/UDP port masks, bit reversed from port layout */
+	fdirtcpm = txgbe_get_fdirtcpm(input_mask);
+
+	/* write both the same so that UDP and TCP use the same mask */
+	wr32(hw, TXGBE_RDB_FDIR_TCP_MSK, ~fdirtcpm);
+	wr32(hw, TXGBE_RDB_FDIR_UDP_MSK, ~fdirtcpm);
+	wr32(hw, TXGBE_RDB_FDIR_SCTP_MSK, ~fdirtcpm);
+
+	/* store source and destination IP masks (little-enian) */
+	wr32(hw, TXGBE_RDB_FDIR_SA4_MSK,
+	     ntohl(~input_mask->formatted.src_ip[0]));
+	wr32(hw, TXGBE_RDB_FDIR_DA4_MSK,
+	     ntohl(~input_mask->formatted.dst_ip[0]));
+	return 0;
+}
+
+s32 txgbe_fdir_write_perfect_filter(struct txgbe_hw *hw,
+				    union txgbe_atr_input *input,
+				    u16 soft_id, u8 queue,
+				    bool cloud_mode)
+{
+	u32 fdirport, fdirvlan, fdirhash, fdircmd;
+	s32 err;
+
+	if (!cloud_mode) {
+		/* currently IPv6 is not supported, must be programmed with 0 */
+		wr32(hw, TXGBE_RDB_FDIR_IP6(2),
+		     ntohl(input->formatted.src_ip[0]));
+		wr32(hw, TXGBE_RDB_FDIR_IP6(1),
+		     ntohl(input->formatted.src_ip[1]));
+		wr32(hw, TXGBE_RDB_FDIR_IP6(0),
+		     ntohl(input->formatted.src_ip[2]));
+
+		/* record the source address (little-endian) */
+		wr32(hw, TXGBE_RDB_FDIR_SA,
+		     ntohl(input->formatted.src_ip[0]));
+
+		/* record the first 32 bits of the destination address
+		 * (little-endian)
+		 */
+		wr32(hw, TXGBE_RDB_FDIR_DA,
+		     ntohl(input->formatted.dst_ip[0]));
+
+		/* record source and destination port (little-endian)*/
+		fdirport = ntohs(input->formatted.dst_port);
+		fdirport <<= TXGBE_RDB_FDIR_PORT_DESTINATION_SHIFT;
+		fdirport |= ntohs(input->formatted.src_port);
+		wr32(hw, TXGBE_RDB_FDIR_PORT, fdirport);
+	}
+
+	/* record packet type and flex_bytes(little-endian) */
+	fdirvlan = ntohs(input->formatted.flex_bytes);
+	fdirvlan <<= TXGBE_RDB_FDIR_FLEX_FLEX_SHIFT;
+
+	fdirvlan |= ntohs(input->formatted.vlan_id);
+	wr32(hw, TXGBE_RDB_FDIR_FLEX, fdirvlan);
+
+	/* configure FDIRHASH register */
+	fdirhash = (__force u32)input->formatted.bkt_hash |
+		   0x1 << TXGBE_RDB_FDIR_HASH_BUCKET_VALID_SHIFT;
+	fdirhash |= soft_id << TXGBE_RDB_FDIR_HASH_SIG_SW_INDEX_SHIFT;
+	wr32(hw, TXGBE_RDB_FDIR_HASH, fdirhash);
+
+	/* flush all previous writes to make certain registers are
+	 * programmed prior to issuing the command
+	 */
+	TXGBE_WRITE_FLUSH(hw);
+
+	/* configure FDIRCMD register */
+	fdircmd = TXGBE_RDB_FDIR_CMD_CMD_ADD_FLOW |
+		  TXGBE_RDB_FDIR_CMD_FILTER_UPDATE |
+		  TXGBE_RDB_FDIR_CMD_LAST | TXGBE_RDB_FDIR_CMD_QUEUE_EN;
+	if (queue == TXGBE_RDB_FDIR_DROP_QUEUE)
+		fdircmd |= TXGBE_RDB_FDIR_CMD_DROP;
+	fdircmd |= input->formatted.flow_type <<
+		   TXGBE_RDB_FDIR_CMD_FLOW_TYPE_SHIFT;
+	fdircmd |= (u32)queue << TXGBE_RDB_FDIR_CMD_RX_QUEUE_SHIFT;
+	fdircmd |= (u32)input->formatted.vm_pool <<
+			TXGBE_RDB_FDIR_CMD_VT_POOL_SHIFT;
+
+	wr32(hw, TXGBE_RDB_FDIR_CMD, fdircmd);
+	err = txgbe_fdir_check_cmd_complete(hw, &fdircmd);
+	if (err) {
+		txgbe_dbg(hw, "Flow Director command did not complete!\n");
+		return err;
+	}
+
+	return 0;
+}
+
+/**
  *  txgbe_start_hw - Prepare hardware for Tx/Rx
  *  @hw: pointer to hardware structure
  *
