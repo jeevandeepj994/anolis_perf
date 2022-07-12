@@ -143,6 +143,30 @@ s32 txgbe_setup_mac_link_multispeed_fiber(struct txgbe_hw *hw,
 					  bool autoneg_wait_to_complete);
 int txgbe_check_flash_load(struct txgbe_hw *hw, u32 check_bit);
 
+s32 txgbe_reinit_fdir_tables(struct txgbe_hw *hw);
+s32 txgbe_init_fdir_signature(struct txgbe_hw *hw, u32 fdirctrl);
+s32 txgbe_init_fdir_perfect(struct txgbe_hw *hw, u32 fdirctrl,
+			    bool cloud_mode);
+s32 txgbe_fdir_add_signature_filter(struct txgbe_hw *hw,
+				    union txgbe_atr_hash_dword input,
+				    union txgbe_atr_hash_dword common,
+				    u8 queue);
+s32 txgbe_fdir_set_input_mask(struct txgbe_hw *hw,
+			      union txgbe_atr_input *input_mask, bool cloud_mode);
+s32 txgbe_fdir_write_perfect_filter(struct txgbe_hw *hw,
+				    union txgbe_atr_input *input,
+				    u16 soft_id, u8 queue, bool cloud_mode);
+s32 txgbe_fdir_add_perfect_filter(struct txgbe_hw *hw,
+				  union txgbe_atr_input *input,
+				  union txgbe_atr_input *mask,
+				  u16 soft_id,
+				  u8 queue,
+				  bool cloud_mode);
+void txgbe_atr_compute_perfect_hash(union txgbe_atr_input *input,
+				    union txgbe_atr_input *mask);
+u32 txgbe_atr_compute_sig_hash(union txgbe_atr_hash_dword input,
+			       union txgbe_atr_hash_dword common);
+
 s32 txgbe_get_link_capabilities(struct txgbe_hw *hw,
 				u32 *speed, bool *autoneg);
 enum txgbe_media_type txgbe_get_media_type(struct txgbe_hw *hw);
