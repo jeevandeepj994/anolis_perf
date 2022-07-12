@@ -9,6 +9,9 @@
 #define TXGBE_SP_MAX_TX_QUEUES  128
 #define TXGBE_SP_MAX_RX_QUEUES  128
 #define TXGBE_SP_RAR_ENTRIES    128
+#define TXGBE_SP_MC_TBL_SIZE    128
+#define TXGBE_SP_VFT_TBL_SIZE   128
+#define TXGBE_SP_RX_PB_SIZE     512
 
 static s32 txgbe_get_eeprom_semaphore(struct txgbe_hw *hw);
 static void txgbe_release_eeprom_semaphore(struct txgbe_hw *hw);
@@ -104,6 +107,56 @@ s32 txgbe_init_hw(struct txgbe_hw *hw)
 	}
 
 	return status;
+}
+
+/**
+ *  txgbe_clear_hw_cntrs - Generic clear hardware counters
+ *  @hw: pointer to hardware structure
+ *
+ *  Clears all hardware statistics counters by reading them from the hardware
+ *  Statistics counters are clear on read.
+ **/
+s32 txgbe_clear_hw_cntrs(struct txgbe_hw *hw)
+{
+	u16 i = 0;
+
+	rd32(hw, TXGBE_RX_CRC_ERROR_FRAMES_LOW);
+	for (i = 0; i < 8; i++)
+		rd32(hw, TXGBE_RDB_MPCNT(i));
+
+	rd32(hw, TXGBE_RX_LEN_ERROR_FRAMES_LOW);
+	rd32(hw, TXGBE_RDB_LXONTXC);
+	rd32(hw, TXGBE_RDB_LXOFFTXC);
+	rd32(hw, TXGBE_MAC_LXONRXC);
+	rd32(hw, TXGBE_MAC_LXOFFRXC);
+
+	for (i = 0; i < 8; i++) {
+		rd32(hw, TXGBE_RDB_PXONTXC(i));
+		rd32(hw, TXGBE_RDB_PXOFFTXC(i));
+		rd32(hw, TXGBE_MAC_PXONRXC(i));
+		wr32m(hw, TXGBE_MMC_CONTROL,
+		      TXGBE_MMC_CONTROL_UP, i << 16);
+		rd32(hw, TXGBE_MAC_PXOFFRXC);
+	}
+	for (i = 0; i < 8; i++)
+		rd32(hw, TXGBE_RDB_PXON2OFFCNT(i));
+	for (i = 0; i < 128; i++)
+		wr32(hw, TXGBE_PX_MPRC(i), 0);
+
+	rd32(hw, TXGBE_PX_GPRC);
+	rd32(hw, TXGBE_PX_GPTC);
+	rd32(hw, TXGBE_PX_GORC_MSB);
+	rd32(hw, TXGBE_PX_GOTC_MSB);
+
+	rd32(hw, TXGBE_RX_BC_FRAMES_GOOD_LOW);
+	rd32(hw, TXGBE_RX_UNDERSIZE_FRAMES_GOOD);
+	rd32(hw, TXGBE_RX_OVERSIZE_FRAMES_GOOD);
+	rd32(hw, TXGBE_RX_FRAME_CNT_GOOD_BAD_LOW);
+	rd32(hw, TXGBE_TX_FRAME_CNT_GOOD_BAD_LOW);
+	rd32(hw, TXGBE_TX_MC_FRAMES_GOOD_LOW);
+	rd32(hw, TXGBE_TX_BC_FRAMES_GOOD_LOW);
+	rd32(hw, TXGBE_RDM_DRP_PKT);
+	return 0;
 }
 
 /**
@@ -677,6 +730,130 @@ s32 txgbe_init_rx_addrs(struct txgbe_hw *hw)
 }
 
 /**
+ *  txgbe_mta_vector - Determines bit-vector in multicast table to set
+ *  @hw: pointer to hardware structure
+ *  @mc_addr: the multicast address
+ *
+ *  Extracts the 12 bits, from a multicast address, to determine which
+ *  bit-vector to set in the multicast table. The hardware uses 12 bits, from
+ *  incoming rx multicast addresses, to determine the bit-vector to check in
+ *  the MTA. Which of the 4 combination, of 12-bits, the hardware uses is set
+ *  by the MO field of the MCSTCTRL. The MO field is set during initialization
+ *  to mc_filter_type.
+ **/
+static s32 txgbe_mta_vector(struct txgbe_hw *hw, u8 *mc_addr)
+{
+	u32 vector = 0;
+
+	switch (hw->mac.mc_filter_type) {
+	case 0:   /* use bits [47:36] of the address */
+		vector = ((mc_addr[4] >> 4) | (((u16)mc_addr[5]) << 4));
+		break;
+	case 1:   /* use bits [46:35] of the address */
+		vector = ((mc_addr[4] >> 3) | (((u16)mc_addr[5]) << 5));
+		break;
+	case 2:   /* use bits [45:34] of the address */
+		vector = ((mc_addr[4] >> 2) | (((u16)mc_addr[5]) << 6));
+		break;
+	case 3:   /* use bits [43:32] of the address */
+		vector = ((mc_addr[4]) | (((u16)mc_addr[5]) << 8));
+		break;
+	default:  /* Invalid mc_filter_type */
+		txgbe_dbg(hw, "MC filter type param set incorrectly\n");
+		break;
+	}
+
+	/* vector can only be 12-bits or boundary will be exceeded */
+	vector &= 0xFFF;
+	return vector;
+}
+
+/**
+ *  txgbe_set_mta - Set bit-vector in multicast table
+ *  @hw: pointer to hardware structure
+ *  @mc_addr: Multicast address
+ *
+ *  Sets the bit-vector in the multicast table.
+ **/
+static void txgbe_set_mta(struct txgbe_hw *hw, u8 *mc_addr)
+{
+	u32 vector;
+	u32 vector_bit;
+	u32 vector_reg;
+
+	hw->addr_ctrl.mta_in_use++;
+
+	vector = txgbe_mta_vector(hw, mc_addr);
+	txgbe_dbg(hw, " bit-vector = 0x%03X\n", vector);
+
+	/* The MTA is a register array of 128 32-bit registers. It is treated
+	 * like an array of 4096 bits.  We want to set bit
+	 * BitArray[vector_value]. So we figure out what register the bit is
+	 * in, read it, OR in the new bit, then write back the new value.  The
+	 * register is determined by the upper 7 bits of the vector value and
+	 * the bit within that register are determined by the lower 5 bits of
+	 * the value.
+	 */
+	vector_reg = (vector >> 5) & 0x7F;
+	vector_bit = vector & 0x1F;
+	hw->mac.mta_shadow[vector_reg] |= (1 << vector_bit);
+}
+
+/**
+ *  txgbe_update_mc_addr_list - Updates MAC list of multicast addresses
+ *  @hw: pointer to hardware structure
+ *  @mc_addr_list: the list of new multicast addresses
+ *  @mc_addr_count: number of addresses
+ *  @next: iterator function to walk the multicast address list
+ *  @clear: flag, when set clears the table beforehand
+ *
+ *  When the clear flag is set, the given list replaces any existing list.
+ *  Hashes the given addresses into the multicast table.
+ **/
+s32 txgbe_update_mc_addr_list(struct txgbe_hw *hw, u8 *mc_addr_list,
+			      u32 mc_addr_count, txgbe_mc_addr_itr next,
+			      bool clear)
+{
+	u32 i;
+	u32 vmdq;
+	u32 psrctl;
+
+	/* Set the new number of MC addresses that we are being requested to
+	 * use.
+	 */
+	hw->addr_ctrl.num_mc_addrs = mc_addr_count;
+	hw->addr_ctrl.mta_in_use = 0;
+
+	/* Clear mta_shadow */
+	if (clear) {
+		txgbe_dbg(hw, " Clearing MTA\n");
+		memset(&hw->mac.mta_shadow, 0, sizeof(hw->mac.mta_shadow));
+	}
+
+	/* Update mta_shadow */
+	for (i = 0; i < mc_addr_count; i++) {
+		txgbe_dbg(hw, " Adding the multicast addresses:\n");
+		txgbe_set_mta(hw, next(hw, &mc_addr_list, &vmdq));
+	}
+
+	/* Enable mta */
+	for (i = 0; i < hw->mac.mcft_size; i++)
+		wr32a(hw, TXGBE_PSR_MC_TBL(0), i,
+		      hw->mac.mta_shadow[i]);
+
+	if (hw->addr_ctrl.mta_in_use > 0) {
+		psrctl = rd32(hw, TXGBE_PSR_CTL);
+		psrctl &= ~(TXGBE_PSR_CTL_MO | TXGBE_PSR_CTL_MFE);
+		psrctl |= TXGBE_PSR_CTL_MFE |
+			(hw->mac.mc_filter_type << TXGBE_PSR_CTL_MO_SHIFT);
+		wr32(hw, TXGBE_PSR_CTL, psrctl);
+	}
+
+	txgbe_dbg(hw, "txgbe update mc addr list Complete\n");
+	return 0;
+}
+
+/**
  *  txgbe_disable_pcie_master - Disable PCI-express master access
  *  @hw: pointer to hardware structure
  *
@@ -774,6 +951,52 @@ s32 txgbe_release_swfw_sync(struct txgbe_hw *hw, u32 mask)
 		wr32m(hw, TXGBE_MNG_SWFW_SYNC, mask, 0);
 
 	txgbe_release_eeprom_semaphore(hw);
+
+	return 0;
+}
+
+/**
+ *  txgbe_disable_sec_rx_path - Stops the receive data path
+ *  @hw: pointer to hardware structure
+ *
+ *  Stops the receive data path and waits for the HW to internally empty
+ *  the Rx security block
+ **/
+s32 txgbe_disable_sec_rx_path(struct txgbe_hw *hw)
+{
+#define TXGBE_MAX_SECRX_POLL 40
+
+	int i;
+	int secrxreg;
+
+	wr32m(hw, TXGBE_RSC_CTL,
+	      TXGBE_RSC_CTL_RX_DIS, TXGBE_RSC_CTL_RX_DIS);
+	for (i = 0; i < TXGBE_MAX_SECRX_POLL; i++) {
+		secrxreg = rd32(hw, TXGBE_RSC_ST);
+		if (!(secrxreg & TXGBE_RSC_ST_RSEC_RDY))
+			/* Use interrupt-safe sleep just in case */
+			usec_delay(1000);
+		else
+			break;
+	}
+
+	/* For informational purposes only */
+	if (i >= TXGBE_MAX_SECRX_POLL)
+		txgbe_dbg(hw, "Rx unit being enabled before security path fully disabled. Continuing with init.\n");
+
+	return 0;
+}
+
+/**
+ *  txgbe_enable_sec_rx_path - Enables the receive data path
+ *  @hw: pointer to hardware structure
+ *
+ *  Enables the receive data path.
+ **/
+s32 txgbe_enable_sec_rx_path(struct txgbe_hw *hw)
+{
+	wr32m(hw, TXGBE_RSC_CTL, TXGBE_RSC_CTL_RX_DIS, 0);
+	TXGBE_WRITE_FLUSH(hw);
 
 	return 0;
 }
@@ -927,6 +1150,82 @@ s32 txgbe_init_uta_tables(struct txgbe_hw *hw)
 
 	for (i = 0; i < 128; i++)
 		wr32(hw, TXGBE_PSR_UC_TBL(i), 0);
+
+	return 0;
+}
+
+/**
+ *  txgbe_set_vfta - Set VLAN filter table
+ *  @hw: pointer to hardware structure
+ *  @vlan: VLAN id to write to VLAN filter
+ *  @vind: VMDq output index that maps queue to VLAN id in VFVFB
+ *  @vlan_on: boolean flag to turn on/off VLAN in VFVF
+ *
+ *  Turn on/off specified VLAN in the VLAN filter table.
+ **/
+s32 txgbe_set_vfta(struct txgbe_hw *hw, u32 vlan, u32 vind,
+		   bool vlan_on)
+{
+	s32 regindex;
+	u32 bitindex;
+	u32 vfta;
+	u32 targetbit;
+	bool vfta_changed = false;
+
+	if (vlan > 4095)
+		return TXGBE_ERR_PARAM;
+
+	/* The VFTA is a bitstring made up of 128 32-bit registers
+	 * that enable the particular VLAN id, much like the MTA:
+	 *    bits[11-5]: which register
+	 *    bits[4-0]:  which bit in the register
+	 */
+	regindex = (vlan >> 5) & 0x7F;
+	bitindex = vlan & 0x1F;
+	targetbit = (1 << bitindex);
+	/* errata 5 */
+	vfta = hw->mac.vft_shadow[regindex];
+	if (vlan_on) {
+		if (!(vfta & targetbit)) {
+			vfta |= targetbit;
+			vfta_changed = true;
+		}
+	} else {
+		if ((vfta & targetbit)) {
+			vfta &= ~targetbit;
+			vfta_changed = true;
+		}
+	}
+
+	if (vfta_changed)
+		wr32(hw, TXGBE_PSR_VLAN_TBL(regindex), vfta);
+	/* errata 5 */
+	hw->mac.vft_shadow[regindex] = vfta;
+	return 0;
+}
+
+/**
+ *  txgbe_clear_vfta - Clear VLAN filter table
+ *  @hw: pointer to hardware structure
+ *
+ *  Clears the VLAN filer table, and the VMDq index associated with the filter
+ **/
+s32 txgbe_clear_vfta(struct txgbe_hw *hw)
+{
+	u32 offset;
+
+	for (offset = 0; offset < hw->mac.vft_size; offset++) {
+		wr32(hw, TXGBE_PSR_VLAN_TBL(offset), 0);
+		/* errata 5 */
+		hw->mac.vft_shadow[offset] = 0;
+	}
+
+	for (offset = 0; offset < TXGBE_PSR_VLAN_SWC_ENTRIES; offset++) {
+		wr32(hw, TXGBE_PSR_VLAN_SWC_IDX, offset);
+		wr32(hw, TXGBE_PSR_VLAN_SWC, 0);
+		wr32(hw, TXGBE_PSR_VLAN_SWC_VM_L, 0);
+		wr32(hw, TXGBE_PSR_VLAN_SWC_VM_H, 0);
+	}
 
 	return 0;
 }
@@ -1287,6 +1586,67 @@ u32 txgbe_flash_read_dword(struct txgbe_hw *hw, u32 addr)
 }
 
 /**
+ * txgbe_set_rxpba - Initialize Rx packet buffer
+ * @hw: pointer to hardware structure
+ * @num_pb: number of packet buffers to allocate
+ * @headroom: reserve n KB of headroom
+ * @strategy: packet buffer allocation strategy
+ **/
+s32 txgbe_set_rxpba(struct txgbe_hw *hw, int num_pb, u32 headroom,
+		    int strategy)
+{
+	u32 pbsize = hw->mac.rx_pb_size;
+	int i = 0;
+	u32 rxpktsize, txpktsize, txpbthresh;
+
+	/* Reserve headroom */
+	pbsize -= headroom;
+
+	if (!num_pb)
+		num_pb = 1;
+
+	/* Divide remaining packet buffer space amongst the number of packet
+	 * buffers requested using supplied strategy.
+	 */
+	switch (strategy) {
+	case PBA_STRATEGY_WEIGHTED:
+		/* txgbe_dcb_pba_80_48 strategy weight first half of packet
+		 * buffer with 5/8 of the packet buffer space.
+		 */
+		rxpktsize = (pbsize * 5) / (num_pb * 4);
+		pbsize -= rxpktsize * (num_pb / 2);
+		rxpktsize <<= TXGBE_RDB_PB_SZ_SHIFT;
+		for (; i < (num_pb / 2); i++)
+			wr32(hw, TXGBE_RDB_PB_SZ(i), rxpktsize);
+		/* fall through - configure remaining packet buffers */
+	case PBA_STRATEGY_EQUAL:
+		rxpktsize = (pbsize / (num_pb - i)) << TXGBE_RDB_PB_SZ_SHIFT;
+		for (; i < num_pb; i++)
+			wr32(hw, TXGBE_RDB_PB_SZ(i), rxpktsize);
+		break;
+	default:
+		break;
+	}
+
+	/* Only support an equally distributed Tx packet buffer strategy. */
+	txpktsize = TXGBE_TDB_PB_SZ_MAX / num_pb;
+	txpbthresh = (txpktsize / 1024) - TXGBE_TXPKT_SIZE_MAX;
+	for (i = 0; i < num_pb; i++) {
+		wr32(hw, TXGBE_TDB_PB_SZ(i), txpktsize);
+		wr32(hw, TXGBE_TDM_PB_THRE(i), txpbthresh);
+	}
+
+	/* Clear unused TCs, if any, to zero buffer size*/
+	for (; i < TXGBE_MAX_PB; i++) {
+		wr32(hw, TXGBE_RDB_PB_SZ(i), 0);
+		wr32(hw, TXGBE_TDB_PB_SZ(i), 0);
+		wr32(hw, TXGBE_TDM_PB_THRE(i), 0);
+	}
+
+	return 0;
+}
+
+/**
  *  txgbe_init_thermal_sensor_thresh - Inits thermal sensor thresholds
  *  @hw: pointer to hardware structure
  *
@@ -1342,6 +1702,27 @@ s32 txgbe_disable_rx(struct txgbe_hw *hw)
 			wr32m(hw, TXGBE_MAC_RX_CFG,
 			      TXGBE_MAC_RX_CFG_RE, 0);
 		}
+	}
+
+	return 0;
+}
+
+s32 txgbe_enable_rx(struct txgbe_hw *hw)
+{
+	u32 pfdtxgswc;
+
+	/* enable mac receiver */
+	wr32m(hw, TXGBE_MAC_RX_CFG,
+	      TXGBE_MAC_RX_CFG_RE, TXGBE_MAC_RX_CFG_RE);
+
+	wr32m(hw, TXGBE_RDB_PB_CTL,
+	      TXGBE_RDB_PB_CTL_RXEN, TXGBE_RDB_PB_CTL_RXEN);
+
+	if (hw->mac.set_lben) {
+		pfdtxgswc = rd32(hw, TXGBE_PSR_CTL);
+		pfdtxgswc |= TXGBE_PSR_CTL_SW_EN;
+		wr32(hw, TXGBE_PSR_CTL, pfdtxgswc);
+		hw->mac.set_lben = false;
 	}
 
 	return 0;
@@ -1545,6 +1926,328 @@ int txgbe_check_flash_load(struct txgbe_hw *hw, u32 check_bit)
 	return err;
 }
 
+/* The txgbe_ptype_lookup is used to convert from the 8-bit ptype in the
+ * hardware to a bit-field that can be used by SW to more easily determine the
+ * packet type.
+ *
+ * Macros are used to shorten the table lines and make this table human
+ * readable.
+ *
+ * We store the PTYPE in the top byte of the bit field - this is just so that
+ * we can check that the table doesn't have a row missing, as the index into
+ * the table should be the PTYPE.
+ *
+ * Typical work flow:
+ *
+ * IF NOT txgbe_ptype_lookup[ptype].known
+ * THEN
+ *      Packet is unknown
+ * ELSE IF txgbe_ptype_lookup[ptype].mac == TXGBE_DEC_PTYPE_MAC_IP
+ *      Use the rest of the fields to look at the tunnels, inner protocols, etc
+ * ELSE
+ *      Use the enum txgbe_l2_ptypes to decode the packet type
+ * ENDIF
+ */
+
+/* macro to make the table lines short */
+#define TXGBE_PTT(ptype, mac, ip, etype, eip, proto, layer)\
+	{       ptype, \
+		1, \
+		/* mac     */ TXGBE_DEC_PTYPE_MAC_##mac, \
+		/* ip      */ TXGBE_DEC_PTYPE_IP_##ip, \
+		/* etype   */ TXGBE_DEC_PTYPE_ETYPE_##etype, \
+		/* eip     */ TXGBE_DEC_PTYPE_IP_##eip, \
+		/* proto   */ TXGBE_DEC_PTYPE_PROT_##proto, \
+		/* layer   */ TXGBE_DEC_PTYPE_LAYER_##layer }
+
+#define TXGBE_UKN(ptype) \
+		{ ptype, 0, 0, 0, 0, 0, 0, 0 }
+
+/* Lookup table mapping the HW PTYPE to the bit field for decoding */
+struct txgbe_dptype txgbe_ptype_lookup[256] = {
+	TXGBE_UKN(0x00),
+	TXGBE_UKN(0x01),
+	TXGBE_UKN(0x02),
+	TXGBE_UKN(0x03),
+	TXGBE_UKN(0x04),
+	TXGBE_UKN(0x05),
+	TXGBE_UKN(0x06),
+	TXGBE_UKN(0x07),
+	TXGBE_UKN(0x08),
+	TXGBE_UKN(0x09),
+	TXGBE_UKN(0x0A),
+	TXGBE_UKN(0x0B),
+	TXGBE_UKN(0x0C),
+	TXGBE_UKN(0x0D),
+	TXGBE_UKN(0x0E),
+	TXGBE_UKN(0x0F),
+
+	/* L2: mac */
+	TXGBE_UKN(0x10),
+	TXGBE_PTT(0x11, L2, NONE, NONE, NONE, NONE, PAY2),
+	TXGBE_PTT(0x12, L2, NONE, NONE, NONE, TS,   PAY2),
+	TXGBE_PTT(0x13, L2, NONE, NONE, NONE, NONE, PAY2),
+	TXGBE_PTT(0x14, L2, NONE, NONE, NONE, NONE, PAY2),
+	TXGBE_PTT(0x15, L2, NONE, NONE, NONE, NONE, NONE),
+	TXGBE_PTT(0x16, L2, NONE, NONE, NONE, NONE, PAY2),
+	TXGBE_PTT(0x17, L2, NONE, NONE, NONE, NONE, NONE),
+
+	/* L2: ethertype filter */
+	TXGBE_PTT(0x18, L2, NONE, NONE, NONE, NONE, NONE),
+	TXGBE_PTT(0x19, L2, NONE, NONE, NONE, NONE, NONE),
+	TXGBE_PTT(0x1A, L2, NONE, NONE, NONE, NONE, NONE),
+	TXGBE_PTT(0x1B, L2, NONE, NONE, NONE, NONE, NONE),
+	TXGBE_PTT(0x1C, L2, NONE, NONE, NONE, NONE, NONE),
+	TXGBE_PTT(0x1D, L2, NONE, NONE, NONE, NONE, NONE),
+	TXGBE_PTT(0x1E, L2, NONE, NONE, NONE, NONE, NONE),
+	TXGBE_PTT(0x1F, L2, NONE, NONE, NONE, NONE, NONE),
+
+	/* L3: ip non-tunnel */
+	TXGBE_UKN(0x20),
+	TXGBE_PTT(0x21, IP, FGV4, NONE, NONE, NONE, PAY3),
+	TXGBE_PTT(0x22, IP, IPV4, NONE, NONE, NONE, PAY3),
+	TXGBE_PTT(0x23, IP, IPV4, NONE, NONE, UDP,  PAY4),
+	TXGBE_PTT(0x24, IP, IPV4, NONE, NONE, TCP,  PAY4),
+	TXGBE_PTT(0x25, IP, IPV4, NONE, NONE, SCTP, PAY4),
+	TXGBE_UKN(0x26),
+	TXGBE_UKN(0x27),
+	TXGBE_UKN(0x28),
+	TXGBE_PTT(0x29, IP, FGV6, NONE, NONE, NONE, PAY3),
+	TXGBE_PTT(0x2A, IP, IPV6, NONE, NONE, NONE, PAY3),
+	TXGBE_PTT(0x2B, IP, IPV6, NONE, NONE, UDP,  PAY3),
+	TXGBE_PTT(0x2C, IP, IPV6, NONE, NONE, TCP,  PAY4),
+	TXGBE_PTT(0x2D, IP, IPV6, NONE, NONE, SCTP, PAY4),
+	TXGBE_UKN(0x2E),
+	TXGBE_UKN(0x2F),
+
+	/* L2: fcoe */
+	TXGBE_PTT(0x30, FCOE, NONE, NONE, NONE, NONE, PAY3),
+	TXGBE_PTT(0x31, FCOE, NONE, NONE, NONE, NONE, PAY3),
+	TXGBE_PTT(0x32, FCOE, NONE, NONE, NONE, NONE, PAY3),
+	TXGBE_PTT(0x33, FCOE, NONE, NONE, NONE, NONE, PAY3),
+	TXGBE_PTT(0x34, FCOE, NONE, NONE, NONE, NONE, PAY3),
+	TXGBE_UKN(0x35),
+	TXGBE_UKN(0x36),
+	TXGBE_UKN(0x37),
+	TXGBE_PTT(0x38, FCOE, NONE, NONE, NONE, NONE, PAY3),
+	TXGBE_PTT(0x39, FCOE, NONE, NONE, NONE, NONE, PAY3),
+	TXGBE_PTT(0x3A, FCOE, NONE, NONE, NONE, NONE, PAY3),
+	TXGBE_PTT(0x3B, FCOE, NONE, NONE, NONE, NONE, PAY3),
+	TXGBE_PTT(0x3C, FCOE, NONE, NONE, NONE, NONE, PAY3),
+	TXGBE_UKN(0x3D),
+	TXGBE_UKN(0x3E),
+	TXGBE_UKN(0x3F),
+
+	TXGBE_UKN(0x40),
+	TXGBE_UKN(0x41),
+	TXGBE_UKN(0x42),
+	TXGBE_UKN(0x43),
+	TXGBE_UKN(0x44),
+	TXGBE_UKN(0x45),
+	TXGBE_UKN(0x46),
+	TXGBE_UKN(0x47),
+	TXGBE_UKN(0x48),
+	TXGBE_UKN(0x49),
+	TXGBE_UKN(0x4A),
+	TXGBE_UKN(0x4B),
+	TXGBE_UKN(0x4C),
+	TXGBE_UKN(0x4D),
+	TXGBE_UKN(0x4E),
+	TXGBE_UKN(0x4F),
+	TXGBE_UKN(0x50),
+	TXGBE_UKN(0x51),
+	TXGBE_UKN(0x52),
+	TXGBE_UKN(0x53),
+	TXGBE_UKN(0x54),
+	TXGBE_UKN(0x55),
+	TXGBE_UKN(0x56),
+	TXGBE_UKN(0x57),
+	TXGBE_UKN(0x58),
+	TXGBE_UKN(0x59),
+	TXGBE_UKN(0x5A),
+	TXGBE_UKN(0x5B),
+	TXGBE_UKN(0x5C),
+	TXGBE_UKN(0x5D),
+	TXGBE_UKN(0x5E),
+	TXGBE_UKN(0x5F),
+	TXGBE_UKN(0x60),
+	TXGBE_UKN(0x61),
+	TXGBE_UKN(0x62),
+	TXGBE_UKN(0x63),
+	TXGBE_UKN(0x64),
+	TXGBE_UKN(0x65),
+	TXGBE_UKN(0x66),
+	TXGBE_UKN(0x67),
+	TXGBE_UKN(0x68),
+	TXGBE_UKN(0x69),
+	TXGBE_UKN(0x6A),
+	TXGBE_UKN(0x6B),
+	TXGBE_UKN(0x6C),
+	TXGBE_UKN(0x6D),
+	TXGBE_UKN(0x6E),
+	TXGBE_UKN(0x6F),
+	TXGBE_UKN(0x70),
+	TXGBE_UKN(0x71),
+	TXGBE_UKN(0x72),
+	TXGBE_UKN(0x73),
+	TXGBE_UKN(0x74),
+	TXGBE_UKN(0x75),
+	TXGBE_UKN(0x76),
+	TXGBE_UKN(0x77),
+	TXGBE_UKN(0x78),
+	TXGBE_UKN(0x79),
+	TXGBE_UKN(0x7A),
+	TXGBE_UKN(0x7B),
+	TXGBE_UKN(0x7C),
+	TXGBE_UKN(0x7D),
+	TXGBE_UKN(0x7E),
+	TXGBE_UKN(0x7F),
+
+	/* IPv4 --> IPv4/IPv6 */
+	TXGBE_UKN(0x80),
+	TXGBE_PTT(0x81, IP, IPV4, IPIP, FGV4, NONE, PAY3),
+	TXGBE_PTT(0x82, IP, IPV4, IPIP, IPV4, NONE, PAY3),
+	TXGBE_PTT(0x83, IP, IPV4, IPIP, IPV4, UDP,  PAY4),
+	TXGBE_PTT(0x84, IP, IPV4, IPIP, IPV4, TCP,  PAY4),
+	TXGBE_PTT(0x85, IP, IPV4, IPIP, IPV4, SCTP, PAY4),
+	TXGBE_UKN(0x86),
+	TXGBE_UKN(0x87),
+	TXGBE_UKN(0x88),
+	TXGBE_PTT(0x89, IP, IPV4, IPIP, FGV6, NONE, PAY3),
+	TXGBE_PTT(0x8A, IP, IPV4, IPIP, IPV6, NONE, PAY3),
+	TXGBE_PTT(0x8B, IP, IPV4, IPIP, IPV6, UDP,  PAY4),
+	TXGBE_PTT(0x8C, IP, IPV4, IPIP, IPV6, TCP,  PAY4),
+	TXGBE_PTT(0x8D, IP, IPV4, IPIP, IPV6, SCTP, PAY4),
+	TXGBE_UKN(0x8E),
+	TXGBE_UKN(0x8F),
+
+	/* IPv4 --> GRE/NAT --> NONE/IPv4/IPv6 */
+	TXGBE_PTT(0x90, IP, IPV4, IG, NONE, NONE, PAY3),
+	TXGBE_PTT(0x91, IP, IPV4, IG, FGV4, NONE, PAY3),
+	TXGBE_PTT(0x92, IP, IPV4, IG, IPV4, NONE, PAY3),
+	TXGBE_PTT(0x93, IP, IPV4, IG, IPV4, UDP,  PAY4),
+	TXGBE_PTT(0x94, IP, IPV4, IG, IPV4, TCP,  PAY4),
+	TXGBE_PTT(0x95, IP, IPV4, IG, IPV4, SCTP, PAY4),
+	TXGBE_UKN(0x96),
+	TXGBE_UKN(0x97),
+	TXGBE_UKN(0x98),
+	TXGBE_PTT(0x99, IP, IPV4, IG, FGV6, NONE, PAY3),
+	TXGBE_PTT(0x9A, IP, IPV4, IG, IPV6, NONE, PAY3),
+	TXGBE_PTT(0x9B, IP, IPV4, IG, IPV6, UDP,  PAY4),
+	TXGBE_PTT(0x9C, IP, IPV4, IG, IPV6, TCP,  PAY4),
+	TXGBE_PTT(0x9D, IP, IPV4, IG, IPV6, SCTP, PAY4),
+	TXGBE_UKN(0x9E),
+	TXGBE_UKN(0x9F),
+
+	/* IPv4 --> GRE/NAT --> MAC --> NONE/IPv4/IPv6 */
+	TXGBE_PTT(0xA0, IP, IPV4, IGM, NONE, NONE, PAY3),
+	TXGBE_PTT(0xA1, IP, IPV4, IGM, FGV4, NONE, PAY3),
+	TXGBE_PTT(0xA2, IP, IPV4, IGM, IPV4, NONE, PAY3),
+	TXGBE_PTT(0xA3, IP, IPV4, IGM, IPV4, UDP,  PAY4),
+	TXGBE_PTT(0xA4, IP, IPV4, IGM, IPV4, TCP,  PAY4),
+	TXGBE_PTT(0xA5, IP, IPV4, IGM, IPV4, SCTP, PAY4),
+	TXGBE_UKN(0xA6),
+	TXGBE_UKN(0xA7),
+	TXGBE_UKN(0xA8),
+	TXGBE_PTT(0xA9, IP, IPV4, IGM, FGV6, NONE, PAY3),
+	TXGBE_PTT(0xAA, IP, IPV4, IGM, IPV6, NONE, PAY3),
+	TXGBE_PTT(0xAB, IP, IPV4, IGM, IPV6, UDP,  PAY4),
+	TXGBE_PTT(0xAC, IP, IPV4, IGM, IPV6, TCP,  PAY4),
+	TXGBE_PTT(0xAD, IP, IPV4, IGM, IPV6, SCTP, PAY4),
+	TXGBE_UKN(0xAE),
+	TXGBE_UKN(0xAF),
+
+	/* IPv4 --> GRE/NAT --> MAC+VLAN --> NONE/IPv4/IPv6 */
+	TXGBE_PTT(0xB0, IP, IPV4, IGMV, NONE, NONE, PAY3),
+	TXGBE_PTT(0xB1, IP, IPV4, IGMV, FGV4, NONE, PAY3),
+	TXGBE_PTT(0xB2, IP, IPV4, IGMV, IPV4, NONE, PAY3),
+	TXGBE_PTT(0xB3, IP, IPV4, IGMV, IPV4, UDP,  PAY4),
+	TXGBE_PTT(0xB4, IP, IPV4, IGMV, IPV4, TCP,  PAY4),
+	TXGBE_PTT(0xB5, IP, IPV4, IGMV, IPV4, SCTP, PAY4),
+	TXGBE_UKN(0xB6),
+	TXGBE_UKN(0xB7),
+	TXGBE_UKN(0xB8),
+	TXGBE_PTT(0xB9, IP, IPV4, IGMV, FGV6, NONE, PAY3),
+	TXGBE_PTT(0xBA, IP, IPV4, IGMV, IPV6, NONE, PAY3),
+	TXGBE_PTT(0xBB, IP, IPV4, IGMV, IPV6, UDP,  PAY4),
+	TXGBE_PTT(0xBC, IP, IPV4, IGMV, IPV6, TCP,  PAY4),
+	TXGBE_PTT(0xBD, IP, IPV4, IGMV, IPV6, SCTP, PAY4),
+	TXGBE_UKN(0xBE),
+	TXGBE_UKN(0xBF),
+
+	/* IPv6 --> IPv4/IPv6 */
+	TXGBE_UKN(0xC0),
+	TXGBE_PTT(0xC1, IP, IPV6, IPIP, FGV4, NONE, PAY3),
+	TXGBE_PTT(0xC2, IP, IPV6, IPIP, IPV4, NONE, PAY3),
+	TXGBE_PTT(0xC3, IP, IPV6, IPIP, IPV4, UDP,  PAY4),
+	TXGBE_PTT(0xC4, IP, IPV6, IPIP, IPV4, TCP,  PAY4),
+	TXGBE_PTT(0xC5, IP, IPV6, IPIP, IPV4, SCTP, PAY4),
+	TXGBE_UKN(0xC6),
+	TXGBE_UKN(0xC7),
+	TXGBE_UKN(0xC8),
+	TXGBE_PTT(0xC9, IP, IPV6, IPIP, FGV6, NONE, PAY3),
+	TXGBE_PTT(0xCA, IP, IPV6, IPIP, IPV6, NONE, PAY3),
+	TXGBE_PTT(0xCB, IP, IPV6, IPIP, IPV6, UDP,  PAY4),
+	TXGBE_PTT(0xCC, IP, IPV6, IPIP, IPV6, TCP,  PAY4),
+	TXGBE_PTT(0xCD, IP, IPV6, IPIP, IPV6, SCTP, PAY4),
+	TXGBE_UKN(0xCE),
+	TXGBE_UKN(0xCF),
+
+	/* IPv6 --> GRE/NAT -> NONE/IPv4/IPv6 */
+	TXGBE_PTT(0xD0, IP, IPV6, IG,   NONE, NONE, PAY3),
+	TXGBE_PTT(0xD1, IP, IPV6, IG,   FGV4, NONE, PAY3),
+	TXGBE_PTT(0xD2, IP, IPV6, IG,   IPV4, NONE, PAY3),
+	TXGBE_PTT(0xD3, IP, IPV6, IG,   IPV4, UDP,  PAY4),
+	TXGBE_PTT(0xD4, IP, IPV6, IG,   IPV4, TCP,  PAY4),
+	TXGBE_PTT(0xD5, IP, IPV6, IG,   IPV4, SCTP, PAY4),
+	TXGBE_UKN(0xD6),
+	TXGBE_UKN(0xD7),
+	TXGBE_UKN(0xD8),
+	TXGBE_PTT(0xD9, IP, IPV6, IG,   FGV6, NONE, PAY3),
+	TXGBE_PTT(0xDA, IP, IPV6, IG,   IPV6, NONE, PAY3),
+	TXGBE_PTT(0xDB, IP, IPV6, IG,   IPV6, UDP,  PAY4),
+	TXGBE_PTT(0xDC, IP, IPV6, IG,   IPV6, TCP,  PAY4),
+	TXGBE_PTT(0xDD, IP, IPV6, IG,   IPV6, SCTP, PAY4),
+	TXGBE_UKN(0xDE),
+	TXGBE_UKN(0xDF),
+
+	/* IPv6 --> GRE/NAT -> MAC -> NONE/IPv4/IPv6 */
+	TXGBE_PTT(0xE0, IP, IPV6, IGM,  NONE, NONE, PAY3),
+	TXGBE_PTT(0xE1, IP, IPV6, IGM,  FGV4, NONE, PAY3),
+	TXGBE_PTT(0xE2, IP, IPV6, IGM,  IPV4, NONE, PAY3),
+	TXGBE_PTT(0xE3, IP, IPV6, IGM,  IPV4, UDP,  PAY4),
+	TXGBE_PTT(0xE4, IP, IPV6, IGM,  IPV4, TCP,  PAY4),
+	TXGBE_PTT(0xE5, IP, IPV6, IGM,  IPV4, SCTP, PAY4),
+	TXGBE_UKN(0xE6),
+	TXGBE_UKN(0xE7),
+	TXGBE_UKN(0xE8),
+	TXGBE_PTT(0xE9, IP, IPV6, IGM,  FGV6, NONE, PAY3),
+	TXGBE_PTT(0xEA, IP, IPV6, IGM,  IPV6, NONE, PAY3),
+	TXGBE_PTT(0xEB, IP, IPV6, IGM,  IPV6, UDP,  PAY4),
+	TXGBE_PTT(0xEC, IP, IPV6, IGM,  IPV6, TCP,  PAY4),
+	TXGBE_PTT(0xED, IP, IPV6, IGM,  IPV6, SCTP, PAY4),
+	TXGBE_UKN(0xEE),
+	TXGBE_UKN(0xEF),
+
+	/* IPv6 --> GRE/NAT -> MAC--> NONE/IPv */
+	TXGBE_PTT(0xF0, IP, IPV6, IGMV, NONE, NONE, PAY3),
+	TXGBE_PTT(0xF1, IP, IPV6, IGMV, FGV4, NONE, PAY3),
+	TXGBE_PTT(0xF2, IP, IPV6, IGMV, IPV4, NONE, PAY3),
+	TXGBE_PTT(0xF3, IP, IPV6, IGMV, IPV4, UDP,  PAY4),
+	TXGBE_PTT(0xF4, IP, IPV6, IGMV, IPV4, TCP,  PAY4),
+	TXGBE_PTT(0xF5, IP, IPV6, IGMV, IPV4, SCTP, PAY4),
+	TXGBE_UKN(0xF6),
+	TXGBE_UKN(0xF7),
+	TXGBE_UKN(0xF8),
+	TXGBE_PTT(0xF9, IP, IPV6, IGMV, FGV6, NONE, PAY3),
+	TXGBE_PTT(0xFA, IP, IPV6, IGMV, IPV6, NONE, PAY3),
+	TXGBE_PTT(0xFB, IP, IPV6, IGMV, IPV6, UDP,  PAY4),
+	TXGBE_PTT(0xFC, IP, IPV6, IGMV, IPV6, TCP,  PAY4),
+	TXGBE_PTT(0xFD, IP, IPV6, IGMV, IPV6, SCTP, PAY4),
+	TXGBE_UKN(0xFE),
+	TXGBE_UKN(0xFF),
+};
+
 void txgbe_init_mac_link_ops(struct txgbe_hw *hw)
 {
 	struct txgbe_mac_info *mac = &hw->mac;
@@ -1622,6 +2325,7 @@ s32 txgbe_init_ops(struct txgbe_hw *hw)
 
 	/* MAC */
 	mac->ops.init_hw = txgbe_init_hw;
+	mac->ops.clear_hw_cntrs = txgbe_clear_hw_cntrs;
 	mac->ops.get_mac_addr = txgbe_get_mac_addr;
 	mac->ops.stop_adapter = txgbe_stop_adapter;
 	mac->ops.get_bus_info = txgbe_get_bus_info;
@@ -1630,6 +2334,9 @@ s32 txgbe_init_ops(struct txgbe_hw *hw)
 	mac->ops.release_swfw_sync = txgbe_release_swfw_sync;
 	mac->ops.reset_hw = txgbe_reset_hw;
 	mac->ops.get_media_type = txgbe_get_media_type;
+	mac->ops.disable_sec_rx_path = txgbe_disable_sec_rx_path;
+	mac->ops.enable_sec_rx_path = txgbe_enable_sec_rx_path;
+	mac->ops.enable_rx_dma = txgbe_enable_rx_dma;
 	mac->ops.start_hw = txgbe_start_hw;
 	mac->ops.get_san_mac_addr = txgbe_get_san_mac_addr;
 	mac->ops.get_wwn_prefix = txgbe_get_wwn_prefix;
@@ -1638,18 +2345,26 @@ s32 txgbe_init_ops(struct txgbe_hw *hw)
 	mac->ops.led_on = txgbe_led_on;
 	mac->ops.led_off = txgbe_led_off;
 
-	/* RAR */
+	/* RAR, Multicast, VLAN */
 	mac->ops.set_rar = txgbe_set_rar;
 	mac->ops.clear_rar = txgbe_clear_rar;
 	mac->ops.init_rx_addrs = txgbe_init_rx_addrs;
+	mac->ops.update_mc_addr_list = txgbe_update_mc_addr_list;
+	mac->ops.enable_rx = txgbe_enable_rx;
 	mac->ops.disable_rx = txgbe_disable_rx;
 	mac->ops.set_vmdq_san_mac = txgbe_set_vmdq_san_mac;
+	mac->ops.set_vfta = txgbe_set_vfta;
+	mac->ops.clear_vfta = txgbe_clear_vfta;
 	mac->ops.init_uta_tables = txgbe_init_uta_tables;
 
 	/* Link */
 	mac->ops.get_link_capabilities = txgbe_get_link_capabilities;
 	mac->ops.check_link = txgbe_check_mac_link;
+	mac->ops.setup_rxpba = txgbe_set_rxpba;
+	mac->mcft_size          = TXGBE_SP_MC_TBL_SIZE;
+	mac->vft_size           = TXGBE_SP_VFT_TBL_SIZE;
 	mac->num_rar_entries    = TXGBE_SP_RAR_ENTRIES;
+	mac->rx_pb_size         = TXGBE_SP_RX_PB_SIZE;
 	mac->max_rx_queues      = TXGBE_SP_MAX_RX_QUEUES;
 	mac->max_tx_queues      = TXGBE_SP_MAX_TX_QUEUES;
 	mac->max_msix_vectors   = txgbe_get_pcie_msix_count(hw);
@@ -3044,6 +3759,14 @@ s32 txgbe_start_hw(struct txgbe_hw *hw)
 	/* Set the media type */
 	hw->phy.media_type = TCALL(hw, mac.ops.get_media_type);
 
+	/* Clear the VLAN filter table */
+	TCALL(hw, mac.ops.clear_vfta);
+
+	/* Clear statistics registers */
+	TCALL(hw, mac.ops.clear_hw_cntrs);
+
+	TXGBE_WRITE_FLUSH(hw);
+
 	/* Clear the rate limiters */
 	for (i = 0; i < hw->mac.max_tx_queues; i++) {
 		wr32(hw, TXGBE_TDM_RP_IDX, i);
@@ -3090,6 +3813,33 @@ s32 txgbe_identify_phy(struct txgbe_hw *hw)
 		return TXGBE_ERR_SFP_NOT_SUPPORTED;
 
 	return status;
+}
+
+/**
+ *  txgbe_enable_rx_dma - Enable the Rx DMA unit on sapphire
+ *  @hw: pointer to hardware structure
+ *  @regval: register value to write to RXCTRL
+ *
+ *  Enables the Rx DMA unit for sapphire
+ **/
+s32 txgbe_enable_rx_dma(struct txgbe_hw *hw, u32 regval)
+{
+	/* Workaround for sapphire silicon errata when enabling the Rx datapath.
+	 * If traffic is incoming before we enable the Rx unit, it could hang
+	 * the Rx DMA unit.  Therefore, make sure the security engine is
+	 * completely disabled prior to enabling the Rx unit.
+	 */
+
+	TCALL(hw, mac.ops.disable_sec_rx_path);
+
+	if (regval & TXGBE_RDB_PB_CTL_RXEN)
+		TCALL(hw, mac.ops.enable_rx);
+	else
+		TCALL(hw, mac.ops.disable_rx);
+
+	TCALL(hw, mac.ops.enable_sec_rx_path);
+
+	return 0;
 }
 
 /**
