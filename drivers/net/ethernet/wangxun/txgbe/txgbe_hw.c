@@ -160,6 +160,46 @@ s32 txgbe_clear_hw_cntrs(struct txgbe_hw *hw)
 }
 
 /**
+ * txgbe_device_supports_autoneg_fc - Check if device supports autonegotiation
+ * of flow control
+ * @hw: pointer to hardware structure
+ *
+ * This function returns true if the device supports flow control
+ * autonegotiation, and false if it does not.
+ *
+ **/
+bool txgbe_device_supports_autoneg_fc(struct txgbe_hw *hw)
+{
+	bool supported = false;
+	u32 speed;
+	bool link_up;
+	u8 device_type = hw->subsystem_device_id & 0xF0;
+
+	switch (hw->phy.media_type) {
+	case txgbe_media_type_fiber:
+		TCALL(hw, mac.ops.check_link, &speed, &link_up, false);
+		/* if link is down, assume supported */
+		if (link_up)
+			supported = speed == TXGBE_LINK_SPEED_1GB_FULL ?
+				true : false;
+		else
+			supported = true;
+		break;
+	case txgbe_media_type_backplane:
+		supported = (device_type != TXGBE_ID_MAC_XAUI &&
+			     device_type != TXGBE_ID_MAC_SGMII);
+		break;
+	default:
+		break;
+	}
+
+	ERROR_REPORT2(hw, TXGBE_ERROR_UNSUPPORTED,
+		      "Device %x does not support flow control autoneg",
+		      hw->device_id);
+	return supported;
+}
+
+/**
  *  txgbe_setup_fc - Set up flow control
  *  @hw: pointer to hardware structure
  *
@@ -1909,6 +1949,118 @@ s32 txgbe_reset_hostif(struct txgbe_hw *hw)
 	return status;
 }
 
+static u16 txgbe_crc16_ccitt(const u8 *buf, int size)
+{
+	u16 crc = 0;
+	int i;
+
+	while (--size >= 0) {
+		crc ^= (u16)*buf++ << 8;
+		for (i = 0; i < 8; i++) {
+			if (crc & 0x8000)
+				crc = crc << 1 ^ 0x1021;
+			else
+				crc <<= 1;
+		}
+	}
+	return crc;
+}
+
+s32 txgbe_upgrade_flash_hostif(struct txgbe_hw *hw, u32 region,
+			       const u8 *data, u32 size)
+{
+	struct txgbe_hic_upg_start start_cmd;
+	struct txgbe_hic_upg_write write_cmd;
+	struct txgbe_hic_upg_verify verify_cmd;
+	u32 offset;
+	s32 status = 0;
+
+	start_cmd.hdr.cmd = FW_FLASH_UPGRADE_START_CMD;
+	start_cmd.hdr.buf_len = FW_FLASH_UPGRADE_START_LEN;
+	start_cmd.hdr.cmd_or_resp.cmd_resv = FW_CEM_CMD_RESERVED;
+	start_cmd.module_id = (u8)region;
+	start_cmd.hdr.checksum = 0;
+	start_cmd.hdr.checksum = txgbe_calculate_checksum((u8 *)&start_cmd,
+							  (FW_CEM_HDR_LEN +
+							   start_cmd.hdr.buf_len));
+	start_cmd.pad2 = 0;
+	start_cmd.pad3 = 0;
+
+	status = txgbe_host_interface_command(hw, (u32 *)&start_cmd,
+					      sizeof(start_cmd),
+					      TXGBE_HI_FLASH_ERASE_TIMEOUT,
+					      true);
+
+	if (start_cmd.hdr.cmd_or_resp.ret_status == FW_CEM_RESP_STATUS_SUCCESS) {
+		status = 0;
+	} else {
+		status = TXGBE_ERR_HOST_INTERFACE_COMMAND;
+		return status;
+	}
+
+	for (offset = 0; offset < size;) {
+		write_cmd.hdr.cmd = FW_FLASH_UPGRADE_WRITE_CMD;
+		if (size - offset > 248) {
+			write_cmd.data_len = 248 / 4;
+			write_cmd.eof_flag = 0;
+		} else {
+			write_cmd.data_len = (u8)((size - offset) / 4);
+			write_cmd.eof_flag = 1;
+		}
+		memcpy((u8 *)write_cmd.data, &data[offset], write_cmd.data_len * 4);
+		write_cmd.hdr.buf_len = (write_cmd.data_len + 1) * 4;
+		write_cmd.hdr.cmd_or_resp.cmd_resv = FW_CEM_CMD_RESERVED;
+		write_cmd.check_sum = txgbe_crc16_ccitt((u8 *)write_cmd.data,
+							write_cmd.data_len * 4);
+
+		status = txgbe_host_interface_command(hw, (u32 *)&write_cmd,
+						      sizeof(write_cmd),
+						      TXGBE_HI_FLASH_UPDATE_TIMEOUT,
+						      true);
+		if (start_cmd.hdr.cmd_or_resp.ret_status ==
+						FW_CEM_RESP_STATUS_SUCCESS) {
+			status = 0;
+		} else {
+			status = TXGBE_ERR_HOST_INTERFACE_COMMAND;
+			return status;
+		}
+		offset += write_cmd.data_len * 4;
+	}
+
+	verify_cmd.hdr.cmd = FW_FLASH_UPGRADE_VERIFY_CMD;
+	verify_cmd.hdr.buf_len = FW_FLASH_UPGRADE_VERIFY_LEN;
+	verify_cmd.hdr.cmd_or_resp.cmd_resv = FW_CEM_CMD_RESERVED;
+	switch (region) {
+	case TXGBE_MODULE_EEPROM:
+		verify_cmd.action_flag = TXGBE_RELOAD_EEPROM;
+		break;
+	case TXGBE_MODULE_FIRMWARE:
+		verify_cmd.action_flag = TXGBE_RESET_FIRMWARE;
+		break;
+	case TXGBE_MODULE_HARDWARE:
+		verify_cmd.action_flag = TXGBE_RESET_LAN;
+		break;
+	default:
+		return status;
+	}
+
+	verify_cmd.hdr.checksum = txgbe_calculate_checksum((u8 *)&verify_cmd,
+							   (FW_CEM_HDR_LEN +
+							    verify_cmd.hdr.buf_len));
+
+	status = txgbe_host_interface_command(hw, (u32 *)&verify_cmd,
+					      sizeof(verify_cmd),
+					      TXGBE_HI_FLASH_VERIFY_TIMEOUT,
+					      true);
+
+	if (verify_cmd.hdr.cmd_or_resp.ret_status == FW_CEM_RESP_STATUS_SUCCESS)
+		status = 0;
+	else
+		status = TXGBE_ERR_HOST_INTERFACE_COMMAND;
+
+	return status;
+}
+
 /* cmd_addr is used for some special command:
  * 1. to be sector address, when implemented erase sector command
  * 2. to be flash address when implemented read, write flash address
@@ -2677,6 +2829,7 @@ s32 txgbe_init_ops(struct txgbe_hw *hw)
 
 	/* PHY */
 	phy->ops.read_i2c_byte = txgbe_read_i2c_byte;
+	phy->ops.read_i2c_sff8472 = txgbe_read_i2c_sff8472;
 	phy->ops.read_i2c_eeprom = txgbe_read_i2c_eeprom;
 	phy->ops.identify_sfp = txgbe_identify_module;
 	phy->ops.check_overtemp = txgbe_check_overtemp;
@@ -2738,6 +2891,9 @@ s32 txgbe_init_ops(struct txgbe_hw *hw)
 	eeprom->ops.calc_checksum = txgbe_calc_eeprom_checksum;
 	eeprom->ops.read = txgbe_read_ee_hostif;
 	eeprom->ops.read_buffer = txgbe_read_ee_hostif_buffer;
+	eeprom->ops.write = txgbe_write_ee_hostif;
+	eeprom->ops.write_buffer = txgbe_write_ee_hostif_buffer;
+	eeprom->ops.update_checksum = txgbe_update_eeprom_checksum;
 	eeprom->ops.validate_checksum = txgbe_validate_eeprom_checksum;
 
 	/* Manageability interface */
@@ -4720,6 +4876,43 @@ s32 txgbe_fdir_write_perfect_filter(struct txgbe_hw *hw,
 	return 0;
 }
 
+s32 txgbe_fdir_erase_perfect_filter(struct txgbe_hw *hw,
+				    union txgbe_atr_input *input,
+				    u16 soft_id)
+{
+	u32 fdirhash;
+	u32 fdircmd;
+	s32 err;
+
+	/* configure FDIRHASH register */
+	fdirhash = (__force u32)input->formatted.bkt_hash;
+	fdirhash |= soft_id << TXGBE_RDB_FDIR_HASH_SIG_SW_INDEX_SHIFT;
+	wr32(hw, TXGBE_RDB_FDIR_HASH, fdirhash);
+
+	/* flush hash to HW */
+	TXGBE_WRITE_FLUSH(hw);
+
+	/* Query if filter is present */
+	wr32(hw, TXGBE_RDB_FDIR_CMD,
+	     TXGBE_RDB_FDIR_CMD_CMD_QUERY_REM_FILT);
+
+	err = txgbe_fdir_check_cmd_complete(hw, &fdircmd);
+	if (err) {
+		txgbe_dbg(hw, "Flow Director command did not complete!\n");
+		return err;
+	}
+
+	/* if filter exists in hardware then remove it */
+	if (fdircmd & TXGBE_RDB_FDIR_CMD_FILTER_VALID) {
+		wr32(hw, TXGBE_RDB_FDIR_HASH, fdirhash);
+		TXGBE_WRITE_FLUSH(hw);
+		wr32(hw, TXGBE_RDB_FDIR_CMD,
+		     TXGBE_RDB_FDIR_CMD_CMD_REMOVE_FLOW);
+	}
+
+	return 0;
+}
+
 /**
  *  txgbe_start_hw - Prepare hardware for Tx/Rx
  *  @hw: pointer to hardware structure
@@ -5005,6 +5198,102 @@ out:
 	return status;
 }
 
+/**
+ *  txgbe_write_ee_hostif - Write EEPROM word using hostif
+ *  @hw: pointer to hardware structure
+ *  @offset: offset of  word in the EEPROM to write
+ *  @data: word write to the EEPROM
+ *
+ *  Write a 16 bit word to the EEPROM using the hostif.
+ **/
+s32 txgbe_write_ee_hostif_data(struct txgbe_hw *hw, u16 offset,
+			       u16 data)
+{
+	s32 status;
+	struct txgbe_hic_write_shadow_ram buffer;
+
+	buffer.hdr.req.cmd = FW_WRITE_SHADOW_RAM_CMD;
+	buffer.hdr.req.buf_lenh = 0;
+	buffer.hdr.req.buf_lenl = FW_WRITE_SHADOW_RAM_LEN;
+	buffer.hdr.req.checksum = FW_DEFAULT_CHECKSUM;
+
+	/* one word */
+	buffer.length = cpu_to_be16(sizeof(u16));
+	buffer.data = data;
+	buffer.address = cpu_to_be32(offset * 2);
+
+	status = txgbe_host_interface_command(hw, (u32 *)&buffer,
+					      sizeof(buffer),
+					      TXGBE_HI_COMMAND_TIMEOUT, false);
+
+	return status;
+}
+
+/**
+ *  txgbe_write_ee_hostif - Write EEPROM word using hostif
+ *  @hw: pointer to hardware structure
+ *  @offset: offset of  word in the EEPROM to write
+ *  @data: word write to the EEPROM
+ *
+ *  Write a 16 bit word to the EEPROM using the hostif.
+ **/
+s32 txgbe_write_ee_hostif(struct txgbe_hw *hw, u16 offset,
+			  u16 data)
+{
+	s32 status = 0;
+
+	if (TCALL(hw, mac.ops.acquire_swfw_sync,
+		  TXGBE_MNG_SWFW_SYNC_SW_FLASH) == 0) {
+		status = txgbe_write_ee_hostif_data(hw, offset, data);
+		TCALL(hw, mac.ops.release_swfw_sync,
+		      TXGBE_MNG_SWFW_SYNC_SW_FLASH);
+	} else {
+		txgbe_dbg(hw, "write ee hostif failed to get semaphore");
+		status = TXGBE_ERR_SWFW_SYNC;
+	}
+
+	return status;
+}
+
+/**
+ *  txgbe_write_ee_hostif_buffer - Write EEPROM word(s) using hostif
+ *  @hw: pointer to hardware structure
+ *  @offset: offset of  word in the EEPROM to write
+ *  @words: number of words
+ *  @data: word(s) write to the EEPROM
+ *
+ *  Write a 16 bit word(s) to the EEPROM using the hostif.
+ **/
+s32 txgbe_write_ee_hostif_buffer(struct txgbe_hw *hw,
+				 u16 offset, u16 words, u16 *data)
+{
+	s32 status = 0;
+	u16 i = 0;
+
+	/* Take semaphore for the entire operation. */
+	status = TCALL(hw, mac.ops.acquire_swfw_sync,
+		       TXGBE_MNG_SWFW_SYNC_SW_FLASH);
+	if (status != 0) {
+		txgbe_dbg(hw, "EEPROM write buffer - semaphore failed\n");
+		goto out;
+	}
+
+	for (i = 0; i < words; i++) {
+		status = txgbe_write_ee_hostif_data(hw, offset + i,
+						    data[i]);
+
+		if (status != 0) {
+			txgbe_dbg(hw, "EEPROM buffered write failed\n");
+			break;
+		}
+	}
+
+	TCALL(hw, mac.ops.release_swfw_sync, TXGBE_MNG_SWFW_SYNC_SW_FLASH);
+out:
+
+	return status;
+}
+
 s32 txgbe_close_notify(struct txgbe_hw *hw)
 {
 	int tmp;
@@ -5122,6 +5411,39 @@ s32 txgbe_calc_eeprom_checksum(struct txgbe_hw *hw)
 		vfree(eeprom_ptrs);
 
 	return (s32)checksum;
+}
+
+/**
+ * txgbe_update_eeprom_checksum - Updates the EEPROM checksum and flash
+ * @hw: pointer to hardware structure
+ **/
+s32 txgbe_update_eeprom_checksum(struct txgbe_hw *hw)
+{
+	s32 status;
+	u16 checksum = 0;
+
+	/* Read the first word from the EEPROM. If this times out or fails, do
+	 * not continue or we could be in for a very long wait while every
+	 * EEPROM read fails
+	 */
+	status = txgbe_read_ee_hostif(hw, 0, &checksum);
+	if (status) {
+		txgbe_dbg(hw, "EEPROM read failed\n");
+		return status;
+	}
+
+	status = txgbe_calc_eeprom_checksum(hw);
+	if (status < 0)
+		return status;
+
+	checksum = (u16)(status & 0xffff);
+
+	status = txgbe_write_ee_hostif(hw, TXGBE_EEPROM_CHECKSUM,
+				       checksum);
+	if (status)
+		return status;
+
+	return status;
 }
 
 /**
