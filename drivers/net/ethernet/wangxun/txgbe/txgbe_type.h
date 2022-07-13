@@ -2532,6 +2532,7 @@ struct txgbe_mac_operations {
 	/* Manageability interface */
 	s32 (*set_fw_drv_ver)(struct txgbe_hw *hw, u8 maj, u8 min,
 			      u8 build, u8 ver);
+	s32 (*get_thermal_sensor_data)(struct txgbe_hw *hw);
 	s32 (*init_thermal_sensor_thresh)(struct txgbe_hw *hw);
 	s32 (*disable_rx)(struct txgbe_hw *hw);
 	s32 (*enable_rx)(struct txgbe_hw *hw);

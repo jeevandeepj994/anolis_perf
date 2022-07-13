@@ -6508,6 +6508,12 @@ no_info_string:
 	netif_info(adapter, probe, netdev,
 		   "WangXun(R) 10 Gigabit Network Connection\n");
 
+#ifdef CONFIG_SYSFS
+	if (txgbe_sysfs_init(adapter))
+		netif_err(adapter, probe, netdev,
+			  "failed to allocate sysfs resources\n");
+#endif
+
 	txgbe_dbg_adapter_init(adapter);
 
 	/* setup link for SFP devices with MNG FW, else wait for TXGBE_UP */
@@ -6555,6 +6561,10 @@ static void txgbe_remove(struct pci_dev *pdev)
 
 	set_bit(__TXGBE_REMOVING, &adapter->state);
 	cancel_work_sync(&adapter->service_task);
+
+#ifdef CONFIG_SYSFS
+	txgbe_sysfs_exit(adapter);
+#endif
 
 	/* remove the added san mac */
 	txgbe_del_sanmac_netdev(netdev);

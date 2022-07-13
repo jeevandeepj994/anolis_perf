@@ -11,3 +11,4 @@ txgbe-objs := txgbe_main.o txgbe_ethtool.o \
               txgbe_lib.o txgbe_ptp.o
 
 txgbe-$(CONFIG_DEBUG_FS) += txgbe_debugfs.o
+txgbe-${CONFIG_SYSFS} += txgbe_sysfs.o
