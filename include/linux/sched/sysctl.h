@@ -60,6 +60,7 @@ int sched_proc_update_handler(struct ctl_table *table, int write,
 #ifdef CONFIG_NUMA_BALANCING
 extern int sysctl_numa_balancing_mode;
 extern unsigned int sysctl_numa_balancing_hot_threshold;
+extern unsigned int sysctl_numa_balancing_promote_rate_limit;
 #else
 #define sysctl_numa_balancing_mode	0
 #endif
