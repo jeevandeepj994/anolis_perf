@@ -509,6 +509,10 @@ struct txgbe_adapter {
 	struct txgbe_mac_addr *mac_table;
 
 	__le16 vxlan_port;
+#ifdef CONFIG_DEBUG_FS
+	struct dentry *txgbe_dbg_adapter;
+#endif
+
 	unsigned long fwd_bitmask; /* bitmask indicating in use pools */
 
 #define TXGBE_MAX_RETA_ENTRIES 128
@@ -616,6 +620,18 @@ void txgbe_disable_tx_queue(struct txgbe_adapter *adapter,
 			    struct txgbe_ring *ring);
 void txgbe_vlan_strip_enable(struct txgbe_adapter *adapter);
 void txgbe_vlan_strip_disable(struct txgbe_adapter *adapter);
+
+#ifdef CONFIG_DEBUG_FS
+void txgbe_dbg_adapter_init(struct txgbe_adapter *adapter);
+void txgbe_dbg_adapter_exit(struct txgbe_adapter *adapter);
+void txgbe_dbg_init(void);
+void txgbe_dbg_exit(void);
+#else
+static inline void txgbe_dbg_adapter_init(struct txgbe_adapter *adapter) {}
+static inline void txgbe_dbg_adapter_exit(struct txgbe_adapter *adapter) {}
+static inline void txgbe_dbg_init(void) {}
+static inline void txgbe_dbg_exit(void) {}
+#endif
 
 static inline struct netdev_queue *txring_txq(const struct txgbe_ring *ring)
 {
