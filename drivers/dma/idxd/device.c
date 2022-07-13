@@ -1454,26 +1454,27 @@ int __drv_enable_wq(struct idxd_wq *wq)
 	}
 
 	/*
-	 * In the event that the WQ is configurable for pasid and priv bits.
-	 * For kernel wq, the driver should setup the pasid, pasid_en, and priv bit.
-	 * However, for non-kernel wq, the driver should only set the pasid_en bit for
-	 * shared wq. A dedicated wq that is not 'kernel' type will configure pasid and
-	 * pasid_en later on so there is no need to setup.
-	 */
-	if (test_bit(IDXD_FLAG_CONFIGURABLE, &idxd->flags)) {
-		int priv = 0;
-
-		if (device_pasid_enabled(idxd)) {
-			if (is_idxd_wq_kernel(wq) || wq_shared(wq)) {
+	* In the event that the WQ is configurable for pasid and priv bits.
+	* For kernel wq, the driver should setup the pasid, pasid_en, and priv bit.
+	* However, for non-kernel wq, the driver should only set the pasid_en bit for
+	* shared wq. A dedicated wq will configure pasid and pasid_en later on so
+	* there is no need to setup.
+	*/
+	if (test_bit(IDXD_FLAG_CONFIGURABLE, &idxd->flags) ||
+	    test_bit(WQ_FLAG_MODE_1, &wq->flags)) {
+		if (is_idxd_wq_kernel(wq)) {
+			if (device_pasid_enabled(idxd)) {
 				u32 pasid = wq_dedicated(wq) ? idxd->pasid : 0;
 
 				__idxd_wq_set_pasid_locked(wq, pasid);
 			}
+			__idxd_wq_set_priv_locked(wq, 1);
+		} else {
+			if (device_user_pasid_enabled(idxd) && wq_shared(wq))
+				__idxd_wq_set_pasid_locked(wq, 0);
+			 __idxd_wq_set_priv_locked(wq, 0);
 		}
 
-		if (is_idxd_wq_kernel(wq))
-			priv = 1;
-		__idxd_wq_set_priv_locked(wq, priv);
 	}
 
 	rc = 0;
