@@ -298,6 +298,27 @@ struct txgbe_q_vector {
 	struct txgbe_ring ring[0] ____cacheline_internodealigned_in_smp;
 };
 
+#ifdef CONFIG_HWMON
+#define TXGBE_HWMON_TYPE_TEMP           0
+#define TXGBE_HWMON_TYPE_ALARMTHRESH    1
+#define TXGBE_HWMON_TYPE_DALARMTHRESH   2
+
+struct hwmon_attr {
+	struct device_attribute dev_attr;
+	struct txgbe_hw *hw;
+	struct txgbe_thermal_diode_data *sensor;
+	char name[19];
+};
+
+struct hwmon_buff {
+	struct attribute_group group;
+	const struct attribute_group *groups[2];
+	struct attribute *attrs[3 + 1];
+	struct hwmon_attr hwmon_list[3];
+	unsigned int n_hwmon;
+};
+#endif /* CONFIG_HWMON */
+
 /* microsecond values for various ITR rates shifted by 2 to fit itr register
  * with the first 3 bits reserved 0
  */
@@ -509,6 +530,9 @@ struct txgbe_adapter {
 	struct txgbe_mac_addr *mac_table;
 
 	__le16 vxlan_port;
+#ifdef CONFIG_HWMON
+	struct hwmon_buff *txgbe_hwmon_buff;
+#endif
 #ifdef CONFIG_DEBUG_FS
 	struct dentry *txgbe_dbg_adapter;
 #endif
@@ -621,6 +645,10 @@ void txgbe_disable_tx_queue(struct txgbe_adapter *adapter,
 void txgbe_vlan_strip_enable(struct txgbe_adapter *adapter);
 void txgbe_vlan_strip_disable(struct txgbe_adapter *adapter);
 
+#ifdef CONFIG_SYSFS
+void txgbe_sysfs_exit(struct txgbe_adapter *adapter);
+int txgbe_sysfs_init(struct txgbe_adapter *adapter);
+#endif
 #ifdef CONFIG_DEBUG_FS
 void txgbe_dbg_adapter_init(struct txgbe_adapter *adapter);
 void txgbe_dbg_adapter_exit(struct txgbe_adapter *adapter);
