@@ -4073,12 +4073,63 @@ int txgbe_close(struct net_device *netdev)
 	return 0;
 }
 
-static void txgbe_dev_shutdown(struct pci_dev *pdev, bool *enable_wake)
+#ifdef CONFIG_PM
+static int txgbe_resume(struct pci_dev *pdev)
+{
+	struct txgbe_adapter *adapter;
+	struct net_device *netdev;
+	u32 err;
+
+	adapter = pci_get_drvdata(pdev);
+	netdev = adapter->netdev;
+	adapter->hw.hw_addr = adapter->io_addr;
+	pci_set_power_state(pdev, PCI_D0);
+	pci_restore_state(pdev);
+	/* pci_restore_state clears dev->state_saved so call
+	 * pci_save_state to restore it.
+	 */
+	pci_save_state(pdev);
+
+	err = pci_enable_device_mem(pdev);
+	if (err) {
+		dev_err(&pdev->dev, "Cannot enable PCI device from suspend\n");
+		return err;
+	}
+	/* make sure to complete pre-operations */
+	smp_mb__before_atomic();
+	clear_bit(__TXGBE_DISABLED, &adapter->state);
+	pci_set_master(pdev);
+
+	pci_wake_from_d3(pdev, false);
+
+	txgbe_reset(adapter);
+
+	rtnl_lock();
+
+	err = txgbe_init_interrupt_scheme(adapter);
+	if (!err && netif_running(netdev))
+		err = txgbe_open(netdev);
+
+	rtnl_unlock();
+
+	if (err)
+		return err;
+
+	netif_device_attach(netdev);
+
+	return 0;
+}
+#endif /* CONFIG_PM */
+
+static int txgbe_dev_shutdown(struct pci_dev *pdev, bool *enable_wake)
 {
 	struct txgbe_adapter *adapter = pci_get_drvdata(pdev);
 	struct net_device *netdev = adapter->netdev;
 	struct txgbe_hw *hw = &adapter->hw;
 	u32 wufc = adapter->wol;
+#ifdef CONFIG_PM
+	int retval = 0;
+#endif
 
 	netif_device_detach(netdev);
 
@@ -4088,6 +4139,12 @@ static void txgbe_dev_shutdown(struct pci_dev *pdev, bool *enable_wake)
 	rtnl_unlock();
 
 	txgbe_clear_interrupt_scheme(adapter);
+
+#ifdef CONFIG_PM
+	retval = pci_save_state(pdev);
+	if (retval)
+		return retval;
+#endif
 
 	if (wufc) {
 		txgbe_set_rx_mode(netdev);
@@ -4114,7 +4171,31 @@ static void txgbe_dev_shutdown(struct pci_dev *pdev, bool *enable_wake)
 
 	if (!test_and_set_bit(__TXGBE_DISABLED, &adapter->state))
 		pci_disable_device(pdev);
+
+	return 0;
 }
+
+#ifdef CONFIG_PM
+static int txgbe_suspend(struct pci_dev *pdev,
+			 pm_message_t __always_unused state)
+{
+	int retval;
+	bool wake = false;
+
+	retval = txgbe_dev_shutdown(pdev, &wake);
+	if (retval)
+		return retval;
+
+	if (wake) {
+		pci_prepare_to_sleep(pdev);
+	} else {
+		pci_wake_from_d3(pdev, false);
+		pci_set_power_state(pdev, PCI_D3hot);
+	}
+
+	return 0;
+}
+#endif /* CONFIG_PM */
 
 static void txgbe_shutdown(struct pci_dev *pdev)
 {
@@ -6512,6 +6593,10 @@ static struct pci_driver txgbe_driver = {
 	.id_table = txgbe_pci_tbl,
 	.probe    = txgbe_probe,
 	.remove   = txgbe_remove,
+#ifdef CONFIG_PM
+	.suspend  = txgbe_suspend,
+	.resume   = txgbe_resume,
+#endif
 	.shutdown = txgbe_shutdown,
 };
 
