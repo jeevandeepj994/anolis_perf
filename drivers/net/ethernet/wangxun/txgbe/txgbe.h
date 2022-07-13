@@ -454,6 +454,10 @@ struct txgbe_adapter {
 	struct txgbe_ring_feature ring_feature[RING_F_ARRAY_SIZE];
 	struct msix_entry *msix_entries;
 
+	u64 test_icr;
+	struct txgbe_ring test_tx_ring;
+	struct txgbe_ring test_rx_ring;
+
 	/* structs defined in txgbe_hw.h */
 	struct txgbe_hw hw;
 	u16 msg_enable;
@@ -478,9 +482,13 @@ struct txgbe_adapter {
 	u32 atr_sample_rate;
 	spinlock_t fdir_perfect_lock; /*spinlock for FDIR */
 
+	u32 wol;
+
 	char eeprom_id[32];
+	u16 eeprom_cap;
 	bool netdev_registered;
 	u32 interrupt_event;
+	u32 led_reg;
 
 	struct ptp_clock *ptp_clock;
 	struct ptp_clock_info ptp_caps;
@@ -570,6 +578,7 @@ void txgbe_reinit_locked(struct txgbe_adapter *adapter);
 void txgbe_reset(struct txgbe_adapter *adapter);
 s32 txgbe_init_shared_code(struct txgbe_hw *hw);
 void txgbe_disable_device(struct txgbe_adapter *adapter);
+void txgbe_set_ethtool_ops(struct net_device *netdev);
 int txgbe_setup_rx_resources(struct txgbe_ring *rx_ring);
 int txgbe_setup_tx_resources(struct txgbe_ring *tx_ring);
 void txgbe_free_rx_resources(struct txgbe_ring *rx_ring);
@@ -595,6 +604,7 @@ void txgbe_configure_port(struct txgbe_adapter *adapter);
 void txgbe_clear_vxlan_port(struct txgbe_adapter *adapter);
 void txgbe_set_rx_mode(struct net_device *netdev);
 int txgbe_write_mc_addr_list(struct net_device *netdev);
+int txgbe_setup_tc(struct net_device *dev, u8 tc);
 void txgbe_tx_ctxtdesc(struct txgbe_ring *tx_ring, u32 vlan_macip_lens,
 		       u32 fcoe_sof_eof, u32 type_tucmd, u32 mss_l4len_idx);
 void txgbe_do_reset(struct net_device *netdev);
@@ -612,6 +622,7 @@ static inline struct netdev_queue *txring_txq(const struct txgbe_ring *ring)
 	return netdev_get_tx_queue(ring->netdev, ring->queue_index);
 }
 
+int txgbe_wol_supported(struct txgbe_adapter *adapter);
 int txgbe_write_uc_addr_list(struct net_device *netdev, int pool);
 int txgbe_add_mac_filter(struct txgbe_adapter *adapter, u8 *addr, u16 pool);
 int txgbe_del_mac_filter(struct txgbe_adapter *adapter, u8 *addr, u16 pool);
@@ -671,12 +682,25 @@ static inline void txgbe_intr_disable(struct txgbe_hw *hw, u64 qmask)
 	/* skip the flush */
 }
 
+static inline void txgbe_intr_trigger(struct txgbe_hw *hw, u64 qmask)
+{
+	u32 mask;
+
+	mask = (qmask & 0xFFFFFFFF);
+	if (mask)
+		wr32(hw, TXGBE_PX_ICS(0), mask);
+	mask = (qmask >> 32);
+	if (mask)
+		wr32(hw, TXGBE_PX_ICS(1), mask);
+}
+
 #define TXGBE_RING_SIZE(R) ((R)->count < TXGBE_MAX_TXD ? (R)->count / 128 : 0)
 
 #define msec_delay(_x) msleep(_x)
 #define usec_delay(_x) udelay(_x)
 
 extern char txgbe_driver_name[];
+extern const char txgbe_driver_version[];
 
 struct txgbe_msg {
 	u16 msg_enable;
@@ -703,7 +727,10 @@ __maybe_unused static struct txgbe_msg *txgbe_hw_to_msg(const struct txgbe_hw *h
 #define TXGBE_FAILED_READ_CFG_WORD  0xffffU
 #define TXGBE_FAILED_READ_CFG_BYTE  0xffU
 
+extern u32 txgbe_read_reg(struct txgbe_hw *hw, u32 reg);
 extern u16 txgbe_read_pci_cfg_word(struct txgbe_hw *hw, u32 reg);
+
+#define TXGBE_R32_Q(h, r) txgbe_read_reg(h, r)
 
 enum {
 	TXGBE_ERROR_SOFTWARE,

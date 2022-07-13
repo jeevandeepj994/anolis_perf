@@ -24,6 +24,8 @@
 #include "txgbe_phy.h"
 
 char txgbe_driver_name[] = "txgbe";
+#define DRV_VERSION "1.3.2-k"
+const char txgbe_driver_version[] = DRV_VERSION;
 
 static const char txgbe_overheat_msg[] =
 	"Network adapter has been stopped because it has over heated."
@@ -155,6 +157,72 @@ static bool txgbe_check_cfg_remove(struct txgbe_hw *hw, struct pci_dev *pdev)
 		return true;
 	}
 	return false;
+}
+
+static void txgbe_check_remove(struct txgbe_hw *hw, u32 reg)
+{
+	u32 value;
+
+	/* The following check not only optimizes a bit by not
+	 * performing a read on the status register when the
+	 * register just read was a status register read that
+	 * returned TXGBE_FAILED_READ_REG. It also blocks any
+	 * potential recursion.
+	 */
+	if (reg == TXGBE_CFG_PORT_ST) {
+		txgbe_remove_adapter(hw);
+		return;
+	}
+	value = rd32(hw, TXGBE_CFG_PORT_ST);
+	if (value == TXGBE_FAILED_READ_REG)
+		txgbe_remove_adapter(hw);
+}
+
+static u32 txgbe_validate_register_read(struct txgbe_hw *hw, u32 reg)
+{
+	u8 __iomem *reg_addr;
+	u32 value;
+	int i;
+
+	reg_addr = READ_ONCE(hw->hw_addr);
+	if (TXGBE_REMOVED(reg_addr))
+		return TXGBE_FAILED_READ_REG;
+	for (i = 0; i < TXGBE_DEAD_READ_RETRIES; ++i) {
+		value = txgbe_rd32(reg_addr + reg);
+		if (value != TXGBE_DEAD_READ_REG)
+			break;
+	}
+
+	return value;
+}
+
+/**
+ * txgbe_read_reg - Read from device register
+ * @hw: hw specific details
+ * @reg: offset of register to read
+ *
+ * Returns : value read or TXGBE_FAILED_READ_REG if removed
+ *
+ * This function is used to read device registers. It checks for device
+ * removal by confirming any read that returns all ones by checking the
+ * status register value for all ones. This function avoids reading from
+ * the hardware if a removal was previously detected in which case it
+ * returns TXGBE_FAILED_READ_REG (all ones).
+ */
+u32 txgbe_read_reg(struct txgbe_hw *hw, u32 reg)
+{
+	u32 value;
+	u8 __iomem *reg_addr;
+
+	reg_addr = READ_ONCE(hw->hw_addr);
+	if (TXGBE_REMOVED(reg_addr))
+		return TXGBE_FAILED_READ_REG;
+	value = txgbe_rd32(reg_addr + reg);
+	if (unlikely(value == TXGBE_FAILED_READ_REG))
+		txgbe_check_remove(hw, reg);
+	if (unlikely(value == TXGBE_DEAD_READ_REG))
+		value = txgbe_validate_register_read(hw, reg);
+	return value;
 }
 
 static void txgbe_release_hw_control(struct txgbe_adapter *adapter)
@@ -3889,6 +3957,10 @@ int txgbe_open(struct net_device *netdev)
 	struct txgbe_adapter *adapter = netdev_priv(netdev);
 	int err;
 
+	/* disallow open during test */
+	if (test_bit(__TXGBE_TESTING, &adapter->state))
+		return -EBUSY;
+
 	netif_carrier_off(netdev);
 
 	/* allocate transmit descriptors */
@@ -4005,6 +4077,8 @@ static void txgbe_dev_shutdown(struct pci_dev *pdev, bool *enable_wake)
 {
 	struct txgbe_adapter *adapter = pci_get_drvdata(pdev);
 	struct net_device *netdev = adapter->netdev;
+	struct txgbe_hw *hw = &adapter->hw;
+	u32 wufc = adapter->wol;
 
 	netif_device_detach(netdev);
 
@@ -4015,6 +4089,27 @@ static void txgbe_dev_shutdown(struct pci_dev *pdev, bool *enable_wake)
 
 	txgbe_clear_interrupt_scheme(adapter);
 
+	if (wufc) {
+		txgbe_set_rx_mode(netdev);
+		txgbe_configure_rx(adapter);
+		/* enable the optics for SFP+ fiber as we can WoL */
+		TCALL(hw, mac.ops.enable_tx_laser);
+
+		/* turn on all-multi mode if wake on multicast is enabled */
+		if (wufc & TXGBE_PSR_WKUP_CTL_MC) {
+			wr32m(hw, TXGBE_PSR_CTL,
+			      TXGBE_PSR_CTL_MPE, TXGBE_PSR_CTL_MPE);
+		}
+
+		pci_clear_master(adapter->pdev);
+		wr32(hw, TXGBE_PSR_WKUP_CTL, wufc);
+	} else {
+		wr32(hw, TXGBE_PSR_WKUP_CTL, 0);
+	}
+
+	pci_wake_from_d3(pdev, !!wufc);
+
+	*enable_wake = !!wufc;
 	txgbe_release_hw_control(adapter);
 
 	if (!test_and_set_bit(__TXGBE_DISABLED, &adapter->state))
@@ -5752,6 +5847,37 @@ static int txgbe_ioctl(struct net_device *netdev, struct ifreq *ifr, int cmd)
 	}
 }
 
+/**
+ * txgbe_setup_tc - routine to configure net_device for multiple traffic
+ * classes.
+ *
+ * @dev: net device to configure
+ * @tc: number of traffic classes to enable
+ */
+int txgbe_setup_tc(struct net_device *dev, u8 tc)
+{
+	struct txgbe_adapter *adapter = netdev_priv(dev);
+
+	/* Hardware has to reinitialize queues and interrupts to
+	 * match packet buffer alignment. Unfortunately, the
+	 * hardware is not flexible enough to do this dynamically.
+	 */
+	if (netif_running(dev))
+		txgbe_close(dev);
+	else
+		txgbe_reset(adapter);
+
+	txgbe_clear_interrupt_scheme(adapter);
+
+	netdev_reset_tc(dev);
+
+	txgbe_init_interrupt_scheme(adapter);
+	if (netif_running(dev))
+		txgbe_open(dev);
+
+	return 0;
+}
+
 void txgbe_do_reset(struct net_device *netdev)
 {
 	struct txgbe_adapter *adapter = netdev_priv(netdev);
@@ -5936,6 +6062,29 @@ static const struct net_device_ops txgbe_netdev_ops = {
 void txgbe_assign_netdev_ops(struct net_device *dev)
 {
 	dev->netdev_ops = &txgbe_netdev_ops;
+	txgbe_set_ethtool_ops(dev);
+}
+
+/**
+ * txgbe_wol_supported - Check whether device supports WoL
+ * @adapter: the adapter private structure
+ *
+ * This function is used by probe and ethtool to determine
+ * which devices have WoL support
+ *
+ **/
+int txgbe_wol_supported(struct txgbe_adapter *adapter)
+{
+	struct txgbe_hw *hw = &adapter->hw;
+	u16 wol_cap = adapter->eeprom_cap & TXGBE_DEVICE_CAPS_WOL_MASK;
+
+	/* check eeprom to see if WOL is enabled */
+	if (wol_cap == TXGBE_DEVICE_CAPS_WOL_PORT0_1 ||
+	    (wol_cap == TXGBE_DEVICE_CAPS_WOL_PORT0 &&
+	     hw->bus.func == 0))
+		return true;
+	else
+		return false;
 }
 
 /**
@@ -6132,6 +6281,21 @@ static int txgbe_probe(struct pci_dev *pdev,
 	err = txgbe_init_interrupt_scheme(adapter);
 	if (err)
 		goto err_free_mac_table;
+
+	/* WOL not supported for all devices */
+	adapter->wol = 0;
+	TCALL(hw, eeprom.ops.read,
+	      hw->eeprom.sw_region_offset + TXGBE_DEVICE_CAPS,
+	      &adapter->eeprom_cap);
+
+	if ((hw->subsystem_device_id & TXGBE_WOL_MASK) == TXGBE_WOL_SUP &&
+	    hw->bus.lan_id == 0) {
+		adapter->wol = TXGBE_PSR_WKUP_CTL_MAG;
+		wr32(hw, TXGBE_PSR_WKUP_CTL, adapter->wol);
+	}
+	hw->wol_enabled = !!(adapter->wol);
+
+	device_set_wakeup_enable(&pdev->dev, adapter->wol);
 
 	/* Save off EEPROM version number and Option Rom version which
 	 * together make a unique identify for the eeprom
@@ -6392,3 +6556,4 @@ MODULE_DEVICE_TABLE(pci, txgbe_pci_tbl);
 MODULE_AUTHOR("Beijing WangXun Technology Co., Ltd, <software@trustnetic.com>");
 MODULE_DESCRIPTION("WangXun(R) 10 Gigabit PCI Express Network Driver");
 MODULE_LICENSE("GPL");
+MODULE_VERSION(DRV_VERSION);

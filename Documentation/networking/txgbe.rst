@@ -78,12 +78,32 @@ NOTES:
   each jumbo packet. This should help to avoid buffer starvation issues
   when allocating receive packets.
 
+ethtool
+-------
+The driver utilizes the ethtool interface for driver configuration and
+diagnostics, as well as displaying statistical information. The latest
+ethtool version is required for this functionality. Download it at
+https://www.kernel.org/pub/software/network/ethtool/
+
 Hardware Receive Side Coalescing (HW RSC)
 -----------------------------------------
 Sapphire adapters support HW RSC, which can merge multiple
 frames from the same IPv4 TCP/IP flow into a single structure that can span
 one or more descriptors. It works similarly to Software Large Receive Offload
 technique.
+
+You can verify that the driver is using HW RSC by looking at the counter in
+ethtool:
+
+- hw_rsc_aggregated. This counts the total number of Ethernet packets that were
+  being combined.
+
+Wake on LAN Support (WoL)
+-------------------------
+Some adapters do not support Wake on LAN. To determine if your adapter
+supports Wake on LAN, run::
+
+  ethtool ethX
 
 VXLAN Overlay HW Offloading
 ---------------------------
@@ -96,6 +116,13 @@ VXLAN offloading is controlled by the tx and rx checksum offload options
 provided by ethtool. That is, if tx checksum offload is enabled, and the adapter
 has the capability, VXLAN offloading is also enabled. If rx checksum offload is
 enabled, then the VXLAN packets rx checksum will be offloaded.
+
+VXLAN Overlay HW Offloading is enabled by default. To view and configure VXLAN
+on a VXLAN-overlay offload enabled device, use the following command::
+
+  ethtool -k ethX
+
+This command displays the offloads and their current state.
 
 IEEE 1588 Precision Time Protocol (PTP) Hardware Clock (PHC)
 ------------------------------------------------------------
