@@ -1131,8 +1131,19 @@ typedef struct pglist_data {
 	struct per_cpu_nodestat __percpu *per_cpu_nodestats;
 	atomic_long_t		vm_stat[NR_VM_NODE_STAT_ITEMS];
 
+#ifdef CONFIG_NUMA_BALANCING
+	/* promote threshold in ms */
+	/* start time in ms of current promote threshold adjustment period */
+	CK_KABI_USE_SPLIT(1, unsigned int nbp_threshold, unsigned int nbp_th_start)
+	/*
+	 * number of promote candidate pages at stat time of current promote
+	 * threshold adjustment period
+	 */
+	CK_KABI_USE(2, unsigned long nbp_th_nr_cand)
+#else
 	CK_KABI_RESERVE(1)
 	CK_KABI_RESERVE(2)
+#endif
 	CK_KABI_RESERVE(3)
 	CK_KABI_RESERVE(4)
 } pg_data_t;
