@@ -136,6 +136,7 @@ s32 txgbe_host_interface_command(struct txgbe_hw *hw, u32 *buffer,
 bool txgbe_mng_present(struct txgbe_hw *hw);
 bool txgbe_check_mng_access(struct txgbe_hw *hw);
 
+s32 txgbe_get_thermal_sensor_data(struct txgbe_hw *hw);
 s32 txgbe_init_thermal_sensor_thresh(struct txgbe_hw *hw);
 s32 txgbe_enable_rx(struct txgbe_hw *hw);
 s32 txgbe_disable_rx(struct txgbe_hw *hw);
