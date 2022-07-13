@@ -1887,6 +1887,10 @@ enum txgbe_l2_ptypes {
 #define TXGBE_TXD_TUNNEL_UDP            (0x0ULL << TXGBE_TXD_TUNNEL_TYPE_SHIFT)
 #define TXGBE_TXD_TUNNEL_GRE            (0x1ULL << TXGBE_TXD_TUNNEL_TYPE_SHIFT)
 
+/* Number of Transmit and Receive Descriptors must be a multiple of 8 */
+#define TXGBE_REQ_TX_DESCRIPTOR_MULTIPLE        8
+#define TXGBE_REQ_RX_DESCRIPTOR_MULTIPLE        8
+
 /* Transmit Descriptor */
 union txgbe_tx_desc {
 	struct {
@@ -2023,6 +2027,9 @@ union txgbe_atr_hash_dword {
 #define TXGBE_HI_MAX_BLOCK_BYTE_LENGTH  256 /* Num of bytes in range */
 #define TXGBE_HI_MAX_BLOCK_DWORD_LENGTH 64 /* Num of dwords in range */
 #define TXGBE_HI_COMMAND_TIMEOUT        5000 /* Process HI command limit */
+#define TXGBE_HI_FLASH_ERASE_TIMEOUT    5000 /* Process Erase command limit */
+#define TXGBE_HI_FLASH_UPDATE_TIMEOUT   5000 /* Process Update command limit */
+#define TXGBE_HI_FLASH_VERIFY_TIMEOUT   60000 /* Process Apply command limit */
 
 /* CEM Support */
 #define FW_CEM_HDR_LEN                  0x4
@@ -2040,6 +2047,11 @@ union txgbe_atr_hash_dword {
 #define FW_MAX_READ_BUFFER_SIZE         244
 #define FW_RESET_CMD                    0xDF
 #define FW_RESET_LEN                    0x2
+#define FW_FLASH_UPGRADE_START_CMD      0xE3
+#define FW_FLASH_UPGRADE_START_LEN      0x1
+#define FW_FLASH_UPGRADE_WRITE_CMD      0xE4
+#define FW_FLASH_UPGRADE_VERIFY_CMD     0xE5
+#define FW_FLASH_UPGRADE_VERIFY_LEN     0x4
 #define FW_DW_OPEN_NOTIFY               0xE9
 #define FW_DW_CLOSE_NOTIFY              0xEA
 
@@ -2099,8 +2111,8 @@ struct txgbe_hic_read_shadow_ram {
 
 struct txgbe_hic_write_shadow_ram {
 	union txgbe_hic_hdr2 hdr;
-	u32 address;
-	u16 length;
+	__be32 address;
+	__be16 length;
 	u16 pad2;
 	u16 data;
 	u16 pad3;
@@ -2110,6 +2122,40 @@ struct txgbe_hic_reset {
 	struct txgbe_hic_hdr hdr;
 	u16 lan_id;
 	u16 reset_type;
+};
+
+enum txgbe_module_id {
+	TXGBE_MODULE_EEPROM = 0,
+	TXGBE_MODULE_FIRMWARE,
+	TXGBE_MODULE_HARDWARE,
+	TXGBE_MODULE_PCIE
+};
+
+struct txgbe_hic_upg_start {
+	struct txgbe_hic_hdr hdr;
+	u8 module_id;
+	u8  pad2;
+	u16 pad3;
+};
+
+struct txgbe_hic_upg_write {
+	struct txgbe_hic_hdr hdr;
+	u8 data_len;
+	u8 eof_flag;
+	u16 check_sum;
+	u32 data[62];
+};
+
+enum txgbe_upg_flag {
+	TXGBE_RESET_NONE = 0,
+	TXGBE_RESET_FIRMWARE,
+	TXGBE_RELOAD_EEPROM,
+	TXGBE_RESET_LAN
+};
+
+struct txgbe_hic_upg_verify {
+	struct txgbe_hic_hdr hdr;
+	u32 action_flag;
 };
 
 /* Number of 100 microseconds we wait for PCI Express master disable */
@@ -2414,7 +2460,11 @@ struct txgbe_eeprom_operations {
 	s32 (*read)(struct txgbe_hw *hw, u16 offset, u16 *data);
 	s32 (*read_buffer)(struct txgbe_hw *hw,
 			   u16 offset, u16 words, u16 *data);
+	s32 (*write)(struct txgbe_hw *hw, u16 offset, u16 data);
+	s32 (*write_buffer)(struct txgbe_hw *hw,
+			    u16 offset, u16 words, u16 *data);
 	s32 (*validate_checksum)(struct txgbe_hw *hw, u16 *checksum_val);
+	s32 (*update_checksum)(struct txgbe_hw *hw);
 	s32 (*calc_checksum)(struct txgbe_hw *hw);
 };
 
@@ -2493,6 +2543,8 @@ struct txgbe_phy_operations {
 	s32 (*init)(struct txgbe_hw *hw);
 	s32 (*read_i2c_byte)(struct txgbe_hw *hw, u8 byte_offset,
 			     u8 dev_addr, u8 *data);
+	s32 (*read_i2c_sff8472)(struct txgbe_hw *hw, u8 byte_offset,
+				u8 *sff8472_data);
 	s32 (*read_i2c_eeprom)(struct txgbe_hw *hw, u8 byte_offset,
 			       u8 *eeprom_data);
 	s32 (*check_overtemp)(struct txgbe_hw *hw);
@@ -2578,6 +2630,7 @@ struct txgbe_hw {
 	bool adapter_stopped;
 	enum txgbe_reset_type reset_type;
 	bool force_full_reset;
+	bool wol_enabled;
 	enum txgbe_link_status link_status;
 	u16 tpid[8];
 	u16 oem_ssid;
