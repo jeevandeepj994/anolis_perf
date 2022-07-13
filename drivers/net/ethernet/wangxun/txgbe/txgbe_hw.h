@@ -104,6 +104,7 @@ s32 txgbe_disable_sec_rx_path(struct txgbe_hw *hw);
 s32 txgbe_enable_sec_rx_path(struct txgbe_hw *hw);
 
 s32 txgbe_fc_enable(struct txgbe_hw *hw);
+bool txgbe_device_supports_autoneg_fc(struct txgbe_hw *hw);
 void txgbe_fc_autoneg(struct txgbe_hw *hw);
 s32 txgbe_setup_fc(struct txgbe_hw *hw);
 
@@ -156,6 +157,9 @@ s32 txgbe_fdir_set_input_mask(struct txgbe_hw *hw,
 s32 txgbe_fdir_write_perfect_filter(struct txgbe_hw *hw,
 				    union txgbe_atr_input *input,
 				    u16 soft_id, u8 queue, bool cloud_mode);
+s32 txgbe_fdir_erase_perfect_filter(struct txgbe_hw *hw,
+				    union txgbe_atr_input *input,
+				    u16 soft_id);
 s32 txgbe_fdir_add_perfect_filter(struct txgbe_hw *hw,
 				  union txgbe_atr_input *input,
 				  union txgbe_atr_input *mask,
@@ -187,9 +191,16 @@ s32 txgbe_enable_rx_dma(struct txgbe_hw *hw, u32 regval);
 s32 txgbe_init_ops(struct txgbe_hw *hw);
 
 s32 txgbe_init_eeprom_params(struct txgbe_hw *hw);
+s32 txgbe_update_eeprom_checksum(struct txgbe_hw *hw);
 s32 txgbe_calc_eeprom_checksum(struct txgbe_hw *hw);
 s32 txgbe_validate_eeprom_checksum(struct txgbe_hw *hw,
 				   u16 *checksum_val);
+s32 txgbe_write_ee_hostif_buffer(struct txgbe_hw *hw,
+				 u16 offset, u16 words, u16 *data);
+s32 txgbe_write_ee_hostif_data(struct txgbe_hw *hw, u16 offset,
+			       u16 data);
+s32 txgbe_write_ee_hostif(struct txgbe_hw *hw, u16 offset,
+			  u16 data);
 s32 txgbe_read_ee_hostif_buffer(struct txgbe_hw *hw,
 				u16 offset, u16 words, u16 *data);
 s32 txgbe_read_ee_hostif_data(struct txgbe_hw *hw, u16 offset, u16 *data);
