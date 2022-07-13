@@ -498,6 +498,12 @@ static int idxd_dmaengine_drv_probe(struct idxd_dev *idxd_dev)
 		return -ENXIO;
 
 	mutex_lock(&wq->wq_lock);
+	if (!idxd_wq_driver_name_match(wq, dev)) {
+		idxd->cmd_status = IDXD_SCMD_WQ_NO_DRV_NAME;
+		rc = -ENODEV;
+		goto err_drv_name;
+	}
+
 	wq->type = IDXD_WQT_KERNEL;
 
 	rc = idxd_wq_request_irq(wq);
@@ -549,6 +555,7 @@ err_res_alloc:
 err:
 	idxd_wq_free_irq(wq);
 err_irq:
+err_drv_name:
 	wq->type = IDXD_WQT_NONE;
 	mutex_unlock(&wq->wq_lock);
 	return rc;
