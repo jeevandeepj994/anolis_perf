@@ -6508,6 +6508,8 @@ no_info_string:
 	netif_info(adapter, probe, netdev,
 		   "WangXun(R) 10 Gigabit Network Connection\n");
 
+	txgbe_dbg_adapter_init(adapter);
+
 	/* setup link for SFP devices with MNG FW, else wait for TXGBE_UP */
 	if (txgbe_mng_present(hw) && txgbe_is_sfp(hw) &&
 	    ((hw->subsystem_device_id & TXGBE_NCSI_MASK) == TXGBE_NCSI_SUP))
@@ -6548,6 +6550,9 @@ static void txgbe_remove(struct pci_dev *pdev)
 	bool disable_dev;
 
 	netdev = adapter->netdev;
+
+	txgbe_dbg_adapter_exit(adapter);
+
 	set_bit(__TXGBE_REMOVING, &adapter->state);
 	cancel_work_sync(&adapter->service_task);
 
@@ -6616,6 +6621,8 @@ static int __init txgbe_init_module(void)
 		return -ENOMEM;
 	}
 
+	txgbe_dbg_init();
+
 	ret = pci_register_driver(&txgbe_driver);
 	return ret;
 }
@@ -6633,6 +6640,8 @@ static void __exit txgbe_exit_module(void)
 	pci_unregister_driver(&txgbe_driver);
 	if (txgbe_wq)
 		destroy_workqueue(txgbe_wq);
+
+	txgbe_dbg_exit();
 }
 
 module_exit(txgbe_exit_module);
