@@ -50,6 +50,11 @@
 
 DECLARE_STATIC_KEY_FALSE(arm64_mpam_has_hcr);
 
+enum mpam_enable_type {
+	MPAM_ENABLE_DENIED = 0,
+	MPAM_ENABLE_ACPI,
+};
+
 /* check whether all CPUs have MPAM support */
 static inline bool mpam_cpus_have_feature(void)
 {

@@ -124,12 +124,12 @@ int __init mpam_discovery_start(void);
 int __init mpam_discovery_complete(void);
 void __init mpam_discovery_failed(void);
 
-enum mpam_enable_type {
-	MPAM_ENABLE_DENIED = 0,
-	MPAM_ENABLE_ACPI,
+enum kunpeng_mpam_enable_type {
+	KUNPENG_MPAM_ENABLE_DENIED = 0,
+	KUNPENG_MPAM_ENABLE_ACPI,
 };
 
-extern enum mpam_enable_type kunpeng_mpam_enabled;
+extern enum kunpeng_mpam_enable_type kunpeng_mpam_enabled;
 
 #define MPAM_IRQ_MODE_LEVEL    0x1
 #define MPAM_IRQ_FLAGS_MASK    0x7f

@@ -2225,6 +2225,13 @@
 			Built with CONFIG_DEBUG_KMEMLEAK_DEFAULT_OFF=y,
 			the default is off.
 
+	kpmpam=		[ARM64] Boot-time MPAM feature for Kunpeng
+			enable/disable
+			Valid arguments: acpi
+			acpi	: Enable MPAM feature, and MPAM feature is
+			provided via ACPI.
+			Default is '' (disabled)
+
 	kprobe_event=[probe-list]
 			[FTRACE] Add kprobe events and enable at boot time.
 			The probe-list is a semicolon delimited list of probe
@@ -2968,6 +2975,12 @@
 			of such nodes will be usable only for movable
 			allocations which rules out almost all kernel
 			allocations. Use with caution!
+
+	mpam=		[ARM64] Boot-time MPAM feature enable/disable
+			Valid arguments: acpi
+			acpi	: Enable MPAM feature, and MPAM feature is
+			provided via ACPI.
+			Default is '' (disabled)
 
 	MTD_Partition=	[MTD]
 			Format: <name>,<region-number>,<size>,<offset>
