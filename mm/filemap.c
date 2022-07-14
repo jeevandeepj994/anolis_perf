@@ -2220,7 +2220,7 @@ find_page:
 			if (!trylock_page(page))
 				goto page_not_up_to_date;
 			/* Did it get truncated before we got the lock? */
-			if (!page->mapping)
+			if (!compound_head(page)->mapping)
 				goto page_not_up_to_date_locked;
 			if (!mapping->a_ops->is_partially_uptodate(page,
 							offset, iter->count))
@@ -2307,7 +2307,7 @@ page_not_up_to_date:
 
 page_not_up_to_date_locked:
 		/* Did it get truncated before we got the lock? */
-		if (!page->mapping) {
+		if (!compound_head(page)->mapping) {
 			unlock_page(page);
 			put_page(page);
 			continue;
@@ -2357,7 +2357,7 @@ readpage:
 			if (unlikely(error))
 				goto readpage_error;
 			if (!PageUptodate(page)) {
-				if (page->mapping == NULL) {
+				if (compound_head(page)->mapping == NULL) {
 					/*
 					 * invalidate_mapping_pages got it
 					 */

@@ -58,7 +58,10 @@ static struct page *erofs_read_meta_page(struct super_block *sb, pgoff_t index,
 		}
 		memalloc_nofs_restore(nofs_flag);
 	} else {
-		mapping = sb->s_bdev->bd_inode->i_mapping;
+		if (erofs_is_fscache_mode(sb))
+			mapping = EROFS_SB(sb)->s_fscache->inode->i_mapping;
+		else
+			mapping = sb->s_bdev->bd_inode->i_mapping;
 		page = read_cache_page_gfp(mapping, index,
 				mapping_gfp_constraint(mapping, ~__GFP_FS));
 	}
@@ -257,6 +260,7 @@ int erofs_map_dev(struct super_block *sb, struct erofs_map_dev *map)
 	/* primary device by default */
 	map->m_bdev = sb->s_bdev;
 	map->m_fp = EROFS_SB(sb)->bootstrap;
+	map->m_fscache = EROFS_SB(sb)->s_fscache;
 
 	if (map->m_deviceid) {
 		down_read(&devs->rwsem);
@@ -267,6 +271,7 @@ int erofs_map_dev(struct super_block *sb, struct erofs_map_dev *map)
 		}
 		map->m_bdev = dif->bdev;
 		map->m_fp = dif->blobfile;
+		map->m_fscache = dif->fscache;
 		up_read(&devs->rwsem);
 	} else if (devs->extra_devices) {
 		down_read(&devs->rwsem);
@@ -283,6 +288,7 @@ int erofs_map_dev(struct super_block *sb, struct erofs_map_dev *map)
 				map->m_pa -= startoff;
 				map->m_bdev = dif->bdev;
 				map->m_fp = dif->blobfile;
+				map->m_fscache = dif->fscache;
 				break;
 			}
 		}

@@ -264,7 +264,7 @@ static int erofs_fill_inode(struct inode *inode, int isdir)
 	switch (inode->i_mode & S_IFMT) {
 	case S_IFREG:
 		inode->i_op = &erofs_generic_iops;
-		if (inode->i_sb->s_bdev)
+		if (inode->i_sb->s_bdev || erofs_is_fscache_mode(inode->i_sb))
 			inode->i_fop = &generic_ro_fops;
 		else
 			inode->i_fop = &rafs_v6_file_ro_fops;
@@ -297,6 +297,10 @@ static int erofs_fill_inode(struct inode *inode, int isdir)
 	}
 	if (inode->i_sb->s_bdev) {
 		inode->i_mapping->a_ops = &erofs_raw_access_aops;
+#ifdef CONFIG_EROFS_FS_ONDEMAND
+	} else if (erofs_is_fscache_mode(inode->i_sb)) {
+		inode->i_mapping->a_ops = &erofs_fscache_access_aops;
+#endif
 	} else if (!S_ISREG(inode->i_mode)) {
 		inode_nohighmem(inode);
 		inode->i_mapping->a_ops = &rafs_v6_aops;
