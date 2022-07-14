@@ -13,6 +13,7 @@ Contents
 
 - Identifying Your Adapter
 - Additional Features and Configurations
+- Known Issues/Troubleshooting
 - Support
 
 
@@ -128,6 +129,34 @@ IEEE 1588 Precision Time Protocol (PTP) Hardware Clock (PHC)
 ------------------------------------------------------------
 Precision Time Protocol (PTP) is used to synchronize clocks in a computer
 network and is supported in the txgbe driver.
+
+
+Known Issues/Troubleshooting
+============================
+
+UDP Stress Test Dropped Packet Issue
+------------------------------------
+Under small packet UDP stress with the txgbe driver, the system may
+drop UDP packets due to socket buffers being full. Setting the driver Flow
+Control variables to the minimum may resolve the issue. You may also try
+increasing the kernel's default buffer sizes by changing the values::
+
+  cat /proc/sys/net/core/rmem_default
+  cat /proc/sys/net/core/rmem_max
+
+Lower than expected performance
+-------------------------------
+Some PCIe x8 slots are actually configured as x4 slots. These slots have
+insufficient bandwidth for full line rate with dual port and quad port
+devices. In addition, if you put a PCIe Generation 3-capable adapter
+into a PCIe Generation 2 slot, you cannot get full bandwidth. The driver
+detects this situation and writes the following message in the system log:
+
+"PCI-Express bandwidth available for this card is not sufficient for optimal
+performance. For optimal performance a x8 PCI-Express slot is required."
+
+If this error occurs, moving your adapter to a true PCIe Generation 3 x8 slot
+will resolve the issue.
 
 
 Support
