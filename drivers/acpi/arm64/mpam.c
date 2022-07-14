@@ -253,6 +253,16 @@ static int __init _parse_table(struct acpi_table_header *table)
 	return err;
 }
 
+enum mpam_enable_type __read_mostly mpam_needed;
+static int __init mpam_setup(char *str)
+{
+	if (!strcmp(str, "=acpi"))
+		mpam_needed = MPAM_ENABLE_ACPI;
+
+	return 1;
+}
+__setup("mpam", mpam_setup);
+
 static int __init acpi_mpam_parse(void)
 {
 	struct acpi_table_header *mpam;
@@ -260,6 +270,9 @@ static int __init acpi_mpam_parse(void)
 	int err;
 
 	if (acpi_disabled || !mpam_cpus_have_feature())
+		return 0;
+
+	if (mpam_needed != MPAM_ENABLE_ACPI)
 		return 0;
 
 	status = acpi_get_table(ACPI_SIG_MPAM, 0, &mpam);
