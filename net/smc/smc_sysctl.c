@@ -15,7 +15,10 @@
 #include <net/net_namespace.h>
 
 #include "smc.h"
+#include "smc_core.h"
 #include "smc_sysctl.h"
+
+static int two = 2;
 
 static struct ctl_table smc_table[] = {
 	{
@@ -24,6 +27,15 @@ static struct ctl_table smc_table[] = {
 		.maxlen         = sizeof(unsigned int),
 		.mode           = 0644,
 		.proc_handler	= proc_douintvec,
+	},
+	{
+		.procname	= "smcr_buf_type",
+		.data		= &init_net.smc.sysctl_smcr_buf_type,
+		.maxlen		= sizeof(unsigned int),
+		.mode		= 0644,
+		.proc_handler	= proc_douintvec_minmax,
+		.extra1		= SYSCTL_ZERO,
+		.extra2		= &two,
 	},
 	{  }
 };
@@ -49,6 +61,7 @@ int __net_init smc_sysctl_net_init(struct net *net)
 		goto err_reg;
 
 	net->smc.sysctl_autocorking_size = SMC_AUTOCORKING_DEFAULT_SIZE;
+	net->smc.sysctl_smcr_buf_type = SMCR_PHYS_CONT_BUFS;
 
 	return 0;
 
