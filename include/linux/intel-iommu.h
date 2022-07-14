@@ -788,6 +788,7 @@ struct intel_svm_dev {
 	struct rcu_head rcu;
 	struct device *dev;
 	struct intel_iommu *iommu;
+	struct dmar_domain *domain;
 	struct iommu_sva sva;
 	u32 pasid;
 	int users;
