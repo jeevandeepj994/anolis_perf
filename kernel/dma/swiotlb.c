@@ -247,7 +247,6 @@ int __init swiotlb_init_with_tbl(char *tlb, unsigned long nslabs, int verbose)
 	mem->nslabs = nslabs;
 	mem->start = __pa(tlb);
 	mem->end = mem->start + bytes;
-	mem->index = 0;
 
 	/*
 	 * default_nslabs maybe changed when adjust area number.
@@ -264,7 +263,6 @@ int __init swiotlb_init_with_tbl(char *tlb, unsigned long nslabs, int verbose)
 	mem->nareas = default_nareas;
 	mem->area_nslabs = nslabs / mem->nareas;
 
-	spin_lock_init(&mem->lock);
 	for (i = 0; i < mem->nareas; i++) {
 		spin_lock_init(&mem->areas[i].lock);
 		mem->areas[i].index = 0;
@@ -366,7 +364,6 @@ swiotlb_late_init_with_tbl(char *tlb, unsigned long nslabs)
 	mem->nslabs = nslabs;
 	mem->start = virt_to_phys(tlb);
 	mem->end = mem->start + bytes;
-	mem->index = 0;
 	mem->late_alloc = 1;
 
 	if (!default_nareas)
@@ -382,7 +379,6 @@ swiotlb_late_init_with_tbl(char *tlb, unsigned long nslabs)
 	if (!mem->areas)
 		goto error_area;
 
-	spin_lock_init(&mem->lock);
 	for (i = 0; i < mem->nareas; i++) {
 		spin_lock_init(&mem->areas[i].lock);
 		mem->areas[i].index = 0;
