@@ -15,6 +15,8 @@
 
 #include <asm/mpam.h>
 
+int ddr_cpufreq;
+
 static bool frob_irq(struct platform_device *pdev, int intid, u32 flags,
 		     int *irq, u32 processor_container_uid)
 {
@@ -105,6 +107,7 @@ static int acpi_mpam_parse_resource(struct mpam_msc *msc,
 		return mpam_ris_create(msc, res->ris_index, MPAM_CLASS_CACHE,
 				       level, cache_id);
 	case ACPI_MPAM_LOCATION_TYPE_MEMORY:
+		ddr_cpufreq = res->locator2;
 		return mpam_ris_create(msc, res->ris_index, MPAM_CLASS_MEMORY,
 				       255, res->locator1);
 	default:

@@ -691,6 +691,22 @@ static int mpam_resctrl_resource_init(struct mpam_resctrl_res *res)
 			r->alloc_capable = true;
 			exposed_alloc_capable = true;
 		}
+
+		if (class_has_usable_mbwu(class)) {
+			r->mon_capable = true;
+			exposed_mon_capable = true;
+
+			/*
+			 * Unfortunately, num_rmid doesn't mean anything for
+			 * mpam, and its exposed to user-space!
+			 * num-rmid is supposed to mean the number of groups
+			 * that can be created, both control or monitor groups.
+			 * For mpam, each control group has its own pmg/rmid
+			 * space.
+			 */
+			r->num_rmid = 1;
+			mbm_local_class = class;
+		}
 	}
 
 	return 0;
