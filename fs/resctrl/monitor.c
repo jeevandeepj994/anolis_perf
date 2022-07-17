@@ -727,11 +727,31 @@ static void l3_mon_evt_init(struct rdt_resource *r)
 
 	if (resctrl_arch_is_llc_occupancy_enabled())
 		list_add_tail(&llc_occupancy_event.list, &r->evt_list);
+/*
+ * FIXME: There are some differences on Yitian ARM64 and X86_64 platform.
+ * X86_64's MBM events are covered by RDT_RESOURCE_L3, while Yitian ARM64's MBM
+ * events exist in RDT_RESOURCE_MBA. So we migrate them to a new function
+ * mba_mon_evt_init() by adding CONFIG_X86_64 and CONFIG_ARM64.
+ */
+#ifdef CONFIG_X86_64
+	if (resctrl_arch_is_mbm_total_enabled())
+		list_add_tail(&mbm_total_event.list, &r->evt_list);
+	if (resctrl_arch_is_mbm_local_enabled())
+		list_add_tail(&mbm_local_event.list, &r->evt_list);
+#endif
+}
+
+#ifdef CONFIG_ARM64
+static void mba_mon_evt_init(struct rdt_resource *r)
+{
+	INIT_LIST_HEAD(&r->evt_list);
+
 	if (resctrl_arch_is_mbm_total_enabled())
 		list_add_tail(&mbm_total_event.list, &r->evt_list);
 	if (resctrl_arch_is_mbm_local_enabled())
 		list_add_tail(&mbm_local_event.list, &r->evt_list);
 }
+#endif
 
 int resctrl_mon_resource_init(void)
 {
@@ -745,6 +765,15 @@ int resctrl_mon_resource_init(void)
 	if (r->mon_capable)
 		l3_mon_evt_init(r);
 
+#ifdef CONFIG_ARM64
+	r = resctrl_arch_get_resource(RDT_RESOURCE_MBA);
+
+	if (ret)
+		return ret;
+
+	if (r->mon_capable)
+		mba_mon_evt_init(r);
+#endif
 	return 0;
 }
 
