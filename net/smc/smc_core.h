@@ -15,6 +15,7 @@
 #include <linux/atomic.h>
 #include <linux/smc.h>
 #include <linux/pci.h>
+#include <linux/rhashtable.h>
 #include <rdma/ib_verbs.h>
 #include <net/genetlink.h>
 
@@ -116,6 +117,7 @@ struct smc_link {
 	u32			wr_tx_cnt;	/* number of WR send buffers */
 	wait_queue_head_t	wr_tx_wait;	/* wait for free WR send buf */
 	atomic_t		wr_tx_refcnt;	/* tx refs to link */
+	rwlock_t		rtokens_lock;
 
 	struct smc_wr_buf	*wr_rx_bufs;	/* WR recv payload buffers */
 	struct ib_recv_wr	*wr_rx_ibs;	/* WR recv meta data */
@@ -261,6 +263,8 @@ struct smc_llc_flow {
 	struct smc_llc_qentry *qentry;
 };
 
+struct smc_lgr_decision_maker;
+
 struct smc_link_group {
 	struct list_head	list;
 	struct rb_root		conns_all;	/* connection tree */
@@ -352,6 +356,8 @@ struct smc_link_group {
 						/* peer triggered shutdownn */
 		};
 	};
+	struct smc_lgr_decision_maker	*ldm;
+						/* who decides to create this lgr */
 };
 
 struct smc_clc_msg_local;
@@ -390,6 +396,7 @@ struct smc_init_info {
 	unsigned short		vlan_id;
 	u32			rc;
 	u8			negotiated_eid[SMC_MAX_EID_LEN];
+	struct smc_lgr_decision_maker *ldm;
 	/* SMC-R */
 	u8			smcr_version;
 	u8			check_smcrv2;
@@ -408,6 +415,7 @@ struct smc_init_info {
 	u8			ism_offered_cnt; /* # of ISM devices offered */
 	u8			ism_selected;    /* index of selected ISM dev*/
 	u8			smcd_version;
+	u8			role;
 };
 
 /* Find the connection associated with the given alert token in the link group.
@@ -575,6 +583,8 @@ int smc_nl_get_sys_info(struct sk_buff *skb, struct netlink_callback *cb);
 int smcr_nl_get_lgr(struct sk_buff *skb, struct netlink_callback *cb);
 int smcr_nl_get_link(struct sk_buff *skb, struct netlink_callback *cb);
 int smcd_nl_get_lgr(struct sk_buff *skb, struct netlink_callback *cb);
+
+void smc_lgr_decision_maker_on_first_contact_done(struct smc_init_info *ini, bool success);
 
 static inline struct smc_link_group *smc_get_lgr(struct smc_link *link)
 {
