@@ -610,6 +610,44 @@ static int fuse_simple_notify_reply(struct fuse_mount *fm,
 	return err;
 }
 
+int fuse_request_queue(struct fuse_mount *fm, struct fuse_args *args)
+{
+	struct fuse_req *req;
+	struct fuse_conn *fc = fm->fc;
+	struct fuse_iqueue *fiq = &fc->iq;
+	int err = 0;
+
+	req = fuse_get_req(fm, false);
+	if (IS_ERR(req))
+		return PTR_ERR(req);
+
+	fuse_args_to_req(req, args);
+
+	spin_lock(&fc->lock);
+	if (!fc->connected) {
+		err = -ENOTCONN;
+		fuse_put_request(req);
+		goto out;
+	}
+
+	__set_bit(FR_ISREPLY, &req->flags);
+
+	spin_lock(&fiq->lock);
+	if (!fiq->connected) {
+		err = -ENODEV;
+		spin_unlock(&fiq->lock);
+		fuse_put_request(req);
+		goto out;
+	}
+
+	req->in.h.unique = fuse_get_unique(fiq);
+	queue_request_and_unlock(fiq, req);
+out:
+	spin_unlock(&fc->lock);
+	return err;
+}
+EXPORT_SYMBOL_GPL(fuse_request_queue);
+
 /*
  * Lock the request.  Up to the next unlock_request() there mustn't be
  * anything that could cause a page-fault.  If the request was already
@@ -2267,6 +2305,61 @@ void fuse_flush_pq(struct fuse_conn *fc)
 	end_requests(&to_end);
 }
 
+/**
+ * Resend all processing queue requests.
+ *
+ * When a FUSE daemon panics and fails over, we want to reuse the existing FUSE
+ * connection and avoid affecting applications as little as possible. During
+ * FUSE daemon failover, the FUSE processing queue requests are waiting for
+ * replies from user space daemon that never come back and applications would
+ * stuck forever.
+ *
+ * Besides flushing the processing queue requests like being done in fuse_flush_pq(),
+ * we can also resend these requests to user space daemon so that they can be
+ * processed properly again. Such strategy can only be done for idempotent requests
+ * or if the user space daemon takes good care to record and avoid processing
+ * duplicated non-idempotent requests.
+ */
+void fuse_resend_pqueue(struct fuse_conn *fc)
+{
+	struct fuse_dev *fud;
+	struct fuse_req *req, *next;
+	struct fuse_iqueue *fiq = &fc->iq;
+	LIST_HEAD(to_queue);
+
+	spin_lock(&fc->lock);
+	if (!fc->connected) {
+		spin_unlock(&fc->lock);
+		return;
+	}
+
+	list_for_each_entry(fud, &fc->devices, entry) {
+		struct fuse_pqueue *fpq = &fud->pq;
+
+		spin_lock(&fpq->lock);
+		list_for_each_entry_safe(req, next, &fpq->io, list) {
+			spin_lock(&req->waitq.lock);
+			if (!test_bit(FR_LOCKED, &req->flags)) {
+				__fuse_get_request(req);
+				list_move(&req->list, &to_queue);
+			}
+			spin_unlock(&req->waitq.lock);
+		}
+		list_splice_tail_init(fpq->processing, &to_queue);
+		spin_unlock(&fpq->lock);
+	}
+	spin_unlock(&fc->lock);
+
+	list_for_each_entry_safe(req, next, &to_queue, list) {
+		__set_bit(FR_PENDING, &req->flags);
+	}
+
+	spin_lock(&fiq->lock);
+	/* iq and pq requests are both oldest to newest */
+	list_splice(&to_queue, &fiq->pending);
+	spin_unlock(&fiq->lock);
+}
+
 static int fuse_dev_fasync(int fd, struct file *file, int on)
 {
 	struct fuse_dev *fud = fuse_get_dev(file);
@@ -2295,22 +2388,39 @@ static int fuse_device_clone(struct fuse_conn *fc, struct file *new)
 	return 0;
 }
 
+void fuse_reset_conn(struct fuse_conn *fc)
+{
+	struct fuse_iqueue *fiq;
+
+	spin_lock(&fc->lock);
+	fiq = &fc->iq;
+	spin_lock(&fiq->lock);
+	fiq->connected = 1;
+	spin_unlock(&fiq->lock);
+	fc->connected = 1;
+	spin_unlock(&fc->lock);
+}
+EXPORT_SYMBOL_GPL(fuse_reset_conn);
+
 static long fuse_dev_ioctl(struct file *file, unsigned int cmd,
 			   unsigned long arg)
 {
-	int err = -ENOTTY;
+	int res;
+	int fd;
+	struct fuse_dev *fud = NULL;
+	bool passthrough_write_only = false;
+	struct fuse_ioctl_attach attach_info;
+	struct fuse_conn *fc;
+	struct fuse_mount *fm, *tmp_fm;
 
-	if (cmd == FUSE_DEV_IOC_CLONE) {
-		int oldfd;
+	switch (cmd) {
+	case FUSE_DEV_IOC_CLONE:
+		res = -EFAULT;
+		if (!get_user(fd, (__u32 __user *)arg)) {
+			struct file *old = fget(fd);
 
-		err = -EFAULT;
-		if (!get_user(oldfd, (__u32 __user *) arg)) {
-			struct file *old = fget(oldfd);
-
-			err = -EINVAL;
+			res = -EINVAL;
 			if (old) {
-				struct fuse_dev *fud = NULL;
-
 				/*
 				 * Check against file->f_op because CUSE
 				 * uses the same ioctl handler.
@@ -2321,14 +2431,105 @@ static long fuse_dev_ioctl(struct file *file, unsigned int cmd,
 
 				if (fud) {
 					mutex_lock(&fuse_mutex);
-					err = fuse_device_clone(fud->fc, file);
+					res = fuse_device_clone(fud->fc, file);
 					mutex_unlock(&fuse_mutex);
 				}
 				fput(old);
 			}
 		}
+		break;
+	case FUSE_DEV_IOC_PASSTHROUGH_WRITE_OPEN_V0:
+		passthrough_write_only = true;
+		/* fallthrough */
+	case FUSE_DEV_IOC_PASSTHROUGH_OPEN_V0:
+		res = -EFAULT;
+		if (!get_user(fd, (__u32 __user *)arg)) {
+			res = -EINVAL;
+			fud = fuse_get_dev(file);
+			if (fud)
+				res = fuse_passthrough_open(fud, fd,
+						passthrough_write_only);
+		}
+		break;
+	case FUSE_DEV_IOC_ATTACH:
+		if (copy_from_user(&attach_info, (__u32 __user *)arg,
+				   sizeof(attach_info))) {
+			res = -EFAULT;
+			goto out;
+		}
+
+		if (attach_info.tag[0] == '\0') {
+			res = -EINVAL;
+			goto out;
+		}
+
+		if (!file) {
+			res = -EBADF;
+			goto out;
+		}
+
+		if (file->f_op != &fuse_dev_operations ||
+		    file->private_data) {
+			res = -EBADF;
+			goto out;
+		}
+
+		res = -EINVAL;
+		mutex_lock(&fuse_mutex);
+		list_for_each_entry(fc, &fuse_conn_list, entry) {
+			if (strncmp(fc->tag, attach_info.tag,
+				    FUSE_TAG_NAME_MAX - 1))
+				continue;
+
+			attach_info.dev = fc->dev;
+			if (copy_to_user((void __user *)arg, &attach_info,
+					 sizeof(attach_info))) {
+				res = -EFAULT;
+				mutex_unlock(&fuse_mutex);
+				goto out;
+			}
+
+			fud = fuse_dev_alloc_install(fc);
+			if (!fud) {
+				res = -ENOMEM;
+				mutex_unlock(&fuse_mutex);
+				goto out;
+			}
+
+			down_read(&fc->killsb);
+			if (list_empty(&fc->mounts)) {
+				res = -EINVAL;
+				up_read(&fc->killsb);
+				fuse_dev_free(fud);
+				mutex_unlock(&fuse_mutex);
+				goto out;
+			}
+
+			file->private_data = fud;
+			atomic_inc(&fc->dev_count);
+			tmp_fm = list_first_entry(&fc->mounts,
+						  struct fuse_mount,
+						  fc_entry);
+			/* Get the main fuse_mount through super block to avoid
+			 * dependence on list fc->mounts sequence
+			 */
+			fm = get_fuse_mount_super(tmp_fm->sb);
+			up_read(&fc->killsb);
+
+			fuse_reset_conn(fc);
+			mutex_unlock(&fuse_mutex);
+			fuse_resend_init(fm);
+			res = 0;
+			goto out;
+		}
+		mutex_unlock(&fuse_mutex);
+out:
+		break;
+	default:
+		res = -ENOTTY;
+		break;
 	}
-	return err;
+	return res;
 }
 
 const struct file_operations fuse_dev_operations = {

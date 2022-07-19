@@ -152,7 +152,7 @@ int fuse_do_open(struct fuse_mount *fm, u64 nodeid, struct file *file,
 		if (!err) {
 			ff->fh = outarg.fh;
 			ff->open_flags = outarg.open_flags;
-
+			fuse_passthrough_setup(fc, ff, file, &outarg);
 		} else if (err != -ENOSYS) {
 			fuse_file_free(ff);
 			return err;
@@ -300,6 +300,8 @@ void fuse_release_common(struct file *file, bool isdir)
 	struct fuse_file *ff = file->private_data;
 	struct fuse_release_args *ra = ff->release_args;
 	int opcode = isdir ? FUSE_RELEASEDIR : FUSE_RELEASE;
+
+	fuse_passthrough_release(&ff->passthrough);
 
 	fuse_prepare_release(fi, ff, file->f_flags, opcode);
 
@@ -1573,6 +1575,14 @@ static ssize_t fuse_direct_write_iter(struct kiocb *iocb, struct iov_iter *from)
 	return res;
 }
 
+static bool fuse_file_passthrough_enabled(struct fuse_file *ff,
+					  bool write)
+{
+	return ff->passthrough.filp &&
+	       (!ff->passthrough.write_only || write) &&
+	       READ_ONCE(ff->fm->fc->passthrough_enabled);
+}
+
 static ssize_t fuse_file_read_iter(struct kiocb *iocb, struct iov_iter *to)
 {
 	struct file *file = iocb->ki_filp;
@@ -1585,7 +1595,9 @@ static ssize_t fuse_file_read_iter(struct kiocb *iocb, struct iov_iter *to)
 	if (FUSE_IS_DAX(inode))
 		return fuse_dax_read_iter(iocb, to);
 
-	if (!(ff->open_flags & FOPEN_DIRECT_IO))
+	if (fuse_file_passthrough_enabled(ff, false))
+		return fuse_passthrough_read_iter(iocb, to);
+	else if (!(ff->open_flags & FOPEN_DIRECT_IO))
 		return fuse_cache_read_iter(iocb, to);
 	else
 		return fuse_direct_read_iter(iocb, to);
@@ -1603,7 +1615,9 @@ static ssize_t fuse_file_write_iter(struct kiocb *iocb, struct iov_iter *from)
 	if (FUSE_IS_DAX(inode))
 		return fuse_dax_write_iter(iocb, from);
 
-	if (!(ff->open_flags & FOPEN_DIRECT_IO))
+	if (fuse_file_passthrough_enabled(ff, true))
+		return fuse_passthrough_write_iter(iocb, from);
+	else if (!(ff->open_flags & FOPEN_DIRECT_IO))
 		return fuse_cache_write_iter(iocb, from);
 	else
 		return fuse_direct_write_iter(iocb, from);
@@ -2382,6 +2396,9 @@ static const struct vm_operations_struct fuse_file_vm_ops = {
 static int fuse_file_mmap(struct file *file, struct vm_area_struct *vma)
 {
 	struct fuse_file *ff = file->private_data;
+
+	if (fuse_file_passthrough_enabled(ff, vma->vm_flags & VM_MAYWRITE))
+		return fuse_passthrough_mmap(file, vma);
 
 	/* DAX mmap is superior to direct_io mmap */
 	if (FUSE_IS_DAX(file_inode(file)))

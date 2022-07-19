@@ -45,7 +45,7 @@
 #define FUSE_NAME_MAX 1024
 
 /** Number of dentries for each connection in the control filesystem */
-#define FUSE_CTL_NUM_DENTRIES 6
+#define FUSE_CTL_NUM_DENTRIES 9
 
 /** List of active connections */
 extern struct list_head fuse_conn_list;
@@ -180,6 +180,19 @@ struct fuse_conn;
 struct fuse_mount;
 struct fuse_release_args;
 
+/**
+ * Reference to lower filesystem file for read/write operations handled in
+ * passthrough mode.
+ * This struct also tracks the credentials to be used for handling read/write
+ * operations.
+ */
+struct fuse_passthrough {
+	struct file *filp;
+	struct cred *cred;
+	/* only passthrough write operation */
+	bool write_only;
+};
+
 /** FUSE specific file data */
 struct fuse_file {
 	/** Fuse connection for this file */
@@ -224,6 +237,9 @@ struct fuse_file {
 		u64 version;
 
 	} readdir;
+
+	/** Container for data related to the passthrough functionality */
+	struct fuse_passthrough passthrough;
 
 	/** RB node to be linked on fuse_conn->polled_files */
 	struct rb_node polled_node;
@@ -502,11 +518,13 @@ static inline bool fuse_is_inode_dax_mode(enum fuse_dax_mode mode)
 
 struct fuse_fs_context {
 	int fd;
+	const char *tag;
 	unsigned int rootmode;
 	kuid_t user_id;
 	kgid_t group_id;
 	bool is_bdev:1;
 	bool fd_present:1;
+	bool tag_present:1;
 	bool rootmode_present:1;
 	bool user_id_present:1;
 	bool group_id_present:1;
@@ -614,6 +632,9 @@ struct fuse_conn {
 
 	/** Connection aborted via sysfs */
 	bool aborted;
+
+	/** Connection supports fd passthrough and enabled */
+	bool passthrough_enabled;
 
 	/** Connection failed (version mismatch).  Cannot race with
 	    setting other bitfields since it is only set once in INIT
@@ -763,6 +784,9 @@ struct fuse_conn {
 	/* Does the filesystem support per inode DAX? */
 	unsigned int inode_dax:1;
 
+	/** Passthrough mode for read/write IO */
+	unsigned int passthrough:1;
+
 	/** The number of requests waiting for completion */
 	atomic_t num_waiting;
 
@@ -798,6 +822,18 @@ struct fuse_conn {
 
 	/** List of device instances belonging to this connection */
 	struct list_head devices;
+
+	/** IDR for passthrough requests */
+	struct idr passthrough_req;
+
+	/** Protects passthrough_req */
+	spinlock_t passthrough_req_lock;
+
+	/** Optional io metrics counter */
+	struct fuse_io_counter *io_counter;
+
+	/* fuse connection tag */
+	char tag[FUSE_TAG_NAME_MAX];
 
 #ifdef CONFIG_FUSE_DAX
 	/* Dax mode */
@@ -924,6 +960,10 @@ struct fuse_forget_link *fuse_alloc_forget(void);
 struct fuse_forget_link *fuse_dequeue_forget(struct fuse_iqueue *fiq,
 					     unsigned int max,
 					     unsigned int *countp);
+/**
+ * Send FUSE_INIT command
+ */
+void fuse_queue_init(struct fuse_iqueue *fiq, struct fuse_req *req);
 
 /*
  * Initialize READ or READDIR request
@@ -1025,6 +1065,7 @@ void __exit fuse_ctl_cleanup(void);
 ssize_t fuse_simple_request(struct fuse_mount *fm, struct fuse_args *args);
 int fuse_simple_background(struct fuse_mount *fm, struct fuse_args *args,
 			   gfp_t gfp_flags);
+int fuse_request_queue(struct fuse_mount *fm, struct fuse_args *args);
 
 /**
  * End a finished request
@@ -1033,10 +1074,14 @@ void fuse_request_end(struct fuse_req *req);
 
 /* Abort all requests */
 void fuse_abort_conn(struct fuse_conn *fc);
+void fuse_reset_conn(struct fuse_conn *fc);
 void fuse_wait_aborted(struct fuse_conn *fc);
 
 /* Flush all requests in processing queue */
 void fuse_flush_pq(struct fuse_conn *fc);
+
+/* Resend all requests in processing queue so they can represent to userspace */
+void fuse_resend_pqueue(struct fuse_conn *fc);
 
 /**
  * Invalidate inode attributes
@@ -1082,6 +1127,7 @@ struct fuse_dev *fuse_dev_alloc(void);
 void fuse_dev_install(struct fuse_dev *fud, struct fuse_conn *fc);
 void fuse_dev_free(struct fuse_dev *fud);
 void fuse_send_init(struct fuse_mount *fm);
+void fuse_resend_init(struct fuse_mount *fm);
 
 /**
  * Fill in superblock and initialize fuse connection
@@ -1255,5 +1301,30 @@ void fuse_dax_inode_cleanup(struct inode *inode);
 void fuse_dax_dontcache(struct inode *inode, unsigned int flags);
 bool fuse_dax_check_alignment(struct fuse_conn *fc, unsigned int map_alignment);
 void fuse_dax_cancel_work(struct fuse_conn *fc);
+
+/* passthrough.c */
+int fuse_passthrough_open(struct fuse_dev *fud, int fd, bool write_only);
+int fuse_passthrough_setup(struct fuse_conn *fc, struct fuse_file *ff,
+			   struct file *f, struct fuse_open_out *openarg);
+void fuse_passthrough_release(struct fuse_passthrough *passthrough);
+ssize_t fuse_passthrough_read_iter(struct kiocb *iocb, struct iov_iter *to);
+ssize_t fuse_passthrough_write_iter(struct kiocb *iocb, struct iov_iter *from);
+ssize_t fuse_passthrough_mmap(struct file *file, struct vm_area_struct *vma);
+
+/* io_stats.c */
+struct fuse_req_stat {
+	int			type;
+	size_t			count;
+	unsigned long long	start_time_ns;
+};
+
+int fuse_io_counter_init(struct fuse_conn *fc);
+void fuse_io_counter_stop(struct fuse_conn *fc);
+void fuse_io_start(struct fuse_io_counter *fic, struct fuse_req_stat *req,
+		   size_t count, int type);
+void fuse_io_end(struct fuse_io_counter *fic, struct fuse_req_stat *req);
+int fuse_io_metrics_show(struct seq_file *s, void *unused);
+void fuse_io_counter_set_latency_target(struct fuse_io_counter *fic,
+					u64 target_ns);
 
 #endif /* _FS_FUSE_I_H */
