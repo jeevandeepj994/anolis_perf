@@ -518,11 +518,13 @@ static inline bool fuse_is_inode_dax_mode(enum fuse_dax_mode mode)
 
 struct fuse_fs_context {
 	int fd;
+	const char *tag;
 	unsigned int rootmode;
 	kuid_t user_id;
 	kgid_t group_id;
 	bool is_bdev:1;
 	bool fd_present:1;
+	bool tag_present:1;
 	bool rootmode_present:1;
 	bool user_id_present:1;
 	bool group_id_present:1;
@@ -830,6 +832,9 @@ struct fuse_conn {
 	/** Optional io metrics counter */
 	struct fuse_io_counter *io_counter;
 
+	/* fuse connection tag */
+	char tag[FUSE_TAG_NAME_MAX];
+
 #ifdef CONFIG_FUSE_DAX
 	/* Dax mode */
 	enum fuse_dax_mode dax_mode;
@@ -955,6 +960,10 @@ struct fuse_forget_link *fuse_alloc_forget(void);
 struct fuse_forget_link *fuse_dequeue_forget(struct fuse_iqueue *fiq,
 					     unsigned int max,
 					     unsigned int *countp);
+/**
+ * Send FUSE_INIT command
+ */
+void fuse_queue_init(struct fuse_iqueue *fiq, struct fuse_req *req);
 
 /*
  * Initialize READ or READDIR request
@@ -1056,6 +1065,7 @@ void __exit fuse_ctl_cleanup(void);
 ssize_t fuse_simple_request(struct fuse_mount *fm, struct fuse_args *args);
 int fuse_simple_background(struct fuse_mount *fm, struct fuse_args *args,
 			   gfp_t gfp_flags);
+int fuse_request_queue(struct fuse_mount *fm, struct fuse_args *args);
 
 /**
  * End a finished request
@@ -1064,6 +1074,7 @@ void fuse_request_end(struct fuse_req *req);
 
 /* Abort all requests */
 void fuse_abort_conn(struct fuse_conn *fc);
+void fuse_reset_conn(struct fuse_conn *fc);
 void fuse_wait_aborted(struct fuse_conn *fc);
 
 /* Flush all requests in processing queue */
@@ -1116,6 +1127,7 @@ struct fuse_dev *fuse_dev_alloc(void);
 void fuse_dev_install(struct fuse_dev *fud, struct fuse_conn *fc);
 void fuse_dev_free(struct fuse_dev *fud);
 void fuse_send_init(struct fuse_mount *fm);
+void fuse_resend_init(struct fuse_mount *fm);
 
 /**
  * Fill in superblock and initialize fuse connection
