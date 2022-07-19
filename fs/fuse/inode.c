@@ -505,6 +505,7 @@ enum {
 	OPT_SOURCE,
 	OPT_SUBTYPE,
 	OPT_FD,
+	OPT_TAG,
 	OPT_ROOTMODE,
 	OPT_USER_ID,
 	OPT_GROUP_ID,
@@ -518,6 +519,7 @@ enum {
 static const struct fs_parameter_spec fuse_fs_parameters[] = {
 	fsparam_string	("source",		OPT_SOURCE),
 	fsparam_u32	("fd",			OPT_FD),
+	fsparam_string	("tag",			OPT_TAG),
 	fsparam_u32oct	("rootmode",		OPT_ROOTMODE),
 	fsparam_u32	("user_id",		OPT_USER_ID),
 	fsparam_u32	("group_id",		OPT_GROUP_ID),
@@ -568,6 +570,12 @@ static int fuse_parse_param(struct fs_context *fc, struct fs_parameter *param)
 	case OPT_FD:
 		ctx->fd = result.uint_32;
 		ctx->fd_present = true;
+		break;
+
+	case OPT_TAG:
+		ctx->tag = param->string;
+		ctx->tag_present = true;
+		param->string = NULL;
 		break;
 
 	case OPT_ROOTMODE:
@@ -622,6 +630,7 @@ static void fuse_free_fc(struct fs_context *fc)
 
 	if (ctx) {
 		kfree(ctx->subtype);
+		kfree(ctx->tag);
 		kfree(ctx);
 	}
 }
@@ -1104,12 +1113,10 @@ static void process_init_reply(struct fuse_mount *fm, struct fuse_args *args,
 	wake_up_all(&fc->blocked_waitq);
 }
 
-void fuse_send_init(struct fuse_mount *fm)
+static void fuse_prepare_send_init(struct fuse_mount *fm,
+				   struct fuse_init_args *ia)
 {
-	struct fuse_init_args *ia;
 	u64 flags;
-
-	ia = kzalloc(sizeof(*ia), GFP_KERNEL | __GFP_NOFAIL);
 
 	ia->in.major = FUSE_KERNEL_VERSION;
 	ia->in.minor = FUSE_KERNEL_MINOR_VERSION;
@@ -1151,11 +1158,30 @@ void fuse_send_init(struct fuse_mount *fm)
 	ia->args.force = true;
 	ia->args.nocreds = true;
 	ia->args.end = process_init_reply;
+}
+
+void fuse_send_init(struct fuse_mount *fm)
+{
+	struct fuse_init_args *ia;
+
+	ia = kzalloc(sizeof(*ia), GFP_KERNEL | __GFP_NOFAIL);
+	fuse_prepare_send_init(fm, ia);
 
 	if (fuse_simple_background(fm, &ia->args, GFP_KERNEL) != 0)
 		process_init_reply(fm, &ia->args, -ENOTCONN);
 }
 EXPORT_SYMBOL_GPL(fuse_send_init);
+
+void fuse_resend_init(struct fuse_mount *fm)
+{
+	struct fuse_init_args *ia;
+
+	ia = kzalloc(sizeof(*ia), GFP_KERNEL | __GFP_NOFAIL);
+	fuse_prepare_send_init(fm, ia);
+
+	if (fuse_request_queue(fm, &ia->args))
+		process_init_reply(fm, &ia->args, -ENOTCONN);
+}
 
 static int free_fuse_passthrough(int id, void *p, void *data)
 {
@@ -1463,6 +1489,22 @@ int fuse_fill_super_common(struct super_block *sb, struct fuse_fs_context *ctx)
 }
 EXPORT_SYMBOL_GPL(fuse_fill_super_common);
 
+static bool fuse_find_instance(const char *tag)
+{
+	struct fuse_conn *fc;
+
+	mutex_lock(&fuse_mutex);
+	list_for_each_entry(fc, &fuse_conn_list, entry) {
+		if (!strncmp(fc->tag, tag, FUSE_TAG_NAME_MAX - 1)) {
+			mutex_unlock(&fuse_mutex);
+			return true;
+		}
+	}
+	mutex_unlock(&fuse_mutex);
+
+	return false;
+}
+
 static int fuse_fill_super(struct super_block *sb, struct fs_context *fsc)
 {
 	struct fuse_fs_context *ctx = fsc->fs_private;
@@ -1471,10 +1513,20 @@ static int fuse_fill_super(struct super_block *sb, struct fs_context *fsc)
 	struct fuse_conn *fc;
 	struct fuse_mount *fm;
 
+	if (ctx->tag_present) {
+		if (fuse_find_instance(ctx->tag)) {
+			err = -EEXIST;
+			pr_err("fuse: tag %s already exist\n", ctx->tag);
+			goto err;
+		}
+	}
+
 	err = -EINVAL;
 	file = fget(ctx->fd);
-	if (!file)
+	if (!file) {
+		pr_err("fuse: invalid fd option\n");
 		goto err;
+	}
 
 	/*
 	 * Require mount to happen from the same user namespace which
@@ -1497,6 +1549,8 @@ static int fuse_fill_super(struct super_block *sb, struct fs_context *fsc)
 	}
 
 	fuse_conn_init(fc, fm, sb->s_user_ns, &fuse_dev_fiq_ops, NULL);
+	if (ctx->tag_present)
+		strncpy(fc->tag, ctx->tag, FUSE_TAG_NAME_MAX - 1);
 	fc->release = fuse_free_conn;
 
 	sb->s_fs_info = fm;
