@@ -33,7 +33,6 @@
 #define ACPI_SIG_MCHI           "MCHI"	/* Management Controller Host Interface table */
 #define ACPI_SIG_MPST           "MPST"	/* Memory Power State Table */
 #define ACPI_SIG_MSCT           "MSCT"	/* Maximum System Characteristics Table */
-#define ACPI_SIG_MPAM           "MPAM"	/* Memory Partitioning and Monitoring Table */
 #define ACPI_SIG_MSDM           "MSDM"	/* Microsoft Data Management Table */
 #define ACPI_SIG_MTMR           "MTMR"	/* MID Timer table */
 #define ACPI_SIG_NFIT           "NFIT"	/* NVDIMM Firmware Interface Table */
@@ -941,63 +940,6 @@ struct acpi_msct_proximity {
 	u64 memory_capacity;	/* In bytes */
 };
 
-/*
- * MPAM - Memory Partitioning and Monitoring table
- *
- * Conforms to "MPAM ACPI Description 1.0",
- * Null 0, 2017. Copyright 2017 ARM Limited or its affiliates.
- *
- ******************************************************************************/
-struct acpi_table_mpam {
-	struct acpi_table_header	header;/* Common ACPI table header */
-};
-
-/* Subtable header for MPAM */
-
-struct acpi_mpam_header {
-	u8			type;
-	u16			length;
-	u8			reserved;
-	u64			base_address;
-	u32			overflow_interrupt;
-	u32			overflow_flags;
-	u32			error_interrupt;
-	u32			error_interrupt_flags;
-	u32			not_ready_max;
-	u32			offset;
-};
-
-/* Values for subtable type in ACPI_MPAM_NODE_HEADER */
-
-enum AcpiMpamType {
-	ACPI_MPAM_TYPE_SMMU		= 0,
-	ACPI_MPAM_TYPE_CACHE		= 1,
-	ACPI_MPAM_TYPE_MEMORY		= 2,
-	ACPI_MPAM_TYPE_UNKNOWN		= 3
-};
-
-/* Flags */
-#define ACPI_MPAM_IRQ_FLAGS    (1)     /* Interrupt mode */
-
-/*
- *  MPAM Subtables
- */
-struct acpi_mpam_node_smmu {
-	struct acpi_mpam_header	header;
-	u32			IORT_ref;
-};
-
-struct acpi_mpam_node_cache {
-	struct acpi_mpam_header	header;
-	u32			PPTT_ref;
-};
-
-struct acpi_mpam_node_memory {
-	struct acpi_mpam_header	header;
-	u8			proximity_domain;
-	u8			reserved1[3];
-};
-
 /*******************************************************************************
  *
  * MSDM - Microsoft Data Management table
@@ -1587,6 +1529,12 @@ struct acpi_pptt_cache {
 	u16 line_size;
 };
 
+/* 1: Cache Type Structure for PPTT version 3 */
+
+struct acpi_pptt_cache_v1 {
+	u32 cache_id;
+};
+
 /* Flags */
 
 #define ACPI_PPTT_SIZE_PROPERTY_VALID       (1)	/* Physical property valid */
@@ -1596,6 +1544,7 @@ struct acpi_pptt_cache {
 #define ACPI_PPTT_CACHE_TYPE_VALID          (1<<4)	/* Cache type valid */
 #define ACPI_PPTT_WRITE_POLICY_VALID        (1<<5)	/* Write policy valid */
 #define ACPI_PPTT_LINE_SIZE_VALID           (1<<6)	/* Line size valid */
+#define ACPI_PPTT_CACHE_ID_VALID            (1<<7)	/* Cache ID valid */
 
 /* Masks for Attributes */
 
