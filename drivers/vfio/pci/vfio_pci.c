@@ -682,9 +682,11 @@ static int vfio_pci_enable(struct vfio_pci_device *vdev)
 		}
 	}
 
-	ret = vfio_pci_dma_fault_init(vdev, true);
-	if (ret)
-		goto disable_exit;
+	if (pdev->dev.iommu) {
+		ret = vfio_pci_dma_fault_init(vdev, true);
+		if (ret)
+			goto disable_exit;
+	}
 
 	vfio_pci_probe_mmaps(vdev);
 
@@ -710,7 +712,8 @@ static void vfio_pci_disable(struct vfio_pci_device *vdev)
 					VFIO_IRQ_SET_ACTION_TRIGGER,
 					vdev->irq_type, 0, 0, NULL);
 
-	WARN_ON(iommu_unregister_device_fault_handler(&vdev->pdev->dev));
+	if (pdev->dev.iommu)
+		WARN_ON(iommu_unregister_device_fault_handler(&vdev->pdev->dev));
 
 	if (vdev->ext_irqs) {
 		for (i = 0; i < vdev->num_ext_irqs; i++)
