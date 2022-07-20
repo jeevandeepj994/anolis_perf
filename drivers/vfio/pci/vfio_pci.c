@@ -313,6 +313,13 @@ int vfio_pci_set_power_state(struct vfio_pci_device *vdev, pci_power_t state)
 static void vfio_pci_dma_fault_release(struct vfio_pci_device *vdev,
 				       struct vfio_pci_region *region)
 {
+	/*
+	 * If failed in vfio_pci_dma_fault_init, vdev->fault_pages may
+	 * have been freed.
+	 */
+	if (!vdev->fault_pages)
+		return;
+
 	kfree(vdev->fault_pages);
 }
 
@@ -580,6 +587,7 @@ int vfio_pci_dma_fault_init(struct vfio_pci_device *vdev,  bool register_fault)
 	return 0;
 out:
 	kfree(vdev->fault_pages);
+	vdev->fault_pages = NULL;
 	return ret;
 }
 EXPORT_SYMBOL_GPL(vfio_pci_dma_fault_init);
@@ -682,9 +690,11 @@ static int vfio_pci_enable(struct vfio_pci_device *vdev)
 		}
 	}
 
-	ret = vfio_pci_dma_fault_init(vdev, true);
-	if (ret)
-		goto disable_exit;
+	if (pdev->dev.iommu) {
+		ret = vfio_pci_dma_fault_init(vdev, true);
+		if (ret)
+			goto disable_exit;
+	}
 
 	vfio_pci_probe_mmaps(vdev);
 
@@ -710,7 +720,8 @@ static void vfio_pci_disable(struct vfio_pci_device *vdev)
 					VFIO_IRQ_SET_ACTION_TRIGGER,
 					vdev->irq_type, 0, 0, NULL);
 
-	WARN_ON(iommu_unregister_device_fault_handler(&vdev->pdev->dev));
+	if (pdev->dev.iommu)
+		WARN_ON(iommu_unregister_device_fault_handler(&vdev->pdev->dev));
 
 	if (vdev->ext_irqs) {
 		for (i = 0; i < vdev->num_ext_irqs; i++)
