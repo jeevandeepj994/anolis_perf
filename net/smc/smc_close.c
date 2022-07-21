@@ -28,7 +28,7 @@ void smc_clcsock_release(struct smc_sock *smc)
 	if (smc->listen_smc && !smc->use_fallback &&
 	    current_work() != &smc->smc_listen_work)
 		cancel_work_sync(&smc->smc_listen_work);
-	mutex_lock(&smc->clcsock_release_lock);
+	down_write(&smc->clcsock_release_lock);
 	/* don't release clcsock for eRDMA */
 	if (smc->clcsock) {
 		tcp = smc->clcsock;
@@ -36,7 +36,7 @@ void smc_clcsock_release(struct smc_sock *smc)
 		if (!smc->keep_clcsock)
 			sock_release(tcp);
 	}
-	mutex_unlock(&smc->clcsock_release_lock);
+	up_write(&smc->clcsock_release_lock);
 }
 
 static void smc_close_cleanup_listen(struct sock *parent)
