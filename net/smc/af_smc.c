@@ -1739,8 +1739,12 @@ static int smc_clcsock_accept(struct smc_sock *lsmc, struct smc_sock **new_smc)
 	int rc = -EINVAL;
 
 	mutex_lock(&lsmc->clcsock_release_lock);
-	if (lsmc->clcsock)
-		rc = kernel_accept(lsmc->clcsock, &new_clcsock, SOCK_NONBLOCK);
+	if (lsmc->clcsock) {
+		if (lsmc->clcsock->sk->sk_ack_backlog)
+			rc = kernel_accept(lsmc->clcsock, &new_clcsock, SOCK_NONBLOCK);
+		else
+			rc = -EAGAIN;
+	}
 	mutex_unlock(&lsmc->clcsock_release_lock);
 	if  (rc < 0 && rc != -EAGAIN)
 		lsk->sk_err = -rc;
