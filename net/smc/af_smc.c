@@ -1733,33 +1733,22 @@ static int smc_clcsock_accept(struct smc_sock *lsmc, struct smc_sock **new_smc)
 	struct sock *new_sk;
 	int rc = -EINVAL;
 
-	new_sk = smc_sock_alloc(sock_net(lsk), NULL, lsk->sk_protocol);
-	if (!new_sk) {
-		rc = -ENOMEM;
-		lsk->sk_err = ENOMEM;
-		*new_smc = NULL;
-		goto out;
-	}
-	*new_smc = smc_sk(new_sk);
-
 	mutex_lock(&lsmc->clcsock_release_lock);
 	if (lsmc->clcsock)
 		rc = kernel_accept(lsmc->clcsock, &new_clcsock, SOCK_NONBLOCK);
 	mutex_unlock(&lsmc->clcsock_release_lock);
 	if  (rc < 0 && rc != -EAGAIN)
 		lsk->sk_err = -rc;
-	if (rc < 0 || lsk->sk_state == SMC_CLOSED) {
-		new_sk->sk_prot->unhash(new_sk);
-		mutex_lock(&lsmc->clcsock_release_lock);
-		if (new_clcsock)
-			sock_release(new_clcsock);
-		new_sk->sk_state = SMC_CLOSED;
-		sock_set_flag(new_sk, SOCK_DEAD);
-		mutex_unlock(&lsmc->clcsock_release_lock);
-		sock_put(new_sk); /* final */
-		*new_smc = NULL;
-		goto out;
+	if (rc < 0 || lsk->sk_state == SMC_CLOSED)
+		goto err_out;
+
+	new_sk = smc_sock_alloc(sock_net(lsk), NULL, lsk->sk_protocol);
+	if (!new_sk) {
+		rc = -ENOMEM;
+		lsk->sk_err = ENOMEM;
+		goto err_out;
 	}
+	*new_smc = smc_sk(new_sk);
 
 	/* new clcsock has inherited the smc listen-specific sk_data_ready
 	 * function; switch it back to the original sk_data_ready function
@@ -1779,7 +1768,12 @@ static int smc_clcsock_accept(struct smc_sock *lsmc, struct smc_sock **new_smc)
 	}
 
 	(*new_smc)->clcsock = new_clcsock;
-out:
+
+	return 0;
+err_out:
+	*new_smc = NULL;
+	if (new_clcsock)
+		sock_release(new_clcsock);
 	return rc;
 }
 
