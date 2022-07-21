@@ -25,7 +25,8 @@ void smc_clcsock_release(struct smc_sock *smc)
 {
 	struct socket *tcp;
 
-	if (smc->listen_smc && current_work() != &smc->smc_listen_work)
+	if (smc->listen_smc && !smc->use_fallback &&
+	    current_work() != &smc->smc_listen_work)
 		cancel_work_sync(&smc->smc_listen_work);
 	mutex_lock(&smc->clcsock_release_lock);
 	if (smc->clcsock) {
