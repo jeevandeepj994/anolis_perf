@@ -1733,13 +1733,11 @@ static int smc_clcsock_accept(struct smc_sock *lsmc, struct smc_sock **new_smc)
 	struct sock *new_sk;
 	int rc = -EINVAL;
 
-	release_sock(lsk);
 	new_sk = smc_sock_alloc(sock_net(lsk), NULL, lsk->sk_protocol);
 	if (!new_sk) {
 		rc = -ENOMEM;
 		lsk->sk_err = ENOMEM;
 		*new_smc = NULL;
-		lock_sock(lsk);
 		goto out;
 	}
 	*new_smc = smc_sk(new_sk);
@@ -1748,7 +1746,6 @@ static int smc_clcsock_accept(struct smc_sock *lsmc, struct smc_sock **new_smc)
 	if (lsmc->clcsock)
 		rc = kernel_accept(lsmc->clcsock, &new_clcsock, SOCK_NONBLOCK);
 	mutex_unlock(&lsmc->clcsock_release_lock);
-	lock_sock(lsk);
 	if  (rc < 0 && rc != -EAGAIN)
 		lsk->sk_err = -rc;
 	if (rc < 0 || lsk->sk_state == SMC_CLOSED) {
@@ -2523,7 +2520,6 @@ static void smc_tcp_listen_work(struct work_struct *work)
 	struct smc_sock *new_smc;
 	int rc = 0;
 
-	lock_sock(lsk);
 	while (lsk->sk_state == SMC_LISTEN) {
 		rc = smc_clcsock_accept(lsmc, &new_smc);
 		if (rc) /* clcsock accept queue empty or error */
@@ -2542,14 +2538,12 @@ static void smc_tcp_listen_work(struct work_struct *work)
 
 		/* check if peer is smc capable */
 		if (!tcp_sk(new_smc->clcsock->sk)->syn_smc) {
-			release_sock(lsk);
 			sock_hold(&new_smc->sk); /* sock_put in passive closing */
 			rc = smc_switch_to_fallback(new_smc, SMC_CLC_DECL_PEERNOSMC);
 			if (rc)
 				smc_listen_out_err(new_smc);
 			else
 				smc_listen_out_connected(new_smc);
-			lock_sock(lsk);
 		} else {
 			new_smc->smc_negotiated = 1;
 			atomic_inc(&lsmc->queued_smc_hs);
@@ -2562,7 +2556,6 @@ static void smc_tcp_listen_work(struct work_struct *work)
 	}
 
 out:
-	release_sock(lsk);
 	sock_put(&lsmc->sk); /* sock_hold in smc_clcsock_data_ready() */
 }
 
