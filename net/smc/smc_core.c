@@ -2248,14 +2248,19 @@ again:
 		     lgr->vlan_id == ini->vlan_id) &&
 		    (role == SMC_CLNT || ini->is_smcd ||
 		    (lgr->conns_num < SMC_RMBS_PER_LGR_MAX &&
-		      !bitmap_full(lgr->rtokens_used_mask, SMC_RMBS_PER_LGR_MAX)))) {
+		    (SMC_RMBS_PER_LGR_MAX -
+			bitmap_weight(lgr->rtokens_used_mask, SMC_RMBS_PER_LGR_MAX)
+				> atomic_read(&lgr->rtoken_pendings))))) {
 			/* link group found */
 			ini->first_contact_local = 0;
 			conn->lgr = lgr;
 			rc = smc_lgr_register_conn(conn, false);
 			write_unlock_bh(&lgr->conns_lock);
-			if (!rc && delayed_work_pending(&lgr->free_work))
-				cancel_delayed_work(&lgr->free_work);
+			if (!rc) {
+				smc_conn_enter_rtoken_pending(smc, ini);
+				if (delayed_work_pending(&lgr->free_work))
+					cancel_delayed_work(&lgr->free_work);
+			}
 			break;
 		}
 		write_unlock_bh(&lgr->conns_lock);

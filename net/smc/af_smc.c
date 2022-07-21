@@ -2504,6 +2504,7 @@ static void smc_listen_work(struct work_struct *work)
 		if (rc)
 			goto out_decl;
 	}
+	smc_conn_leave_rtoken_pending(new_smc, ini);
 	smc_conn_save_peer_info(new_smc, cclc);
 	smc_listen_out_connected(new_smc);
 	SMC_STAT_SERV_SUCC_INC(sock_net(newclcsock->sk), ini);
@@ -2512,6 +2513,7 @@ static void smc_listen_work(struct work_struct *work)
 	goto out_free;
 
 out_decl:
+	smc_conn_leave_rtoken_pending(new_smc, ini);
 	if (ini && ini->first_contact_local)
 		smc_lgr_decision_maker_on_first_contact_done(ini, false /* fail */);
 	smc_listen_decline(new_smc, rc, ini ? ini->first_contact_local : 0,
