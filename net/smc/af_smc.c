@@ -2651,9 +2651,10 @@ static int smc_accept(struct socket *sock, struct socket *new_sock,
 		      int flags, bool kern)
 {
 	struct sock *sk = sock->sk, *nsk;
-	DECLARE_WAITQUEUE(wait, current);
+	DEFINE_WAIT(wait);
 	struct smc_sock *lsmc;
 	long timeo;
+	bool waited = false;
 	int rc = 0;
 
 	lsmc = smc_sk(sk);
@@ -2666,15 +2667,16 @@ static int smc_accept(struct socket *sock, struct socket *new_sock,
 		goto out;
 	}
 
-	/* Wait for an incoming connection */
 	timeo = sock_rcvtimeo(sk, flags & O_NONBLOCK);
-	add_wait_queue_exclusive(sk_sleep(sk), &wait);
 	while (!(nsk = smc_accept_dequeue(sk, new_sock))) {
-		set_current_state(TASK_INTERRUPTIBLE);
 		if (!timeo) {
 			rc = -EAGAIN;
 			break;
 		}
+		/* Wait for an incoming connection */
+		prepare_to_wait_exclusive(sk_sleep(sk), &wait,
+					  TASK_INTERRUPTIBLE);
+		waited = true;
 		release_sock(sk);
 		timeo = schedule_timeout(timeo);
 		/* wakeup by sk_data_ready in smc_listen_work() */
@@ -2685,8 +2687,9 @@ static int smc_accept(struct socket *sock, struct socket *new_sock,
 			break;
 		}
 	}
-	set_current_state(TASK_RUNNING);
-	remove_wait_queue(sk_sleep(sk), &wait);
+
+	if (waited)
+		finish_wait(sk_sleep(sk), &wait);
 
 	if (!rc)
 		rc = sock_error(nsk);
