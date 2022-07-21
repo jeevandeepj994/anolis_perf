@@ -2421,16 +2421,6 @@ static void smc_listen_work(struct work_struct *work)
 		return;
 	}
 
-	/* check if peer is smc capable */
-	if (!tcp_sk(newclcsock->sk)->syn_smc) {
-		rc = smc_switch_to_fallback(new_smc, SMC_CLC_DECL_PEERNOSMC);
-		if (rc)
-			smc_listen_out_err(new_smc);
-		else
-			smc_listen_out_connected(new_smc);
-		return;
-	}
-
 	/* do inband token exchange -
 	 * wait for and receive SMC Proposal CLC message
 	 */
@@ -2536,13 +2526,6 @@ static void smc_tcp_listen_work(struct work_struct *work)
 		if (!new_smc)
 			continue;
 
-		if (tcp_sk(new_smc->clcsock->sk)->syn_smc) {
-			new_smc->smc_negotiated = 1;
-			atomic_inc(&lsmc->queued_smc_hs);
-			/* memory barrier */
-			smp_mb__after_atomic();
-		}
-
 		new_smc->listen_smc = lsmc;
 		new_smc->use_fallback = lsmc->use_fallback;
 		new_smc->fallback_rsn = lsmc->fallback_rsn;
@@ -2551,9 +2534,26 @@ static void smc_tcp_listen_work(struct work_struct *work)
 		smc_copy_sock_settings_to_smc(new_smc);
 		new_smc->sk.sk_sndbuf = lsmc->sk.sk_sndbuf;
 		new_smc->sk.sk_rcvbuf = lsmc->sk.sk_rcvbuf;
-		sock_hold(&new_smc->sk); /* sock_put in passive closing */
-		if (!queue_work(smc_hs_wq, &new_smc->smc_listen_work))
-			sock_put(&new_smc->sk);
+
+		/* check if peer is smc capable */
+		if (!tcp_sk(new_smc->clcsock->sk)->syn_smc) {
+			release_sock(lsk);
+			sock_hold(&new_smc->sk); /* sock_put in passive closing */
+			rc = smc_switch_to_fallback(new_smc, SMC_CLC_DECL_PEERNOSMC);
+			if (rc)
+				smc_listen_out_err(new_smc);
+			else
+				smc_listen_out_connected(new_smc);
+			lock_sock(lsk);
+		} else {
+			new_smc->smc_negotiated = 1;
+			atomic_inc(&lsmc->queued_smc_hs);
+			/* memory barrier */
+			smp_mb__after_atomic();
+			sock_hold(&new_smc->sk); /* sock_put in passive closing */
+			if (!queue_work(smc_hs_wq, &new_smc->smc_listen_work))
+				sock_put(&new_smc->sk);
+		}
 	}
 
 out:
