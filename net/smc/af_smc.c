@@ -431,7 +431,7 @@ static struct sock *smc_sock_alloc(struct net *net, struct socket *sock,
 	spin_lock_init(&smc->conn.send_lock);
 	sk->sk_prot->hash(sk);
 	sk_refcnt_debug_inc(sk);
-	mutex_init(&smc->clcsock_release_lock);
+	init_rwsem(&smc->clcsock_release_lock);
 	smc_init_saved_callbacks(smc);
 
 	/* default behavior from every net namespace */
@@ -924,7 +924,7 @@ static int smc_switch_to_fallback(struct smc_sock *smc, int reason_code)
 {
 	int rc = 0;
 
-	mutex_lock(&smc->clcsock_release_lock);
+	down_read(&smc->clcsock_release_lock);
 	if (!smc->clcsock) {
 		rc = -EBADF;
 		goto out;
@@ -947,7 +947,7 @@ static int smc_switch_to_fallback(struct smc_sock *smc, int reason_code)
 		smc_fback_replace_callbacks(smc);
 	}
 out:
-	mutex_unlock(&smc->clcsock_release_lock);
+	up_read(&smc->clcsock_release_lock);
 	return rc;
 }
 
@@ -1740,14 +1740,14 @@ static int smc_clcsock_accept(struct smc_sock *lsmc, struct smc_sock **new_smc)
 	struct sock *new_sk;
 	int rc = -EINVAL;
 
-	mutex_lock(&lsmc->clcsock_release_lock);
+	down_read(&lsmc->clcsock_release_lock);
 	if (lsmc->clcsock) {
 		if (lsmc->clcsock->sk->sk_ack_backlog)
 			rc = kernel_accept(lsmc->clcsock, &new_clcsock, SOCK_NONBLOCK);
 		else
 			rc = -EAGAIN;
 	}
-	mutex_unlock(&lsmc->clcsock_release_lock);
+	up_read(&lsmc->clcsock_release_lock);
 	if  (rc < 0 && rc != -EAGAIN)
 		lsk->sk_err = -rc;
 	if (rc < 0 || lsk->sk_state == SMC_CLOSED)
@@ -1834,10 +1834,12 @@ struct sock *smc_accept_dequeue(struct sock *parent,
 		smc_accept_unlink(new_sk);
 		if (new_sk->sk_state == SMC_CLOSED) {
 			new_sk->sk_prot->unhash(new_sk);
+			down_write(&isk->clcsock_release_lock);
 			if (isk->clcsock) {
 				sock_release(isk->clcsock);
 				isk->clcsock = NULL;
 			}
+			up_write(&isk->clcsock_release_lock);
 			sock_put(new_sk); /* final */
 			continue;
 		}
@@ -3032,9 +3034,9 @@ static int smc_setsockopt(struct socket *sock, int level, int optname,
 	/* generic setsockopts reaching us here always apply to the
 	 * CLC socket
 	 */
-	mutex_lock(&smc->clcsock_release_lock);
+	down_read(&smc->clcsock_release_lock);
 	if (!smc->clcsock) {
-		mutex_unlock(&smc->clcsock_release_lock);
+		up_read(&smc->clcsock_release_lock);
 		return -EBADF;
 	}
 	if (unlikely(!smc->clcsock->ops->setsockopt))
@@ -3046,7 +3048,7 @@ static int smc_setsockopt(struct socket *sock, int level, int optname,
 		sk->sk_err = smc->clcsock->sk->sk_err;
 		sk->sk_error_report(sk);
 	}
-	mutex_unlock(&smc->clcsock_release_lock);
+	up_read(&smc->clcsock_release_lock);
 
 	if (optlen < sizeof(int))
 		return -EINVAL;
@@ -3112,19 +3114,19 @@ static int smc_getsockopt(struct socket *sock, int level, int optname,
 		return __smc_getsockopt(sock, level, optname, optval, optlen);
 
 	smc = smc_sk(sock->sk);
-	mutex_lock(&smc->clcsock_release_lock);
+	down_read(&smc->clcsock_release_lock);
 	if (!smc->clcsock) {
-		mutex_unlock(&smc->clcsock_release_lock);
+		up_read(&smc->clcsock_release_lock);
 		return -EBADF;
 	}
 	/* socket options apply to the CLC socket */
 	if (unlikely(!smc->clcsock->ops->getsockopt)) {
-		mutex_unlock(&smc->clcsock_release_lock);
+		up_read(&smc->clcsock_release_lock);
 		return -EOPNOTSUPP;
 	}
 	rc = smc->clcsock->ops->getsockopt(smc->clcsock, level, optname,
 					   optval, optlen);
-	mutex_unlock(&smc->clcsock_release_lock);
+	up_read(&smc->clcsock_release_lock);
 	return rc;
 }
 
