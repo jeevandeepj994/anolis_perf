@@ -297,7 +297,7 @@ struct smc_sock {				/* smc sock container */
 						/* non-blocking connect in
 						 * flight
 						 */
-	struct mutex            clcsock_release_lock;
+	struct rw_semaphore	clcsock_release_lock;
 						/* protects clcsock of a listen
 						 * socket
 						 * */
