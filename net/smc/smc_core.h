@@ -15,6 +15,7 @@
 #include <linux/atomic.h>
 #include <linux/smc.h>
 #include <linux/pci.h>
+#include <linux/rhashtable.h>
 #include <rdma/ib_verbs.h>
 #include <net/genetlink.h>
 
@@ -116,6 +117,7 @@ struct smc_link {
 	u32			wr_tx_cnt;	/* number of WR send buffers */
 	wait_queue_head_t	wr_tx_wait;	/* wait for free WR send buf */
 	atomic_t		wr_tx_refcnt;	/* tx refs to link */
+	rwlock_t		rtokens_lock;
 
 	struct smc_wr_buf	*wr_rx_bufs;	/* WR recv payload buffers */
 	struct ib_recv_wr	*wr_rx_ibs;	/* WR recv meta data */
@@ -260,17 +262,23 @@ struct smc_llc_flow {
 	struct smc_llc_qentry *qentry;
 };
 
+struct smc_lgr_decision_maker;
+
 struct smc_link_group {
 	struct list_head	list;
 	struct rb_root		conns_all;	/* connection tree */
 	rwlock_t		conns_lock;	/* protects conns_all */
 	unsigned int		conns_num;	/* current # of connections */
+	atomic_t		rtoken_pendings;/* number of connection that
+						 * lgr assigned but no rtoken got yet
+						 */
 	unsigned short		vlan_id;	/* vlan id of link group */
 
 	struct list_head	sndbufs[SMC_RMBE_SIZES];/* tx buffers */
 	struct mutex		sndbufs_lock;	/* protects tx buffers */
 	struct list_head	rmbs[SMC_RMBE_SIZES];	/* rx buffers */
 	struct mutex		rmbs_lock;	/* protects rx buffers */
+	u8			first_contact_done; /* if first contact succeed */
 
 	u8			id[SMC_LGR_ID_SIZE];	/* unique lgr id */
 	struct delayed_work	free_work;	/* delayed freeing of an lgr */
@@ -350,6 +358,8 @@ struct smc_link_group {
 						/* peer triggered shutdownn */
 		};
 	};
+	struct smc_lgr_decision_maker	*ldm;
+						/* who decides to create this lgr */
 };
 
 struct smc_clc_msg_local;
@@ -388,6 +398,9 @@ struct smc_init_info {
 	unsigned short		vlan_id;
 	u32			rc;
 	u8			negotiated_eid[SMC_MAX_EID_LEN];
+	struct smc_lgr_decision_maker *ldm;
+	u8			advise;
+	void			*private;
 	/* SMC-R */
 	u8			smcr_version;
 	u8			check_smcrv2;
@@ -406,6 +419,7 @@ struct smc_init_info {
 	u8			ism_offered_cnt; /* # of ISM devices offered */
 	u8			ism_selected;    /* index of selected ISM dev*/
 	u8			smcd_version;
+	u8			role;
 };
 
 /* Find the connection associated with the given alert token in the link group.
@@ -573,6 +587,38 @@ int smc_nl_get_sys_info(struct sk_buff *skb, struct netlink_callback *cb);
 int smcr_nl_get_lgr(struct sk_buff *skb, struct netlink_callback *cb);
 int smcr_nl_get_link(struct sk_buff *skb, struct netlink_callback *cb);
 int smcd_nl_get_lgr(struct sk_buff *skb, struct netlink_callback *cb);
+
+void smc_lgr_decision_maker_on_first_contact_done(struct smc_init_info *ini, bool success);
+
+static inline void smc_lgr_decision_maker_on_first_contact_success(struct smc_sock *smc,
+								   struct smc_init_info *ini)
+{
+	smc->conn.lgr->first_contact_done = 1;
+	/* make sure first_contact_done can be seen after wakeup */
+	smp_mb();
+	smc_lgr_decision_maker_on_first_contact_done(ini, 1 /* success */);
+}
+
+static inline void smc_lgr_decision_maker_on_first_contact_fail(struct smc_init_info *ini)
+{
+	smc_lgr_decision_maker_on_first_contact_done(ini, 0 /* failed */);
+}
+
+static inline void smc_conn_enter_rtoken_pending(struct smc_sock *smc, struct smc_init_info *ini)
+{
+	struct smc_link_group *lgr = smc->conn.lgr;
+
+	if (lgr && !ini->first_contact_local)
+		atomic_inc(&lgr->rtoken_pendings);
+}
+
+static inline void smc_conn_leave_rtoken_pending(struct smc_sock *smc, struct smc_init_info *ini)
+{
+	struct smc_link_group *lgr = smc->conn.lgr;
+
+	if (lgr && !ini->first_contact_local)
+		atomic_dec(&lgr->rtoken_pendings);
+}
 
 static inline struct smc_link_group *smc_get_lgr(struct smc_link *link)
 {
