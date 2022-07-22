@@ -419,7 +419,7 @@ static int vidxd_resume_wq_state(struct vdcm_idxd *vidxd)
 			/* If dedicated WQ and PASID is not enabled, program
 			 * the default PASID in the WQ PASID register */
 			if (wq_dedicated(wq) && vwqcfg->mode_support) {
-				int wq_pasid, gpasid = -1;
+				int wq_pasid = -1, gpasid = -1;
 
 				if (vwqcfg->pasid_en) {
 					gpasid = vwqcfg->pasid;
@@ -433,8 +433,6 @@ static int vidxd_resume_wq_state(struct vdcm_idxd *vidxd)
 				}
 
 				if (wq_pasid >= 0) {
-					u32 status;
-
 					wqcfg->bits[WQCFG_PASID_IDX] &=
 								~GENMASK(29, 8);
 					wqcfg->priv = priv;
@@ -448,8 +446,8 @@ static int vidxd_resume_wq_state(struct vdcm_idxd *vidxd)
 					idxd_wq_setup_priv(wq, priv);
 					spin_unlock_irqrestore(&idxd->dev_lock,
 									flags);
-					idxd_wq_enable(wq, &rc);
-					if (status) {
+					rc = idxd_wq_enable(wq, NULL);
+					if (rc) {
 						dev_err(dev, "resume wq failed\n");
 						break;
 					}
@@ -461,7 +459,7 @@ static int vidxd_resume_wq_state(struct vdcm_idxd *vidxd)
 				spin_lock_irqsave(&idxd->dev_lock, flags);
 				idxd_wq_setup_pasid(wq, 0);
 				spin_unlock_irqrestore(&idxd->dev_lock, flags);
-				idxd_wq_enable(wq, &rc);
+				rc = idxd_wq_enable(wq, NULL);
 				if (rc) {
 					dev_err(dev, "resume wq %d failed\n",
 							wq->id);
@@ -1095,6 +1093,7 @@ static int vidxd_register_ioasid_notifier(struct vdcm_idxd *vidxd)
 	list_for_each_entry(mm_entry, &vdev->mm_list, node) {
 		if (mm_entry->mm == mm) {
 			mutex_unlock(&vdev->ioasid_lock);
+			mmput(mm);
 			return 0;
 		}
 	}
@@ -1110,12 +1109,12 @@ static int vidxd_register_ioasid_notifier(struct vdcm_idxd *vidxd)
 	vidxd->ivdev.pasid_nb.priority = IOASID_PRIO_DEVICE;
 	vidxd->ivdev.pasid_nb.notifier_call = idxd_mdev_ioasid_event;
 	rc = ioasid_register_notifier_mm(mm, &vidxd->ivdev.pasid_nb);
-	mmput(mm);
 	if (rc < 0)
 		goto err_ioasid;
 
 	list_add(&mm_entry->node, &vdev->mm_list);
 	mutex_unlock(&vdev->ioasid_lock);
+	mmput(mm);
 
 	return 0;
 
@@ -1445,7 +1444,7 @@ static int idxd_vdcm_mmap(struct vfio_device *vdev, struct vm_area_struct *vma)
 
 static void vidxd_vdcm_reset(struct vdcm_idxd *vidxd)
 {
-	vidxd_reset(vidxd, false);
+	idxd_vdcm_init(vidxd);
 }
 
 static irqreturn_t idxd_vdcm_msix_handler(int irq, void *arg)
@@ -1779,6 +1778,9 @@ static int idxd_vdcm_set_ctx_trigger_single(struct eventfd_ctx **ctx,
 		u8 trigger;
 
 		if (!count)
+			return -EINVAL;
+
+		if (!data)
 			return -EINVAL;
 
 		trigger = *(u8 *)data;
@@ -2404,22 +2406,21 @@ static void idxd_mdev_drv_remove(struct idxd_dev *idxd_dev)
 	struct idxd_wq *wq = idxd_dev_to_wq(idxd_dev);
 	struct idxd_device *idxd = wq->idxd;
 
-
 	mutex_lock(&wq->wq_lock);
 	__drv_disable_wq(wq);
-
-	if (wq->state == IDXD_WQ_DISABLED) {
-		mutex_unlock(&wq->wq_lock);
-		return;
-	}
 
 	if (wq->state == IDXD_WQ_LOCKED)
 		wq->state = IDXD_WQ_DISABLED;
 	mutex_unlock(&wq->wq_lock);
 
 	mutex_lock(&idxd->kref_lock);
-	if (idxd->mdev_host_init)
+	if (idxd->mdev_host_init) {
 		kref_put(&idxd->mdev_kref, idxd_mdev_host_release);
+
+		/* kref init at 1, when it hits 1, no more devices and we can release */
+		if (kref_read(&idxd->mdev_kref) == 1)
+			kref_put(&idxd->mdev_kref, idxd_mdev_host_release);
+	}
 	mutex_unlock(&idxd->kref_lock);
 	put_device(dev);
 	dev_info(dev, "wq %s disabled\n", dev_name(dev));
