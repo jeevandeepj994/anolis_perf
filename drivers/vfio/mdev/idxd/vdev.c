@@ -221,7 +221,7 @@ int vidxd_mmio_write(struct vdcm_idxd *vidxd, u64 pos, void *buf, unsigned int s
 	}
 
 	case VIDXD_MSIX_PERM_OFFSET ...  VIDXD_MSIX_PERM_OFFSET + VIDXD_MSIX_PERM_TBL_SZ - 1: {
-		int index, rc;
+		int index;
 		u32 msix_perm;
 		u32 pasid, pasid_en;
 
@@ -236,30 +236,6 @@ int vidxd_mmio_write(struct vdcm_idxd *vidxd, u64 pos, void *buf, unsigned int s
 		dev_dbg(dev, "%s writing to MSIX_PERM: %#x offset %#x index: %u\n",
 			__func__, msix_perm, offset, index);
 		break;
-		/*
-		 * index 0 for MSIX is emulated for misc interrupts. The MSIX indices from
-		 * 1...N are backed by IMS. Here we would pass in index - 1, which is 0 for
-		 * the first one
-		 */
-		if (index > 0) {
-			pasid_en = (msix_perm >> 3) & 1;
-
-			/*
-			 * When vSVA is turned on, this is the only place where the guest PASID
-			 * can be retrieved by the host. The guest driver writes the PASID to the
-			 * MSIX permission entry. In turn the vdcm will translate this to the
-			 * IMS entry.
-			 */
-
-			if (pasid_en) {
-				pasid = (msix_perm >> 12) & 0xfffff;
-				if (!pasid)
-					break;
-			}
-			rc = vidxd_set_ims_pasid(vidxd, index - 1, pasid_en, pasid);
-			if (rc < 0)
-				return rc;
-		}
 	}
 	} /* offset */
 
@@ -936,7 +912,7 @@ static void vidxd_wq_drain(struct vdcm_idxd *vidxd, int val)
 	u8 *bar0 = vidxd->bar0;
 	union wqcfg *wqcfg = (union wqcfg *)(bar0 + VIDXD_WQCFG_OFFSET);
 	struct idxd_wq *wq = vidxd->wq;
-	u32 status;
+	u32 status = 0;
 
 	dev_dbg(dev, "%s\n", __func__);
 	if (wqcfg->wq_state != IDXD_WQ_DEV_ENABLED) {
@@ -1029,7 +1005,7 @@ static void vidxd_wq_reset(struct vdcm_idxd *vidxd, int wq_id_mask)
 	union wqcfg *wqcfg = (union wqcfg *)(bar0 + VIDXD_WQCFG_OFFSET);
 	struct mdev_device *mdev = vidxd->ivdev.mdev;
 	struct device *dev = mdev_dev(mdev);
-	u32 status;
+	u32 status = 0;
 
 	wq = vidxd->wq;
 	dev_dbg(dev, "vidxd reset wq %u:%u\n", 0, wq->id);
@@ -1207,7 +1183,7 @@ static void vidxd_wq_enable(struct vdcm_idxd *vidxd, int wq_id)
 	wq_pasid_enable = vwqcfg->pasid_en;
 
 	if (wq_dedicated(wq)) {
-		u32 wq_pasid = ~0U;
+		int wq_pasid = -1;
 		bool priv;
 
 		if (wq_pasid_enable) {
@@ -1249,8 +1225,8 @@ static void vidxd_wq_enable(struct vdcm_idxd *vidxd, int wq_id)
 			idxd_wq_setup_pasid(wq, wq_pasid);
 			idxd_wq_setup_priv(wq, priv);
 			spin_unlock_irqrestore(&idxd->dev_lock, flags);
-			idxd_wq_enable(wq, &status);
-			if (status) {
+			rc = idxd_wq_enable(wq, &status);
+			if (rc < 0 || status) {
 				dev_err(dev, "vidxd enable wq %d failed\n", wq->id);
 				idxd_complete_command(vidxd, status);
 				return;

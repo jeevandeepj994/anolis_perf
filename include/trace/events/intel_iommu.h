@@ -16,6 +16,8 @@
 #include <linux/tracepoint.h>
 #include <linux/intel-iommu.h>
 
+#define MSG_MAX		256
+
 DECLARE_EVENT_CLASS(dma_map,
 	TP_PROTO(struct device *dev, dma_addr_t dev_addr, phys_addr_t phys_addr,
 		 size_t size),
@@ -134,6 +136,41 @@ DEFINE_EVENT(dma_map_sg, bounce_map_sg,
 	TP_PROTO(struct device *dev, int index, int total,
 		 struct scatterlist *sg),
 	TP_ARGS(dev, index, total, sg)
+);
+
+TRACE_EVENT(prq_report,
+	TP_PROTO(struct intel_iommu *iommu, struct device *dev,
+		 u64 dw0, u64 dw1, u64 dw2, u64 dw3,
+		 unsigned long seq),
+
+	TP_ARGS(iommu, dev, dw0, dw1, dw2, dw3, seq),
+
+	TP_STRUCT__entry(
+		__field(u64, dw0)
+		__field(u64, dw1)
+		__field(u64, dw2)
+		__field(u64, dw3)
+		__field(unsigned long, seq)
+		__string(iommu, iommu->name)
+		__string(dev, dev_name(dev))
+		__dynamic_array(char, buff, MSG_MAX)
+	),
+
+	TP_fast_assign(
+		__entry->dw0 = dw0;
+		__entry->dw1 = dw1;
+		__entry->dw2 = dw2;
+		__entry->dw3 = dw3;
+		__entry->seq = seq;
+		__assign_str(iommu, iommu->name);
+		__assign_str(dev, dev_name(dev));
+	),
+
+	TP_printk("%s/%s seq# %ld: %s",
+		__get_str(iommu), __get_str(dev), __entry->seq,
+		decode_prq_descriptor(__get_str(buff), MSG_MAX, __entry->dw0,
+				      __entry->dw1, __entry->dw2, __entry->dw3)
+	)
 );
 #endif /* _TRACE_INTEL_IOMMU_H */
 
