@@ -33,6 +33,8 @@
 
 #include "mpam_internal.h"
 
+extern int ddr_cpufreq;
+
 DEFINE_STATIC_KEY_FALSE(mpam_enabled);
 
 /*
@@ -56,6 +58,8 @@ static DEFINE_MUTEX(mpam_cpuhp_state_lock);
 u16 mpam_partid_max;
 u8 mpam_pmg_max;
 static bool partid_max_init, partid_max_published;
+static u16 mpam_cmdline_partid_max;
+static bool mpam_cmdline_partid_max_overridden;
 static DEFINE_SPINLOCK(partid_max_lock);
 
 /*
@@ -196,6 +200,9 @@ int mpam_register_requestor(u16 partid_max, u8 pmg_max)
 		if ((partid_max < mpam_partid_max) || (pmg_max < mpam_pmg_max))
 			err = -EBUSY;
 	}
+
+	if (mpam_cmdline_partid_max_overridden)
+		mpam_partid_max = min(mpam_cmdline_partid_max, mpam_partid_max);
 	spin_unlock(&partid_max_lock);
 
 	return err;
@@ -660,6 +667,22 @@ static void mpam_ris_hw_probe(struct mpam_msc_ris *ris)
 		mpam_set_feature(mpam_feat_partid_nrw, props);
 		msc->partid_max = min(msc->partid_max, partid_max);
 	}
+
+	/*
+	 * FIXME: Yitian does not have MPAMF_MSMON_IDR_MSMON_MBWU register, it
+	 * uses MPAMF_IDR_HAS_IMPL_IDR and some custom registers to get mbwu
+	 * monitor information instead.
+	 */
+	if (FIELD_GET(MPAMF_IDR_HAS_IMPL_IDR, ris->idr) && class->type == MPAM_CLASS_MEMORY) {
+		/*
+		 * resctrl expects the bandwidth counters to be free running,
+		 * which means to expose the files in the filesystem we need
+		 * as many monitors as resctrl has control/monitor groups.
+		 * Here, we set the two values to be equal by default.
+		 */
+		props->num_mbwu_mon = resctrl_arch_system_num_rmid_idx();
+		mpam_set_feature(mpam_feat_msmon_mbwu, props);
+	}
 }
 
 static int mpam_msc_hw_probe(struct mpam_msc *msc)
@@ -819,7 +842,12 @@ static u64 mpam_msmon_overflow_val(struct mpam_msc_ris *ris)
 	return GENMASK_ULL(30,0);
 }
 
-static void __ris_msmon_read(void *arg)
+/*
+ * FIXME: Yitian use several custom registers to implement mbwu monitor feature instead
+ * of MSMON_MBWU. So we split __ris_msmon_read() into __ris_msmon_csu_read() and
+ * __ris_msmon_mbwu_read().
+ */
+static void __maybe_unused __ris_msmon_read(void *arg)
 {
 	bool nrdy = false;
 	unsigned long flags;
@@ -900,9 +928,104 @@ static void __ris_msmon_read(void *arg)
 	*(m->val) += now;
 }
 
+static void __ris_msmon_csu_read(void *arg)
+{
+	bool nrdy = false;
+	unsigned long flags;
+	bool config_mismatch;
+	struct mon_read *m = arg;
+	u64 now;
+	struct mon_cfg *ctx = m->ctx;
+	struct mpam_msc *msc = m->ris->msc;
+	u32 mon_sel, ctl_val, flt_val, cur_ctl, cur_flt;
+
+	assert_spin_locked(&msc->lock);
+
+	spin_lock_irqsave(&msc->mon_sel_lock, flags);
+	mon_sel = FIELD_PREP(MSMON_CFG_MON_SEL_MON_SEL, ctx->mon) |
+		  FIELD_PREP(MSMON_CFG_MON_SEL_RIS, m->ris->ris_idx);
+	mpam_write_monsel_reg(msc, CFG_MON_SEL, mon_sel);
+
+	/*
+	 * Read the existing configuration to avoid re-writing the same values.
+	 * This saves waiting for 'nrdy' on subsequent reads.
+	 */
+	read_msmon_ctl_flt_vals(m, &cur_ctl, &cur_flt);
+	gen_msmon_ctl_flt_vals(m, &ctl_val, &flt_val);
+	config_mismatch = cur_flt != flt_val ||
+			  cur_ctl != (ctl_val | MSMON_CFG_x_CTL_EN);
+
+	if (config_mismatch)
+		write_msmon_ctl_flt_vals(m, ctl_val, flt_val);
+
+	now = mpam_read_monsel_reg(msc, CSU);
+	nrdy = now & MSMON___NRDY;
+	now = FIELD_GET(MSMON___VALUE, now);
+
+	spin_unlock_irqrestore(&msc->mon_sel_lock, flags);
+
+	if (nrdy) {
+		m->err = -EBUSY;
+		return;
+	}
+
+	*(m->val) += now;
+}
+
+#define MBWU_MASK GENMASK(23, 0)
+#define MBWU_GET(v) ((v) & MBWU_MASK)
+#define MPAMF_CUST_MBWC_OFFSET 0x08
+#define MPAMF_CUST_WINDW_OFFSET 0x0C
+
+static void __ris_msmon_mbwu_read(void *arg)
+{
+	unsigned long flags;
+	struct mon_read *m = arg;
+	u64 mb_val = 0;
+	struct mon_cfg *ctx = m->ctx;
+	bool reset_on_next_read = false;
+	struct mpam_msc_ris *ris = m->ris;
+	struct mpam_msc *msc = m->ris->msc;
+	struct msmon_mbwu_state *mbwu_state;
+	u32 custom_reg_base_addr, cycle, val;
+
+	assert_spin_locked(&msc->lock);
+
+	spin_lock_irqsave(&msc->mon_sel_lock, flags);
+
+	__mpam_write_reg(msc, MPAMCFG_PART_SEL, ctx->mon);
+
+	mbwu_state = &ris->mbwu_state[ctx->mon];
+	if (mbwu_state) {
+		reset_on_next_read = mbwu_state->reset_on_next_read;
+		mbwu_state->reset_on_next_read = false;
+	}
+
+	custom_reg_base_addr = __mpam_read_reg(msc, MPAMF_IMPL_IDR);
+
+	cycle = __mpam_read_reg(msc, custom_reg_base_addr + MPAMF_CUST_WINDW_OFFSET);
+	val = __mpam_read_reg(msc, custom_reg_base_addr + MPAMF_CUST_MBWC_OFFSET);
+
+	spin_unlock_irqrestore(&msc->mon_sel_lock, flags);
+
+	if (val & MSMON___NRDY) {
+		m->err = -EBUSY;
+		return;
+	}
+
+	mb_val = MBWU_GET(val);
+
+	mb_val = mb_val * 32 * ddr_cpufreq * 1000000 / cycle; /* B/s */
+	*(m->val) += mb_val;
+
+	/* Include bandwidth consumed before the last hardware reset */
+	*(m->val) += mbwu_state->correction;
+}
+
 static int _msmon_read(struct mpam_component *comp, struct mon_read *arg)
 {
-	int err;
+	int err, cpu;
+	struct cpumask *mask;
 	struct mpam_msc *msc;
 	struct mpam_msc_ris *ris;
 
@@ -911,10 +1034,38 @@ static int _msmon_read(struct mpam_component *comp, struct mon_read *arg)
 		arg->ris = ris;
 
 		msc = ris->msc;
+		mask = &msc->accessibility;
+
+		/*
+		 * Fail the access if we need to cross call to reach this MSC
+		 * and irqs are masked. The PMU driver calls this with irqs
+		 * masked, but it also specifies where the callback should run.
+		 */
+		err = -EIO;
 		spin_lock(&msc->lock);
-		err = smp_call_function_any(&msc->accessibility,
-					    __ris_msmon_read, arg, true);
+		cpu = get_cpu();
+		if (cpumask_test_cpu(cpu, mask)) {
+			if (arg->type == mpam_feat_msmon_csu) {
+				__ris_msmon_csu_read(arg);
+				err = 0;
+			} else if (arg->type == mpam_feat_msmon_mbwu) {
+				__ris_msmon_mbwu_read(arg);
+				err = 0;
+			} else
+				err = -EOPNOTSUPP;
+		} else if (!irqs_disabled()) {
+			if (arg->type == mpam_feat_msmon_csu)
+				err = smp_call_function_any(&msc->accessibility,
+						__ris_msmon_csu_read, arg, true);
+			else if (arg->type == mpam_feat_msmon_mbwu)
+				err = smp_call_function_any(&msc->accessibility,
+						__ris_msmon_mbwu_read, arg, true);
+			else
+				err = -EOPNOTSUPP;
+		}
+		put_cpu();
 		spin_unlock(&msc->lock);
+
 		if (!err && arg->err)
 			err = arg->err;
 		if (err)
@@ -933,8 +1084,6 @@ int mpam_msmon_read(struct mpam_component *comp, struct mon_cfg *ctx,
 	u64 wait_jiffies = 0;
 	struct mpam_props *cprops = &comp->class->props;
 
-	might_sleep();
-
 	if (!mpam_is_enabled())
 		return -EIO;
 
@@ -948,7 +1097,7 @@ int mpam_msmon_read(struct mpam_component *comp, struct mon_cfg *ctx,
 	*val = 0;
 
 	err = _msmon_read(comp, &arg);
-	if (err == -EBUSY)
+	if (err == -EBUSY && !irqs_disabled())
 		wait_jiffies = usecs_to_jiffies(comp->class->nrdy_usec);
 
 	while (wait_jiffies)
@@ -1117,7 +1266,7 @@ static void mpam_restore_mbwu_state(void *_ris)
 			mwbu_arg.ctx = &ris->mbwu_state[i].cfg;
 			mwbu_arg.type = mpam_feat_msmon_mbwu;
 
-			__ris_msmon_read(&mwbu_arg);
+			__ris_msmon_mbwu_read(&mwbu_arg);
 		}
 	}
 }
@@ -1848,7 +1997,7 @@ static void __destroy_component_cfg(struct mpam_component *comp)
 		spin_unlock_irqrestore(&ris->msc->mon_sel_lock, flags);
 		spin_unlock(&ris->msc->lock);
 
-		kfree(ris->mbwu_state);
+		kfree(mbwu_state);
 	}
 }
 
@@ -2000,6 +2149,8 @@ static irqreturn_t mpam_disable_thread(int irq, void *dev_id)
 		mpam_cpuhp_state = 0;
 	}
 	mutex_unlock(&mpam_cpuhp_state_lock);
+
+	mpam_resctrl_exit();
 
 	static_branch_disable(&mpam_enabled);
 
@@ -2174,3 +2325,17 @@ static int __init mpam_msc_driver_init(void)
 }
 /* Must occur after arm64_mpam_register_cpus() from arch_initcall() */
 subsys_initcall(mpam_msc_driver_init);
+
+static int __init mpam_parse_partid_max(char *arg)
+{
+	int ret;
+
+	spin_lock(&partid_max_lock);
+	ret = kstrtou16(arg, 10, &mpam_cmdline_partid_max);
+	spin_unlock(&partid_max_lock);
+	if (!ret)
+		mpam_cmdline_partid_max_overridden = true;
+
+	return 0;
+}
+early_param("mpam.partid_max", mpam_parse_partid_max);

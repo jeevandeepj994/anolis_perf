@@ -37,6 +37,29 @@ int mpam_register_requestor(u16 partid_max, u8 pmg_max);
 int mpam_ris_create(struct mpam_msc *msc, u8 ris_idx,
 		    enum mpam_class_types type, u8 class_id, int component_id);
 
+/* Are there enough MSMON monitors for 1 per PARTID*PMG ? */
+extern bool mpam_monitors_free_runing;
+
+/* Does the event count even when no context is allocated? */
+static inline bool resctrl_arch_event_is_free_running(enum resctrl_event_id evt)
+{
+	switch (evt) {
+	case QOS_L3_OCCUP_EVENT_ID:
+		return true;
+	case QOS_L3_MBM_TOTAL_EVENT_ID:
+	case QOS_L3_MBM_LOCAL_EVENT_ID:
+		return mpam_monitors_free_runing;
+	}
+
+	unreachable();
+
+	return false;
+}
+
+static inline unsigned int resctrl_arch_round_mon_val(unsigned int val)
+{
+	return val;
+}
 
 bool resctrl_arch_alloc_capable(void);
 bool resctrl_arch_mon_capable(void);
@@ -62,5 +85,25 @@ void resctrl_sched_in(void);
 u32 resctrl_arch_rmid_idx_encode(u32 closid, u32 rmid);
 void resctrl_arch_rmid_idx_decode(u32 idx, u32 *closid, u32 *rmid);
 u32 resctrl_arch_system_num_rmid_idx(void);
+
+struct rdt_resource;
+int resctrl_arch_mon_ctx_alloc_no_wait(struct rdt_resource *r, int evtid);
+void resctrl_arch_mon_ctx_free(struct rdt_resource *r, int evtid, int ctx);
+
+/* Pseudo lock is not supported by MPAM */
+static inline int resctrl_arch_pseudo_lock_fn(void *_plr) { return 0; }
+static inline int resctrl_arch_measure_l2_residency(void *_plr) { return 0; }
+static inline int resctrl_arch_measure_l3_residency(void *_plr) { return 0; }
+static inline int resctrl_arch_measure_cycles_lat_fn(void *_plr) { return 0; }
+static inline u64 resctrl_arch_get_prefetch_disable_bits(void) { return 0; }
+
+/*
+ * The CPU configuration for MPAM is cheap to write, and is only written if it
+ * has changed. No need for fine grained enables.
+ */
+static inline void resctrl_arch_enable_mon(void) { }
+static inline void resctrl_arch_disable_mon(void) { }
+static inline void resctrl_arch_enable_alloc(void) { }
+static inline void resctrl_arch_disable_alloc(void) { }
 
 #endif /* __LINUX_ARM_MPAM_H */
