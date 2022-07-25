@@ -31,8 +31,7 @@ void vidxd_send_interrupt(struct vdcm_idxd *vidxd, int msix_idx)
 {
 	struct vfio_pci_device *vfio_pdev = &vidxd->vfio_pdev;
 
-	if (vfio_pdev->ctx[msix_idx].trigger)
-		eventfd_signal(vfio_pdev->ctx[msix_idx].trigger, 1);
+	eventfd_signal(vfio_pdev->ctx[msix_idx].trigger, 1);
 }
 
 static void vidxd_report_error(struct vdcm_idxd *vidxd, unsigned int error)
@@ -221,7 +220,7 @@ int vidxd_mmio_write(struct vdcm_idxd *vidxd, u64 pos, void *buf, unsigned int s
 	}
 
 	case VIDXD_MSIX_PERM_OFFSET ...  VIDXD_MSIX_PERM_OFFSET + VIDXD_MSIX_PERM_TBL_SZ - 1: {
-		int index, rc;
+		int index;
 		u32 msix_perm;
 		u32 pasid, pasid_en;
 
@@ -236,30 +235,6 @@ int vidxd_mmio_write(struct vdcm_idxd *vidxd, u64 pos, void *buf, unsigned int s
 		dev_dbg(dev, "%s writing to MSIX_PERM: %#x offset %#x index: %u\n",
 			__func__, msix_perm, offset, index);
 		break;
-		/*
-		 * index 0 for MSIX is emulated for misc interrupts. The MSIX indices from
-		 * 1...N are backed by IMS. Here we would pass in index - 1, which is 0 for
-		 * the first one
-		 */
-		if (index > 0) {
-			pasid_en = (msix_perm >> 3) & 1;
-
-			/*
-			 * When vSVA is turned on, this is the only place where the guest PASID
-			 * can be retrieved by the host. The guest driver writes the PASID to the
-			 * MSIX permission entry. In turn the vdcm will translate this to the
-			 * IMS entry.
-			 */
-
-			if (pasid_en) {
-				pasid = (msix_perm >> 12) & 0xfffff;
-				if (!pasid)
-					break;
-			}
-			rc = vidxd_set_ims_pasid(vidxd, index - 1, pasid_en, pasid);
-			if (rc < 0)
-				return rc;
-		}
 	}
 	} /* offset */
 
@@ -828,8 +803,7 @@ void vidxd_mmio_init(struct vdcm_idxd *vidxd)
 	vidxd_mmio_init_wqcfg(vidxd);
 }
 
-static void __idxd_complete_command(struct vdcm_idxd *vidxd, enum idxd_cmdsts_err val,
-				    bool interrupt)
+static void idxd_complete_command(struct vdcm_idxd *vidxd, enum idxd_cmdsts_err val)
 {
 	u8 *bar0 = vidxd->bar0;
 	u32 *cmd = (u32 *)(bar0 + IDXD_CMD_OFFSET);
@@ -843,14 +817,8 @@ static void __idxd_complete_command(struct vdcm_idxd *vidxd, enum idxd_cmdsts_er
 
 	if (*cmd & IDXD_CMD_INT_MASK) {
 		*intcause |= IDXD_INTC_CMD;
-		if (interrupt)
-			vidxd_send_interrupt(vidxd, 0);
+		vidxd_send_interrupt(vidxd, 0);
 	}
-}
-
-static void idxd_complete_command(struct vdcm_idxd *vidxd, enum idxd_cmdsts_err val)
-{
-	__idxd_complete_command(vidxd, val, true);
 }
 
 static void vidxd_enable(struct vdcm_idxd *vidxd)
@@ -936,7 +904,7 @@ static void vidxd_wq_drain(struct vdcm_idxd *vidxd, int val)
 	u8 *bar0 = vidxd->bar0;
 	union wqcfg *wqcfg = (union wqcfg *)(bar0 + VIDXD_WQCFG_OFFSET);
 	struct idxd_wq *wq = vidxd->wq;
-	u32 status;
+	u32 status = 0;
 
 	dev_dbg(dev, "%s\n", __func__);
 	if (wqcfg->wq_state != IDXD_WQ_DEV_ENABLED) {
@@ -996,7 +964,7 @@ static void vidxd_wq_abort(struct vdcm_idxd *vidxd, int val)
 	idxd_complete_command(vidxd, IDXD_CMDSTS_SUCCESS);
 }
 
-void vidxd_reset(struct vdcm_idxd *vidxd, bool interrupt)
+void vidxd_reset(struct vdcm_idxd *vidxd)
 {
 	struct mdev_device *mdev = vidxd->ivdev.mdev;
 	struct device *dev = mdev_dev(mdev);
@@ -1019,7 +987,7 @@ void vidxd_reset(struct vdcm_idxd *vidxd, bool interrupt)
 
 	vidxd_mmio_reset(vidxd);
 	gensts->state = IDXD_DEVICE_STATE_DISABLED;
-	__idxd_complete_command(vidxd, IDXD_CMDSTS_SUCCESS, interrupt);
+	idxd_complete_command(vidxd, IDXD_CMDSTS_SUCCESS);
 }
 
 static void vidxd_wq_reset(struct vdcm_idxd *vidxd, int wq_id_mask)
@@ -1029,7 +997,7 @@ static void vidxd_wq_reset(struct vdcm_idxd *vidxd, int wq_id_mask)
 	union wqcfg *wqcfg = (union wqcfg *)(bar0 + VIDXD_WQCFG_OFFSET);
 	struct mdev_device *mdev = vidxd->ivdev.mdev;
 	struct device *dev = mdev_dev(mdev);
-	u32 status;
+	u32 status = 0;
 
 	wq = vidxd->wq;
 	dev_dbg(dev, "vidxd reset wq %u:%u\n", 0, wq->id);
@@ -1207,7 +1175,7 @@ static void vidxd_wq_enable(struct vdcm_idxd *vidxd, int wq_id)
 	wq_pasid_enable = vwqcfg->pasid_en;
 
 	if (wq_dedicated(wq)) {
-		u32 wq_pasid = ~0U;
+		int wq_pasid = -1;
 		bool priv;
 
 		if (wq_pasid_enable) {
@@ -1249,8 +1217,8 @@ static void vidxd_wq_enable(struct vdcm_idxd *vidxd, int wq_id)
 			idxd_wq_setup_pasid(wq, wq_pasid);
 			idxd_wq_setup_priv(wq, priv);
 			spin_unlock_irqrestore(&idxd->dev_lock, flags);
-			idxd_wq_enable(wq, &status);
-			if (status) {
+			rc = idxd_wq_enable(wq, &status);
+			if (rc < 0 || status) {
 				dev_err(dev, "vidxd enable wq %d failed\n", wq->id);
 				idxd_complete_command(vidxd, status);
 				return;
@@ -1374,7 +1342,7 @@ static void vidxd_do_command(struct vdcm_idxd *vidxd, u32 val)
 		vidxd_abort_all(vidxd);
 		break;
 	case IDXD_CMD_RESET_DEVICE:
-		vidxd_reset(vidxd, true);
+		vidxd_reset(vidxd);
 		break;
 	case IDXD_CMD_ENABLE_WQ:
 		vidxd_wq_enable(vidxd, reg->operand);
