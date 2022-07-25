@@ -313,7 +313,7 @@ static int dwc_pcie_pmu_discover(struct dwc_pcie_pmu_priv *priv)
 	int where;
 	bool is_rp;
 	int index = 0;
-	struct pci_dev *pdev;
+	struct pci_dev *pdev = NULL;
 	struct dwc_pcie_info_table *pcie_info;
 
 	priv->pcie_table =
