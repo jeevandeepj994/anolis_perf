@@ -16,6 +16,7 @@
 #include <linux/zalloc.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <api/fs/fs.h>
 
 #include "auxtrace.h"
 #include "color.h"
@@ -35,7 +36,7 @@
 #include "arm-spe-decoder/arm-spe-pkt-decoder.h"
 
 #define MAX_TIMESTAMP			(~0ULL)
-#define IN_CACHELINE			(0x7FULL)
+static u64 IN_CACHELINE = 0x3FULL;
 
 struct arm_spe {
 	struct auxtrace			auxtrace;
@@ -424,6 +425,23 @@ static int arm_spe_sample(struct arm_spe_queue *speq)
 			return err;
 	}
 
+	return 0;
+}
+
+#define MAX_CACHE_LVL 4
+
+static int llc_cacheline_size(int *line_size)
+{
+	char path[PATH_MAX], file[PATH_MAX];
+	u32 cpu = 0;
+	u16 level = MAX_CACHE_LVL-1;
+
+	scnprintf(path, PATH_MAX, "devices/system/cpu/cpu%d/cache/index%d/", cpu, level);
+	scnprintf(file, PATH_MAX, "%s/%s", sysfs__mountpoint(), path);
+
+	scnprintf(file, PATH_MAX, "%s/coherency_line_size", path);
+	if (sysfs__read_int(file, line_size))
+		return -1;
 	return 0;
 }
 
@@ -1543,7 +1561,7 @@ int arm_spe_process_auxtrace_info(union perf_event *event,
 	struct perf_record_auxtrace_info *auxtrace_info = &event->auxtrace_info;
 	size_t min_sz = sizeof(u64) * ARM_SPE_AUXTRACE_PRIV_MAX;
 	struct arm_spe *spe;
-	int err;
+	int err, line_size;
 
 	if (auxtrace_info->header.size < sizeof(struct perf_record_auxtrace_info) +
 					min_sz)
@@ -1581,6 +1599,12 @@ int arm_spe_process_auxtrace_info(union perf_event *event,
 
 	if (dump_trace)
 		return 0;
+
+	err = llc_cacheline_size(&line_size);
+	if (err != 0)
+		pr_info("ARM SPE: can not detimine LLC cache line size\n");
+	else
+		IN_CACHELINE = line_size-1;
 
 	if (spe->have_sched_switch == 1) {
 		spe->switch_evsel = arm_spe_find_sched_switch(session->evlist);
