@@ -449,8 +449,11 @@ static u32 get_mba_granularity(struct mpam_props *cprops)
 		/*
 		 * bwa_wd is the number of bits implemented in the 0.xxx
 		 * fixed point fraction. 1 bit is 50%, 2 is 25% etc.
+		 * Since the minimum granularity on current hardwares cannot
+		 * be less than 5%, when the granularity is too fine, 5 is
+		 * returned.
 		 */
-		return MAX_MBA_BW / (cprops->bwa_wd + 1);
+		return max((u32) 5, (u32) (MAX_MBA_BW / BIT(cprops->bwa_wd)));
 	}
 
 	return 0;
