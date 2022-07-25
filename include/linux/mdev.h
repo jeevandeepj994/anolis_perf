@@ -41,7 +41,10 @@ static inline struct mdev_device *to_mdev_device(struct device *dev)
 static inline void mdev_set_iommu_device(struct mdev_device *mdev,
 					 struct device *iommu_device)
 {
+	struct device *dev = &mdev->dev;
+
 	mdev->iommu_device = iommu_device;
+	dev->iommu = iommu_device->iommu;
 }
 
 static inline struct device *mdev_get_iommu_device(struct mdev_device *mdev)
