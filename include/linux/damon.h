@@ -75,6 +75,8 @@ struct damon_region {
 struct damon_target {
 	unsigned long id;
 	unsigned int nr_regions;
+	unsigned int nr_init_regions;
+	struct damon_addr_range *init_regions;
 	struct list_head regions_list;
 	struct list_head list;
 	spinlock_t target_lock;

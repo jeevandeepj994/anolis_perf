@@ -148,6 +148,8 @@ struct damon_target *damon_new_target(unsigned long id)
 
 	t->id = id;
 	t->nr_regions = 0;
+	t->nr_init_regions = 0;
+	t->init_regions = NULL;
 	INIT_LIST_HEAD(&t->regions_list);
 	spin_lock_init(&t->target_lock);
 
@@ -171,6 +173,9 @@ void damon_free_target(struct damon_target *t)
 	spin_lock(&t->target_lock);
 	damon_for_each_region_safe(r, next, t)
 		damon_free_region(r);
+
+	kfree(t->init_regions);
+
 	spin_unlock(&t->target_lock);
 	kfree(t);
 }
