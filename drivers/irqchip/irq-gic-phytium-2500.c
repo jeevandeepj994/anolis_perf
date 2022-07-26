@@ -23,6 +23,7 @@
 #include <linux/acpi.h>
 #include <linux/cpu.h>
 #include <linux/cpu_pm.h>
+#include <linux/crash_dump.h>
 #include <linux/delay.h>
 #include <linux/interrupt.h>
 #include <linux/irqdomain.h>
@@ -836,7 +837,6 @@ static void __init gic_dist_init(void)
 
 	for (skt = 0; skt < MAX_MARS3_SOC_COUNT; skt++) {
 
-		//if ((((unsigned int)1 << skt) & mars3_sockets_bitmap) == 0)
 		if (((1 << skt) & mars3_sockets_bitmap) == 0)
 			continue;
 
@@ -1345,6 +1345,23 @@ static int gic_cpumask_select(struct irq_data *d, const struct cpumask *mask_val
 
 	cpu = cpumask_any_and(mask_val, cpu_online_mask);
 	cpus = cpus + cpu % skt_cpu_cnt[irq_skt];
+
+	if (is_kdump_kernel()) {
+		skt = (cpu_logical_map(cpu) >> 16) & 0xff;
+		if (irq_skt == skt)
+			return cpu;
+
+		for (i = 0; i < nr_cpu_ids; i++) {
+			skt = (cpu_logical_map(i) >> 16) & 0xff;
+			if ((skt >= 0) && (skt < MAX_MARS3_SOC_COUNT)) {
+				if (irq_skt == skt)
+					return i;
+			} else if (skt != 0xff) {
+				pr_err("socket address: %d is out of range.",
+						skt);
+			}
+		}
+	}
 
 	return cpus;
 }
@@ -1955,8 +1972,6 @@ static void __init gic_populate_ppi_partitions(struct device_node *gic_node)
 
 		part->partition_id = of_node_to_fwnode(child_part);
 
-	//	pr_info("GIC: PPI partition %pOFn[%d] { ",
-	//		child_part, part_idx);
 
 		n = of_property_count_elems_of_size(child_part, "affinity",
 						    sizeof(u32));
@@ -1980,12 +1995,10 @@ static void __init gic_populate_ppi_partitions(struct device_node *gic_node)
 			if (WARN_ON(cpu < 0))
 				continue;
 
-		//	pr_cont("%pOF[%d] ", cpu_node, cpu);
 
 			cpumask_set_cpu(cpu, &part->mask);
 		}
 
-	//	pr_cont("}\n");
 		part_idx++;
 	}
 
@@ -2079,7 +2092,6 @@ static int __init gic_of_init(struct device_node *node, struct device_node *pare
 
 
 	for (skt = 1; skt < MAX_MARS3_SOC_COUNT; skt++) {
-		//if ((((unsigned int)1 << skt) & mars3_sockets_bitmap) == 0)
 		if (((1 << skt) & mars3_sockets_bitmap) == 0)
 			continue;
 
@@ -2440,6 +2452,10 @@ gic_acpi_init(union acpi_subtable_headers *header, const unsigned long end)
 
 #ifdef CONFIG_ACPI
 	mars3_sockets_bitmap = gic_mars3_sockets_bitmap();
+
+	if (is_kdump_kernel())
+		mars3_sockets_bitmap = 0x3;
+
 	if (mars3_sockets_bitmap == 0) {
 		mars3_sockets_bitmap = 0x1;
 		pr_err("No socket, please check cpus MPIDR_AFFINITY_LEVEL!!!");
@@ -2448,7 +2464,6 @@ gic_acpi_init(union acpi_subtable_headers *header, const unsigned long end)
 #endif
 
 	for (skt = 1; skt < MAX_MARS3_SOC_COUNT; skt++) {
-		//if ((((unsigned int)1 << skt) & mars3_sockets_bitmap) == 0)
 		if (((1 << skt) & mars3_sockets_bitmap) == 0)
 			continue;
 
