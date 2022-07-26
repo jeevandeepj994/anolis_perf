@@ -6,8 +6,7 @@
  *
  * Author: Brijesh Singh <brijesh.singh@amd.com>
  *
- * SEV spec 0.14 is available at:
- * http://support.amd.com/TechDocs/55766_SEV-KM%20API_Specification.pdf
+ * SEV API specification is available at: https://developer.amd.com/sev/
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
@@ -30,7 +29,13 @@ enum {
 	SEV_PDH_GEN,
 	SEV_PDH_CERT_EXPORT,
 	SEV_PEK_CERT_IMPORT,
-	SEV_GET_ID,
+	SEV_GET_ID,	/* This command is deprecated, use SEV_GET_ID2 */
+	SEV_GET_ID2,
+
+	SEV_USER_CMD_INIT = 101,
+	SEV_USER_CMD_SHUTDOWN,
+
+	SEV_USER_CMD_DOWNLOAD_FIRMWARE = 128,
 
 	SEV_MAX,
 };
@@ -73,6 +78,10 @@ typedef enum {
  * @flags: platform config flags
  * @build: firmware build id for API version
  * @guest_count: number of active guests
+ * @bl_version_debug: Bootloader VERSION_DEBUG
+ * @bl_version_minor: Bootloader VERSION_MINOR
+ * @bl_version_major: Bootloader VERSION_MAJOR
+ * @reserved: reserved bits
  */
 struct sev_user_data_status {
 	__u8 api_major;				/* Out */
@@ -81,6 +90,10 @@ struct sev_user_data_status {
 	__u32 flags;				/* Out */
 	__u8 build;				/* Out */
 	__u32 guest_count;			/* Out */
+	__u32 bl_version_debug : 8,		/* Out */
+	 bl_version_minor : 8,			/* Out */
+	 bl_version_major : 8,			/* Out */
+	 reserved : 8;
 } __packed;
 
 /**
@@ -125,7 +138,7 @@ struct sev_user_data_pdh_cert_export {
 } __packed;
 
 /**
- * struct sev_user_data_get_id - GET_ID command parameters
+ * struct sev_user_data_get_id - GET_ID command parameters (deprecated)
  *
  * @socket1: Buffer to pass unique ID of first socket
  * @socket2: Buffer to pass unique ID of second socket
@@ -133,6 +146,27 @@ struct sev_user_data_pdh_cert_export {
 struct sev_user_data_get_id {
 	__u8 socket1[64];			/* Out */
 	__u8 socket2[64];			/* Out */
+} __packed;
+
+/**
+ * struct sev_user_data_get_id2 - GET_ID command parameters
+ * @address: Buffer to store unique ID
+ * @length: length of the unique ID
+ */
+struct sev_user_data_get_id2 {
+	__u64 address;				/* In */
+	__u32 length;				/* In/Out */
+} __packed;
+
+/**
+ * struct sev_user_data_download_firmware - DOWNLOAD_FIRMWARE command parameters
+ * DOWNLOAD_FIRMWARE command parameters
+ * @address: physical address of firmware image
+ * @length: length of the firmware image
+ */
+struct sev_user_data_download_firmware {
+	__u64 address;				/* In */
+	__u32 length;				/* In */
 } __packed;
 
 /**

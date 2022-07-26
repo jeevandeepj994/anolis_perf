@@ -27,12 +27,10 @@
 #include "sp-dev.h"
 #include "psp-dev.h"
 
-#define SEV_VERSION_GREATER_OR_EQUAL(_maj, _min)	\
-		((psp_master->api_major) >= _maj &&	\
-		 (psp_master->api_minor) >= _min)
-
-#define DEVICE_NAME	"sev"
-#define SEV_FW_FILE	"amd/sev.fw"
+#define DEVICE_NAME		"sev"
+#define SEV_FW_FILE		"amd/sev.fw"
+#define CSV_FW_FILE		"hygon/csv.fw"
+#define SEV_FW_NAME_SIZE	64
 
 static DEFINE_MUTEX(sev_cmd_mutex);
 static struct sev_misc_dev *misc_dev;
@@ -48,6 +46,15 @@ MODULE_PARM_DESC(psp_probe_timeout, " default timeout value, in seconds, during 
 
 static bool psp_dead;
 static int psp_timeout;
+
+static inline bool sev_version_greater_or_equal(u8 maj, u8 min)
+{
+	if (psp_master->api_major > maj)
+		return true;
+	if (psp_master->api_major == maj && psp_master->api_minor >= min)
+		return true;
+	return false;
+}
 
 static struct psp_device *psp_alloc_struct(struct sp_device *sp)
 {
@@ -437,8 +444,51 @@ static int sev_get_api_version(void)
 	psp_master->api_major = status->api_major;
 	psp_master->api_minor = status->api_minor;
 	psp_master->build = status->build;
+	psp_master->sev_state = status->state;
 
 	return 0;
+}
+
+int sev_get_firmware(struct device *dev, const struct firmware **firmware)
+{
+	char fw_name_specific[SEV_FW_NAME_SIZE];
+	char fw_name_subset[SEV_FW_NAME_SIZE];
+
+	if (boot_cpu_data.x86_vendor == X86_VENDOR_HYGON) {
+		/* Check for CSV FW using generic name: csv.fw */
+		if (firmware_request_nowarn(firmware, CSV_FW_FILE, dev) >= 0)
+			return 0;
+		else
+			return -ENOENT;
+	}
+
+	snprintf(fw_name_specific, sizeof(fw_name_specific),
+		 "amd/amd_sev_fam%.2xh_model%.2xh.sbin",
+		 boot_cpu_data.x86, boot_cpu_data.x86_model);
+
+	snprintf(fw_name_subset, sizeof(fw_name_subset),
+		 "amd/amd_sev_fam%.2xh_model%.1xxh.sbin",
+		 boot_cpu_data.x86, (boot_cpu_data.x86_model & 0xf0) >> 4);
+
+	/* Check for SEV FW for a particular model.
+	 * Ex. amd_sev_fam17h_model00h.sbin for Family 17h Model 00h
+	 *
+	 * or
+	 *
+	 * Check for SEV FW common to a subset of models.
+	 * Ex. amd_sev_fam17h_model0xh.sbin for
+	 *     Family 17h Model 00h -- Family 17h Model 0Fh
+	 *
+	 * or
+	 *
+	 * Fall-back to using generic name: sev.fw
+	 */
+	if ((firmware_request_nowarn(firmware, fw_name_specific, dev) >= 0) ||
+	    (firmware_request_nowarn(firmware, fw_name_subset, dev) >= 0) ||
+	    (firmware_request_nowarn(firmware, SEV_FW_FILE, dev) >= 0))
+		return 0;
+
+	return -ENOENT;
 }
 
 /* Don't fail if SEV FW couldn't be updated. Continue with existing SEV FW */
@@ -450,9 +500,10 @@ static int sev_update_firmware(struct device *dev)
 	struct page *p;
 	u64 data_size;
 
-	ret = request_firmware(&firmware, SEV_FW_FILE, dev);
-	if (ret < 0)
+	if (sev_get_firmware(dev, &firmware) == -ENOENT) {
+		dev_dbg(dev, "No SEV firmware file present\n");
 		return -1;
+	}
 
 	/*
 	 * SEV FW expects the physical address given to it to be 32
@@ -490,6 +541,71 @@ static int sev_update_firmware(struct device *dev)
 
 fw_err:
 	release_firmware(firmware);
+
+	return ret;
+}
+
+static int sev_ioctl_do_download_firmware(struct sev_issue_cmd *argp)
+{
+	struct sev_data_download_firmware *data = NULL;
+	struct sev_user_data_download_firmware input;
+	int ret, order;
+	struct page *p;
+	u64 data_size;
+
+	if (copy_from_user(&input, (void __user *)argp->data, sizeof(input)))
+		return -EFAULT;
+
+	if (!input.address) {
+		argp->error = SEV_RET_INVALID_ADDRESS;
+		return -EINVAL;
+	}
+
+	if (!input.length || input.length > CSV_FW_MAX_SIZE) {
+		argp->error = SEV_RET_INVALID_LEN;
+		return -EINVAL;
+	}
+
+	/* Check if we have read access to the userspace buffer */
+	if (!access_ok(VERIFY_READ, input.address, input.length))
+		return -EFAULT;
+
+	/*
+	 * CSV FW expects the physical address given to it to be 32
+	 * byte aligned. Memory allocated has structure placed at the
+	 * beginning followed by the firmware being passed to the CSV
+	 * FW. Allocate enough memory for data structure + alignment
+	 * padding + CSV FW.
+	 */
+	data_size = ALIGN(sizeof(struct sev_data_download_firmware), 32);
+
+	order = get_order(input.length + data_size);
+	p = alloc_pages(GFP_KERNEL, order);
+	if (!p)
+		return -EFAULT;
+
+	/*
+	 * Copy firmware data to a kernel allocated contiguous
+	 * memory region.
+	 */
+	data = page_address(p);
+	if (copy_from_user((void *)((uint64_t)page_address(p) + data_size),
+			   (void __user *)(input.address), input.length)) {
+		ret = -EFAULT;
+		goto fail_free_page;
+	}
+
+	data->address = __psp_pa(page_address(p) + data_size);
+	data->len = input.length;
+
+	ret = __sev_do_cmd_locked(SEV_CMD_DOWNLOAD_FIRMWARE, data, &argp->error);
+	if (ret)
+		pr_err("Failed to update CSV firmware: %#x\n", argp->error);
+	else
+		pr_info("CSV firmware update successful\n");
+
+fail_free_page:
+	__free_pages(p, order);
 
 	return ret;
 }
@@ -546,6 +662,69 @@ e_free:
 	return ret;
 }
 
+static int sev_ioctl_do_get_id2(struct sev_issue_cmd *argp)
+{
+	struct sev_user_data_get_id2 input;
+	struct sev_data_get_id *data;
+	void *id_blob = NULL;
+	int ret;
+
+	/* SEV GET_ID is available from SEV API v0.16 and up */
+	if (!sev_version_greater_or_equal(0, 16))
+		return -ENOTSUPP;
+
+	if (copy_from_user(&input, (void __user *)argp->data, sizeof(input)))
+		return -EFAULT;
+
+	/* Check if we have write access to the userspace buffer */
+	if (input.address &&
+	    input.length &&
+	    !access_ok(VERIFY_WRITE, input.address, input.length))
+		return -EFAULT;
+
+	data = kzalloc(sizeof(*data), GFP_KERNEL);
+	if (!data)
+		return -ENOMEM;
+
+	if (input.address && input.length) {
+		id_blob = kmalloc(input.length, GFP_KERNEL);
+		if (!id_blob) {
+			kfree(data);
+			return -ENOMEM;
+		}
+
+		data->address = __psp_pa(id_blob);
+		data->len = input.length;
+	}
+
+	ret = __sev_do_cmd_locked(SEV_CMD_GET_ID, data, &argp->error);
+
+	/*
+	 * Firmware will return the length of the ID value (either the minimum
+	 * required length or the actual length written), return it to the user.
+	 */
+	input.length = data->len;
+
+	if (copy_to_user((void __user *)argp->data, &input, sizeof(input))) {
+		ret = -EFAULT;
+		goto e_free;
+	}
+
+	if (id_blob) {
+		if (copy_to_user((void __user *)input.address,
+				 id_blob, data->len)) {
+			ret = -EFAULT;
+			goto e_free;
+		}
+	}
+
+e_free:
+	kfree(id_blob);
+	kfree(data);
+
+	return ret;
+}
+
 static int sev_ioctl_do_get_id(struct sev_issue_cmd *argp)
 {
 	struct sev_data_get_id *data;
@@ -554,7 +733,7 @@ static int sev_ioctl_do_get_id(struct sev_issue_cmd *argp)
 	int ret;
 
 	/* SEV GET_ID available from SEV API v0.16 and up */
-	if (!SEV_VERSION_GREATER_OR_EQUAL(0, 16))
+	if (!sev_version_greater_or_equal(0, 16))
 		return -ENOTSUPP;
 
 	/* SEV FW expects the buffer it fills with the ID to be
@@ -724,7 +903,35 @@ static long sev_ioctl(struct file *file, unsigned int ioctl, unsigned long arg)
 		ret = sev_ioctl_do_pdh_export(&input);
 		break;
 	case SEV_GET_ID:
+		pr_warn_once("SEV_GET_ID command is deprecated, use SEV_GET_ID2\n");
 		ret = sev_ioctl_do_get_id(&input);
+		break;
+	case SEV_GET_ID2:
+		ret = sev_ioctl_do_get_id2(&input);
+		break;
+	case SEV_USER_CMD_INIT:
+		if (boot_cpu_data.x86_vendor == X86_VENDOR_HYGON) {
+			ret = __sev_platform_init_locked(&input.error);
+		} else {
+			ret = -EINVAL;
+			goto out;
+		}
+		break;
+	case SEV_USER_CMD_SHUTDOWN:
+		if (boot_cpu_data.x86_vendor == X86_VENDOR_HYGON) {
+			ret = __sev_platform_shutdown_locked(&input.error);
+		} else {
+			ret = -EINVAL;
+			goto out;
+		}
+		break;
+	case SEV_USER_CMD_DOWNLOAD_FIRMWARE:
+		if (boot_cpu_data.x86_vendor == X86_VENDOR_HYGON) {
+			ret = sev_ioctl_do_download_firmware(&input);
+		} else {
+			ret = -EINVAL;
+			goto out;
+		}
 		break;
 	default:
 		ret = -EINVAL;
@@ -928,7 +1135,22 @@ void psp_pci_init(void)
 	if (sev_get_api_version())
 		goto err;
 
-	if (SEV_VERSION_GREATER_OR_EQUAL(0, 15) &&
+	/*
+	 * If platform is not in UNINIT state then firmware upgrade and/or
+	 * platform INIT command will fail. These command require UNINIT state.
+	 *
+	 * In a normal boot we should never run into case where the firmware
+	 * is not in UNINIT state on boot. But in case of kexec boot, a reboot
+	 * may not go through a typical shutdown sequence and may leave the
+	 * firmware in INIT or WORKING state.
+	 */
+
+	if (psp_master->sev_state != SEV_STATE_UNINIT) {
+		sev_platform_shutdown(NULL);
+		psp_master->sev_state = SEV_STATE_UNINIT;
+	}
+
+	if (sev_version_greater_or_equal(0, 15) &&
 	    sev_update_firmware(psp_master->dev) == 0)
 		sev_get_api_version();
 
