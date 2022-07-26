@@ -47,8 +47,7 @@ struct smc_cdc_msg {
 	union smc_cdc_cursor		cons;	/* piggy backed "ack" */
 	struct smc_cdc_producer_flags	prod_flags;
 	struct smc_cdc_conn_state_flags	conn_state_flags;
-	u8				credits;	/* credits synced by every cdc msg */
-	u8				reserved[17];
+	u8				reserved[18];
 };
 
 /* SMC-D cursor format */
