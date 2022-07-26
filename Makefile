@@ -748,7 +748,6 @@ endif
 
 ifdef CONFIG_FUNCTION_TRACER
 ifdef CONFIG_FTRACE_MCOUNT_RECORD
-ifneq ($(ARCH),x86_64)
   # gcc 5 supports generating the mcount tables directly
   ifeq ($(call cc-option-yn,-mrecord-mcount),y)
     CC_FLAGS_FTRACE	+= -mrecord-mcount
@@ -760,7 +759,6 @@ ifneq ($(ARCH),x86_64)
       CC_FLAGS_USING	+= -DCC_USING_NOP_MCOUNT
     endif
   endif
-endif
 endif
 ifdef CONFIG_HAVE_FENTRY
   ifeq ($(call cc-option-yn, -mfentry),y)
