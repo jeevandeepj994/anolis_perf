@@ -5,6 +5,10 @@
  * Written by David Howells (dhowells@redhat.com)
  */
 
+#ifdef CONFIG_KIDLED
+#include <linux/kidled.h>
+#endif
+
 struct super_block;
 struct file_system_type;
 struct iomap;
@@ -163,7 +167,18 @@ extern struct dentry * d_alloc_pseudo(struct super_block *, const struct qstr *)
 extern char *simple_dname(struct dentry *, char *, int);
 extern void dput_to_list(struct dentry *, struct list_head *);
 extern void shrink_dentry_list(struct list_head *);
-
+#ifdef CONFIG_KIDLED
+extern void cold_dcache_sb(struct super_block *sb,
+			   struct shrink_control *sc);
+extern void cold_icache_sb(struct super_block *sb,
+			   struct shrink_control *sc);
+#endif
+#if IS_ENABLED(CONFIG_RECLAIM_COLDPGS)
+extern unsigned long shrink_cold_dcache(struct super_block *sb,
+					struct shrink_control *sc);
+extern unsigned long shrink_cold_icache(struct super_block *sb,
+					struct shrink_control *sc);
+#endif
 /*
  * read_write.c
  */

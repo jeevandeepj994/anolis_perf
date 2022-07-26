@@ -1819,6 +1819,8 @@ out:
 		return NULL;
 
 	inc_slabs_node(s, page_to_nid(page), page->objects);
+	if (unlikely(kidled_alloc_slab_age(page, s, alloc_gfp)))
+		pr_warn("Fails to trace %s:%p cold slab distribution.\n", s->name, page);
 
 	return page;
 }

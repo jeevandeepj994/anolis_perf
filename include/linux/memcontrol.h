@@ -213,6 +213,43 @@ struct memcg_padding {
 #define MEMCG_PADDING(name)
 #endif
 
+#if IS_ENABLED(CONFIG_RECLAIM_COLDPGS)
+struct reclaim_coldpgs_control {
+	struct rw_semaphore	rwsem;
+	unsigned long		threshold;
+	unsigned long		size;
+	unsigned long		flags;
+
+	CK_HOTFIX_RESERVE(1)
+	CK_HOTFIX_RESERVE(2)
+	CK_HOTFIX_RESERVE(3)
+	CK_HOTFIX_RESERVE(4)
+};
+
+enum reclaim_coldpgs_stat_item {
+	RECLAIM_COLDPGS_STAT_PCACHE_IN_MIGRATE = 0,
+	RECLAIM_COLDPGS_STAT_PCACHE_OUT_MIGRATE,
+	RECLAIM_COLDPGS_STAT_PCACHE_OUT_DROP,
+	RECLAIM_COLDPGS_STAT_ANON_IN_MIGRATE,
+	RECLAIM_COLDPGS_STAT_ANON_IN_ZSWAP,
+	RECLAIM_COLDPGS_STAT_ANON_IN_SWAP,
+	RECLAIM_COLDPGS_STAT_ANON_OUT_MIGRATE,
+	RECLAIM_COLDPGS_STAT_ANON_OUT_ZSWAP,
+	RECLAIM_COLDPGS_STAT_ANON_OUT_SWAP,
+	RECLAIM_COLDPGS_STAT_SLAB_DROP,
+	RECLIMA_COLDPGS_STAT_MLOCK_DROP,
+	RECLIMA_COLDPGS_STAT_MLOCK_REFAULT,
+	RECLAIM_COLDPGS_STAT_MAX,
+};
+
+struct reclaim_coldpgs_stats {
+	unsigned long		counts[RECLAIM_COLDPGS_STAT_MAX];
+
+	CK_HOTFIX_RESERVE(1)
+	CK_HOTFIX_RESERVE(2)
+};
+#endif /* CONFIG_RECLAIM_COLDPGS */
+
 /*
  * Remember four most recent foreign writebacks with dirty pages in this
  * cgroup.  Inode sharing is expected to be uncommon and, even if we miss
@@ -400,8 +437,9 @@ struct mem_cgroup {
 
 #ifdef CONFIG_KIDLED
 	struct rw_semaphore idle_stats_rwsem;
-	unsigned long idle_scans;
-	struct kidled_scan_period scan_period;
+	unsigned long idle_page_scans;
+	unsigned long idle_slab_scans;
+	struct kidled_scan_control scan_control;
 	int idle_stable_idx;
 	struct idle_page_stats idle_stats[KIDLED_STATS_NR_TYPE];
 #endif
@@ -411,6 +449,11 @@ struct mem_cgroup {
 
 #ifdef CONFIG_DUPTEXT
 	bool allow_duptext;
+#endif
+
+#if IS_ENABLED(CONFIG_RECLAIM_COLDPGS)
+	struct reclaim_coldpgs_control	coldpgs_control;
+	struct reclaim_coldpgs_stats __percpu *coldpgs_stats;
 #endif
 
 	CK_HOTFIX_RESERVE(1)

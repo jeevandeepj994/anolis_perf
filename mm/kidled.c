@@ -11,6 +11,9 @@
 #include <linux/vmalloc.h>
 #include <linux/wait.h>
 #include <linux/kidled.h>
+#include <linux/slab.h>
+#include "slab.h"
+#include <linux/swap.h>
 #include <uapi/linux/sched/types.h>
 
 /*
@@ -50,7 +53,8 @@
  * kstaled's patch directly. Thanks!
  */
 
-struct kidled_scan_period kidled_scan_period;
+unsigned int kidled_scan_target __read_mostly = KIDLED_SCAN_PAGE;
+struct kidled_scan_control kidled_scan_control;
 /*
  * These bucket values are copied from Michel Lespinasse's patch, they are
  * the default buckets to do histogram sampling.
@@ -62,7 +66,8 @@ struct kidled_scan_period kidled_scan_period;
 const int kidled_default_buckets[NUM_KIDLED_BUCKETS] = {
 	1, 2, 5, 15, 30, 60, 120, 240 };
 static DECLARE_WAIT_QUEUE_HEAD(kidled_wait);
-static unsigned long kidled_scan_rounds __read_mostly;
+static DEFINE_STATIC_KEY_FALSE(kidled_slab_key);
+unsigned long kidled_scan_rounds __read_mostly;
 
 static inline int kidled_get_bucket(int *idle_buckets, int age)
 {
@@ -83,6 +88,10 @@ static inline int kidled_get_idle_type(struct page *page)
 {
 	int idle_type = KIDLE_BASE;
 
+	if (PageSlab(page)) {
+		idle_type |= KIDLE_SLAB;
+		goto out;
+	}
 	if (PageDirty(page) || PageWriteback(page))
 		idle_type |= KIDLE_DIRTY;
 	if (page_is_file_lru(page))
@@ -96,6 +105,7 @@ static inline int kidled_get_idle_type(struct page *page)
 		idle_type |= KIDLE_UNEVICT;
 	if (PageActive(page))
 		idle_type |= KIDLE_ACTIVE;
+out:
 	return idle_type;
 }
 
@@ -137,37 +147,45 @@ EXPORT_SYMBOL_GPL(kidled_set_page_age);
 #endif /* !KIDLED_AGE_NOT_IN_PAGE_FLAGS */
 
 #ifdef CONFIG_MEMCG
-static inline void kidled_mem_cgroup_account(struct page *page,
-					     int age,
-					     int nr_pages)
+void kidled_mem_cgroup_account(struct page *page,
+		void *ptr, int age, unsigned long size)
 {
 	struct mem_cgroup *memcg;
 	struct idle_page_stats *stats;
 	int type, bucket;
+	bool locked = false;
 
 	if (mem_cgroup_disabled())
 		return;
 
 	type = kidled_get_idle_type(page);
-
-	memcg = lock_page_memcg(page);
-	if (unlikely(!memcg)) {
-		unlock_page_memcg(page);
-		return;
+	if (type == KIDLE_SLAB) {
+		if (!memcg_kmem_enabled())
+			memcg = root_mem_cgroup;
+		else
+			memcg = mem_cgroup_from_obj(ptr);
+	} else {
+		memcg = lock_page_memcg(page);
+		if (unlikely(!memcg)) {
+			unlock_page_memcg(page);
+			return;
+		}
+		locked = true;
 	}
 
 	stats = mem_cgroup_get_unstable_idle_stats(memcg);
 	bucket = kidled_get_bucket(stats->buckets, age);
 	if (bucket >= 0)
-		stats->count[type][bucket] += nr_pages;
+		stats->count[type][bucket] += size;
 
-	unlock_page_memcg(page);
+	if (locked)
+		unlock_page_memcg(page);
 }
 
 void kidled_mem_cgroup_move_stats(struct mem_cgroup *from,
 				  struct mem_cgroup *to,
 				  struct page *page,
-				  unsigned int nr_pages)
+				  unsigned long size)
 {
 	pg_data_t *pgdat = page_pgdat(page);
 	unsigned long pfn = page_to_pfn(page);
@@ -202,13 +220,13 @@ void kidled_mem_cgroup_move_stats(struct mem_cgroup *from,
 		return;
 
 	/* Remove from the source memory cgroup */
-	if (stats[0]->count[type][bucket] > nr_pages)
-		stats[0]->count[type][bucket] -= nr_pages;
+	if (stats[0]->count[type][bucket] > size)
+		stats[0]->count[type][bucket] -= size;
 	else
 		stats[0]->count[type][bucket] = 0;
 	if (pgdat->node_idle_scan_pfn >= pfn) {
-		if (stats[1]->count[type][bucket] > nr_pages)
-			stats[1]->count[type][bucket] -= nr_pages;
+		if (stats[1]->count[type][bucket] > size)
+			stats[1]->count[type][bucket] -= size;
 		else
 			stats[1]->count[type][bucket] = 0;
 	}
@@ -221,16 +239,18 @@ void kidled_mem_cgroup_move_stats(struct mem_cgroup *from,
 	if (bucket < 0)
 		return;
 
-	stats[2]->count[type][bucket] += nr_pages;
+	stats[2]->count[type][bucket] += size;
 	if (pgdat->node_idle_scan_pfn >= pfn)
-		stats[3]->count[type][bucket] += nr_pages;
+		stats[3]->count[type][bucket] += size;
 }
 EXPORT_SYMBOL_GPL(kidled_mem_cgroup_move_stats);
 
-static inline void kidled_mem_cgroup_scan_done(struct kidled_scan_period period)
+static inline void
+kidled_mem_cgroup_scan_done(struct kidled_scan_control scan_control)
 {
 	struct mem_cgroup *memcg;
 	struct idle_page_stats *stable_stats, *unstable_stats;
+	bool slab_only = false;
 
 	for (memcg = mem_cgroup_iter(NULL, NULL, NULL);
 	     memcg != NULL;
@@ -247,22 +267,38 @@ static inline void kidled_mem_cgroup_scan_done(struct kidled_scan_period period)
 		 */
 		if (!KIDLED_IS_BUCKET_INVALID(unstable_stats->buckets)) {
 			mem_cgroup_idle_page_stats_switch(memcg);
-			memcg->idle_scans++;
+			if (kidled_has_page_target(&scan_control))
+				memcg->idle_page_scans++;
+			if (kidled_has_slab_target(&scan_control) &&
+					(memcg_kmem_enabled() || mem_cgroup_is_root(memcg)))
+				memcg->idle_slab_scans++;
+
+			slab_only = kidled_has_slab_target_only(&scan_control);
 		} else {
 			memcpy(unstable_stats->buckets, stable_stats->buckets,
 			       sizeof(unstable_stats->buckets));
 		}
 
-		memcg->scan_period = period;
+		memcg->scan_control = scan_control;
 		up_write(&memcg->idle_stats_rwsem);
 
 		unstable_stats = mem_cgroup_get_unstable_idle_stats(memcg);
 		memset(&unstable_stats->count, 0,
 		       sizeof(unstable_stats->count));
+
+		if (slab_only && !memcg_kmem_enabled())
+			break;
 	}
 }
 
-static inline void kidled_mem_cgroup_reset(void)
+/*
+ * Reset the specified statistics by scan_type when users want to
+ * change the scan target. For example, we should clear the slab
+ * statistics when we only want to scan the page and vice versa.
+ * Otherwise it will mislead the user about the statistics.
+ */
+static inline void
+kidled_mem_cgroup_reset(enum kidled_scan_type scan_type)
 {
 	struct mem_cgroup *memcg;
 	struct idle_page_stats *stable_stats, *unstable_stats;
@@ -273,27 +309,48 @@ static inline void kidled_mem_cgroup_reset(void)
 		down_write(&memcg->idle_stats_rwsem);
 		stable_stats = mem_cgroup_get_stable_idle_stats(memcg);
 		unstable_stats = mem_cgroup_get_unstable_idle_stats(memcg);
-		memset(&stable_stats->count, 0, sizeof(stable_stats->count));
+		if (scan_type == SCAN_TARGET_PAGE) {
+			int i;
 
-		memcg->idle_scans = 0;
-		kidled_reset_scan_period(&memcg->scan_period);
-		up_write(&memcg->idle_stats_rwsem);
+			for (i = 0; i < KIDLE_NR_TYPE - 1; i++)
+				memset(&stable_stats->count[i], 0,
+					   sizeof(stable_stats->count[i]));
+			memcg->scan_control.scan_target = kidled_scan_target;
+			up_write(&memcg->idle_stats_rwsem);
+			for (i = 0; i < KIDLE_NR_TYPE - 1; i++)
+				memset(&unstable_stats->count[i], 0,
+					   sizeof(unstable_stats->count[i]));
+		} else if (scan_type == SCAN_TARGET_SLAB) {
+			memset(&stable_stats->count[KIDLE_SLAB], 0,
+				   sizeof(stable_stats->count[KIDLE_SLAB]));
+			memcg->scan_control.scan_target = kidled_scan_target;
+			up_write(&memcg->idle_stats_rwsem);
+			memset(&unstable_stats->count[KIDLE_SLAB], 0,
+				   sizeof(unstable_stats->count[KIDLE_SLAB]));
 
-		memset(&unstable_stats->count, 0,
-		       sizeof(unstable_stats->count));
+			if (!memcg_kmem_enabled())
+				break;
+		} else {
+			memset(&stable_stats->count, 0,
+				   sizeof(stable_stats->count));
+			memcg->idle_page_scans = 0;
+			kidled_reset_scan_control(&memcg->scan_control);
+			up_write(&memcg->idle_stats_rwsem);
+			memset(&unstable_stats->count, 0,
+				   sizeof(unstable_stats->count));
+		}
 	}
 }
 #else /* !CONFIG_MEMCG */
-static inline void kidled_mem_cgroup_account(struct page *page,
-					     int age,
-					     int nr_pages)
+void kidled_mem_cgroup_account(struct page *page,
+		void *ptr, int age, unsigned long size)
 {
 }
-static inline void kidled_mem_cgroup_scan_done(struct kidled_scan_period
-					       scan_period)
+static inline void kidled_mem_cgroup_scan_done(struct kidled_scan_control
+					       scan_control)
 {
 }
-static inline void kidled_mem_cgroup_reset(void)
+static inline void kidled_mem_cgroup_reset(enum kidled_scan_type scan_type)
 {
 }
 #endif /* CONFIG_MEMCG */
@@ -408,7 +465,8 @@ static inline int kidled_scan_page(pg_data_t *pgdat, unsigned long pfn)
 	if (idle) {
 		age = kidled_inc_page_age(pgdat, pfn);
 		if (age > 0)
-			kidled_mem_cgroup_account(page, age, nr_pages);
+			kidled_mem_cgroup_account(page, NULL,
+					age, nr_pages << PAGE_SHIFT);
 		else
 			age = 0;
 	} else {
@@ -429,10 +487,17 @@ out:
 }
 
 static bool kidled_scan_node(pg_data_t *pgdat,
-			     struct kidled_scan_period scan_period,
+			     struct kidled_scan_control scan_control,
 			     bool restart)
 {
-	unsigned long pfn, end, node_end;
+	unsigned long pfn, end;
+	unsigned long node_end = pgdat_end_pfn(pgdat);
+
+	if (kidled_has_slab_target_only(&scan_control))
+		return false;
+	else
+		if (!restart && pgdat->node_idle_scan_pfn >= node_end)
+			return true;
 
 #ifdef KIDLED_AGE_NOT_IN_PAGE_FLAGS
 	if (unlikely(!pgdat->node_page_age)) {
@@ -449,15 +514,15 @@ static bool kidled_scan_node(pg_data_t *pgdat,
 	}
 #endif /* KIDLED_AGE_NOT_IN_PAGE_FLAGS */
 
-	node_end = pgdat_end_pfn(pgdat);
 	pfn = pgdat->node_start_pfn;
 	if (!restart && pfn < pgdat->node_idle_scan_pfn)
 		pfn = pgdat->node_idle_scan_pfn;
 	end = min(pfn + DIV_ROUND_UP(pgdat->node_spanned_pages,
-				     scan_period.duration), node_end);
+				     scan_control.duration), node_end);
 	while (pfn < end) {
 		/* Restart new scanning when user updates the period */
-		if (unlikely(!kidled_is_scan_period_equal(&scan_period)))
+		if (unlikely(!kidled_is_scan_period_equal(&scan_control) ||
+				!kidled_has_page_target_equal(&scan_control)))
 			break;
 
 		cond_resched();
@@ -482,9 +547,33 @@ void kidled_free_page_age(pg_data_t *pgdat)
 }
 #endif
 
-static inline void kidled_scan_done(struct kidled_scan_period scan_period)
+static inline void kidled_scan_slab_node(int nid,
+			struct kidled_scan_control scan_control)
 {
-	kidled_mem_cgroup_scan_done(scan_period);
+	struct mem_cgroup *memcg;
+
+	memcg = mem_cgroup_iter(NULL, NULL, NULL);
+	do {
+		kidled_scan_slab(nid, memcg, scan_control);
+		if (!memcg_kmem_enabled())
+			break;
+	} while ((memcg = mem_cgroup_iter(NULL, memcg, NULL)) != NULL);
+}
+
+static inline void kidled_scan_slabs(struct kidled_scan_control scan_control)
+{
+	int nid;
+
+	if (!kidled_has_slab_target(&scan_control))
+		return;
+
+	for_each_online_node(nid)
+		kidled_scan_slab_node(nid, scan_control);
+}
+
+static inline void kidled_scan_done(struct kidled_scan_control scan_control)
+{
+	kidled_mem_cgroup_scan_done(scan_control);
 	kidled_scan_rounds++;
 }
 
@@ -492,7 +581,7 @@ static inline void kidled_reset(bool free)
 {
 	pg_data_t *pgdat;
 
-	kidled_mem_cgroup_reset();
+	kidled_mem_cgroup_reset(SCAN_TARGET_ALL);
 
 	get_online_mems();
 
@@ -530,16 +619,40 @@ static inline void kidled_reset(bool free)
 	put_online_mems();
 }
 
-static inline bool kidled_should_run(struct kidled_scan_period *p, bool *new)
+static inline bool kidled_should_run(struct kidled_scan_control *p,
+					bool *new, int *count_slab_scan)
 {
 	if (unlikely(!kidled_is_scan_period_equal(p))) {
-		struct kidled_scan_period scan_period;
+		struct kidled_scan_control scan_control;
 
-		scan_period  = kidled_get_current_scan_period();
+		scan_control  = kidled_get_current_scan_control();
 		if (p->duration)
-			kidled_reset(!scan_period.duration);
-		*p = scan_period;
+			kidled_reset(!scan_control.duration);
+		*p = scan_control;
 		*new = true;
+	} else if (unlikely(!kidled_is_scan_target_equal(p))) {
+		struct kidled_scan_control scan_control;
+		bool page_disabled = false;
+		bool slab_disabled = false;
+
+		scan_control = kidled_get_current_scan_control();
+		kidled_get_reset_type(p, &page_disabled, &slab_disabled);
+		if (slab_disabled) {
+			kidled_mem_cgroup_reset(SCAN_TARGET_SLAB);
+			*count_slab_scan = 0;
+		}
+		if (page_disabled)
+			kidled_mem_cgroup_reset(SCAN_TARGET_PAGE);
+
+		/*
+		 * It need to restart the page scan when user enable
+		 * the specified scan type again.
+		 */
+		if (kidled_has_slab_target_only(p))
+			*new = true;
+		else
+			*new = false;
+		*p = scan_control;
 	} else {
 		*new = false;
 	}
@@ -550,13 +663,28 @@ static inline bool kidled_should_run(struct kidled_scan_period *p, bool *new)
 	return false;
 }
 
+static inline bool is_kidled_scan_done(bool scan_done,
+				int count_slab_scan,
+				struct kidled_scan_control scan_control)
+{
+	u16 duration = scan_control.duration;
+
+	if (kidled_has_slab_target_only(&scan_control))
+		return count_slab_scan >= duration;
+	else if (kidled_has_page_target_only(&scan_control))
+		return scan_done;
+	else
+		return scan_done && (count_slab_scan >= duration);
+}
+
 static int kidled(void *dummy)
 {
 	int busy_loop = 0;
 	bool restart = true;
-	struct kidled_scan_period scan_period;
+	struct kidled_scan_control scan_control;
+	int count_slab_scan = 0;
 
-	kidled_reset_scan_period(&scan_period);
+	kidled_reset_scan_control(&scan_control);
 
 	while (!kthread_should_stop()) {
 		pg_data_t *pgdat;
@@ -564,29 +692,34 @@ static int kidled(void *dummy)
 		bool new, scan_done = true;
 
 		wait_event_interruptible(kidled_wait,
-					 kidled_should_run(&scan_period, &new));
+					 kidled_should_run(&scan_control,
+					 &new, &count_slab_scan));
 		if (unlikely(new)) {
 			restart = true;
 			busy_loop = 0;
 		}
 
-		if (unlikely(scan_period.duration == 0))
+		if (unlikely(scan_control.duration == 0))
 			continue;
 
 		start_jiffies = jiffies_64;
 		get_online_mems();
 		for_each_online_pgdat(pgdat) {
 			scan_done &= kidled_scan_node(pgdat,
-						      scan_period,
+						      scan_control,
 						      restart);
 		}
 		put_online_mems();
 
-		if (scan_done) {
-			kidled_scan_done(scan_period);
+		kidled_scan_slabs(scan_control);
+		if (is_kidled_scan_done(scan_done,
+			count_slab_scan + 1, scan_control)) {
+			kidled_scan_done(scan_control);
 			restart = true;
+			count_slab_scan = 0;
 		} else {
 			restart = false;
+			count_slab_scan++;
 		}
 
 		/*
@@ -596,7 +729,7 @@ static int kidled(void *dummy)
 		 * neighbors (e.g. cause spike latency).
 		 *
 		 * We hope kidled can scan specified pages which depends on
-		 * scan_period in each slice, and supposed to finish each
+		 * scan_control in each slice, and supposed to finish each
 		 * slice in one second:
 		 *
 		 *	pages_to_scan = total_pages / scan_duration
@@ -609,7 +742,13 @@ static int kidled(void *dummy)
 		 *
 		 * We thought it's busy when elapsed >= (HZ / 2), and if keep
 		 * busy for several consecutive times, we'll scale up the
-		 * scan duration.
+		 * scan duration, But except in one case when we enable the
+		 * slab scan. It's acceptable that the cpu load is very high
+		 * for a while and we can not scale up the scan duration.
+		 * Otherwise it will takes a lot of time to scan an round.
+		 *
+		 * Because kidled is the lowest priority, and it can be
+		 * scheduled easily when other task want to run in current cpu.
 		 *
 		 * NOTE it's a simple guard, not a promise.
 		 */
@@ -621,7 +760,7 @@ static int kidled(void *dummy)
 			schedule_timeout_interruptible(HZ - elapsed);
 		} else if (++busy_loop == KIDLED_BUSY_LOOP_THRESHOLD) {
 			busy_loop = 0;
-			if (kidled_try_double_scan_period(scan_period)) {
+			if (kidled_try_double_scan_control(scan_control)) {
 				pr_warn_ratelimited("%s: period -> %u\n",
 					__func__,
 					kidled_get_current_scan_duration());
@@ -633,6 +772,124 @@ static int kidled(void *dummy)
 	}
 
 	return 0;
+}
+
+static inline bool kidled_allow_scan_slab(void)
+{
+	struct kidled_scan_control scan_control =
+		kidled_get_current_scan_control();
+
+	if (!scan_control.duration)
+		return false;
+
+	if (!kidled_has_slab_target(&scan_control))
+		return false;
+
+	return true;
+}
+
+static inline void kidled_slab_scan_enabled(void)
+{
+	if (!static_key_enabled(&kidled_slab_key)) {
+		if (kidled_allow_scan_slab())
+			static_branch_enable(&kidled_slab_key);
+	} else {
+		if (!kidled_allow_scan_slab())
+			static_branch_disable(&kidled_slab_key);
+	}
+}
+
+static unsigned short *kidled_get_slab_age_array(void *object)
+{
+	struct page *page = virt_to_head_page(object);
+	unsigned int objects = objs_per_slab_page(page->slab_cache, page);
+	unsigned short *slab_age;
+
+	if (memcg_kmem_enabled())
+		slab_age = (unsigned short *)page_obj_cgroups(page)[objects];
+	else
+		slab_age = kidled_slab_age(page);
+
+	return slab_age;
+}
+
+unsigned short kidled_get_slab_age(void *object)
+{
+	unsigned short *slab_age;
+	struct page *page;
+	unsigned int off;
+
+	if (!static_branch_unlikely(&kidled_slab_key))
+		return 0;
+
+	slab_age = kidled_get_slab_age_array(object);
+	if (!slab_age)
+		return 0;
+
+	page = virt_to_head_page(object);
+	off = obj_to_index(page->slab_cache, page, object);
+	return *(slab_age + off);
+}
+
+void kidled_set_slab_age(void *object, unsigned short age)
+{
+	unsigned short *slab_age;
+	struct page *page;
+	unsigned int off;
+
+	if (!static_branch_unlikely(&kidled_slab_key))
+		return;
+
+	slab_age = kidled_get_slab_age_array(object);
+	if (!slab_age)
+		return;
+
+	page = virt_to_head_page(object);
+	off = obj_to_index(page->slab_cache, page, object);
+	*(slab_age + off) = age;
+}
+
+/*
+ * each slab object pointer to an memcg respectively when kmem account enable,
+ * slab page can be used by root mem_cgroup and children memcg. slab object
+ * age is recorded in slab_age of page when kmem account disable. Otherwise,
+ * an special obj_cgroups pointer will store the value.
+ */
+#define OBJCGS_CLEAR_MASK   (__GFP_DMA | __GFP_RECLAIMABLE | __GFP_ACCOUNT)
+int kidled_alloc_slab_age(struct page *page, struct kmem_cache *s, gfp_t flags)
+{
+	unsigned int objects = objs_per_slab_page(s, page);
+	void *ver;
+	int ret;
+
+	if (!kidled_available_slab(s))
+		return 0;
+
+	/* void count the memory to kmem accounting when kmem enable */
+	flags &= ~OBJCGS_CLEAR_MASK;
+	ver = kzalloc_node(objects * 2, flags, page_to_nid(page));
+	if (!ver)
+		return -ENOMEM;
+
+	if (memcg_kmem_enabled()) {
+		ret = memcg_alloc_page_obj_cgroups(page, s, flags);
+		if (!ret)
+			page_obj_cgroups(page)[objects] = ver;
+		else {
+			kfree(ver);
+			return -ENOMEM;
+		}
+		return 0;
+	}
+
+	page->slab_age = (unsigned short *)((unsigned long)ver | 0x2UL);
+	return 0;
+}
+
+void kidled_free_slab_age(struct page *page)
+{
+	kfree(kidled_slab_age(page));
+	page->slab_age = NULL;
 }
 
 static ssize_t kidled_scan_period_show(struct kobject *kobj,
@@ -659,15 +916,43 @@ static ssize_t kidled_scan_period_store(struct kobject *kobj,
 
 	kidled_set_scan_duration(secs);
 	wake_up_interruptible(&kidled_wait);
+	kidled_slab_scan_enabled();
+	return count;
+}
+
+static ssize_t kidled_scan_target_show(struct kobject *kobj,
+					     struct kobj_attribute *attr,
+					     char *buf)
+{
+	return sprintf(buf, "%u\n", kidled_scan_target);
+}
+
+static ssize_t kidled_scan_target_store(struct kobject *kobj,
+					      struct kobj_attribute *attr,
+					      const char *buf, size_t count)
+{
+	int ret;
+	unsigned int val;
+
+	ret = kstrtouint(buf, 10, &val);
+	if (ret || !val || val > KIDLED_SCAN_ALL)
+		return -EINVAL;
+
+	WRITE_ONCE(kidled_scan_target, val);
+	kidled_slab_scan_enabled();
 	return count;
 }
 
 static struct kobj_attribute kidled_scan_period_attr =
 	__ATTR(scan_period_in_seconds, 0644,
 	       kidled_scan_period_show, kidled_scan_period_store);
+static struct kobj_attribute kidled_scan_target_attr =
+	__ATTR(scan_target, 0644,
+	       kidled_scan_target_show, kidled_scan_target_store);
 
 static struct attribute *kidled_attrs[] = {
 	&kidled_scan_period_attr.attr,
+	&kidled_scan_target_attr.attr,
 	NULL
 };
 static struct attribute_group kidled_attr_group = {

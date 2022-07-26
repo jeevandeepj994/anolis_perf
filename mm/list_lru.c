@@ -205,6 +205,10 @@ __list_lru_walk_one(struct list_lru_node *nlru, int memcg_idx,
 	struct list_lru_one *l;
 	struct list_head *item, *n;
 	unsigned long isolated = 0;
+#ifdef CONFIG_KIDLED
+	bool kidled_slab_scan = false;
+	LIST_HEAD(head_temp);
+#endif
 
 	l = list_lru_from_memcg_idx(nlru, memcg_idx);
 restart:
@@ -238,6 +242,12 @@ restart:
 		case LRU_ROTATE:
 			list_move_tail(item, &l->list);
 			break;
+#ifdef CONFIG_KIDLED
+		case LRU_ROTATE_DELAY:
+			if (unlikely(!kidled_slab_scan))
+				kidled_slab_scan = true;
+			/* fall through */
+#endif
 		case LRU_SKIP:
 			break;
 		case LRU_RETRY:
@@ -251,6 +261,17 @@ restart:
 			BUG();
 		}
 	}
+#ifdef CONFIG_KIDLED
+	if (kidled_slab_scan) {
+		struct list_head *head = &l->list;
+		struct list_head *entry = item->prev;
+
+		if (item != head) {
+			list_cut_position(&head_temp, head, entry);
+			list_splice_tail(&head_temp, head);
+		}
+	}
+#endif
 	return isolated;
 }
 

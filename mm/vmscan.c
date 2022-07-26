@@ -53,6 +53,7 @@
 #include <linux/psi.h>
 #include <linux/page_dup.h>
 #include <linux/debugfs.h>
+#include <linux/kidled.h>
 
 #include <asm/tlbflush.h>
 #include <asm/div64.h>
@@ -456,6 +457,113 @@ void unregister_shrinker(struct shrinker *shrinker)
 EXPORT_SYMBOL(unregister_shrinker);
 
 #define SHRINK_BATCH 128
+
+#ifdef CONFIG_KIDLED
+static void kidled_scan_slab_common(struct shrinker *shrinker,
+				    struct shrink_control *sc,
+				    struct kidled_scan_control scan_control)
+{
+	long batch_size = shrinker->batch ?: SHRINK_BATCH;
+	long freeable, nr_free;
+
+	lockdep_assert_held(&shrinker_rwsem);
+
+	if (!shrinker->cold_objects)
+		return;
+	freeable = shrinker->count_objects(shrinker, sc);
+	if (freeable == 0 || freeable == SHRINK_EMPTY)
+		return;
+
+	nr_free = DIV_ROUND_UP(freeable, scan_control.duration);
+	while (nr_free > 0) {
+		unsigned long nr_scanned;
+
+		sc->nr_to_scan = min(nr_free, batch_size);
+		nr_scanned = shrinker->cold_objects(shrinker, sc);
+		if (nr_scanned == SHRINK_STOP)
+			break;
+		nr_free -= nr_scanned;
+		cond_resched();
+
+		if (unlikely(!kidled_is_scan_period_equal(&scan_control) ||
+				!kidled_has_slab_target_equal(&scan_control)))
+			break;
+	}
+}
+
+#ifdef CONFIG_MEMCG
+static void kidled_scan_slab_memcg(int nid, struct mem_cgroup *memcg,
+				   struct kidled_scan_control scan_control)
+{
+	struct memcg_shrinker_map *map;
+	int i;
+
+	if (!mem_cgroup_online(memcg))
+		return;
+
+	if (!down_read_trylock(&shrinker_rwsem))
+		return;
+
+	map = rcu_dereference_protected(memcg->nodeinfo[nid]->shrinker_map,
+					true);
+	if (unlikely(!map))
+		goto out;
+
+	for_each_set_bit(i, map->map, shrinker_nr_max) {
+		struct shrink_control sc = {
+			.gfp_mask = GFP_KERNEL,
+			.nid = nid,
+			.memcg = memcg,
+		};
+		struct shrinker *shrinker;
+
+		shrinker = idr_find(&shrinker_idr, i);
+		/* shrinker was null if memcg_expand_shrinker_maps fails */
+		if (unlikely(!shrinker || shrinker == SHRINKER_REGISTERING)) {
+			if (!shrinker)
+				clear_bit(i, map->map);
+			continue;
+		}
+
+		kidled_scan_slab_common(shrinker, &sc, scan_control);
+		if (rwsem_is_contended(&shrinker_rwsem))
+			break;
+	}
+out:
+	up_read(&shrinker_rwsem);
+}
+#else /* !CONFIG_MEMCG */
+static void kidled_scan_slab_memcg(int nid, struct mem_cgroup *memcg,
+				   struct kidled_scan_control scan_control)
+{
+}
+#endif /* CONFIG_MEMCG */
+
+void kidled_scan_slab(int nid, struct mem_cgroup *memcg,
+		      struct kidled_scan_control scan_control)
+{
+	struct shrinker *shrinker;
+
+	if (!mem_cgroup_disabled() && !mem_cgroup_is_root(memcg))
+		return kidled_scan_slab_memcg(nid, memcg, scan_control);
+
+	if (!down_read_trylock(&shrinker_rwsem))
+		return;
+
+	list_for_each_entry(shrinker, &shrinker_list, list) {
+		struct shrink_control sc = {
+			.gfp_mask = GFP_KERNEL,
+			.nid = nid,
+			.memcg = memcg,
+		};
+
+		kidled_scan_slab_common(shrinker, &sc, scan_control);
+		if (rwsem_is_contended(&shrinker_rwsem))
+			break;
+	}
+	up_read(&shrinker_rwsem);
+}
+#endif
 
 static unsigned long do_shrink_slab(struct shrink_control *shrinkctl,
 				    struct shrinker *shrinker, int priority)
