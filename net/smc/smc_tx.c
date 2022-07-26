@@ -283,14 +283,8 @@ int smc_tx_sendmsg(struct smc_sock *smc, struct msghdr *msg, size_t len)
 		/* If we need to cork, do nothing and wait for the next
 		 * sendmsg() call or push on tx completion
 		 */
-		if (!smc_tx_should_cork(smc, msg)) {
-			conn->tx_bytes += copylen;
-			++conn->tx_cnt;
+		if (!smc_tx_should_cork(smc, msg))
 			smc_tx_sndbuf_nonempty(conn);
-		} else {
-			conn->tx_corked_bytes += copylen;
-			++conn->tx_corked_cnt;
-		}
 
 		trace_smc_tx_sendmsg(smc, copylen);
 	} /* while (msg_data_left(msg)) */
