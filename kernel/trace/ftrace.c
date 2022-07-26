@@ -5625,11 +5625,6 @@ static int ftrace_process_locs(struct module *mod,
 	 * until we are finished with it, and there's no
 	 * reason to cause large interrupt latencies while we do it.
 	 */
-#ifdef CONFIG_X86_64
-	ftrace_update_tot_cnt = 20000;
-	ret = 0;
-	goto out;
-#endif
 	if (!mod)
 		local_irq_save(flags);
 	ftrace_update_code(mod, start_pg);
