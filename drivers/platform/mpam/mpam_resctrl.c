@@ -449,8 +449,11 @@ static u32 get_mba_granularity(struct mpam_props *cprops)
 		/*
 		 * bwa_wd is the number of bits implemented in the 0.xxx
 		 * fixed point fraction. 1 bit is 50%, 2 is 25% etc.
+		 * Since the minimum granularity on current hardwares cannot
+		 * be less than 5%, when the granularity is too fine, 5 is
+		 * returned.
 		 */
-		return MAX_MBA_BW / (cprops->bwa_wd + 1);
+		return max((u32) 5, (u32) (MAX_MBA_BW / BIT(cprops->bwa_wd)));
 	}
 
 	return 0;
@@ -474,9 +477,16 @@ static u32 mbw_max_to_percent(u16 mbw_max, struct mpam_props *cprops)
 
 	for (bit = 15; bit; bit--) {
 		if (mbw_max & BIT(bit))
-			value += MAX_MBA_BW / divisor;
+			/*
+			 * Left shift by 16 bits to preserve the precision of
+			 * the division operation.
+			 */
+			value += (MAX_MBA_BW << 16) / divisor;
 		divisor <<= 1;
 	}
+
+	/* Use the upper bound of the fixed-point fraction. */
+	value = (value + (MAX_MBA_BW << (16 - cprops->bwa_wd))) >> 16;
 
 	return value;
 }
@@ -496,23 +506,35 @@ static u32 percent_to_mbw_pbm(u8 pc, struct mpam_props *cprops)
 static u16 percent_to_mbw_max(u8 pc, struct mpam_props *cprops)
 {
 	u8 bit;
-	u32 divisor = 2, value = 0;
+	u32 granularity, pc_ls, divisor = 2, value = 0;
 
 	if (WARN_ON_ONCE(cprops->bwa_wd > 15))
 		return MAX_MBA_BW;
 
+	/* Set the pc value to be a multiple of granularity. */
+	granularity = get_mba_granularity(cprops);
+	pc = roundup(pc, (u8) granularity);
+	if (pc > 100)
+		pc = 100;
+
+	/*
+	 * Left shift by 16 bits to preserve the precision of the division
+	 * operation.
+	 */
+	pc_ls = (u32) pc << 16;
+
 	for (bit = 15; bit; bit--) {
-		if (pc >= MAX_MBA_BW / divisor) {
-			pc -= MAX_MBA_BW / divisor;
+		if (pc_ls >= (MAX_MBA_BW << 16) / divisor) {
+			pc_ls -= (MAX_MBA_BW << 16) / divisor;
 			value |= BIT(bit);
 		}
 		divisor <<= 1;
 
-		if (!pc || !(MAX_MBA_BW / divisor))
+		if (!pc_ls || !((MAX_MBA_BW << 16) / divisor))
 			break;
 	}
 
-	value &= GENMASK(15, 15 - cprops->bwa_wd);
+	value &= GENMASK(15, 15 - cprops->bwa_wd + 1);
 
 	return value;
 }
@@ -625,6 +647,8 @@ static int mpam_resctrl_resource_init(struct mpam_resctrl_res *res)
 		bool has_csu = cache_has_usable_csu(class);
 		bool has_mbwu = class_has_usable_mbwu(class);
 
+		r->cache_level = class->level;
+
 		/* TODO: Scaling is not yet supported */
 		r->cache.cbm_len = class->props.cpbm_wd;
 		r->cache.arch_has_sparse_bitmaps = true;
@@ -678,7 +702,7 @@ static int mpam_resctrl_resource_init(struct mpam_resctrl_res *res)
 		struct mpam_props *cprops = &class->props;
 
 		/* TODO: kill these properties off as they are derivatives */
-		r->format_str = "%d=%0*u";
+		r->format_str = "%d=%*u";
 		r->fflags = RFTYPE_RES_MB;
 		r->default_ctrl = MAX_MBA_BW;
 		r->data_width = 3;
@@ -686,6 +710,7 @@ static int mpam_resctrl_resource_init(struct mpam_resctrl_res *res)
 		r->membw.delay_linear = true;
 		r->membw.throttle_mode = THREAD_THROTTLE_UNDEFINED;
 		r->membw.bw_gran = get_mba_granularity(cprops);
+		r->membw.min_bw = r->membw.bw_gran;
 
 		if (class_has_usable_mba(cprops)) {
 			r->alloc_capable = true;
