@@ -40,7 +40,6 @@ extern int hooker_install(const void *place, struct hooker *hooker);
  * This function may sleep.
  *
  * Parameters:
- *	place - the address that saves function pointer
  *	hooker - the installed hooker struct
  */
 
