@@ -15,6 +15,12 @@
 
 #include <asm/mpam.h>
 
+/*
+ * Two different versions of MPAM table coexist on Yitian. To avoid conflicts,
+ * the signature of the new MPAM ACPI table is named YMPM.
+ */
+#define ACPI_SIG_YMPM "YMPM"
+
 int ddr_cpufreq;
 
 static bool frob_irq(struct platform_device *pdev, int intid, u32 flags,
@@ -278,7 +284,7 @@ static int __init acpi_mpam_parse(void)
 	if (mpam_needed != MPAM_ENABLE_ACPI)
 		return 0;
 
-	status = acpi_get_table(ACPI_SIG_MPAM, 0, &mpam);
+	status = acpi_get_table(ACPI_SIG_YMPM, 0, &mpam);
 	if (ACPI_FAILURE(status))
 		return -ENOENT;
 
@@ -326,7 +332,7 @@ int acpi_mpam_count_msc(void)
 	if (acpi_disabled || !mpam_cpus_have_feature())
 		return 0;
 
-	status = acpi_get_table(ACPI_SIG_MPAM, 0, &mpam);
+	status = acpi_get_table(ACPI_SIG_YMPM, 0, &mpam);
 	if (ACPI_FAILURE(status))
 		return -ENOENT;
 
