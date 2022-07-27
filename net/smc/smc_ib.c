@@ -131,15 +131,6 @@ int smc_ib_ready_link(struct smc_link *lnk)
 	if (rc)
 		goto out;
 	smc_wr_remember_qp_attr(lnk);
-	rc = ib_req_notify_cq(lnk->smcibcq_recv->ib_cq,
-			      IB_CQ_SOLICITED_MASK);
-	if (rc)
-		goto out;
-
-	rc = ib_req_notify_cq(lnk->smcibcq_send->ib_cq,
-			      IB_CQ_NEXT_COMP | IB_CQ_REPORT_MISSED_EVENTS);
-	if (rc)
-		goto out;
 
 	rc = smc_wr_rx_post_init(lnk);
 	if (rc)
@@ -630,21 +621,16 @@ int smcr_nl_get_device(struct sk_buff *skb, struct netlink_callback *cb)
 	return skb->len;
 }
 
-static struct smc_ib_cq *smc_ib_get_least_used_cq(struct smc_ib_device *smcibdev,
-						  bool is_send)
+static struct smc_ib_cq *smc_ib_get_least_used_cq(struct smc_ib_device *smcibdev)
 {
 	struct smc_ib_cq *smcibcq, *cq;
 	int min, i;
 
-	if (is_send)
-		smcibcq = smcibdev->smcibcq_send;
-	else
-		smcibcq = smcibdev->smcibcq_recv;
-
+	smcibcq = smcibdev->smcibcq;
 	cq = smcibcq;
 	min = cq->load;
 
-	for (i = 0; i < smcibdev->num_cq_peer; i++) {
+	for (i = 0; i < smcibdev->num_cq; i++) {
 		if (smcibcq[i].load < min) {
 			cq = &smcibcq[i];
 			min = cq->load;
@@ -685,27 +671,22 @@ void smc_ib_destroy_queue_pair(struct smc_link *lnk)
 {
 	if (lnk->roce_qp) {
 		ib_destroy_qp(lnk->roce_qp);
-		smc_ib_put_cq(lnk->smcibcq_send);
-		smc_ib_put_cq(lnk->smcibcq_recv);
+		smc_ib_put_cq(lnk->smcibcq);
 	}
 	lnk->roce_qp = NULL;
-	lnk->smcibcq_send = NULL;
-	lnk->smcibcq_recv = NULL;
+	lnk->smcibcq = NULL;
 }
 
 /* create a queue pair within the protection domain for a link */
 int smc_ib_create_queue_pair(struct smc_link *lnk)
 {
-	struct smc_ib_cq *smcibcq_send = smc_ib_get_least_used_cq(lnk->smcibdev,
-								  true);
-	struct smc_ib_cq *smcibcq_recv = smc_ib_get_least_used_cq(lnk->smcibdev,
-								  false);
+	struct smc_ib_cq *smcibcq = smc_ib_get_least_used_cq(lnk->smcibdev);
 	int sges_per_buf = (lnk->lgr->smc_version == SMC_V2) ? 2 : 1;
 	struct ib_qp_init_attr qp_attr = {
 		.event_handler = smc_ib_qp_event_handler,
 		.qp_context = lnk,
-		.send_cq = smcibcq_send->ib_cq,
-		.recv_cq = smcibcq_recv->ib_cq,
+		.send_cq = smcibcq->ib_cq,
+		.recv_cq = smcibcq->ib_cq,
 		.srq = NULL,
 		.cap = {
 				/* include unsolicited rdma_writes as well,
@@ -717,6 +698,7 @@ int smc_ib_create_queue_pair(struct smc_link *lnk)
 			.max_recv_wr = SMC_WR_BUF_CNT,
 			.max_send_sge = SMC_IB_MAX_SEND_SGE,
 			.max_recv_sge = sges_per_buf,
+			.max_inline_data = 0,
 		},
 		.sq_sig_type = IB_SIGNAL_REQ_WR,
 		.qp_type = IB_QPT_RC,
@@ -734,8 +716,7 @@ int smc_ib_create_queue_pair(struct smc_link *lnk)
 	if (IS_ERR(lnk->roce_qp)) {
 		lnk->roce_qp = NULL;
 	} else {
-		lnk->smcibcq_send = smcibcq_send;
-		lnk->smcibcq_recv = smcibcq_recv;
+		lnk->smcibcq = smcibcq;
 		smc_wr_remember_qp_attr(lnk);
 	}
 	return rc;
@@ -752,7 +733,7 @@ static int smc_ib_map_mr_sg(struct smc_buf_desc *buf_slot, u8 link_idx)
 	int sg_num;
 
 	/* map the largest prefix of a dma mapped SG list */
-	sg_num = ib_map_mr_sg(buf_slot->mr_rx[link_idx],
+	sg_num = ib_map_mr_sg(buf_slot->mr[link_idx],
 			      buf_slot->sgt[link_idx].sgl,
 			      buf_slot->sgt[link_idx].orig_nents,
 			      &offset, PAGE_SIZE);
@@ -764,23 +745,47 @@ static int smc_ib_map_mr_sg(struct smc_buf_desc *buf_slot, u8 link_idx)
 int smc_ib_get_memory_region(struct ib_pd *pd, int access_flags,
 			     struct smc_buf_desc *buf_slot, u8 link_idx)
 {
-	if (buf_slot->mr_rx[link_idx])
+	if (buf_slot->mr[link_idx])
 		return 0; /* already done */
 
-	buf_slot->mr_rx[link_idx] =
+	buf_slot->mr[link_idx] =
 		ib_alloc_mr(pd, IB_MR_TYPE_MEM_REG, 1 << buf_slot->order);
-	if (IS_ERR(buf_slot->mr_rx[link_idx])) {
+	if (IS_ERR(buf_slot->mr[link_idx])) {
 		int rc;
 
-		rc = PTR_ERR(buf_slot->mr_rx[link_idx]);
-		buf_slot->mr_rx[link_idx] = NULL;
+		rc = PTR_ERR(buf_slot->mr[link_idx]);
+		buf_slot->mr[link_idx] = NULL;
 		return rc;
 	}
 
-	if (smc_ib_map_mr_sg(buf_slot, link_idx) != 1)
+	if (smc_ib_map_mr_sg(buf_slot, link_idx) !=
+			     buf_slot->sgt[link_idx].orig_nents)
 		return -EINVAL;
 
 	return 0;
+}
+
+bool smc_ib_is_sg_need_sync(struct smc_link *lnk,
+			    struct smc_buf_desc *buf_slot)
+{
+	struct scatterlist *sg;
+	unsigned int i;
+	bool ret = false;
+
+	/* for now there is just one DMA address */
+	for_each_sg(buf_slot->sgt[lnk->link_idx].sgl, sg,
+		    buf_slot->sgt[lnk->link_idx].nents, i) {
+		if (!sg_dma_len(sg))
+			break;
+		if (dma_need_sync(lnk->smcibdev->ibdev->dma_device,
+				  sg_dma_address(sg))) {
+			ret = true;
+			goto out;
+		}
+	}
+
+out:
+	return ret;
 }
 
 /* synchronize buffer usage for cpu access */
@@ -790,6 +795,9 @@ void smc_ib_sync_sg_for_cpu(struct smc_link *lnk,
 {
 	struct scatterlist *sg;
 	unsigned int i;
+
+	if (!(buf_slot->is_dma_need_sync & (1U << lnk->link_idx)))
+		return;
 
 	/* for now there is just one DMA address */
 	for_each_sg(buf_slot->sgt[lnk->link_idx].sgl, sg,
@@ -810,6 +818,9 @@ void smc_ib_sync_sg_for_device(struct smc_link *lnk,
 {
 	struct scatterlist *sg;
 	unsigned int i;
+
+	if (!(buf_slot->is_dma_need_sync & (1U << lnk->link_idx)))
+		return;
 
 	/* for now there is just one DMA address */
 	for_each_sg(buf_slot->sgt[lnk->link_idx].sgl, sg,
@@ -854,26 +865,72 @@ void smc_ib_buf_unmap_sg(struct smc_link *lnk,
 	buf_slot->sgt[lnk->link_idx].sgl->dma_address = 0;
 }
 
+static const struct dim_cq_moder
+smc_dim_profile[RDMA_DIM_PARAMS_NUM_PROFILES] = {
+	{1,   0, 1,  0},
+	{1,   0, 4,  0},
+	{2,   0, 4,  0},
+	{2,   0, 8,  0},
+	{4,   0, 8,  0},
+	{16,  0, 8,  0},
+	{16,  0, 16, 0},
+	{32,  0, 16, 0},
+	{32,  0, 32, 0},
+};
+
+static void smc_ib_dim_work(struct work_struct *w)
+{
+	struct dim *dim = container_of(w, struct dim, work);
+	struct ib_cq *cq = dim->priv;
+
+	u16 usec = smc_dim_profile[dim->profile_ix].usec;
+	u16 comps = smc_dim_profile[dim->profile_ix].comps;
+
+	dim->state = DIM_START_MEASURE;
+	cq->device->ops.modify_cq(cq, comps, usec);
+}
+
+static void smc_ib_dim_init(struct ib_cq *cq)
+{
+	struct dim *dim;
+
+	if (!cq->device->ops.modify_cq || !cq->device->use_cq_dim)
+		return;
+
+	dim = kzalloc(sizeof(struct dim), GFP_KERNEL);
+	if (!dim)
+		return;
+
+	dim->state = DIM_START_MEASURE;
+	dim->tune_state = DIM_GOING_RIGHT;
+	dim->profile_ix = RDMA_DIM_START_PROFILE;
+	dim->priv = cq;
+	cq->dim = dim;
+
+	INIT_WORK(&dim->work, smc_ib_dim_work);
+}
+
+static void smc_ib_dim_destroy(struct ib_cq *cq)
+{
+	if (!cq->dim)
+		return;
+
+	cancel_work_sync(&cq->dim->work);
+	kfree(cq->dim);
+}
+
 static void smc_ib_cleanup_cq(struct smc_ib_device *smcibdev)
 {
 	int i;
 
-	for (i = 0; i < smcibdev->num_cq_peer; i++) {
-		if (smcibdev->smcibcq_send[i].ib_cq)
-			ib_destroy_cq(smcibdev->smcibcq_send[i].ib_cq);
-
-		if (smcibdev->smcibcq_recv[i].ib_cq)
-			ib_destroy_cq(smcibdev->smcibcq_recv[i].ib_cq);
+	for (i = 0; i < smcibdev->num_cq; i++) {
+		if (smcibdev->smcibcq[i].ib_cq) {
+			smc_ib_dim_destroy(smcibdev->smcibcq[i].ib_cq);
+			ib_destroy_cq(smcibdev->smcibcq[i].ib_cq);
+		}
 	}
 
-	kfree(smcibdev->smcibcq_send);
-	kfree(smcibdev->smcibcq_recv);
-}
-
-static void cq_event_handler(struct ib_event *event, void *data)
-{
-	pr_warn("smc: event %u (%s) data %p\n",
-		event->event, ib_event_msg(event->event), data);
+	kfree(smcibdev->smcibcq);
 }
 
 long smc_ib_setup_per_ibdev(struct smc_ib_device *smcibdev)
@@ -881,7 +938,7 @@ long smc_ib_setup_per_ibdev(struct smc_ib_device *smcibdev)
 	struct ib_cq_init_attr cqattr = { .cqe = SMC_MAX_CQE };
 	int cqe_size_order, smc_order;
 	struct smc_ib_cq *smcibcq;
-	int i, num_cq_peer;
+	int i, num_cq;
 	long rc;
 
 	mutex_lock(&smcibdev->mutex);
@@ -893,45 +950,32 @@ long smc_ib_setup_per_ibdev(struct smc_ib_device *smcibdev)
 	smc_order = MAX_ORDER - cqe_size_order - 1;
 	if (SMC_MAX_CQE + 2 > (0x00000001 << smc_order) * PAGE_SIZE)
 		cqattr.cqe = (0x00000001 << smc_order) * PAGE_SIZE - 2;
-	num_cq_peer = min_t(int, smcibdev->ibdev->num_comp_vectors,
-			    num_online_cpus());
-	smcibdev->num_cq_peer = num_cq_peer;
-	smcibdev->smcibcq_send = kcalloc(num_cq_peer, sizeof(*smcibcq),
-					 GFP_KERNEL);
-	if (!smcibdev->smcibcq_send) {
-		rc = -ENOMEM;
-		goto err;
-	}
-	smcibdev->smcibcq_recv = kcalloc(num_cq_peer, sizeof(*smcibcq),
-					 GFP_KERNEL);
-	if (!smcibdev->smcibcq_recv) {
+	num_cq = min_t(int, smcibdev->ibdev->num_comp_vectors,
+		       num_online_cpus());
+	smcibdev->num_cq = num_cq;
+	smcibdev->smcibcq = kcalloc(num_cq, sizeof(*smcibcq), GFP_KERNEL);
+	if (!smcibdev->smcibcq) {
 		rc = -ENOMEM;
 		goto err;
 	}
 
 	/* initialize CQs */
-	for (i = 0; i < num_cq_peer; i++) {
-		/* initialize send CQ */
-		smcibcq = &smcibdev->smcibcq_send[i];
+	for (i = 0; i < num_cq; i++) {
+		smcibcq = &smcibdev->smcibcq[i];
 		smcibcq->smcibdev = smcibdev;
-		smcibcq->is_send = 1;
 		cqattr.comp_vector = i;
 		smcibcq->ib_cq = ib_create_cq(smcibdev->ibdev,
-					      smc_wr_tx_cq_handler, cq_event_handler,
+					      smc_wr_cq_handler, NULL,
 					      smcibcq, &cqattr);
 		rc = PTR_ERR_OR_ZERO(smcibcq->ib_cq);
-		if (IS_ERR(smcibcq->ib_cq))
+		if (IS_ERR(smcibcq->ib_cq)) {
+			smcibcq->ib_cq = NULL;
 			goto err;
+		}
 
-		/* initialize recv CQ */
-		smcibcq = &smcibdev->smcibcq_recv[i];
-		smcibcq->smcibdev = smcibdev;
-		cqattr.comp_vector = num_cq_peer - 1 - i; /* reverse to spread snd/rcv */
-		smcibcq->ib_cq = ib_create_cq(smcibdev->ibdev,
-					      smc_wr_rx_cq_handler, cq_event_handler,
-					      smcibcq, &cqattr);
-		rc = PTR_ERR_OR_ZERO(smcibcq->ib_cq);
-		if (IS_ERR(smcibcq->ib_cq))
+		smc_ib_dim_init(smcibcq->ib_cq);
+		rc = ib_req_notify_cq(smcibcq->ib_cq, IB_CQ_NEXT_COMP);
+		if (rc)
 			goto err;
 	}
 	smc_wr_add_dev(smcibdev);

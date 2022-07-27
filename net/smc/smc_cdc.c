@@ -34,7 +34,6 @@ static void smc_cdc_tx_handler(struct smc_wr_tx_pend_priv *pnd_snd,
 	smc = container_of(conn, struct smc_sock, conn);
 	bh_lock_sock(&smc->sk);
 	if (!wc_status) {
-		atomic_inc(&link->cdc_comp_cnt);
 		diff = smc_curs_diff(cdcpend->conn->sndbuf_desc->len,
 				     &cdcpend->conn->tx_curs_fin,
 				     &cdcpend->cursor);
@@ -83,7 +82,7 @@ int smc_cdc_get_free_slot(struct smc_connection *conn,
 		/* abnormal termination */
 		if (!rc)
 			smc_wr_tx_put_slot(link,
-					   (struct smc_wr_tx_pend_priv *)pend);
+					   (struct smc_wr_tx_pend_priv *)(*pend));
 		rc = -EPIPE;
 	}
 	return rc;
@@ -122,7 +121,8 @@ int smc_cdc_msg_send(struct smc_connection *conn,
 	conn->tx_cdc_seq++;
 	conn->local_tx_ctrl.seqno = conn->tx_cdc_seq;
 	smc_host_msg_to_cdc(cdc_msg, conn, &cfed);
-	saved_credits = (u8)smc_wr_rx_get_credits(link);
+	if (smc_wr_rx_credits_need_announce_frequent(link))
+		saved_credits = (u8)smc_wr_rx_get_credits(link);
 	cdc_msg->credits = saved_credits;
 
 	atomic_inc(&conn->cdc_pend_tx_wr);
@@ -132,12 +132,12 @@ int smc_cdc_msg_send(struct smc_connection *conn,
 	if (likely(!rc)) {
 		smc_curs_copy(&conn->rx_curs_confirmed, &cfed, conn);
 		conn->local_rx_ctrl.prod_flags.cons_curs_upd_req = 0;
-		atomic_inc(&link->cdc_send_cnt);
 	} else {
 		conn->tx_cdc_seq--;
 		conn->local_tx_ctrl.seqno = conn->tx_cdc_seq;
 		smc_wr_rx_put_credits(link, saved_credits);
-		atomic_dec(&conn->cdc_pend_tx_wr);
+		if (atomic_dec_and_test(&conn->cdc_pend_tx_wr) || smc_link_usable(conn->lnk))
+			wake_up(&conn->cdc_pend_tx_wq);
 	}
 
 	return rc;
@@ -169,8 +169,10 @@ int smcr_cdc_msg_send_validation(struct smc_connection *conn,
 	smp_mb__after_atomic(); /* Make sure cdc_pend_tx_wr added before post */
 
 	rc = smc_wr_tx_send(link, (struct smc_wr_tx_pend_priv *)pend);
-	if (unlikely(rc))
-		atomic_dec(&conn->cdc_pend_tx_wr);
+	if (unlikely(rc)) {
+		if (atomic_dec_and_test(&conn->cdc_pend_tx_wr) || smc_link_usable(conn->lnk))
+			wake_up(&conn->cdc_pend_tx_wq);
+	}
 
 	return rc;
 }
@@ -231,7 +233,8 @@ int smc_cdc_get_slot_and_msg_send(struct smc_connection *conn)
 
 void smc_cdc_wait_pend_tx_wr(struct smc_connection *conn)
 {
-	wait_event(conn->cdc_pend_tx_wq, !atomic_read(&conn->cdc_pend_tx_wr));
+	wait_event(conn->cdc_pend_tx_wq, !atomic_read(&conn->cdc_pend_tx_wr) ||
+		   !smc_link_usable(conn->lnk) || conn->lgr->terminating);
 }
 
 /* Send a SMC-D CDC header.
@@ -365,7 +368,8 @@ static void smc_cdc_msg_recv_action(struct smc_sock *smc,
 	}
 
 	/* trigger sndbuf consumer: RDMA write into peer RMBE and CDC */
-	if ((diff_cons && smc_tx_prepared_sends(conn)) ||
+	if ((diff_cons && smc_tx_prepared_sends(conn) &&
+	     conn->local_tx_ctrl.prod_flags.write_blocked) ||
 	    conn->local_rx_ctrl.prod_flags.cons_curs_upd_req ||
 	    conn->local_rx_ctrl.prod_flags.urg_data_pending) {
 		if (!sock_owned_by_user(&smc->sk))

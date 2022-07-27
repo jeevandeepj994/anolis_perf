@@ -795,7 +795,13 @@ int smc_clc_send_decline(struct smc_sock *smc, u32 peer_diag_info, u8 version)
 	memset(&msg, 0, sizeof(msg));
 	vec.iov_base = &dclc;
 	vec.iov_len = send_len;
+	down_read(&smc->clcsock_release_lock);
+	if (!smc->clcsock || !smc->clcsock->sk) {
+		up_read(&smc->clcsock_release_lock);
+		return -EPROTO;
+	}
 	len = kernel_sendmsg(smc->clcsock, &msg, &vec, 1, send_len);
+	up_read(&smc->clcsock_release_lock);
 	if (len < 0 || len < send_len)
 		len = -EPROTO;
 	return len > 0 ? 0 : len;
@@ -1034,7 +1040,7 @@ static int smc_clc_send_confirm_accept(struct smc_sock *smc,
 		       ETH_ALEN);
 		hton24(clc->r0.qpn, link->roce_qp->qp_num);
 		clc->r0.rmb_rkey =
-			htonl(conn->rmb_desc->mr_rx[link->link_idx]->rkey);
+			htonl(conn->rmb_desc->mr[link->link_idx]->rkey);
 		clc->r0.rmbe_idx = 1; /* for now: 1 RMB = 1 RMBE */
 		clc->r0.rmbe_alert_token = htonl(conn->alert_token_local);
 		switch (clc->hdr.type) {
@@ -1049,8 +1055,10 @@ static int smc_clc_send_confirm_accept(struct smc_sock *smc,
 			break;
 		}
 		clc->r0.rmbe_size = conn->rmbe_size_short;
-		clc->r0.rmb_dma_addr = cpu_to_be64((u64)sg_dma_address
-				(conn->rmb_desc->sgt[link->link_idx].sgl));
+		clc->r0.rmb_dma_addr = conn->rmb_desc->is_vm ?
+			cpu_to_be64((uintptr_t)conn->rmb_desc->cpu_addr) :
+			cpu_to_be64((u64)sg_dma_address
+				    (conn->rmb_desc->sgt[link->link_idx].sgl));
 		hton24(clc->r0.psn, link->psn_initial);
 		if (version == SMC_V1) {
 			clc->hdr.length = htons(SMCR_CLC_ACCEPT_CONFIRM_LEN);

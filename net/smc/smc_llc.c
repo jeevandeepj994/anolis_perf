@@ -389,8 +389,6 @@ static void smc_llc_tx_handler(struct smc_wr_tx_pend_priv *pend,
 			       enum ib_wc_status wc_status)
 {
 	/* future work: handle wc_status error for recovery and failover */
-	if (!wc_status)
-		atomic_inc(&link->llc_comp_cnt);
 }
 
 /**
@@ -513,19 +511,22 @@ static int smc_llc_send_confirm_rkey(struct smc_link *send_link,
 		if (smc_link_active(link) && link != send_link) {
 			rkeyllc->rtoken[rtok_ix].link_id = link->link_id;
 			rkeyllc->rtoken[rtok_ix].rmb_key =
-				htonl(rmb_desc->mr_rx[link->link_idx]->rkey);
-			rkeyllc->rtoken[rtok_ix].rmb_vaddr = cpu_to_be64(
-				(u64)sg_dma_address(
-					rmb_desc->sgt[link->link_idx].sgl));
+				htonl(rmb_desc->mr[link->link_idx]->rkey);
+			rkeyllc->rtoken[rtok_ix].rmb_vaddr = rmb_desc->is_vm ?
+				cpu_to_be64((uintptr_t)rmb_desc->cpu_addr) :
+				cpu_to_be64((u64)sg_dma_address
+					    (rmb_desc->sgt[link->link_idx].sgl));
 			rtok_ix++;
 		}
 	}
 	/* rkey of send_link is in rtoken[0] */
 	rkeyllc->rtoken[0].num_rkeys = rtok_ix - 1;
 	rkeyllc->rtoken[0].rmb_key =
-		htonl(rmb_desc->mr_rx[send_link->link_idx]->rkey);
-	rkeyllc->rtoken[0].rmb_vaddr = cpu_to_be64(
-		(u64)sg_dma_address(rmb_desc->sgt[send_link->link_idx].sgl));
+		htonl(rmb_desc->mr[send_link->link_idx]->rkey);
+	rkeyllc->rtoken[0].rmb_vaddr = rmb_desc->is_vm ?
+		cpu_to_be64((uintptr_t)rmb_desc->cpu_addr) :
+		cpu_to_be64((u64)sg_dma_address
+			    (rmb_desc->sgt[send_link->link_idx].sgl));
 	/* send llc message */
 	rc = smc_wr_tx_send(send_link, pend);
 put_out:
@@ -552,7 +553,7 @@ static int smc_llc_send_delete_rkey(struct smc_link *link,
 	rkeyllc->hd.common.llc_type = SMC_LLC_DELETE_RKEY;
 	smc_llc_init_msg_hdr(&rkeyllc->hd, link->lgr, sizeof(*rkeyllc));
 	rkeyllc->num_rkeys = 1;
-	rkeyllc->rkey[0] = htonl(rmb_desc->mr_rx[link->link_idx]->rkey);
+	rkeyllc->rkey[0] = htonl(rmb_desc->mr[link->link_idx]->rkey);
 	/* send llc message */
 	rc = smc_wr_tx_send(link, pend);
 put_out:
@@ -622,9 +623,10 @@ static int smc_llc_fill_ext_v2(struct smc_llc_msg_add_link_v2_ext *ext,
 		if (!buf_pos)
 			break;
 		rmb = buf_pos;
-		ext->rt[i].rmb_key = htonl(rmb->mr_rx[prim_lnk_idx]->rkey);
-		ext->rt[i].rmb_key_new = htonl(rmb->mr_rx[lnk_idx]->rkey);
-		ext->rt[i].rmb_vaddr_new =
+		ext->rt[i].rmb_key = htonl(rmb->mr[prim_lnk_idx]->rkey);
+		ext->rt[i].rmb_key_new = htonl(rmb->mr[lnk_idx]->rkey);
+		ext->rt[i].rmb_vaddr_new = rmb->is_vm ?
+			cpu_to_be64((uintptr_t)rmb->cpu_addr) :
 			cpu_to_be64((u64)sg_dma_address(rmb->sgt[lnk_idx].sgl));
 		buf_pos = smc_llc_get_next_rmb(lgr, &buf_lst, buf_pos);
 		while (buf_pos && !(buf_pos)->used)
@@ -900,9 +902,10 @@ static int smc_llc_add_link_cont(struct smc_link *link,
 		}
 		rmb = *buf_pos;
 
-		addc_llc->rt[i].rmb_key = htonl(rmb->mr_rx[prim_lnk_idx]->rkey);
-		addc_llc->rt[i].rmb_key_new = htonl(rmb->mr_rx[lnk_idx]->rkey);
-		addc_llc->rt[i].rmb_vaddr_new =
+		addc_llc->rt[i].rmb_key = htonl(rmb->mr[prim_lnk_idx]->rkey);
+		addc_llc->rt[i].rmb_key_new = htonl(rmb->mr[lnk_idx]->rkey);
+		addc_llc->rt[i].rmb_vaddr_new = rmb->is_vm ?
+			cpu_to_be64((uintptr_t)rmb->cpu_addr) :
 			cpu_to_be64((u64)sg_dma_address(rmb->sgt[lnk_idx].sgl));
 
 		(*num_rkeys_todo)--;
@@ -1337,6 +1340,7 @@ static void smc_llc_delete_asym_link(struct smc_link_group *lgr)
 		return; /* no asymmetric link */
 	if (!smc_link_downing(&lnk_asym->state))
 		return;
+	smcr_lnk_cluster_on_lnk_state(lnk_asym, NULL);
 	lnk_new = smc_switch_conns(lgr, lnk_asym, false);
 	smc_wr_tx_wait_no_pending_sends(lnk_asym);
 	if (!lnk_new)
@@ -1556,6 +1560,7 @@ int smc_llc_srv_add_link(struct smc_link *link,
 out_err:
 	if (link_new) {
 		link_new->state = SMC_LNK_INACTIVE;
+		smcr_lnk_cluster_on_lnk_state(link_new, NULL);
 		smcr_link_clear(link_new, false);
 	}
 out:
@@ -1666,8 +1671,10 @@ static void smc_llc_process_cli_delete_link(struct smc_link_group *lgr)
 	del_llc->reason = 0;
 	smc_llc_send_message(lnk, &qentry->msg); /* response */
 
-	if (smc_link_downing(&lnk_del->state))
+	if (smc_link_downing(&lnk_del->state)) {
+		smcr_lnk_cluster_on_lnk_state(lnk, NULL);
 		smc_switch_conns(lgr, lnk_del, false);
+	}
 	smcr_link_clear(lnk_del, true);
 
 	active_links = smc_llc_active_link_count(lgr);
@@ -1740,6 +1747,7 @@ static void smc_llc_process_srv_delete_link(struct smc_link_group *lgr)
 		goto out; /* asymmetric link already deleted */
 
 	if (smc_link_downing(&lnk_del->state)) {
+		smcr_lnk_cluster_on_lnk_state(lnk, NULL);
 		if (smc_switch_conns(lgr, lnk_del, false))
 			smc_wr_tx_wait_no_pending_sends(lnk_del);
 	}
@@ -2259,6 +2267,7 @@ void smc_llc_link_active(struct smc_link *link)
 		schedule_delayed_work(&link->llc_testlink_wrk,
 				      link->llc_testlink_time);
 	}
+	smcr_lnk_cluster_on_lnk_state(link, NULL);
 }
 
 /* called in worker context */
