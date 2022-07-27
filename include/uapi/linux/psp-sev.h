@@ -29,6 +29,11 @@ enum {
 	SEV_GET_ID,	/* This command is deprecated, use SEV_GET_ID2 */
 	SEV_GET_ID2,
 
+	SEV_USER_CMD_INIT = 101,
+	SEV_USER_CMD_SHUTDOWN,
+
+	SEV_USER_CMD_DOWNLOAD_FIRMWARE = 128,
+
 	SEV_MAX,
 };
 
@@ -73,6 +78,10 @@ typedef enum {
  * @flags: platform config flags
  * @build: firmware build id for API version
  * @guest_count: number of active guests
+ * @bl_version_debug: Bootloader VERSION_DEBUG
+ * @bl_version_minor: Bootloader VERSION_MINOR
+ * @bl_version_major: Bootloader VERSION_MAJOR
+ * @reserved: reserved bits
  */
 struct sev_user_data_status {
 	__u8 api_major;				/* Out */
@@ -81,6 +90,10 @@ struct sev_user_data_status {
 	__u32 flags;				/* Out */
 	__u8 build;				/* Out */
 	__u32 guest_count;			/* Out */
+	__u32 bl_version_debug : 8,		/* Out */
+	 bl_version_minor : 8,			/* Out */
+	 bl_version_major : 8,			/* Out */
+	 reserved : 8;
 } __packed;
 
 #define SEV_STATUS_FLAGS_CONFIG_ES	0x0100
@@ -145,6 +158,17 @@ struct sev_user_data_get_id {
 struct sev_user_data_get_id2 {
 	__u64 address;				/* In */
 	__u32 length;				/* In/Out */
+} __packed;
+
+/**
+ * struct sev_user_data_download_firmware - DOWNLOAD_FIRMWARE command parameters
+ * DOWNLOAD_FIRMWARE command parameters
+ * @address: physical address of firmware image
+ * @length: length of the firmware image
+ */
+struct sev_user_data_download_firmware {
+	__u64 address;				/* In */
+	__u32 length;				/* In */
 } __packed;
 
 /**

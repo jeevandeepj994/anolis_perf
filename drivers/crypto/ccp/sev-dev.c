@@ -30,6 +30,7 @@
 
 #define DEVICE_NAME		"sev"
 #define SEV_FW_FILE		"amd/sev.fw"
+#define CSV_FW_FILE		"hygon/csv.fw"
 #define SEV_FW_NAME_SIZE	64
 
 static DEFINE_MUTEX(sev_cmd_mutex);
@@ -500,6 +501,14 @@ static int sev_get_firmware(struct device *dev,
 	char fw_name_specific[SEV_FW_NAME_SIZE];
 	char fw_name_subset[SEV_FW_NAME_SIZE];
 
+	if (boot_cpu_data.x86_vendor == X86_VENDOR_HYGON) {
+		/* Check for CSV FW using generic name: csv.fw */
+		if (firmware_request_nowarn(firmware, CSV_FW_FILE, dev) >= 0)
+			return 0;
+		else
+			return -ENOENT;
+	}
+
 	snprintf(fw_name_specific, sizeof(fw_name_specific),
 		 "amd/amd_sev_fam%.2xh_model%.2xh.sbin",
 		 boot_cpu_data.x86, boot_cpu_data.x86_model);
@@ -579,6 +588,71 @@ static int sev_update_firmware(struct device *dev)
 
 fw_err:
 	release_firmware(firmware);
+
+	return ret;
+}
+
+static int sev_ioctl_do_download_firmware(struct sev_issue_cmd *argp)
+{
+	struct sev_data_download_firmware *data = NULL;
+	struct sev_user_data_download_firmware input;
+	int ret, order;
+	struct page *p;
+	u64 data_size;
+
+	if (copy_from_user(&input, (void __user *)argp->data, sizeof(input)))
+		return -EFAULT;
+
+	if (!input.address) {
+		argp->error = SEV_RET_INVALID_ADDRESS;
+		return -EINVAL;
+	}
+
+	if (!input.length || input.length > CSV_FW_MAX_SIZE) {
+		argp->error = SEV_RET_INVALID_LEN;
+		return -EINVAL;
+	}
+
+	/* Check if we have read access to the userspace buffer */
+	if (!access_ok(input.address, input.length))
+		return -EFAULT;
+
+	/*
+	 * CSV FW expects the physical address given to it to be 32
+	 * byte aligned. Memory allocated has structure placed at the
+	 * beginning followed by the firmware being passed to the CSV
+	 * FW. Allocate enough memory for data structure + alignment
+	 * padding + CSV FW.
+	 */
+	data_size = ALIGN(sizeof(struct sev_data_download_firmware), 32);
+
+	order = get_order(input.length + data_size);
+	p = alloc_pages(GFP_KERNEL, order);
+	if (!p)
+		return -EFAULT;
+
+	/*
+	 * Copy firmware data to a kernel allocated contiguous
+	 * memory region.
+	 */
+	data = page_address(p);
+	if (copy_from_user((void *)((uint64_t)page_address(p) + data_size),
+			   (void __user *)(input.address), input.length)) {
+		ret = -EFAULT;
+		goto fail_free_page;
+	}
+
+	data->address = __psp_pa(page_address(p) + data_size);
+	data->len = input.length;
+
+	ret = __sev_do_cmd_locked(SEV_CMD_DOWNLOAD_FIRMWARE, data, &argp->error);
+	if (ret)
+		pr_err("Failed to update CSV firmware: %#x\n", argp->error);
+	else
+		pr_info("CSV firmware update successful\n");
+
+fail_free_page:
+	__free_pages(p, order);
 
 	return ret;
 }
@@ -868,6 +942,30 @@ static long sev_ioctl(struct file *file, unsigned int ioctl, unsigned long arg)
 		break;
 	case SEV_GET_ID2:
 		ret = sev_ioctl_do_get_id2(&input);
+		break;
+	case SEV_USER_CMD_INIT:
+		if (boot_cpu_data.x86_vendor == X86_VENDOR_HYGON) {
+			ret = __sev_platform_init_locked(&input.error);
+		} else {
+			ret = -EINVAL;
+			goto out;
+		}
+		break;
+	case SEV_USER_CMD_SHUTDOWN:
+		if (boot_cpu_data.x86_vendor == X86_VENDOR_HYGON) {
+			ret = __sev_platform_shutdown_locked(&input.error);
+		} else {
+			ret = -EINVAL;
+			goto out;
+		}
+		break;
+	case SEV_USER_CMD_DOWNLOAD_FIRMWARE:
+		if (boot_cpu_data.x86_vendor == X86_VENDOR_HYGON) {
+			ret = sev_ioctl_do_download_firmware(&input);
+		} else {
+			ret = -EINVAL;
+			goto out;
+		}
 		break;
 	default:
 		ret = -EINVAL;
