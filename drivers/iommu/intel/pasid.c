@@ -561,6 +561,8 @@ void intel_pasid_tear_down_entry(struct intel_iommu *iommu, struct device *dev,
 {
 	struct pasid_entry *pte;
 	u16 did;
+	u64 pe_val;
+	u16 pgtt_type;
 
 	pte = intel_pasid_get_entry(dev, pasid);
 	if (WARN_ON(!pte))
@@ -570,12 +572,19 @@ void intel_pasid_tear_down_entry(struct intel_iommu *iommu, struct device *dev,
 		return;
 
 	did = pasid_get_domain_id(pte);
+	pe_val = READ_ONCE(pte->val[0]);
+	pgtt_type = (pe_val >> 6) & 0x7;
+
 	intel_pasid_clear_entry(iommu, dev, pasid, fault_ignore, keep_pte);
 
 	if (!ecap_coherent(iommu->ecap))
 		clflush_cache_range(pte, sizeof(*pte));
 
-	flush_iotlb_all(iommu, dev, did, pasid, 0);
+	if (pgtt_type == PASID_ENTRY_PGTT_FL_ONLY ||
+			pgtt_type == PASID_ENTRY_PGTT_PT)
+		flush_iotlb_all(iommu, dev, did, pasid, 0);
+	else
+		flush_iotlb_all(iommu, dev, did, pasid, DMA_TLB_DSI_FLUSH);
 }
 
 /*
