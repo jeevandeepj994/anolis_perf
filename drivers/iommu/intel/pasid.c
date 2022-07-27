@@ -543,13 +543,13 @@ devtlb_invalidation_with_pasid(struct intel_iommu *iommu,
 
 static void
 flush_iotlb_all(struct intel_iommu *iommu, struct device *dev,
-		u16 did, u16 pgtt, u32 pasid, u64 type)
+		u16 did, u32 pasid, u64 type)
 {
 	pasid_cache_invalidation_with_pasid(iommu, did, pasid);
 
 	if (type)
 		iommu->flush.flush_iotlb(iommu, did, 0, 0, type);
-	else if (pgtt == PASID_ENTRY_PGTT_PT || pgtt == PASID_ENTRY_PGTT_FL_ONLY)
+	else
 		qi_flush_piotlb(iommu, did, pasid, 0, -1, 0);
 
 	if (!cap_caching_mode(iommu->cap))
@@ -560,7 +560,7 @@ void intel_pasid_tear_down_entry(struct intel_iommu *iommu, struct device *dev,
 				 u32 pasid, bool fault_ignore, bool keep_pte)
 {
 	struct pasid_entry *pte;
-	u16 did, pgtt;
+	u16 did;
 
 	pte = intel_pasid_get_entry(dev, pasid);
 	if (WARN_ON(!pte))
@@ -575,7 +575,7 @@ void intel_pasid_tear_down_entry(struct intel_iommu *iommu, struct device *dev,
 	if (!ecap_coherent(iommu->ecap))
 		clflush_cache_range(pte, sizeof(*pte));
 
-	flush_iotlb_all(iommu, dev, did, pgtt, pasid, 0);
+	flush_iotlb_all(iommu, dev, did, pasid, 0);
 }
 
 /*
@@ -993,7 +993,7 @@ int intel_pasid_setup_slade(struct device *dev, struct dmar_domain *domain,
 
 	pasid_set_slade(pte, value);
 
-	flush_iotlb_all(iommu, dev, did, 0, pasid, DMA_TLB_DSI_FLUSH);
+	flush_iotlb_all(iommu, dev, did, pasid, DMA_TLB_DSI_FLUSH);
 
 	return 0;
 }
