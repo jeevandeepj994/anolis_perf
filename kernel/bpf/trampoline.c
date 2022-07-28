@@ -210,8 +210,11 @@ static int register_fentry(struct bpf_trampoline *tr, void *new_addr)
 	int ret;
 
 	faddr = ftrace_location((unsigned long)ip);
-	if (faddr)
+	if (faddr) {
+		if (!tr->fops)
+			return -ENOTSUPP;
 		tr->func.ftrace_managed = true;
+	}
 
 	if (tr->func.ftrace_managed) {
 		ftrace_set_filter_ip(tr->fops, (unsigned long)ip, 0, 1);
