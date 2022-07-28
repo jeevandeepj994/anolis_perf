@@ -796,16 +796,23 @@ bool is_swiotlb_active(void)
 
 #ifdef CONFIG_DEBUG_FS
 
+static int io_tlb_used_get(void *data, u64 *val)
+{
+	*val = mem_used(io_tlb_default_mem);
+	return 0;
+}
+DEFINE_DEBUGFS_ATTRIBUTE(fops_io_tlb_used, io_tlb_used_get, NULL, "%llu\n");
+
 static int __init swiotlb_create_debugfs(void)
 {
 	struct io_tlb_mem *mem = io_tlb_default_mem;
-	unsigned long used = mem_used(mem);
 
 	if (!mem)
 		return 0;
 	mem->debugfs = debugfs_create_dir("swiotlb", NULL);
 	debugfs_create_ulong("io_tlb_nslabs", 0400, mem->debugfs, &mem->nslabs);
-	debugfs_create_ulong("io_tlb_used", 0400, mem->debugfs, &used);
+	debugfs_create_file("io_tlb_used", 0400, mem->debugfs, NULL,
+			&fops_io_tlb_used);
 	return 0;
 }
 
