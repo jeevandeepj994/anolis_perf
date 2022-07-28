@@ -947,6 +947,8 @@ static bool blk_mq_req_expired(struct request *rq, unsigned long *next)
 		return false;
 
 	deadline = READ_ONCE(rq->deadline);
+	if (deadline == 0)
+		return false;
 	if (time_after_eq(jiffies, deadline))
 		return true;
 

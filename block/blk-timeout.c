@@ -140,6 +140,8 @@ void blk_add_timer(struct request *req)
 	req->rq_flags &= ~RQF_TIMED_OUT;
 
 	expiry = jiffies + req->timeout;
+	if (expiry == 0)
+		expiry += 1;
 	WRITE_ONCE(req->deadline, expiry);
 
 	/*
