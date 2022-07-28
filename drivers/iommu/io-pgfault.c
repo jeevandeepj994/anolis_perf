@@ -55,6 +55,7 @@ struct iopf_group {
 static int iopf_complete_group(struct device *dev, struct iopf_fault *iopf,
 			       enum iommu_page_response_code status)
 {
+	struct iommu_domain *domain = iommu_get_domain_for_dev(dev);
 	struct iommu_page_response resp = {
 		.version		= IOMMU_PAGE_RESP_VERSION_1,
 		.pasid			= iopf->fault.prm.pasid,
@@ -66,7 +67,7 @@ static int iopf_complete_group(struct device *dev, struct iopf_fault *iopf,
 	    (iopf->fault.prm.flags & IOMMU_FAULT_PAGE_RESPONSE_NEEDS_PASID))
 		resp.flags = IOMMU_PAGE_RESP_PASID_VALID;
 
-	return iommu_page_response(dev, &resp);
+	return iommu_page_response(domain, dev, &resp);
 }
 
 static enum iommu_page_response_code
