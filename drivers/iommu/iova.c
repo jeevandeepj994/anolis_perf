@@ -250,12 +250,11 @@ struct iova *alloc_iova_mem(void)
 }
 EXPORT_SYMBOL(alloc_iova_mem);
 
-void free_iova_mem(struct iova *iova)
+static void free_iova_mem(struct iova *iova)
 {
 	if (iova->pfn_lo != IOVA_ANCHOR)
 		kmem_cache_free(iova_cache, iova);
 }
-EXPORT_SYMBOL(free_iova_mem);
 
 int iova_cache_get(void)
 {

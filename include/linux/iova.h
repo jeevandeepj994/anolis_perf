@@ -137,7 +137,6 @@ int iova_cache_get(void);
 void iova_cache_put(void);
 
 struct iova *alloc_iova_mem(void);
-void free_iova_mem(struct iova *iova);
 void free_iova(struct iova_domain *iovad, unsigned long pfn);
 void __free_iova(struct iova_domain *iovad, struct iova *iova);
 struct iova *alloc_iova(struct iova_domain *iovad, unsigned long size,
@@ -173,10 +172,6 @@ static inline void iova_cache_put(void)
 static inline struct iova *alloc_iova_mem(void)
 {
 	return NULL;
-}
-
-static inline void free_iova_mem(struct iova *iova)
-{
 }
 
 static inline void free_iova(struct iova_domain *iovad, unsigned long pfn)
