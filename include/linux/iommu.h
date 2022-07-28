@@ -87,6 +87,8 @@ struct iommu_domain {
 	void *handler_token;
 	struct iommu_domain_geometry geometry;
 	void *iova_cookie;
+	bool dirty_log_tracking;
+	struct mutex switch_log_lock;
 	ioasid_t dma_pasid;		/* Used for DMA requests with PASID */
 	atomic_t dma_pasid_users;
 };
@@ -224,6 +226,10 @@ struct iommu_iotlb_gather {
  * @device_group: find iommu group for a particular device
  * @domain_get_attr: Query domain attributes
  * @domain_set_attr: Change domain attributes
+ * @support_dirty_log: Check whether domain supports dirty log tracking
+ * @switch_dirty_log: Perform actions to start|stop dirty log tracking
+ * @sync_dirty_log: Sync dirty log from IOMMU into a dirty bitmap
+ * @clear_dirty_log: Clear dirty log of IOMMU by a mask bitmap
  * @get_resv_regions: Request list of reserved regions for a device
  * @put_resv_regions: Free list of reserved regions for a device
  * @apply_resv_region: Temporary helper call-back for iova reserved ranges
@@ -332,6 +338,13 @@ struct iommu_ops {
 			   size_t size);
 	int (*set_hwdbm)(struct iommu_domain *domain, bool enable,
 			unsigned long iova, size_t size);
+	/*
+	 * Track dirty log. Note: Don't concurrently call these interfaces with
+	 * other ops that access underlying page table.
+	 */
+	bool (*support_dirty_log)(struct iommu_domain *domain);
+	int (*switch_dirty_log)(struct iommu_domain *domain, bool enable,
+				unsigned long iova, size_t size, int prot);
 	int (*sync_dirty_log)(struct iommu_domain *domain,
 			unsigned long iova, size_t size,
 			unsigned long *bitmap, unsigned long base_iova,
@@ -479,6 +492,8 @@ extern int iommu_sva_unbind_gpasid(struct iommu_domain *domain,
 				   struct device *dev, ioasid_t pasid);
 extern struct iommu_domain *iommu_get_domain_for_dev(struct device *dev);
 extern struct iommu_domain *iommu_get_dma_domain(struct device *dev);
+extern size_t iommu_pgsize(struct iommu_domain *domain,
+			   unsigned long addr_merge, size_t size);
 extern int iommu_map(struct iommu_domain *domain, unsigned long iova,
 		     phys_addr_t paddr, size_t size, int prot);
 extern int iommu_map_atomic(struct iommu_domain *domain, unsigned long iova,
@@ -552,6 +567,9 @@ extern int iommu_domain_set_attr(struct iommu_domain *domain, enum iommu_attr,
 				 void *data);
 extern int iommu_domain_set_hwdbm(struct iommu_domain *domain, bool enable,
 				  unsigned long iova, size_t size);
+extern bool iommu_support_dirty_log(struct iommu_domain *domain);
+extern int iommu_switch_dirty_log(struct iommu_domain *domain, bool enable,
+				  unsigned long iova, size_t size, int prot);
 extern int iommu_sync_dirty_log(struct iommu_domain *domain, unsigned long iova,
 				size_t size, unsigned long *bitmap,
 				unsigned long base_iova,
@@ -968,6 +986,18 @@ static inline int iommu_domain_set_hwdbm(struct iommu_domain *domain,
 					 bool enable,
 					 unsigned long iova,
 					 size_t size)
+{
+	return -EINVAL;
+}
+
+static inline bool iommu_support_dirty_log(struct iommu_domain *domain)
+{
+	return false;
+}
+
+static inline int iommu_switch_dirty_log(struct iommu_domain *domain,
+					 bool enable, unsigned long iova,
+					 size_t size, int prot)
 {
 	return -EINVAL;
 }
