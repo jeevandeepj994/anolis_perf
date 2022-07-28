@@ -429,13 +429,31 @@ struct qi_desc {
 	u64 qw3;
 };
 
+#ifdef CONFIG_INTEL_IOMMU_DEBUGFS
+enum {
+	QI_COUNTS_1 = 0,
+	QI_COUNTS_10,
+	QI_COUNTS_100,
+	QI_COUNTS_1000,
+	QI_COUNTS_10000,
+	QI_COUNTS_100000,
+	QI_COUNTS_100000_plus,
+	QI_COUNTS_NUM
+};
+#endif
+
 struct q_inval {
 	raw_spinlock_t  q_lock;
-	void		*desc;          /* invalidation queue */
-	int             *desc_status;   /* desc status */
-	int             free_head;      /* first free entry */
-	int             free_tail;      /* last free entry */
+	void		*desc;			/* invalidation queue */
+	int             *desc_status;		/* desc status */
+	int             free_head;		/* first free entry */
+	int             free_tail;		/* last free entry */
 	int             free_cnt;
+#ifdef CONFIG_INTEL_IOMMU_DEBUGFS
+	s64		start_ktime_100ns;	/* start time of qi */
+	u64		iotlb_qi_counts[QI_COUNTS_NUM];
+	u64		diotlb_qi_counts[QI_COUNTS_NUM];
+#endif
 };
 
 struct dmar_pci_notify_info;
@@ -814,8 +832,12 @@ static inline void intel_svm_check(struct intel_iommu *iommu) {}
 
 #ifdef CONFIG_INTEL_IOMMU_DEBUGFS
 void intel_iommu_debugfs_init(void);
+void log_qi_done_start(struct intel_iommu *iommu);
+void log_qi_done_end(struct intel_iommu *iommu, u64 qw0);
 #else
 static inline void intel_iommu_debugfs_init(void) {}
+static inline void log_qi_done_start(struct intel_iommu *iommu) {}
+static inline void log_qi_done_end(struct intel_iommu *iommu, u64 qw0) {}
 #endif /* CONFIG_INTEL_IOMMU_DEBUGFS */
 
 extern const struct attribute_group *intel_iommu_groups[];

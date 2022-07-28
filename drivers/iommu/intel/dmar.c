@@ -1427,6 +1427,8 @@ restart:
 	 */
 	writel(qi->free_head << shift, iommu->reg + DMAR_IQT_REG);
 
+	log_qi_done_start(iommu);
+
 	while (qi->desc_status[wait_index] != QI_DONE) {
 		/*
 		 * We will leave the interrupts disabled, to prevent interrupt
@@ -1443,6 +1445,8 @@ restart:
 		cpu_relax();
 		raw_spin_lock(&qi->q_lock);
 	}
+
+	log_qi_done_end(iommu, desc->qw0);
 
 	for (i = 0; i < count; i++)
 		qi->desc_status[(index + i) % QI_LENGTH] = QI_DONE;
