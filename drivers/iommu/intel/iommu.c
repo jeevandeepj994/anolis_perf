@@ -511,6 +511,9 @@ static int __init intel_iommu_setup(char *str)
 			prs_allocation = 256;
 		} else if (!strncmp(str, "prs_allocation_512", 18)) {
 			prs_allocation = 512;
+		} else if (!strncmp(str, "qi_done_no_cpu_relax", 19)) {
+			pr_info("Intel-IOMMU: no cpu_relax() in qi\n");
+			qi_done_no_cpu_relax = 1;
 		}
 
 		str += strcspn(str, ",");

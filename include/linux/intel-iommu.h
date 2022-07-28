@@ -830,6 +830,8 @@ static inline void intel_svm_add_pasid_notifier(void) {}
 static inline void intel_svm_check(struct intel_iommu *iommu) {}
 #endif
 
+extern int qi_done_no_cpu_relax;
+
 #ifdef CONFIG_INTEL_IOMMU_DEBUGFS
 void intel_iommu_debugfs_init(void);
 void log_qi_done_start(struct intel_iommu *iommu);

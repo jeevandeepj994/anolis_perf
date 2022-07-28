@@ -68,6 +68,8 @@ static void free_iommu(struct intel_iommu *iommu);
 
 extern const struct iommu_ops intel_iommu_ops;
 
+int qi_done_no_cpu_relax __read_mostly;
+
 static void dmar_register_drhd_unit(struct dmar_drhd_unit *drhd)
 {
 	/*
@@ -1441,9 +1443,11 @@ restart:
 		if (rc)
 			break;
 
-		raw_spin_unlock(&qi->q_lock);
-		cpu_relax();
-		raw_spin_lock(&qi->q_lock);
+		if (!qi_done_no_cpu_relax) {
+			raw_spin_unlock(&qi->q_lock);
+			cpu_relax();
+			raw_spin_lock(&qi->q_lock);
+		}
 	}
 
 	log_qi_done_end(iommu, desc->qw0);
