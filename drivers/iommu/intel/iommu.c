@@ -52,6 +52,7 @@
 #include "../irq_remapping.h"
 #include "../iommu-sva-lib.h"
 #include "pasid.h"
+#include "cap_audit.h"
 
 #define ROOT_SIZE		VTD_PAGE_SIZE
 #define CONTEXT_SIZE		VTD_PAGE_SIZE
@@ -1917,29 +1918,10 @@ static void free_dmar_iommu(struct intel_iommu *iommu)
  */
 static bool first_level_by_default(void)
 {
-	struct dmar_drhd_unit *drhd;
-	struct intel_iommu *iommu;
-	static int first_level_support = -1;
-
 	/* Change IOVA mapping to SL instead of FL */
 	if (default_iova)
 		return false;
-
-	if (likely(first_level_support != -1))
-		return first_level_support;
-
-	first_level_support = 1;
-
-	rcu_read_lock();
-	for_each_active_iommu(iommu, drhd) {
-		if (!sm_supported(iommu) || !ecap_flts(iommu->ecap)) {
-			first_level_support = 0;
-			break;
-		}
-	}
-	rcu_read_unlock();
-
-	return first_level_support;
+	return scalable_mode_support() && intel_cap_flts_sanity();
 }
 
 static struct dmar_domain *alloc_domain(int flags)
@@ -3310,6 +3292,10 @@ static int __init init_dmars(void)
 		goto error;
 	}
 
+	ret = intel_cap_audit(CAP_AUDIT_STATIC_DMAR, NULL);
+	if (ret)
+		goto free_iommu;
+
 	for_each_iommu(iommu, drhd) {
 		if (drhd->ignored) {
 			iommu_disable_translation(iommu);
@@ -3474,7 +3460,7 @@ static int __init init_dmars(void)
 				goto free_iommu;
 		}
 #endif
-		ret = dmar_set_interrupt(iommu);
+		ret = dmar_set_interrupt(iommu, true);
 		if (ret)
 			goto free_iommu;
 	}
@@ -3937,6 +3923,10 @@ static int intel_iommu_add(struct dmar_drhd_unit *dmaru)
 	if (g_iommus[iommu->seq_id])
 		return 0;
 
+	ret = intel_cap_audit(CAP_AUDIT_HOTPLUG_DMAR, iommu);
+	if (ret)
+		goto out;
+
 	if (hw_pass_through && !ecap_pass_through(iommu->ecap)) {
 		pr_warn("%s: Doesn't support hardware pass through.\n",
 			iommu->name);
@@ -3989,7 +3979,7 @@ static int intel_iommu_add(struct dmar_drhd_unit *dmaru)
 			goto disable_iommu;
 	}
 #endif
-	ret = dmar_set_interrupt(iommu);
+	ret = dmar_set_interrupt(iommu, true);
 	if (ret)
 		goto disable_iommu;
 
@@ -5142,6 +5132,10 @@ intel_iommu_sva_invalidate(struct iommu_domain *domain, struct device *dev,
 			 (inv_info->granu.addr_info.flags & IOMMU_INV_ADDR_FLAGS_PASID))
 			pasid = inv_info->granu.addr_info.pasid;
 
+		ret = ioasid_get_if_owned(pasid);
+		if (ret)
+			goto out_unlock;
+
 		switch (BIT(cache_type)) {
 		case IOMMU_CACHE_INV_TYPE_IOTLB:
 			/* HW will ignore LSB bits based on address mask */
@@ -5198,6 +5192,7 @@ intel_iommu_sva_invalidate(struct iommu_domain *domain, struct device *dev,
 					    cache_type);
 			ret = -EINVAL;
 		}
+		ioasid_put(NULL, pasid);
 	}
 out_unlock:
 	spin_unlock(&iommu->lock);
@@ -5310,24 +5305,6 @@ static phys_addr_t intel_iommu_iova_to_phys(struct iommu_domain *domain,
 	return phys;
 }
 
-static inline bool scalable_mode_support(void)
-{
-	struct dmar_drhd_unit *drhd;
-	struct intel_iommu *iommu;
-	bool ret = true;
-
-	rcu_read_lock();
-	for_each_active_iommu(iommu, drhd) {
-		if (!sm_supported(iommu)) {
-			ret = false;
-			break;
-		}
-	}
-	rcu_read_unlock();
-
-	return ret;
-}
-
 static inline bool slad_support(void)
 {
 	struct dmar_drhd_unit *drhd;
@@ -5355,24 +5332,6 @@ static inline bool iommu_pasid_support(void)
 	rcu_read_lock();
 	for_each_active_iommu(iommu, drhd) {
 		if (!pasid_supported(iommu)) {
-			ret = false;
-			break;
-		}
-	}
-	rcu_read_unlock();
-
-	return ret;
-}
-
-static inline bool nested_mode_support(void)
-{
-	struct dmar_drhd_unit *drhd;
-	struct intel_iommu *iommu;
-	bool ret = true;
-
-	rcu_read_lock();
-	for_each_active_iommu(iommu, drhd) {
-		if (!sm_supported(iommu) || !ecap_nest(iommu->ecap)) {
 			ret = false;
 			break;
 		}
@@ -5658,7 +5617,7 @@ intel_iommu_dev_has_feat(struct device *dev, enum iommu_dev_features feat)
 		int ret;
 
 		if (!dev_is_pci(dev) || dmar_disabled ||
-		    !scalable_mode_support() || !iommu_pasid_support())
+		    !scalable_mode_support() || !pasid_mode_support())
 			return false;
 
 		ret = pci_pasid_features(to_pci_dev(dev));
@@ -5823,13 +5782,92 @@ static bool domain_use_flush_queue(void)
 	return r;
 }
 
+static int intel_iommu_get_nesting_info(struct iommu_domain *domain,
+					struct iommu_nesting_info *info)
+{
+	struct dmar_domain *dmar_domain = to_dmar_domain(domain);
+	u64 cap = VTD_CAP_MASK, ecap = VTD_ECAP_MASK;
+	struct device_domain_info *domain_info;
+	struct iommu_nesting_info_vtd vtd;
+	unsigned int size;
+
+	if (!info)
+		return -EINVAL;
+
+	if (!(dmar_domain->flags & DOMAIN_FLAG_NESTING_MODE))
+		return -ENODEV;
+
+	size = sizeof(struct iommu_nesting_info);
+	/*
+	 * if provided buffer size is smaller than expected, should
+	 * return 0 and also the expected buffer size to caller.
+	 */
+	if (info->argsz < size) {
+		info->argsz = size;
+		return 0;
+	}
+
+	/*
+	 * arbitrary select the first domain_info as all nesting
+	 * related capabilities should be consistent across iommu
+	 * units.
+	 */
+	/*
+	 * Check full-device list first, and then sub-device list
+	 */
+	if (!list_empty(&dmar_domain->devices))
+		domain_info = list_first_entry(&dmar_domain->devices,
+					struct device_domain_info, link);
+	else if (!list_empty(&dmar_domain->subdevices)) {
+		struct subdev_domain_info *sinfo;
+
+		sinfo = list_first_entry(&dmar_domain->subdevices,
+					struct subdev_domain_info, link_domain);
+		domain_info = get_domain_info(sinfo->pdev);
+	} else
+		return -ENODEV;
+
+	cap &= domain_info->iommu->cap;
+	ecap &= domain_info->iommu->ecap;
+
+	info->addr_width = dmar_domain->gaw;
+	info->format = IOMMU_PASID_FORMAT_INTEL_VTD;
+	info->features = IOMMU_NESTING_FEAT_BIND_PGTBL |
+			 IOMMU_NESTING_FEAT_CACHE_INVLD;
+	info->pasid_bits = ilog2(intel_pasid_max_id);
+	memset(&info->padding, 0x0, 12);
+
+	vtd.flags = 0;
+	memset(&vtd.padding, 0x0, 12);
+	vtd.cap_reg = cap & VTD_CAP_MASK;
+	vtd.ecap_reg = ecap & VTD_ECAP_MASK;
+
+	memcpy(&info->vendor.vtd, &vtd, sizeof(vtd));
+	return 0;
+}
+
 static int
 intel_iommu_domain_get_attr(struct iommu_domain *domain,
 			    enum iommu_attr attr, void *data)
 {
 	switch (domain->type) {
 	case IOMMU_DOMAIN_UNMANAGED:
-		return -ENODEV;
+		switch (attr) {
+		case DOMAIN_ATTR_NESTING:
+		{
+			struct iommu_nesting_info *info =
+				(struct iommu_nesting_info *)data;
+			unsigned long flags;
+			int ret;
+
+			spin_lock_irqsave(&device_domain_lock, flags);
+			ret = intel_iommu_get_nesting_info(domain, info);
+			spin_unlock_irqrestore(&device_domain_lock, flags);
+			return ret;
+		}
+		default:
+			return -ENODEV;
+		}
 	case IOMMU_DOMAIN_DMA:
 		switch (attr) {
 		case DOMAIN_ATTR_DMA_USE_FLUSH_QUEUE:

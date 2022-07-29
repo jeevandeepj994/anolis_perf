@@ -6,6 +6,7 @@
 #include <linux/errno.h>
 #include <linux/xarray.h>
 #include <linux/refcount.h>
+#include <uapi/linux/ioasid.h>
 
 #define INVALID_IOASID ((ioasid_t)-1)
 typedef unsigned int ioasid_t;
@@ -40,6 +41,7 @@ struct ioasid_set {
 	int quota;
 	atomic_t nr_ioasids;
 	int id;
+	bool free_pending;
 	struct rcu_head rcu;
 };
 
@@ -113,6 +115,7 @@ ioasid_t ioasid_alloc(struct ioasid_set *set, ioasid_t min, ioasid_t max,
 		      void *private);
 int ioasid_get(struct ioasid_set *set, ioasid_t ioasid);
 int ioasid_get_locked(struct ioasid_set *set, ioasid_t ioasid);
+int ioasid_get_if_owned(ioasid_t ioasid);
 bool ioasid_put(struct ioasid_set *set, ioasid_t ioasid);
 bool ioasid_put_locked(struct ioasid_set *set, ioasid_t ioasid);
 void ioasid_free(struct ioasid_set *set, ioasid_t ioasid);
@@ -136,13 +139,54 @@ void ioasid_set_for_each_ioasid(struct ioasid_set *sdata,
 				void *data);
 int ioasid_register_notifier_mm(struct mm_struct *mm, struct notifier_block *nb);
 void ioasid_unregister_notifier_mm(struct mm_struct *mm, struct notifier_block *nb);
+#ifdef CONFIG_CGROUP_IOASIDS
+int ioasid_cg_charge(struct ioasid_set *set);
+void ioasid_cg_uncharge(struct ioasid_set *set);
+#else
+/* No cgroup control, allocation will proceed until run out total pool */
+static inline int ioasid_cg_charge(struct ioasid_set *set)
+{
+	return 0;
+}
+
+static inline int ioasid_cg_uncharge(struct ioasid_set *set)
+{
+	return 0;
+}
+#endif /* CGROUP_IOASIDS */
 bool ioasid_queue_work(struct work_struct *work);
 static inline bool pasid_valid(ioasid_t ioasid)
 {
 	return ioasid != INVALID_IOASID;
 }
 
+/* IOASID userspace support */
+struct ioasid_user;
+#if IS_ENABLED(CONFIG_IOASID_USER)
+extern struct ioasid_user *ioasid_user_get_from_task(struct task_struct *task);
+extern void ioasid_user_put(struct ioasid_user *iuser);
+extern void ioasid_user_for_each_id(struct ioasid_user *iuser, void *data,
+				   void (*fn)(ioasid_t id, void *data));
+
+#else /* CONFIG_IOASID_USER */
+static inline struct ioasid_user *
+ioasid_user_get_from_task(struct task_struct *task)
+{
+	return ERR_PTR(-ENOTTY);
+}
+
+static inline void ioasid_user_put(struct ioasid_user *iuser)
+{
+}
+
+static inline void ioasid_user_for_each_id(struct ioasid_user *iuser, void *data,
+					  void (*fn)(ioasid_t id, void *data))
+{
+}
+#endif /* CONFIG_IOASID_USER */
+
 #else /* !CONFIG_IOASID */
+
 static inline void ioasid_install_capacity(ioasid_t total)
 {
 }
@@ -184,6 +228,11 @@ static inline int ioasid_get(struct ioasid_set *set, ioasid_t ioasid)
 }
 
 static inline int ioasid_get_locked(struct ioasid_set *set, ioasid_t ioasid)
+{
+	return -ENOTSUPP;
+}
+
+static inline int ioasid_get_if_owned(ioasid_t ioasid)
 {
 	return -ENOTSUPP;
 }

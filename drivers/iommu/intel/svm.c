@@ -469,12 +469,6 @@ int intel_svm_bind_gpasid(struct iommu_domain *domain, struct device *dev,
 			ret = -ENOMEM;
 			goto out;
 		}
-		/* REVISIT: upper layer/VFIO can track host process that bind
-		 * the PASID. ioasid_set = mm might be sufficient for vfio to
-		 * check pasid VMM ownership. We can drop the following line
-		 * once VFIO and IOASID set check is in place.
-		 */
-		svm->mm = get_task_mm(current);
 		svm->pasid = data->hpasid;
 		if (data->flags & IOMMU_SVA_GPASID_VAL) {
 			svm->gpasid = data->gpasid;
@@ -489,7 +483,6 @@ int intel_svm_bind_gpasid(struct iommu_domain *domain, struct device *dev,
 		 */
 		INIT_WORK(&svm->work, intel_svm_free_async_fn);
 		INIT_LIST_HEAD_RCU(&svm->devs);
-		mmput(svm->mm);
 	}
 	sdev = kzalloc(sizeof(*sdev), GFP_KERNEL);
 	if (!sdev) {
@@ -1324,33 +1317,11 @@ int intel_svm_page_response(struct device *dev,
 		goto out;
 	}
 
-	ret = pasid_to_svm_sdev(dev, host_pasid_set,
+	ret = pasid_to_svm_sdev(dev, NULL,
 				prm->pasid, &svm, &sdev);
 	if (ret || !sdev) {
 		ret = -ENODEV;
 		goto out;
-	}
-
-	/*
-	 * For responses from userspace, need to make sure that the
-	 * pasid has been bound to its mm.
-	 */
-	if (svm->flags & SVM_FLAG_GUEST_MODE) {
-		struct mm_struct *mm;
-
-		mm = get_task_mm(current);
-		if (!mm) {
-			ret = -EINVAL;
-			goto out;
-		}
-
-		if (mm != svm->mm) {
-			ret = -ENODEV;
-			mmput(mm);
-			goto out;
-		}
-
-		mmput(mm);
 	}
 
 	/*

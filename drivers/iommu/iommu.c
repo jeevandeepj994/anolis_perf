@@ -32,6 +32,19 @@ static unsigned int iommu_def_domain_type __read_mostly;
 static bool iommu_dma_strict __read_mostly = true;
 static u32 iommu_cmd_line __read_mostly;
 
+/*
+ * Timeout to wait for page response of a pending page request. This is
+ * intended as a basic safety net in case a pending page request is not
+ * responded for an exceptionally long time. Device may also implement
+ * its own protection mechanism against this exception.
+ * Units are in jiffies with a range between 1 - 100 seconds equivalent.
+ * Default to 10 seconds.
+ * Setting 0 means no timeout tracking.
+ */
+#define IOMMU_PAGE_RESPONSE_MAX_TIMEOUT (HZ * 100)
+#define IOMMU_PAGE_RESPONSE_DEF_TIMEOUT (HZ * 10)
+static unsigned long prq_timeout = IOMMU_PAGE_RESPONSE_DEF_TIMEOUT;
+
 struct iommu_group {
 	struct kobject kobj;
 	struct kobject *devices_kobj;
@@ -337,6 +350,26 @@ static int __init iommu_dma_setup(char *str)
 	return kstrtobool(str, &iommu_dma_strict);
 }
 early_param("iommu.strict", iommu_dma_setup);
+
+static int __init iommu_set_prq_timeout(char *str)
+{
+	int ret;
+	unsigned long timeout;
+
+	if (!str)
+		return -EINVAL;
+
+	ret = kstrtoul(str, 10, &timeout);
+	if (ret)
+		return ret;
+	timeout = timeout * HZ;
+	if (timeout > IOMMU_PAGE_RESPONSE_MAX_TIMEOUT)
+		return -EINVAL;
+	prq_timeout = timeout;
+
+	return 0;
+}
+early_param("iommu.prq_timeout", iommu_set_prq_timeout);
 
 static ssize_t iommu_group_attr_show(struct kobject *kobj,
 				     struct attribute *__attr, char *buf)
@@ -1050,6 +1083,39 @@ int iommu_group_unregister_notifier(struct iommu_group *group,
 }
 EXPORT_SYMBOL_GPL(iommu_group_unregister_notifier);
 
+static void iommu_dev_fault_timer_fn(struct timer_list *t)
+{
+	struct iommu_fault_param *fparam = from_timer(fparam, t, timer);
+	struct iommu_fault_event *evt;
+	struct iommu_fault_page_request *prm;
+
+	u64 now;
+
+	now = get_jiffies_64();
+
+	/* The goal is to ensure driver or guest page fault handler(via vfio)
+	 * send page response on time. Otherwise, limited queue resources
+	 * may be occupied by some irresponsive guests or drivers.
+	 * When per device pending fault list is not empty, we periodically checks
+	 * if any anticipated page response time has expired.
+	 *
+	 * TODO:
+	 * We could do the following if response time expires:
+	 * 1. send page response code FAILURE to all pending PRQ
+	 * 2. inform device driver or vfio
+	 * 3. drain in-flight page requests and responses for this device
+	 * 4. clear pending fault list such that driver can unregister fault
+	 *    handler(otherwise blocked when pending faults are present).
+	 */
+	list_for_each_entry(evt, &fparam->faults, list) {
+		prm = &evt->fault.prm;
+		if (time_after64(now, evt->expire))
+			pr_err("Page response time expired!, pasid %d gid %d exp %llu now %llu\n",
+				prm->pasid, prm->grpid, evt->expire, now);
+	}
+	mod_timer(t, now + prq_timeout);
+}
+
 /**
  * iommu_register_device_fault_handler() - Register a device fault handler
  * @dev: the device
@@ -1097,6 +1163,9 @@ int iommu_register_device_fault_handler(struct device *dev,
 	mutex_init(&param->fault_param->lock);
 	INIT_LIST_HEAD(&param->fault_param->faults);
 
+	if (prq_timeout)
+		timer_setup(&param->fault_param->timer, iommu_dev_fault_timer_fn,
+			TIMER_DEFERRABLE);
 done_unlock:
 	mutex_unlock(&param->lock);
 
@@ -1158,7 +1227,9 @@ int iommu_report_device_fault(struct device *dev, struct iommu_fault_event *evt)
 	struct dev_iommu *param = dev->iommu;
 	struct iommu_fault_event *evt_pending = NULL;
 	struct iommu_fault_param *fparam;
+	struct timer_list *tmr;
 	int ret = 0;
+	u64 exp;
 
 	if (!param || !evt)
 		return -EINVAL;
@@ -1179,7 +1250,17 @@ int iommu_report_device_fault(struct device *dev, struct iommu_fault_event *evt)
 			ret = -ENOMEM;
 			goto done_unlock;
 		}
+		/* Keep track of response expiration time */
+		exp = get_jiffies_64() + prq_timeout;
+		evt_pending->expire = exp;
 		mutex_lock(&fparam->lock);
+		if (list_empty(&fparam->faults)) {
+			/* First pending event, start timer */
+			tmr = &dev->iommu->fault_param->timer;
+			WARN_ON(timer_pending(tmr));
+			mod_timer(tmr, exp);
+		}
+
 		list_add_tail(&evt_pending->list, &fparam->faults);
 		mutex_unlock(&fparam->lock);
 	}
@@ -1191,22 +1272,59 @@ int iommu_report_device_fault(struct device *dev, struct iommu_fault_event *evt)
 		mutex_unlock(&fparam->lock);
 		kfree(evt_pending);
 	}
+	trace_dev_fault(dev, &evt->fault);
 done_unlock:
 	mutex_unlock(&param->lock);
 	return ret;
 }
 EXPORT_SYMBOL_GPL(iommu_report_device_fault);
 
+static int iommu_page_response_prepare_msg(void __user *udata,
+					   struct iommu_page_response *msg)
+{
+	unsigned long minsz, maxsz;
+
+	/* Current kernel data size is the max to be copied from user */
+	maxsz = sizeof(struct iommu_page_response);
+	memset((void *)msg, 0, maxsz);
+	minsz = offsetofend(struct iommu_page_response, code);
+
+	if (copy_from_user(msg, udata, minsz))
+		return -EFAULT;
+
+	if (msg->argsz < minsz)
+		return -EINVAL;
+
+	if (msg->argsz > maxsz)
+		msg->argsz = maxsz;
+
+	if (msg->version != IOMMU_PAGE_RESP_VERSION_1 ||
+		!(msg->flags & IOMMU_PAGE_RESP_PASID_VALID)) {
+		pr_debug("%s:Invalid ver %x: flags %x\n",
+			__func__, msg->version, msg->flags);
+		return -EINVAL;
+	}
+
+	/* Copy the remaining user data _after_ minsz if there is */
+	if ((msg->argsz - minsz) &&
+	    copy_from_user((void *)msg + minsz, udata + minsz,
+				msg->argsz - minsz))
+		return -EFAULT;
+
+	return 0;
+}
+
 int iommu_page_response(struct device *dev,
-			struct iommu_page_response *msg)
+			void __user *uinfo)
 {
 	bool needs_pasid;
 	int ret = -EINVAL;
+	struct iommu_page_response msg;
 	struct iommu_fault_event *evt;
 	struct iommu_fault_page_request *prm;
 	struct dev_iommu *param = dev->iommu;
-	bool has_pasid = msg->flags & IOMMU_PAGE_RESP_PASID_VALID;
 	struct iommu_domain *domain = iommu_get_domain_for_dev(dev);
+	bool has_pasid;
 
 	if (!domain || !domain->ops->page_response)
 		return -ENODEV;
@@ -1214,9 +1332,11 @@ int iommu_page_response(struct device *dev,
 	if (!param || !param->fault_param)
 		return -EINVAL;
 
-	if (msg->version != IOMMU_PAGE_RESP_VERSION_1 ||
-	    msg->flags & ~IOMMU_PAGE_RESP_PASID_VALID)
-		return -EINVAL;
+	ret = iommu_page_response_prepare_msg(uinfo, &msg);
+	if (ret)
+		return ret;
+
+	has_pasid = msg.flags & IOMMU_PAGE_RESP_PASID_VALID;
 
 	/* Only send response if there is a fault report pending */
 	mutex_lock(&param->fault_param->lock);
@@ -1230,7 +1350,7 @@ int iommu_page_response(struct device *dev,
 	 */
 	list_for_each_entry(evt, &param->fault_param->faults, list) {
 		prm = &evt->fault.prm;
-		if (prm->grpid != msg->grpid)
+		if (prm->grpid != msg.grpid)
 			continue;
 
 		/*
@@ -1240,19 +1360,27 @@ int iommu_page_response(struct device *dev,
 		 * response.
 		 */
 		needs_pasid = prm->flags & IOMMU_FAULT_PAGE_RESPONSE_NEEDS_PASID;
-		if (needs_pasid && (!has_pasid || msg->pasid != prm->pasid))
+		if (needs_pasid && (!has_pasid || msg.pasid != prm->pasid))
 			continue;
 
 		if (!needs_pasid && has_pasid) {
 			/* No big deal, just clear it. */
-			msg->flags &= ~IOMMU_PAGE_RESP_PASID_VALID;
-			msg->pasid = 0;
+			msg.flags &= ~IOMMU_PAGE_RESP_PASID_VALID;
+			msg.pasid = 0;
 		}
 
-		ret = domain->ops->page_response(dev, evt, msg);
+		ret = domain->ops->page_response(dev, evt, &msg);
+		trace_dev_page_response(dev, &msg);
 		list_del(&evt->list);
 		kfree(evt);
 		break;
+	}
+
+	/* stop response timer if no more pending request */
+	if (list_empty(&param->fault_param->faults) &&
+		timer_pending(&param->fault_param->timer)) {
+		pr_debug("no pending PRQ, stop timer\n");
+		del_timer(&param->fault_param->timer);
 	}
 
 done_unlock:
@@ -2156,7 +2284,13 @@ int iommu_uapi_sva_bind_gpasid(struct iommu_domain *domain, struct device *dev,
 	if (ret)
 		return ret;
 
-	return domain->ops->sva_bind_gpasid(domain, dev, &data);
+	ret = ioasid_get_if_owned(data.hpasid);
+	if (ret)
+		return ret;
+	ret = domain->ops->sva_bind_gpasid(domain, dev, &data);
+	ioasid_put(NULL, data.hpasid);
+
+	return ret;
 }
 EXPORT_SYMBOL_GPL(iommu_uapi_sva_bind_gpasid);
 
@@ -2183,7 +2317,13 @@ int iommu_uapi_sva_unbind_gpasid(struct iommu_domain *domain, struct device *dev
 	if (ret)
 		return ret;
 
-	return iommu_sva_unbind_gpasid(domain, dev, data.hpasid);
+	ret = ioasid_get_if_owned(data.hpasid);
+	if (ret)
+		return ret;
+	ret = iommu_sva_unbind_gpasid(domain, dev, data.hpasid);
+	ioasid_put(NULL, data.hpasid);
+
+	return ret;
 }
 EXPORT_SYMBOL_GPL(iommu_uapi_sva_unbind_gpasid);
 

@@ -42,8 +42,10 @@ struct iommu_sva;
 struct iommu_fault_event;
 
 /* iommu fault flags */
-#define IOMMU_FAULT_READ	0x0
-#define IOMMU_FAULT_WRITE	0x1
+#define IOMMU_FAULT_READ		(1 << 0)
+#define IOMMU_FAULT_WRITE		(1 << 1)
+#define IOMMU_FAULT_EXEC		(1 << 2)
+#define IOMMU_FAULT_PRIV		(1 << 3)
 
 typedef int (*iommu_fault_handler_t)(struct iommu_domain *,
 			struct device *, unsigned long, int, void *);
@@ -256,6 +258,8 @@ struct iommu_iotlb_gather {
  *		- 0: use the default setting
  * @pgsize_bitmap: bitmap of all possible supported page sizes
  * @owner: Driver module providing these ops
+ * @sva_suspend_pasid: stop activities related to a pasid but maintain the bond
+ * @sva_resume_pasid: start activities related to a pasid
  */
 struct iommu_ops {
 	bool (*capable)(enum iommu_cap);
@@ -330,6 +334,10 @@ struct iommu_ops {
 
 	int (*sva_unbind_gpasid)(struct device *dev, u32 pasid);
 
+	void (*sva_suspend_pasid)(struct device *dev, u32 pasid);
+
+	void (*sva_resume_pasid)(struct device *dev, u32 pasid);
+
 	int (*def_domain_type)(struct device *dev);
 
 	int (*merge_pages)(struct iommu_domain *domain, unsigned long iova,
@@ -380,10 +388,12 @@ struct iommu_device {
  *
  * @fault: fault descriptor
  * @list: pending fault event list, used for tracking responses
+ * @expire: time limit in jiffies will wait for page response
  */
 struct iommu_fault_event {
 	struct iommu_fault fault;
 	struct list_head list;
+	u64 expire;
 };
 
 /**
@@ -392,11 +402,13 @@ struct iommu_fault_event {
  * @data: handler private data
  * @faults: holds the pending faults which needs response
  * @lock: protect pending faults list
+ * @timer: track page request pending time limit
  */
 struct iommu_fault_param {
 	iommu_dev_fault_handler_t handler;
 	void *data;
 	struct list_head faults;
+	struct timer_list timer;
 	struct mutex lock;
 };
 
@@ -555,8 +567,7 @@ extern int iommu_unregister_device_fault_handler(struct device *dev);
 
 extern int iommu_report_device_fault(struct device *dev,
 				     struct iommu_fault_event *evt);
-extern int iommu_page_response(struct device *dev,
-			       struct iommu_page_response *msg);
+extern int iommu_page_response(struct device *dev, void __user *uinfo);
 
 extern int iommu_group_id(struct iommu_group *group);
 extern struct iommu_domain *iommu_group_default_domain(struct iommu_group *);
@@ -959,8 +970,7 @@ int iommu_report_device_fault(struct device *dev, struct iommu_fault_event *evt)
 	return -ENODEV;
 }
 
-static inline int iommu_page_response(struct device *dev,
-				      struct iommu_page_response *msg)
+static inline int iommu_page_response(struct device *dev, void __user *uinfo)
 {
 	return -ENODEV;
 }
@@ -1179,6 +1189,14 @@ static inline int iommu_sva_unbind_gpasid(struct iommu_domain *domain,
 					  ioasid_t pasid)
 {
 	return -ENODEV;
+}
+
+static inline void sva_suspend_pasid(struct device *dev, u32 pasid)
+{
+}
+
+static inline void sva_resume_pasid(struct device *dev, u32 pasid)
+{
 }
 
 static inline struct iommu_fwspec *dev_iommu_fwspec_get(struct device *dev)
