@@ -161,6 +161,10 @@ static inline bool transhuge_vma_enabled(struct vm_area_struct *vma,
 	(transparent_hugepage_flags &		\
 	 (1<<TRANSPARENT_HUGEPAGE_ANON_TEXT_ENABLED_FLAG))
 
+extern unsigned long hugetext_pad_threshold;
+#define hugetext_padding_enabled()			\
+	(hugetext_file_enabled() && hugetext_pad_threshold > 0)
+
 extern unsigned long hugetext_get_unmapped_area(struct file *filp,
 		unsigned long addr, unsigned long len, unsigned long pgoff,
 		unsigned long flags);
@@ -168,6 +172,7 @@ extern unsigned long hugetext_get_unmapped_area(struct file *filp,
 #define hugetext_enabled()	false
 #define hugetext_file_enabled()	false
 #define hugetext_anon_enabled()	false
+#define hugetext_padding_enabled()	false
 
 static inline unsigned long hugetext_get_unmapped_area(struct file *filp,
 		unsigned long addr, unsigned long len, unsigned long pgoff,
