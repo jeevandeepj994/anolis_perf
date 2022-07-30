@@ -1148,41 +1148,6 @@ static int intel_svm_prq_report(struct intel_iommu *iommu, struct device *dev,
 	return iommu_report_device_fault(dev, &event);
 }
 
-static void handle_bad_prq_event(struct intel_iommu *iommu,
-				 struct page_req_dsc *req, int result)
-{
-	struct qi_desc desc;
-
-	pr_err("%s: Invalid page request: %08llx %08llx\n",
-	       iommu->name, ((unsigned long long *)req)[0],
-	       ((unsigned long long *)req)[1]);
-
-	/*
-	 * Per VT-d spec. v3.0 ch7.7, system software must
-	 * respond with page group response if private data
-	 * is present (PDP) or last page in group (LPIG) bit
-	 * is set. This is an additional VT-d feature beyond
-	 * PCI ATS spec.
-	 */
-	if (!req->lpig && !req->priv_data_present)
-		return;
-
-	desc.qw0 = QI_PGRP_PASID(req->pasid) |
-			QI_PGRP_DID(req->rid) |
-			QI_PGRP_PASID_P(req->pasid_present) |
-			QI_PGRP_PDP(req->priv_data_present) |
-			QI_PGRP_RESP_CODE(result) |
-			QI_PGRP_RESP_TYPE;
-	desc.qw1 = QI_PGRP_IDX(req->prg_index) |
-			QI_PGRP_LPIG(req->lpig);
-	desc.qw2 = 0;
-	desc.qw3 = 0;
-
-	if (req->priv_data_present)
-		memcpy(&desc.qw2, req->priv_data, sizeof(req->priv_data));
-	qi_submit_sync(iommu, &desc, 1, 0);
-}
-
 static void handle_single_prq_event(struct intel_iommu *iommu,
 				    struct mm_struct *mm,
 				    struct page_req_dsc *req)
