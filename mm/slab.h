@@ -274,8 +274,13 @@ static inline bool page_has_obj_cgroups(struct page *page)
 int memcg_alloc_page_obj_cgroups(struct page *page, struct kmem_cache *s,
 				 gfp_t gfp);
 
-static inline void memcg_free_page_obj_cgroups(struct page *page)
+static inline void memcg_free_page_obj_cgroups(struct page *page, struct kmem_cache *s)
 {
+	unsigned int objects = objs_per_slab_page(s, page);
+
+	if (kidled_available_slab(s))
+		kfree(page_obj_cgroups(page)[objects]);
+
 	kfree(page_obj_cgroups(page));
 	page->obj_cgroups = NULL;
 }
@@ -420,7 +425,7 @@ static inline int memcg_alloc_page_obj_cgroups(struct page *page,
 	return 0;
 }
 
-static inline void memcg_free_page_obj_cgroups(struct page *page)
+static inline void memcg_free_page_obj_cgroups(struct page *page, struct kmem_cache *s)
 {
 }
 
@@ -466,7 +471,7 @@ static __always_inline void unaccount_slab_page(struct page *page, int order,
 						struct kmem_cache *s)
 {
 	if (!cgroup_memory_nokmem)
-		memcg_free_page_obj_cgroups(page);
+		memcg_free_page_obj_cgroups(page, s);
 	else {
 		if (page_has_slab_age(page))
 			kidled_free_slab_age(page);
