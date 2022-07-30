@@ -278,8 +278,11 @@ static inline void memcg_free_page_obj_cgroups(struct page *page, struct kmem_ca
 {
 	unsigned int objects = objs_per_slab_page(s, page);
 
-	if (kidled_available_slab(s))
-		kfree(page_obj_cgroups(page)[objects]);
+	if (kidled_available_slab(s)) {
+		/* In case fail to allocate memory for cold slab */
+		if (likely(page_obj_cgroups(page)))
+			kfree(page_obj_cgroups(page)[objects]);
+	}
 
 	kfree(page_obj_cgroups(page));
 	page->obj_cgroups = NULL;
