@@ -30,6 +30,8 @@ static irqreturn_t prq_event_thread(int irq, void *d);
 static void intel_svm_drain_prq(struct device *dev, u32 pasid);
 #define to_intel_svm_dev(handle) container_of(handle, struct intel_svm_dev, sva)
 
+extern int prq_size_page_order;
+
 static struct intel_svm_dev *
 svm_lookup_device_by_sid(struct intel_svm *svm, u16 sid)
 {
@@ -70,7 +72,7 @@ int intel_svm_enable_prq(struct intel_iommu *iommu)
 	struct page *pages;
 	int irq, ret;
 
-	pages = alloc_pages(GFP_KERNEL | __GFP_ZERO, PRQ_ORDER);
+	pages = alloc_pages(GFP_KERNEL | __GFP_ZERO, prq_size_page_order);
 	if (!pages) {
 		pr_warn("IOMMU: %s: Failed to allocate page request queue\n",
 			iommu->name);
@@ -108,7 +110,7 @@ int intel_svm_enable_prq(struct intel_iommu *iommu)
 	}
 	dmar_writeq(iommu->reg + DMAR_PQH_REG, 0ULL);
 	dmar_writeq(iommu->reg + DMAR_PQT_REG, 0ULL);
-	dmar_writeq(iommu->reg + DMAR_PQA_REG, virt_to_phys(iommu->prq) | PRQ_ORDER);
+	dmar_writeq(iommu->reg + DMAR_PQA_REG, virt_to_phys(iommu->prq) | prq_size_page_order);
 
 	init_completion(&iommu->prq_complete);
 
@@ -121,7 +123,7 @@ free_hwirq:
 	dmar_free_hwirq(irq);
 	iommu->pr_irq = 0;
 free_prq:
-	free_pages((unsigned long)iommu->prq, PRQ_ORDER);
+	free_pages((unsigned long)iommu->prq, prq_size_page_order);
 	iommu->prq = NULL;
 
 	return ret;
@@ -144,7 +146,7 @@ int intel_svm_finish_prq(struct intel_iommu *iommu)
 		iommu->iopf_queue = NULL;
 	}
 
-	free_pages((unsigned long)iommu->prq, PRQ_ORDER);
+	free_pages((unsigned long)iommu->prq, prq_size_page_order);
 	iommu->prq = NULL;
 
 	return 0;
@@ -962,7 +964,7 @@ struct page_req_dsc {
 	u64 priv_data[2];
 };
 
-#define PRQ_RING_MASK	((0x1000 << PRQ_ORDER) - 0x20)
+#define PRQ_RING_MASK	((0x1000 << prq_size_page_order) - 0x20)
 
 static bool access_error(struct vm_area_struct *vma, struct page_req_dsc *req)
 {
