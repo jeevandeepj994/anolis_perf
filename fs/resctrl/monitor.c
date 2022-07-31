@@ -191,7 +191,7 @@ bool resctrl_closid_is_dirty(u32 closid)
 
 	lockdep_assert_held(&rdtgroup_mutex);
 
-	if (IS_ENABLED(CONFIG_RESCTRL_RMID_DEPENDS_ON_CLOSID))
+	if (!IS_ENABLED(CONFIG_RESCTRL_RMID_DEPENDS_ON_CLOSID))
 		return false;
 
 	for (i = 0; i < resctrl_arch_system_num_rmid_idx(); i++) {
