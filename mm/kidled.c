@@ -162,8 +162,11 @@ void kidled_mem_cgroup_account(struct page *page,
 	if (type == KIDLE_SLAB) {
 		if (!memcg_kmem_enabled())
 			memcg = root_mem_cgroup;
-		else
+		else {
 			memcg = mem_cgroup_from_obj(ptr);
+			if (!memcg)
+				return;
+		}
 	} else {
 		memcg = lock_page_memcg(page);
 		if (unlikely(!memcg)) {
@@ -803,13 +806,17 @@ static unsigned short *kidled_get_slab_age_array(void *object)
 {
 	struct page *page = virt_to_head_page(object);
 	unsigned int objects = objs_per_slab_page(page->slab_cache, page);
-	unsigned short *slab_age;
+	unsigned short *slab_age = NULL;
 
-	if (memcg_kmem_enabled())
+	if (!kidled_available_slab(page->slab_cache))
+		goto out;
+
+	if (!cgroup_memory_nokmem)
 		slab_age = (unsigned short *)page_obj_cgroups(page)[objects];
 	else
 		slab_age = kidled_slab_age(page);
 
+out:
 	return slab_age;
 }
 
@@ -871,7 +878,7 @@ int kidled_alloc_slab_age(struct page *page, struct kmem_cache *s, gfp_t flags)
 	if (!ver)
 		return -ENOMEM;
 
-	if (memcg_kmem_enabled()) {
+	if (!cgroup_memory_nokmem) {
 		ret = memcg_alloc_page_obj_cgroups(page, s, flags);
 		if (!ret)
 			page_obj_cgroups(page)[objects] = ver;
