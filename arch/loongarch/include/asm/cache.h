@@ -10,4 +10,7 @@
 
 #define __read_mostly __section(".data..read_mostly")
 
+extern struct loongson_system_configuration loongson_sysconf;
+extern char __weak except_vec_cex;
+
 #endif /* _ASM_CACHE_H */
