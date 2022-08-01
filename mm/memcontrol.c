@@ -82,7 +82,7 @@ DEFINE_PER_CPU(struct mem_cgroup *, int_active_memcg);
 static bool cgroup_memory_nosocket;
 
 /* Kernel memory accounting disabled? */
-static bool cgroup_memory_nokmem;
+bool cgroup_memory_nokmem;
 unsigned long sysctl_penalty_extra_delay_jiffies;
 
 #ifdef CONFIG_MEMSLI

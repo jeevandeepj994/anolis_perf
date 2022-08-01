@@ -202,12 +202,10 @@ struct page {
 	/* Usage count. *DO NOT USE DIRECTLY*. See page_ref.h */
 	atomic_t _refcount;
 
-#ifdef CONFIG_MEMCG
+#if defined(CONFIG_MEMCG) || defined(CONFIG_KIDLED)
 	union {
 		struct mem_cgroup *mem_cgroup;
-#ifdef CONFIG_KIDLED
 		unsigned short *slab_age;
-#endif
 		struct obj_cgroup **obj_cgroups;
 	};
 #endif

@@ -156,6 +156,12 @@ static inline unsigned short *kidled_slab_age(struct page *page)
 	return (unsigned short *)((unsigned long)page->slab_age & ~0x2UL);
 }
 
+#ifdef CONFIG_MEMCG_KMEM
+extern bool cgroup_memory_nokmem;
+#else
+#define cgroup_memory_nokmem 1
+#endif
+
 extern int kidled_alloc_slab_age(struct page *page, struct kmem_cache *s, gfp_t flags);
 extern void kidled_free_slab_age(struct page *page);
 extern void kidled_mem_cgroup_account(struct page *page,
@@ -386,6 +392,7 @@ static inline void kidled_mem_cgroup_move_stats(struct mem_cgroup *from,
 						unsigned long size)
 {
 }
+
 #endif /* CONFIG_MEMCG */
 
 static inline unsigned short kidled_get_slab_age(void *object)
