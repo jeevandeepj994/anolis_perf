@@ -142,6 +142,7 @@ static void devm_memremap_pages_release(void *data)
 		kasan_remove_zero_shadow(__va(align_start), align_size);
 	}
 	mem_hotplug_done();
+	zdm_delete(align_start, align_size);
 
 	untrack_pfn(NULL, PHYS_PFN(align_start), align_size);
 	pgmap_radix_release(res, -1);

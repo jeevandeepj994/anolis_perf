@@ -1352,7 +1352,7 @@ static void free_one_page(struct zone *zone,
 	spin_unlock(&zone->lock);
 }
 
-static void __meminit __init_single_page(struct page *page, unsigned long pfn,
+void __meminit __init_single_page(struct page *page, unsigned long pfn,
 				unsigned long zone, int nid)
 {
 	mm_zero_struct_page(page);
@@ -5994,6 +5994,57 @@ not_early:
 }
 
 #ifdef CONFIG_ZONE_DEVICE
+DEFINE_SPINLOCK(zdm_lock);
+LIST_HEAD(zdm_list);
+
+int zdm_insert(struct dev_pagemap *pgmap, struct zone *zone,
+		      unsigned long start_pfn, unsigned long nr_pages)
+{
+	struct zdm_context *zdm;
+
+	zdm = kzalloc(sizeof(struct zdm_context), GFP_KERNEL);
+	if (!zdm)
+		return -ENOMEM;
+
+	INIT_LIST_HEAD(&zdm->list);
+	spin_lock_init(&zdm->lock);
+	zdm->pgmap = pgmap;
+	zdm->zone = zone;
+	zdm->start_pfn = start_pfn;
+	zdm->nr_pages = nr_pages;
+
+	spin_lock(&zdm_lock);
+	list_add_rcu(&zdm->list, &zdm_list);
+	spin_unlock(&zdm_lock);
+	return 0;
+}
+
+void zdm_delete(unsigned long start, unsigned long size)
+{
+	struct zdm_context *zdm;
+	struct zdm_context *tmp;
+
+	spin_lock(&zdm_lock);
+	list_for_each_entry_safe(zdm, tmp, &zdm_list, list) {
+		if (start >> PAGE_SHIFT == zdm->start_pfn) {
+			list_del_rcu(&zdm->list);
+			kfree_rcu(zdm, rcu);
+			break;
+		}
+	}
+}
+
+/*
+ * zdm_ondemand_enable should clear pte of page struct page.
+ */
+int __weak zdm_ondemand_enable(struct zone *zone,
+			       unsigned long start_pfn,
+			       unsigned long size,
+			       struct dev_pagemap *pgmap)
+{
+	return -EINVAL;
+}
+
 void __ref memmap_init_zone_device(struct zone *zone,
 				   unsigned long start_pfn,
 				   unsigned long size,
@@ -6018,6 +6069,11 @@ void __ref memmap_init_zone_device(struct zone *zone,
 
 		start_pfn = altmap->base_pfn + vmem_altmap_offset(altmap);
 		size = end_pfn - start_pfn;
+	}
+
+	if (!zdm_ondemand_enable(zone, start_pfn, size, pgmap)) {
+		pr_info("zdm pagemap on deamnd enabled\n");
+		goto out;
 	}
 
 	for (pfn = start_pfn; pfn < end_pfn; pfn++) {
@@ -6063,6 +6119,7 @@ void __ref memmap_init_zone_device(struct zone *zone,
 		}
 	}
 
+out:
 	pr_info("%s initialised, %lu pages in %ums\n", dev_name(pgmap->dev),
 		size, jiffies_to_msecs(jiffies - start));
 }

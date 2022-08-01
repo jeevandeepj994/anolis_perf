@@ -1051,6 +1051,7 @@ static int hmm_devmem_pages_create(struct hmm_devmem *devmem)
 	devmem->pagemap.dev = devmem->device;
 	devmem->pagemap.ref = &devmem->ref;
 	devmem->pagemap.data = devmem;
+	devmem->pagemap.on_demand = false;
 
 	mutex_lock(&hmm_devmem_lock);
 	align_end = align_start + align_size - 1;

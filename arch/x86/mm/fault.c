@@ -17,6 +17,8 @@
 #include <linux/context_tracking.h>	/* exception_enter(), ...	*/
 #include <linux/uaccess.h>		/* faulthandler_disabled()	*/
 #include <linux/mm_types.h>
+#include <linux/page-isolation.h>
+#include <linux/memremap.h>
 
 #include <asm/cpufeature.h>		/* boot_cpu_has, ...		*/
 #include <asm/traps.h>			/* dotraplinkage, ...		*/
@@ -1231,6 +1233,137 @@ static inline bool smap_violation(int error_code, struct pt_regs *regs)
 	return true;
 }
 
+#ifdef CONFIG_ZONE_DEVICE
+void __init_single_page(struct page *page, unsigned long pfn,
+			unsigned long zone, int nid);
+
+int zdm_ondemand_enable(struct zone *zone,
+			unsigned long start_pfn,
+			unsigned long size,
+			struct dev_pagemap *pgmap)
+{
+	unsigned long pfn, end_pfn = start_pfn + size;
+
+	if (!pgmap->on_demand || zdm_insert(pgmap, zone, start_pfn, size))
+		return -EINVAL;
+
+	pfn = start_pfn;
+	while (pfn < end_pfn) {
+		struct page *page = pfn_to_page(pfn);
+		unsigned int level;
+		pte_t *pte;
+		pmd_t *pmd;
+
+		pte = lookup_address((unsigned long)page, &level);
+		BUG_ON(!pte);
+		if (level == PG_LEVEL_4K) {
+			set_pte(pte, __pte(pte_val(*pte) & ~_PAGE_PRESENT));
+			pfn += PAGE_SIZE/sizeof(struct page);
+		} else if (level == PG_LEVEL_2M) {
+			pmd = (pmd_t *)pte;
+			set_pmd(pmd, __pmd(pmd_val(*pmd) & ~_PAGE_PRESENT));
+			pfn += PMD_SIZE/sizeof(struct page);
+		}
+	}
+	flush_tlb_kernel_range((unsigned long)pfn_to_page(start_pfn),
+				(unsigned long)pfn_to_page(end_pfn));
+
+	return 0;
+}
+
+int __ref memmap_page_fault(unsigned long address)
+{
+	struct zdm_context *zdm;
+	unsigned long start_pfn = 0, end_pfn, pfn, page_pfn, zone_idx, flags;
+	struct pglist_data *pgdat;
+	unsigned int level;
+	struct page *page;
+	int nid;
+	pte_t *pte;
+	pmd_t *pmd;
+
+	address = ALIGN_DOWN(address, PAGE_SIZE);
+
+	rcu_read_lock();
+	list_for_each_entry_rcu(zdm, &zdm_list, list) {
+		if (address >= (unsigned long)pfn_to_page(zdm->start_pfn) &&
+		    address < (unsigned long)pfn_to_page(zdm->start_pfn +
+							 zdm->nr_pages))
+			goto reset_pgtable;
+	}
+	rcu_read_unlock();
+	return 0;
+
+reset_pgtable:
+	spin_lock_irqsave(&zdm->lock, flags);
+	pte = lookup_address(address, &level);
+	BUG_ON(!pte);
+	if (pte_flags(*pte) & _PAGE_PRESENT)
+		goto out;
+
+	page = (struct page *)address;
+	if (level == PG_LEVEL_4K) {
+		page_pfn = pte_pfn(__pte(pte_val(*pte) | _PAGE_PRESENT));
+		start_pfn = page_to_pfn((struct page *)address);
+		end_pfn = start_pfn + PAGE_SIZE/sizeof(struct page);
+	} else {
+		pmd = (pmd_t *)pte;
+		address &= PMD_MASK;
+		page_pfn = pmd_pfn(__pmd(pmd_val(*pmd) | _PAGE_PRESENT));
+		start_pfn = page_to_pfn((struct page *)address);
+		end_pfn = start_pfn + PMD_SIZE/sizeof(struct page);
+	}
+
+	pgdat = zdm->zone->zone_pgdat;
+	zone_idx = zone_idx(zdm->zone);
+	nid = pgdat->node_id;
+
+	for (pfn = start_pfn; pfn < end_pfn; pfn++) {
+		unsigned long count = pfn - start_pfn;
+
+		if (count % (PAGE_SIZE/sizeof(struct page)) == 0) {
+			if (count != 0) {
+				page_pfn++;
+				clear_fixmap(FIX_ZDM);
+			}
+			set_fixmap(FIX_ZDM, page_pfn << PAGE_SHIFT);
+			page = (struct page *)fix_to_virt(FIX_ZDM);
+		}
+
+		__init_single_page(page, pfn, zone_idx, nid);
+
+		/* Init lru list again, since the lru list was initialized
+		 * to be fix addr by __init_single_page above.
+		 */
+		page->lru.next = page->lru.prev = &pfn_to_page(pfn)->lru;
+		__SetPageReserved(page);
+		page->pgmap = zdm->pgmap;
+		page->hmm_data = 0;
+		page++;
+	}
+	clear_fixmap(FIX_ZDM);
+
+	/* All job is done, recover the page table */
+	if (level == PG_LEVEL_4K) {
+		set_pte(pte, __pte(pte_val(*pte) | _PAGE_PRESENT));
+	} else {
+		pmd = (pmd_t *)pte;
+		set_pmd(pmd, __pmd(pmd_val(*pmd) | _PAGE_PRESENT));
+	}
+out:
+	spin_unlock_irqrestore(&zdm->lock, flags);
+	rcu_read_unlock();
+	__flush_tlb_one_kernel(address);
+
+	if (start_pfn)
+		for (pfn = start_pfn; pfn < end_pfn; pfn += pageblock_nr_pages)
+			set_pageblock_migratetype(pfn_to_page(pfn),
+						  MIGRATE_MOVABLE);
+
+	return 1;
+}
+#endif
+
 /*
  * This routine handles page faults.  It determines the address,
  * and the problem, and then passes it off to one of the appropriate
@@ -1281,6 +1414,12 @@ __do_page_fault(struct pt_regs *regs, unsigned long error_code,
 		/* kprobes don't want to hook the spurious faults: */
 		if (kprobes_fault(regs))
 			return;
+
+#ifdef CONFIG_ZONE_DEVICE
+		if (memmap_page_fault(address))
+			return;
+#endif
+
 		/*
 		 * Don't take the mm semaphore here. If we fixup a prefetch
 		 * fault we could otherwise deadlock:

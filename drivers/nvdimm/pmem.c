@@ -460,6 +460,7 @@ static int pmem_attach_disk(struct device *dev,
 	pmem->pgmap.ref = &q->q_usage_counter;
 	pmem->pgmap.kill = pmem_freeze_queue;
 	pmem->pgmap.memory_failure = pmem_pagemap_memory_failure;
+	pmem->pgmap.on_demand = false;
 	if (is_nd_pfn(dev)) {
 		if (setup_pagemap_fsdax(dev, &pmem->pgmap))
 			return -ENOMEM;
