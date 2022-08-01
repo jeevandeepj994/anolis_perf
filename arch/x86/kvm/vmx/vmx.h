@@ -307,7 +307,7 @@ struct vcpu_vmx {
 	struct pt_desc pt_desc;
 
 	/* Save desired MSR intercept (read: pass-through) state */
-#define MAX_POSSIBLE_PASSTHROUGH_MSRS	15
+#define MAX_POSSIBLE_PASSTHROUGH_MSRS	16
 	struct {
 		DECLARE_BITMAP(read, MAX_POSSIBLE_PASSTHROUGH_MSRS);
 		DECLARE_BITMAP(write, MAX_POSSIBLE_PASSTHROUGH_MSRS);
@@ -329,6 +329,11 @@ struct kvm_vmx {
 
 	enum ept_pointers_status ept_pointers_match;
 	spinlock_t ept_pointer_lock;
+
+	struct page *pasid_dirs;
+	spinlock_t pasid_lock;
+	struct notifier_block pasid_nb;
+	struct mm_struct *mm;
 };
 
 bool nested_vmx_allowed(struct kvm_vcpu *vcpu);
