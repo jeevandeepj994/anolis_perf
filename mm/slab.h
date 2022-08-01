@@ -218,10 +218,21 @@ static inline bool kidled_available_slab(struct kmem_cache *s)
 
 	return false;
 }
+
+/* cold slab will need the special condition */
+static inline bool kidled_kmem_enabled(void)
+{
+	return !cgroup_memory_nokmem;
+}
 #else
 static inline bool kidled_available_slab(struct kmem_cache *s)
 {
 	return false;
+}
+
+static inline bool kidled_kmem_enabled(void)
+{
+	return memcg_kmem_enabled();
 }
 #endif
 
@@ -412,6 +423,11 @@ static inline void memcg_slab_free_hook(struct kmem_cache *s_orig,
 }
 
 #else /* CONFIG_MEMCG_KMEM */
+static inline struct obj_cgroup **page_obj_cgroups(struct page *page)
+{
+	return false;
+}
+
 static inline bool page_has_obj_cgroups(struct page *page)
 {
 	return false;
@@ -473,7 +489,7 @@ static __always_inline void account_slab_page(struct page *page, int order,
 static __always_inline void unaccount_slab_page(struct page *page, int order,
 						struct kmem_cache *s)
 {
-	if (!cgroup_memory_nokmem)
+	if (kidled_kmem_enabled())
 		memcg_free_page_obj_cgroups(page, s);
 	else {
 		if (page_has_slab_age(page))
