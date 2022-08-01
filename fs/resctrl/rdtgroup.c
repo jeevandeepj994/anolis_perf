@@ -2211,8 +2211,15 @@ static int schemata_list_create(void)
 static void schemata_list_destroy(void)
 {
 	struct resctrl_schema *s, *tmp;
+	struct rdt_domain *dom;
 
 	list_for_each_entry_safe(s, tmp, &resctrl_schema_all, list) {
+		/*
+		 * Clear staged_config on each domain before schemata list is
+		 * destroyed.
+		 */
+		list_for_each_entry(dom, &s->res->domains, list)
+			memset(dom->staged_config, 0, sizeof(dom->staged_config));
 		list_del(&s->list);
 		kfree(s);
 	}
