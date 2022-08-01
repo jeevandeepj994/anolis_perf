@@ -116,6 +116,7 @@ struct dev_pagemap {
 	dev_page_free_t page_free;
 	struct vmem_altmap altmap;
 	bool altmap_valid;
+	bool on_demand;
 	struct resource res;
 	struct percpu_ref *ref;
 	void (*kill)(struct percpu_ref *ref);
@@ -126,6 +127,25 @@ struct dev_pagemap {
 };
 
 #ifdef CONFIG_ZONE_DEVICE
+extern spinlock_t zdm_lock;
+extern struct list_head zdm_list;
+struct zdm_context {
+	struct list_head	list;
+	struct dev_pagemap      *pgmap;
+	struct zone             *zone;
+	unsigned long           start_pfn;
+	unsigned long           nr_pages;
+	spinlock_t		lock;
+	struct rcu_head		rcu;
+};
+int zdm_insert(struct dev_pagemap *pgmap, struct zone *zone,
+	       unsigned long start_pfn, unsigned long nr_pages);
+void zdm_delete(unsigned long start, unsigned long size);
+int zdm_ondemand_enable(struct zone *zone,
+			unsigned long start_pfn,
+			unsigned long size,
+			struct dev_pagemap *pgmap);
+
 void *devm_memremap_pages(struct device *dev, struct dev_pagemap *pgmap);
 struct dev_pagemap *get_dev_pagemap(unsigned long pfn,
 		struct dev_pagemap *pgmap);

@@ -815,6 +815,7 @@ static int virtio_fs_setup_dax(struct virtio_device *vdev, struct virtio_fs *fs)
 	pgmap->altmap_valid = false;
 	pgmap->ref = &mi->ref;
 	pgmap->kill = virtio_fs_percpu_kill;
+	pgmap->on_demand = true;
 
 	if (virtio_fs_setup_pagemap_fsdax(&vdev->dev, pgmap))
 		return -ENOMEM;

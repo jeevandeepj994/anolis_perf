@@ -141,6 +141,7 @@ enum fixed_addresses {
 #ifdef CONFIG_INTEL_TXT
 	FIX_TBOOT_BASE,
 #endif
+	FIX_ZDM,
 	__end_of_fixed_addresses
 };
 

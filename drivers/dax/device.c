@@ -472,6 +472,7 @@ int dev_dax_probe(struct device *dev)
 
 	dev_dax->pgmap.ref = &dev_dax->ref;
 	dev_dax->pgmap.kill = dev_dax_percpu_kill;
+	dev_dax->pgmap.on_demand = false;
 	addr = devm_memremap_pages(dev, &dev_dax->pgmap);
 	if (IS_ERR(addr)) {
 		devm_remove_action(dev, dev_dax_percpu_exit, &dev_dax->ref);
