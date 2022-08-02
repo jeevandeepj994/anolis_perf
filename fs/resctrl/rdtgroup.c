@@ -127,13 +127,13 @@ int closids_supported(void)
 static void closid_init(void)
 {
 	struct resctrl_schema *s;
-	u32 rdt_min_closid = 32;
+	u32 rdt_min_closid = RESCTRL_MAX_CLOSID;
 
 	/* Compute rdt_min_closid across all resources */
 	list_for_each_entry(s, &resctrl_schema_all, list)
 		rdt_min_closid = min(rdt_min_closid, s->num_closid);
 
-	closid_free_map = BIT_MASK(rdt_min_closid) - 1;
+	closid_free_map = GENMASK(rdt_min_closid - 1, 0);
 
 	/* CLOSID 0 is always reserved for the default group */
 	closid_free_map &= ~1;
@@ -158,7 +158,7 @@ static int closid_alloc(void)
 
 void closid_free(int closid)
 {
-	closid_free_map |= 1 << closid;
+	closid_free_map |= 1UL << closid;
 }
 
 /**
@@ -170,7 +170,7 @@ void closid_free(int closid)
  */
 static bool closid_allocated(unsigned int closid)
 {
-	return (closid_free_map & (1 << closid)) == 0;
+	return (closid_free_map & (1UL << closid)) == 0;
 }
 
 /**
