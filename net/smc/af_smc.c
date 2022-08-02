@@ -2734,14 +2734,20 @@ static int smc_getname(struct socket *sock, struct sockaddr *addr,
 		       int peer)
 {
 	struct smc_sock *smc;
+	int r = -ENOTCONN;
 
 	if (peer && (sock->sk->sk_state != SMC_ACTIVE) &&
 	    (sock->sk->sk_state != SMC_APPCLOSEWAIT1))
-		return -ENOTCONN;
+		goto out;
 
 	smc = smc_sk(sock->sk);
+	down_read(&smc->clcsock_release_lock);
+	if (smc->clcsock && smc->clcsock->ops)
+		r = smc->clcsock->ops->getname(smc->clcsock, addr, peer);
+	up_read(&smc->clcsock_release_lock);
 
-	return smc->clcsock->ops->getname(smc->clcsock, addr, peer);
+out:
+	return r;
 }
 
 static int smc_sendmsg(struct socket *sock, struct msghdr *msg, size_t len)
