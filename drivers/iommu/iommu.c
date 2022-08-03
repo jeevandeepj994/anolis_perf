@@ -3087,7 +3087,7 @@ int iommu_sync_dirty_log(struct iommu_domain *domain, unsigned long iova,
 	}
 
 	mutex_lock(&domain->switch_log_lock);
-	if (!domain->dirty_log_tracking) {
+	if (iommu_support_dirty_log(domain) && !domain->dirty_log_tracking) {
 		ret = -EINVAL;
 		goto out;
 	}
@@ -3168,7 +3168,7 @@ int iommu_clear_dirty_log(struct iommu_domain *domain,
 	}
 
 	mutex_lock(&domain->switch_log_lock);
-	if (!domain->dirty_log_tracking) {
+	if (iommu_support_dirty_log(domain) && !domain->dirty_log_tracking) {
 		ret = -EINVAL;
 		goto out;
 	}
