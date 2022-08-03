@@ -2858,7 +2858,7 @@ static void io_complete_rw_iopoll(struct kiocb *kiocb, long res, long res2)
  * find it from a io_iopoll_getevents() thread before the issuer is done
  * accessing the kiocb cookie.
  */
-static void io_iopoll_req_issued(struct io_kiocb *req, bool in_async)
+static void io_iopoll_req_issued(struct io_kiocb *req)
 {
 	struct io_ring_ctx *ctx = req->ctx;
 
@@ -6332,7 +6332,7 @@ static int io_issue_sqe(struct io_kiocb *req, unsigned int issue_flags)
 		if (in_async)
 			mutex_lock(&ctx->uring_lock);
 
-		io_iopoll_req_issued(req, in_async);
+		io_iopoll_req_issued(req);
 
 		if (in_async)
 			mutex_unlock(&ctx->uring_lock);
