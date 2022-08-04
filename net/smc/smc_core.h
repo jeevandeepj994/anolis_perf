@@ -260,6 +260,7 @@ struct smc_llc_qentry;
 struct smc_llc_flow {
 	enum smc_llc_flowtype type;
 	struct smc_llc_qentry *qentry;
+	refcount_t	      parallel_refcnt;
 };
 
 struct smc_lgr_decision_maker;
