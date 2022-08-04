@@ -142,6 +142,7 @@ enum idxd_wq_state {
 enum idxd_wq_flag {
 	WQ_FLAG_DEDICATED = 0,
 	WQ_FLAG_BLOCK_ON_FAULT,
+	WQ_FLAG_MODE_1,
 };
 
 enum idxd_wq_type {

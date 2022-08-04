@@ -1193,13 +1193,16 @@ static int idxd_wq_load_config(struct idxd_wq *wq)
 	wq->size = wq->wqcfg->wq_size;
 	wq->threshold = wq->wqcfg->wq_thresh;
 
-	/* The driver does not support shared WQ mode in read-only config yet */
-	if (wq->wqcfg->mode == 0 || wq->wqcfg->pasid_en)
-		return -EOPNOTSUPP;
-
-	set_bit(WQ_FLAG_DEDICATED, &wq->flags);
+	if (wq->wqcfg->mode)
+		set_bit(WQ_FLAG_DEDICATED, &wq->flags);
 
 	wq->priority = wq->wqcfg->priority;
+
+	if (wq->wqcfg->bof)
+		set_bit(WQ_FLAG_BLOCK_ON_FAULT, &wq->flags);
+
+	if (wq->wqcfg->mode_support)
+		set_bit(WQ_FLAG_MODE_1, &wq->flags);
 
 	wq->max_xfer_bytes = 1ULL << wq->wqcfg->max_xfer_shift;
 	wq->max_batch_size = 1ULL << wq->wqcfg->max_batch_shift;
