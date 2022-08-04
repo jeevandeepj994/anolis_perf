@@ -23,10 +23,11 @@
 /* This doesn't need to be atomic: speed is chosen over correctness here. */
 static u64 pstore_ftrace_stamp;
 
-static void notrace pstore_ftrace_call(unsigned long ip,
-				       unsigned long parent_ip,
-				       struct ftrace_ops *op,
-				       struct pt_regs *regs)
+static void notrace pstore_do_ftrace(unsigned long ip,
+				     unsigned long parent_ip,
+				     struct ftrace_ops *op,
+				     struct pt_regs *regs,
+				     struct pstore_info *psinfo)
 {
 	unsigned long flags;
 	struct pstore_ftrace_record rec = {};
@@ -49,6 +50,20 @@ static void notrace pstore_ftrace_call(unsigned long ip,
 	psinfo->write(&record);
 
 	local_irq_restore(flags);
+}
+
+static void notrace pstore_ftrace_call(unsigned long ip,
+				       unsigned long parent_ip,
+				       struct ftrace_ops *op,
+				       struct pt_regs *regs)
+{
+	struct pstore_info_list *entry;
+
+	rcu_read_lock();
+	list_for_each_entry_rcu(entry, &psback->list_entry, list)
+		if (entry->psi->flags & PSTORE_FLAGS_FTRACE)
+			pstore_do_ftrace(ip, parent_ip, op, regs, entry->psi);
+	rcu_read_unlock();
 }
 
 static struct ftrace_ops pstore_ftrace_ops __read_mostly = {
@@ -113,9 +128,6 @@ static struct dentry *pstore_ftrace_dir;
 
 void pstore_register_ftrace(void)
 {
-	if (!psinfo->write)
-		return;
-
 	pstore_ftrace_dir = debugfs_create_dir("pstore", NULL);
 
 	debugfs_create_file("record_ftrace", 0600, pstore_ftrace_dir, NULL,
