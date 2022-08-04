@@ -239,10 +239,18 @@ static inline void smc_llc_flow_qentry_set(struct smc_llc_flow *flow,
 	flow->qentry = qentry;
 }
 
-static void smc_llc_flow_parallel(struct smc_link_group *lgr, u8 flow_type,
+static void smc_llc_flow_parallel(struct smc_link_group *lgr, struct smc_llc_flow *flow,
 				  struct smc_llc_qentry *qentry)
 {
 	u8 msg_type = qentry->msg.raw.hdr.common.llc_type;
+	u8 flow_type = flow->type;
+
+	/* SMC_LLC_FLOW_RKEY can be parallel */
+	if (flow_type == SMC_LLC_FLOW_RKEY &&
+	    (msg_type == SMC_LLC_CONFIRM_RKEY || msg_type == SMC_LLC_DELETE_RKEY)) {
+		refcount_inc(&flow->parallel_refcnt);
+		return;
+	}
 
 	if ((msg_type == SMC_LLC_ADD_LINK || msg_type == SMC_LLC_DELETE_LINK) &&
 	    flow_type != msg_type && !lgr->delayed_event) {
@@ -268,7 +276,7 @@ static bool smc_llc_flow_start(struct smc_llc_flow *flow,
 	spin_lock_bh(&lgr->llc_flow_lock);
 	if (flow->type) {
 		/* a flow is already active */
-		smc_llc_flow_parallel(lgr, flow->type, qentry);
+		smc_llc_flow_parallel(lgr, flow, qentry);
 		spin_unlock_bh(&lgr->llc_flow_lock);
 		return false;
 	}
@@ -287,6 +295,7 @@ static bool smc_llc_flow_start(struct smc_llc_flow *flow,
 		flow->type = SMC_LLC_FLOW_NONE;
 	}
 	smc_llc_flow_qentry_set(flow, qentry);
+	refcount_set(&flow->parallel_refcnt, 1);
 	spin_unlock_bh(&lgr->llc_flow_lock);
 	return true;
 }
@@ -296,6 +305,7 @@ int smc_llc_flow_initiate(struct smc_link_group *lgr,
 			  enum smc_llc_flowtype type)
 {
 	enum smc_llc_flowtype allowed_remote = SMC_LLC_FLOW_NONE;
+	bool accept = false;
 	int rc;
 
 	/* all flows except confirm_rkey and delete_rkey are exclusive,
@@ -307,10 +317,39 @@ again:
 	if (list_empty(&lgr->list))
 		return -ENODEV;
 	spin_lock_bh(&lgr->llc_flow_lock);
-	if (lgr->llc_flow_lcl.type == SMC_LLC_FLOW_NONE &&
-	    (lgr->llc_flow_rmt.type == SMC_LLC_FLOW_NONE ||
-	     lgr->llc_flow_rmt.type == allowed_remote)) {
-		lgr->llc_flow_lcl.type = type;
+
+	/* Flow is initialized only if the following conditions are met:
+	 * incoming flow	local flow		remote flow
+	 * exclusive		NONE			NONE
+	 * SMC_LLC_FLOW_RKEY	SMC_LLC_FLOW_RKEY	SMC_LLC_FLOW_RKEY
+	 * SMC_LLC_FLOW_RKEY	NONE			SMC_LLC_FLOW_RKEY
+	 * SMC_LLC_FLOW_RKEY	SMC_LLC_FLOW_RKEY	NONE
+	 */
+	switch (type) {
+	case SMC_LLC_FLOW_RKEY:
+		if (!SMC_IS_PARALLEL_FLOW(lgr->llc_flow_lcl.type))
+			break;
+		if (!SMC_IS_PARALLEL_FLOW(lgr->llc_flow_rmt.type))
+			break;
+		/* accepted */
+		accept = true;
+		break;
+	default:
+		if (!SMC_IS_NONE_FLOW(lgr->llc_flow_lcl.type))
+			break;
+		if (!SMC_IS_NONE_FLOW(lgr->llc_flow_rmt.type))
+			break;
+		/* accepted */
+		accept = true;
+		break;
+	}
+	if (accept) {
+		if (SMC_IS_NONE_FLOW(lgr->llc_flow_lcl.type)) {
+			lgr->llc_flow_lcl.type = type;
+			refcount_set(&lgr->llc_flow_lcl.parallel_refcnt, 1);
+		} else {
+			refcount_inc(&lgr->llc_flow_lcl.parallel_refcnt);
+		}
 		spin_unlock_bh(&lgr->llc_flow_lock);
 		return 0;
 	}
@@ -329,6 +368,10 @@ again:
 void smc_llc_flow_stop(struct smc_link_group *lgr, struct smc_llc_flow *flow)
 {
 	spin_lock_bh(&lgr->llc_flow_lock);
+	if (!refcount_dec_and_test(&flow->parallel_refcnt)) {
+		spin_unlock_bh(&lgr->llc_flow_lock);
+		return;
+	}
 	memset(flow, 0, sizeof(*flow));
 	flow->type = SMC_LLC_FLOW_NONE;
 	spin_unlock_bh(&lgr->llc_flow_lock);
@@ -1787,16 +1830,14 @@ out:
 }
 
 /* process a confirm_rkey request from peer, remote flow */
-static void smc_llc_rmt_conf_rkey(struct smc_link_group *lgr)
+static void smc_llc_rmt_conf_rkey(struct smc_link_group *lgr, struct smc_llc_qentry *qentry)
 {
 	struct smc_llc_msg_confirm_rkey *llc;
-	struct smc_llc_qentry *qentry;
 	struct smc_link *link;
 	int num_entries;
 	int rk_idx;
 	int i;
 
-	qentry = lgr->llc_flow_rmt.qentry;
 	llc = &qentry->msg.confirm_rkey;
 	link = qentry->link;
 
@@ -1823,19 +1864,16 @@ out:
 	llc->hd.flags |= SMC_LLC_FLAG_RESP;
 	smc_llc_init_msg_hdr(&llc->hd, link->lgr, sizeof(*llc));
 	smc_llc_send_message(link, &qentry->msg);
-	smc_llc_flow_qentry_del(&lgr->llc_flow_rmt);
 }
 
 /* process a delete_rkey request from peer, remote flow */
-static void smc_llc_rmt_delete_rkey(struct smc_link_group *lgr)
+static void smc_llc_rmt_delete_rkey(struct smc_link_group *lgr, struct smc_llc_qentry *qentry)
 {
 	struct smc_llc_msg_delete_rkey *llc;
-	struct smc_llc_qentry *qentry;
 	struct smc_link *link;
 	u8 err_mask = 0;
 	int i, max;
 
-	qentry = lgr->llc_flow_rmt.qentry;
 	llc = &qentry->msg.delete_rkey;
 	link = qentry->link;
 
@@ -1873,7 +1911,6 @@ static void smc_llc_rmt_delete_rkey(struct smc_link_group *lgr)
 finish:
 	llc->hd.flags |= SMC_LLC_FLAG_RESP;
 	smc_llc_send_message(link, &qentry->msg);
-	smc_llc_flow_qentry_del(&lgr->llc_flow_rmt);
 }
 
 static void smc_llc_protocol_violation(struct smc_link_group *lgr, u8 type)
@@ -1973,7 +2010,7 @@ static void smc_llc_event_handler(struct smc_llc_qentry *qentry)
 		/* new request from remote, assign to remote flow */
 		if (smc_llc_flow_start(&lgr->llc_flow_rmt, qentry)) {
 			/* process here, does not wait for more llc msgs */
-			smc_llc_rmt_conf_rkey(lgr);
+			smc_llc_rmt_conf_rkey(lgr, qentry);
 			smc_llc_flow_stop(lgr, &lgr->llc_flow_rmt);
 		}
 		return;
@@ -1986,7 +2023,7 @@ static void smc_llc_event_handler(struct smc_llc_qentry *qentry)
 		/* new request from remote, assign to remote flow */
 		if (smc_llc_flow_start(&lgr->llc_flow_rmt, qentry)) {
 			/* process here, does not wait for more llc msgs */
-			smc_llc_rmt_delete_rkey(lgr);
+			smc_llc_rmt_delete_rkey(lgr, qentry);
 			smc_llc_flow_stop(lgr, &lgr->llc_flow_rmt);
 		}
 		return;

@@ -51,6 +51,12 @@ enum smc_llc_msg_type {
 #define smc_link_downing(state) \
 	(cmpxchg(state, SMC_LNK_ACTIVE, SMC_LNK_INACTIVE) == SMC_LNK_ACTIVE)
 
+#define SMC_IS_NONE_FLOW(type)		\
+	((type) == SMC_LLC_FLOW_NONE)
+
+#define SMC_IS_PARALLEL_FLOW(type)	\
+	(((type) == SMC_LLC_FLOW_RKEY) || SMC_IS_NONE_FLOW(type))
+
 /* LLC DELETE LINK Request Reason Codes */
 #define SMC_LLC_DEL_LOST_PATH		0x00010000
 #define SMC_LLC_DEL_OP_INIT_TERM	0x00020000
