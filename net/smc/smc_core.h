@@ -122,7 +122,6 @@ struct smc_link {
 	struct ib_sge		*wr_rx_sges;	/* WR recv scatter meta data */
 	/* above three vectors have wr_rx_cnt elements and use the same index */
 	dma_addr_t		wr_rx_dma_addr;	/* DMA address of wr_rx_bufs */
-	dma_addr_t		wr_rx_v2_dma_addr; /* DMA address of v2 rx buf*/
 	u64			wr_rx_id;	/* seq # of last recv WR */
 	u32			wr_rx_cnt;	/* number of WR recv buffers */
 	unsigned long		wr_rx_tstamp;	/* jiffies when last buf rx */
@@ -294,8 +293,6 @@ struct smc_link_group {
 						/* client or server */
 			struct smc_link		lnk[SMC_LINKS_PER_LGR_MAX];
 						/* smc link */
-			struct smc_wr_v2_buf	*wr_rx_buf_v2;
-						/* WR v2 recv payload buffer */
 			struct smc_wr_v2_buf	*wr_tx_buf_v2;
 						/* WR v2 send payload buffer */
 			char			peer_systemid[SMC_SYSTEMID_LEN];
