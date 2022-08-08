@@ -548,12 +548,27 @@ static int smcr_lgr_reg_rmbs(struct smc_sock *smc,
 	struct smc_link *link = smc->conn.lnk;
 	struct smc_link_group *lgr = link->lgr;
 	int i, lnk = 0, rc = 0;
+	bool do_slow = false;
 
 	if (!smc->simplify_rkey_exhcange) {
 		rc = smc_llc_flow_initiate(lgr, SMC_LLC_FLOW_RKEY);
 		if (rc)
 			return rc;
 	}
+
+	down_read(&lgr->llc_conf_mutex);
+	for (i = 0; i < SMC_LINKS_PER_LGR_MAX; i++) {
+		if (!smc_link_active(&lgr->lnk[i]))
+			continue;
+		if (!rmb_desc->is_reg_mr[link->link_idx]) {
+			up_read(&lgr->llc_conf_mutex);
+			goto slow_path;
+		}
+	}
+	/* mr register already */
+	goto fast_path;
+slow_path:
+	do_slow = true;
 	/* protect against parallel smc_llc_cli_rkey_exchange() and
 	 * parallel smcr_link_reg_buf()
 	 */
@@ -567,7 +582,7 @@ static int smcr_lgr_reg_rmbs(struct smc_sock *smc,
 		/* available link count inc */
 		lnk++;
 	}
-
+fast_path:
 	/* do not exchange confirm_rkey msg since there are only one link */
 	if (lnk > 1 || !smc->simplify_rkey_exhcange) {
 		/* exchange confirm_rkey msg with peer */
@@ -580,7 +595,7 @@ static int smcr_lgr_reg_rmbs(struct smc_sock *smc,
 
 	rmb_desc->is_conf_rkey = true;
 out:
-	up_write(&lgr->llc_conf_mutex);
+	do_slow ? up_write(&lgr->llc_conf_mutex) : up_read(&lgr->llc_conf_mutex);
 	if (!smc->simplify_rkey_exhcange)
 		smc_llc_flow_stop(lgr, &lgr->llc_flow_lcl);
 	return rc;
