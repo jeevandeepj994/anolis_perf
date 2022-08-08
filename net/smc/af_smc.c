@@ -529,7 +529,7 @@ static int smcr_lgr_reg_sndbufs(struct smc_link *link,
 		return -EINVAL;
 
 	/* protect against parallel smcr_link_reg_buf() */
-	mutex_lock(&lgr->llc_conf_mutex);
+	down_write(&lgr->llc_conf_mutex);
 	for (i = 0; i < SMC_LINKS_PER_LGR_MAX; i++) {
 		if (!smc_link_active(&lgr->lnk[i]))
 			continue;
@@ -537,7 +537,7 @@ static int smcr_lgr_reg_sndbufs(struct smc_link *link,
 		if (rc)
 			break;
 	}
-	mutex_unlock(&lgr->llc_conf_mutex);
+	up_write(&lgr->llc_conf_mutex);
 	return rc;
 }
 
@@ -557,7 +557,7 @@ static int smcr_lgr_reg_rmbs(struct smc_sock *smc,
 	/* protect against parallel smc_llc_cli_rkey_exchange() and
 	 * parallel smcr_link_reg_buf()
 	 */
-	mutex_lock(&lgr->llc_conf_mutex);
+	down_write(&lgr->llc_conf_mutex);
 	for (i = 0; i < SMC_LINKS_PER_LGR_MAX; i++) {
 		if (!smc_link_active(&lgr->lnk[i]))
 			continue;
@@ -580,7 +580,7 @@ static int smcr_lgr_reg_rmbs(struct smc_sock *smc,
 
 	rmb_desc->is_conf_rkey = true;
 out:
-	mutex_unlock(&lgr->llc_conf_mutex);
+	up_write(&lgr->llc_conf_mutex);
 	if (!smc->simplify_rkey_exhcange)
 		smc_llc_flow_stop(lgr, &lgr->llc_flow_lcl);
 	return rc;
@@ -1906,10 +1906,10 @@ static int smcr_serv_conf_first_link(struct smc_sock *smc)
 	smcr_lgr_set_type(link->lgr, SMC_LGR_SINGLE);
 
 	if (!link->lgr->disable_multiple_link) {
-		mutex_lock(&link->lgr->llc_conf_mutex);
+		down_write(&link->lgr->llc_conf_mutex);
 		/* initial contact - try to establish second link */
 		smc_llc_srv_add_link(link, NULL);
-		mutex_unlock(&link->lgr->llc_conf_mutex);
+		up_write(&link->lgr->llc_conf_mutex);
 	}
 	return 0;
 }
