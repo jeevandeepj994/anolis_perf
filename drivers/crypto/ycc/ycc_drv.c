@@ -320,6 +320,8 @@ static int ycc_rcec_bind(struct ycc_dev *ydev)
 		goto out;
 	}
 
+	return ret;
+
 remove_rcec_link:
 	sysfs_remove_link(&rciep->pdev->dev.kobj, "ycc_rcec");
 remove_rciep_link:
