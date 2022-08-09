@@ -145,6 +145,7 @@ int ghes_notify_sea(void);
 static inline int ghes_notify_sea(void) { return -ENOENT; }
 #endif
 
+#ifdef CONFIG_YITIAN_CPER_RAWDATA
 #pragma pack(1)
 struct raw_data_header {
 	uint32_t signature; /* 'r' 'a' 'w' 'd' */
@@ -174,6 +175,7 @@ enum ras_type {
 	ERR_TYPE_DDR = 0x50,
 	ERR_TYPE_PCI = 0x60
 };
+
 enum cmn_node_type {
 	NODE_TYPE_DVM = 0x1,
 	NODE_TYPE_CFG = 0x2,
@@ -203,5 +205,6 @@ enum cmn_node_type {
 	for (reg_common = (struct ras_reg_common *)(r_data_header + 1); \
 	     (void *)(reg_common) - (void *)(r_data_header + 1) < r_data_header->ras_count; \
 	     reg_common = (((void *)(reg_common)) + 1))
+#endif /* CONFIG_YITIAN_CPER_RAWDATA */
 
 #endif /* GHES_H */
