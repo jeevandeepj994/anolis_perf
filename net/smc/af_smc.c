@@ -1913,8 +1913,10 @@ static int smcr_serv_conf_first_link(struct smc_sock *smc)
 	smcr_lgr_set_type(link->lgr, SMC_LGR_SINGLE);
 
 	if (!link->lgr->disable_multiple_link) {
+		mutex_lock(&link->lgr->llc_conf_mutex);
 		/* initial contact - try to establish second link */
 		smc_llc_srv_add_link(link, NULL);
+		mutex_unlock(&link->lgr->llc_conf_mutex);
 	}
 	return 0;
 }
