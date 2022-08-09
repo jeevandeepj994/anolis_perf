@@ -284,3 +284,11 @@ config EFI_CUSTOM_SSDT_OVERLAYS
 
 	  See Documentation/admin-guide/acpi/ssdt-overlays.rst for more
 	  information.
+
+config YITIAN_CPER_RAWDATA
+	bool "Print Yitian custom raw data about platform error info"
+	depends on EFI && ACPI
+	help
+	  Allow print Yitian custom raw data about platform error info,
+	  including CMN, GIC, SMMU, DDR, etc. It gathers more useful error
+	  info from hardware, which helps to debug and test RAS feature.
