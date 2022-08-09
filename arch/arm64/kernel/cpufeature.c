@@ -892,7 +892,7 @@ void __init init_cpu_features(struct cpuinfo_arm64 *info)
 		sve_init_vq_map();
 	}
 
-	if (id_aa64pfr0_mpam(info->reg_id_aa64pfr0))
+	if (is_hyp_mode_available() && id_aa64pfr0_mpam(info->reg_id_aa64pfr0))
 		init_cpu_ftr_reg(SYS_MPAMIDR_EL1, info->reg_mpamidr);
 
 	/*
@@ -1120,7 +1120,7 @@ void update_cpu_features(int cpu,
 			sve_update_vq_map();
 	}
 
-	if (id_aa64pfr0_mpam(info->reg_id_aa64pfr0)) {
+	if (is_hyp_mode_available() && id_aa64pfr0_mpam(info->reg_id_aa64pfr0)) {
 		taint |= check_update_ftr_reg(SYS_MPAMIDR_EL1, cpu,
 					info->reg_mpamidr, boot->reg_mpamidr);
 	}
@@ -1778,7 +1778,7 @@ cpucap_panic_on_conflict(const struct arm64_cpu_capabilities *cap)
 static bool __maybe_unused
 test_has_mpam(const struct arm64_cpu_capabilities *entry, int scope)
 {
-	if (!has_cpuid_feature(entry, scope))
+	if (!is_hyp_mode_available() || !has_cpuid_feature(entry, scope))
 		return false;
 
 	/* Check firmware actually enabled MPAM on this cpu. */
@@ -1787,7 +1787,12 @@ test_has_mpam(const struct arm64_cpu_capabilities *entry, int scope)
 
 static void mpam_extra_caps(void)
 {
-	u64 idr = read_sanitised_ftr_reg(SYS_MPAMIDR_EL1);
+	u64 idr;
+
+	if (!is_hyp_mode_available())
+		return;
+
+	idr = read_sanitised_ftr_reg(SYS_MPAMIDR_EL1);
 
 	if (!IS_ENABLED(CONFIG_ARM64_MPAM))
 		return;
