@@ -1522,6 +1522,7 @@ enum FW_BOOT_CONTEXT {
 #define MFI_IO_TIMEOUT_SECS			180
 #define MEGASAS_SRIOV_HEARTBEAT_INTERVAL_VF	(5 * HZ)
 #define MEGASAS_OCR_SETTLE_TIME_VF		(1000 * 30)
+#define MEGASAS_SRIOV_MAX_RESET_TRIES_VF	1
 #define MEGASAS_ROUTINE_WAIT_TIME_VF		300
 #define MFI_REPLY_1078_MESSAGE_INTERRUPT	0x80000000
 #define MFI_REPLY_GEN2_MESSAGE_INTERRUPT	0x00000001
@@ -1547,6 +1548,10 @@ enum FW_BOOT_CONTEXT {
 #define MR_CAN_HANDLE_SYNC_CACHE_OFFSET		0X01000000
 
 #define MR_CAN_HANDLE_64_BIT_DMA_OFFSET		(1 << 25)
+
+#define MEGASAS_WATCHDOG_THREAD_INTERVAL	1000
+#define MEGASAS_WAIT_FOR_NEXT_DMA_MSECS		20
+#define MEGASAS_WATCHDOG_WAIT_COUNT		50
 
 enum MR_ADAPTER_TYPE {
 	MFI_SERIES = 1,
@@ -2117,6 +2122,9 @@ struct megasas_aen_event {
 struct megasas_irq_context {
 	struct megasas_instance *instance;
 	u32 MSIxIndex;
+	u32 os_irq;
+	struct irq_poll irqpoll;
+	bool irq_poll_scheduled;
 };
 
 struct MR_DRV_SYSTEM_INFO {
@@ -2241,6 +2249,7 @@ struct megasas_instance {
 	struct pci_dev *pdev;
 	u32 unique_id;
 	u32 fw_support_ieee;
+	u32 threshold_reply_count;
 
 	atomic_t fw_outstanding;
 	atomic_t ldio_outstanding;
@@ -2254,7 +2263,9 @@ struct megasas_instance {
 	struct megasas_instance_template *instancet;
 	struct tasklet_struct isr_tasklet;
 	struct work_struct work_init;
-	struct work_struct crash_init;
+	struct delayed_work fw_fault_work;
+	struct workqueue_struct *fw_fault_work_q;
+	char fault_handler_work_q_name[48];
 
 	u8 flag;
 	u8 unload;
@@ -2543,7 +2554,6 @@ int megasas_get_target_prop(struct megasas_instance *instance,
 int megasas_set_crash_dump_params(struct megasas_instance *instance,
 	u8 crash_buf_state);
 void megasas_free_host_crash_buffer(struct megasas_instance *instance);
-void megasas_fusion_crash_dump_wq(struct work_struct *work);
 
 u32 megasas_readl(struct megasas_instance *instance,
 		  const volatile void __iomem *addr);
@@ -2566,7 +2576,14 @@ int megasas_reset_target_fusion(struct scsi_cmnd *scmd);
 u32 mega_mod64(u64 dividend, u32 divisor);
 int megasas_alloc_fusion_context(struct megasas_instance *instance);
 void megasas_free_fusion_context(struct megasas_instance *instance);
+int megasas_fusion_start_watchdog(struct megasas_instance *instance);
+void megasas_fusion_stop_watchdog(struct megasas_instance *instance);
+
 void megasas_set_dma_settings(struct megasas_instance *instance,
 			      struct megasas_dcmd_frame *dcmd,
 			      dma_addr_t dma_addr, u32 dma_len);
+int megasas_adp_reset_wait_for_ready(struct megasas_instance *instance,
+				     bool do_adp_reset,
+				     int ocr_context);
+int megasas_irqpoll(struct irq_poll *irqpoll, int budget);
 #endif				/*LSI_MEGARAID_SAS_H */

@@ -50,6 +50,7 @@
 #include <linux/mutex.h>
 #include <linux/poll.h>
 #include <linux/vmalloc.h>
+#include <linux/irq_poll.h>
 
 #include <scsi/scsi.h>
 #include <scsi/scsi_cmnd.h>
@@ -4805,8 +4806,10 @@ megasas_get_ctrl_info(struct megasas_instance *instance)
 		switch (dcmd_timeout_ocr_possible(instance)) {
 		case INITIATE_OCR:
 			cmd->flags |= DRV_DCMD_SKIP_REFIRE;
+			mutex_unlock(&instance->reset_mutex);
 			megasas_reset_fusion(instance->host,
 				MFI_IO_TIMEOUT_OCR);
+			mutex_lock(&instance->reset_mutex);
 			break;
 		case KILL_ADAPTER:
 			megaraid_sas_kill_hba(instance);
@@ -5074,6 +5077,25 @@ fail_alloc_cmds:
 	return 1;
 }
 
+static
+void megasas_setup_irq_poll(struct megasas_instance *instance)
+{
+	struct megasas_irq_context *irq_ctx;
+	u32 count, i;
+
+	count = instance->msix_vectors > 0 ? instance->msix_vectors : 1;
+
+	/* Initialize IRQ poll */
+	for (i = 0; i < count; i++) {
+		irq_ctx = &instance->irq_context[i];
+		irq_ctx->os_irq = pci_irq_vector(instance->pdev, i);
+		irq_ctx->irq_poll_scheduled = false;
+		irq_poll_init(&irq_ctx->irqpoll,
+			      instance->threshold_reply_count,
+			      megasas_irqpoll);
+	}
+}
+
 /*
  * megasas_setup_irqs_ioapic -		register legacy interrupts.
  * @instance:				Adapter soft state
@@ -5152,6 +5174,16 @@ static void
 megasas_destroy_irqs(struct megasas_instance *instance) {
 
 	int i;
+	int count;
+	struct megasas_irq_context *irq_ctx;
+
+	count = instance->msix_vectors > 0 ? instance->msix_vectors : 1;
+	if (instance->adapter_type != MFI_SERIES) {
+		for (i = 0; i < count; i++) {
+			irq_ctx = &instance->irq_context[i];
+			irq_poll_disable(&irq_ctx->irqpoll);
+		}
+	}
 
 	if (instance->msix_vectors)
 		for (i = 0; i < instance->msix_vectors; i++) {
@@ -5257,7 +5289,6 @@ static int megasas_init_fw(struct megasas_instance *instance)
 	int i, j, loop, fw_msix_count = 0;
 	struct IOV_111 *iovPtr;
 	struct fusion_context *fusion;
-	bool do_adp_reset = true;
 
 	fusion = instance->ctrl_context;
 
@@ -5304,29 +5335,35 @@ static int megasas_init_fw(struct megasas_instance *instance)
 	}
 
 	if (megasas_transition_to_ready(instance, 0)) {
-		if (instance->adapter_type >= INVADER_SERIES) {
+		dev_info(&instance->pdev->dev,
+			 "Failed to transition controller to ready from %s!\n",
+			 __func__);
+		if (instance->adapter_type != MFI_SERIES) {
 			status_reg = instance->instancet->read_fw_status_reg(
 					instance);
-			do_adp_reset = status_reg & MFI_RESET_ADAPTER;
-		}
-
-		if (do_adp_reset) {
+			if (status_reg & MFI_RESET_ADAPTER) {
+				if (megasas_adp_reset_wait_for_ready
+					(instance, true, 0) == FAILED)
+					goto fail_ready_state;
+			} else {
+				goto fail_ready_state;
+			}
+		} else {
 			atomic_set(&instance->fw_reset_no_pci_access, 1);
 			instance->instancet->adp_reset
 				(instance, instance->reg_set);
 			atomic_set(&instance->fw_reset_no_pci_access, 0);
-			dev_info(&instance->pdev->dev,
-				 "FW restarted successfully from %s!\n",
-				 __func__);
 
 			/*waiting for about 30 second before retry*/
 			ssleep(30);
 
 			if (megasas_transition_to_ready(instance, 0))
 				goto fail_ready_state;
-		} else {
-			goto fail_ready_state;
 		}
+
+		dev_info(&instance->pdev->dev,
+			 "FW restarted successfully from %s!\n",
+			 __func__);
 	}
 
 	megasas_init_ctrl_params(instance);
@@ -5488,6 +5525,9 @@ static int megasas_init_fw(struct megasas_instance *instance)
 		megasas_setup_irqs_ioapic(instance))
 		goto fail_init_adapter;
 
+	if (instance->adapter_type != MFI_SERIES)
+		megasas_setup_irq_poll(instance);
+
 	instance->instancet->enable_intr(instance);
 
 	dev_info(&instance->pdev->dev, "INIT adapter done\n");
@@ -5644,14 +5684,28 @@ static int megasas_init_fw(struct megasas_instance *instance)
 
 	/* Launch SR-IOV heartbeat timer */
 	if (instance->requestorId) {
-		if (!megasas_sriov_start_heartbeat(instance, 1))
+		if (!megasas_sriov_start_heartbeat(instance, 1)) {
 			megasas_start_timer(instance);
-		else
+		} else {
 			instance->skip_heartbeat_timer_del = 1;
+			goto fail_get_ld_pd_list;
+		}
 	}
+
+	/*
+	 * Create and start watchdog thread which will monitor
+	 * controller state every 1 sec and trigger OCR when
+	 * it enters fault state
+	 */
+	if (instance->adapter_type != MFI_SERIES)
+		if (megasas_fusion_start_watchdog(instance) != SUCCESS)
+			goto fail_start_watchdog;
 
 	return 0;
 
+fail_start_watchdog:
+	if (instance->requestorId && !instance->skip_heartbeat_timer_del)
+		del_timer_sync(&instance->sriov_heartbeat_timer);
 fail_get_ld_pd_list:
 	instance->instancet->disable_intr(instance);
 	megasas_destroy_irqs(instance);
@@ -5970,8 +6024,10 @@ megasas_get_target_prop(struct megasas_instance *instance,
 		switch (dcmd_timeout_ocr_possible(instance)) {
 		case INITIATE_OCR:
 			cmd->flags |= DRV_DCMD_SKIP_REFIRE;
+			mutex_unlock(&instance->reset_mutex);
 			megasas_reset_fusion(instance->host,
 					     MFI_IO_TIMEOUT_OCR);
+			mutex_lock(&instance->reset_mutex);
 			break;
 		case KILL_ADAPTER:
 			megaraid_sas_kill_hba(instance);
@@ -6513,12 +6569,10 @@ static inline void megasas_init_ctrl_params(struct megasas_instance *instance)
 	instance->disableOnlineCtrlReset = 1;
 	instance->UnevenSpanSupport = 0;
 
-	if (instance->adapter_type != MFI_SERIES) {
+	if (instance->adapter_type != MFI_SERIES)
 		INIT_WORK(&instance->work_init, megasas_fusion_ocr_wq);
-		INIT_WORK(&instance->crash_init, megasas_fusion_crash_dump_wq);
-	} else {
+	else
 		INIT_WORK(&instance->work_init, process_fw_state_change_wq);
-	}
 }
 
 /**
@@ -6791,6 +6845,10 @@ megasas_suspend(struct pci_dev *pdev, pm_message_t state)
 	if (instance->requestorId && !instance->skip_heartbeat_timer_del)
 		del_timer_sync(&instance->sriov_heartbeat_timer);
 
+	/* Stop the FW fault detection watchdog */
+	if (instance->adapter_type != MFI_SERIES)
+		megasas_fusion_stop_watchdog(instance);
+
 	megasas_flush_cache(instance);
 	megasas_shutdown_controller(instance, MR_DCMD_HIBERNATE_SHUTDOWN);
 
@@ -6906,6 +6964,9 @@ megasas_resume(struct pci_dev *pdev)
 			megasas_setup_irqs_ioapic(instance))
 		goto fail_init_mfi;
 
+	if (instance->adapter_type != MFI_SERIES)
+		megasas_setup_irq_poll(instance);
+
 	/* Re-launch SR-IOV heartbeat timer */
 	if (instance->requestorId) {
 		if (!megasas_sriov_start_heartbeat(instance, 0))
@@ -6926,8 +6987,16 @@ megasas_resume(struct pci_dev *pdev)
 	if (megasas_start_aen(instance))
 		dev_err(&instance->pdev->dev, "Start AEN failed\n");
 
+	/* Re-launch FW fault watchdog */
+	if (instance->adapter_type != MFI_SERIES)
+		if (megasas_fusion_start_watchdog(instance) != SUCCESS)
+			goto fail_start_watchdog;
+
 	return 0;
 
+fail_start_watchdog:
+	if (instance->requestorId && !instance->skip_heartbeat_timer_del)
+		del_timer_sync(&instance->sriov_heartbeat_timer);
 fail_init_mfi:
 	megasas_free_ctrl_dma_buffers(instance);
 	megasas_free_ctrl_mem(instance);
@@ -6994,6 +7063,10 @@ static void megasas_detach_one(struct pci_dev *pdev)
 	/* Shutdown SR-IOV heartbeat timer */
 	if (instance->requestorId && !instance->skip_heartbeat_timer_del)
 		del_timer_sync(&instance->sriov_heartbeat_timer);
+
+	/* Stop the FW fault detection watchdog */
+	if (instance->adapter_type != MFI_SERIES)
+		megasas_fusion_stop_watchdog(instance);
 
 	if (instance->fw_crash_state != UNAVAILABLE)
 		megasas_free_host_crash_buffer(instance);
@@ -7291,10 +7364,13 @@ megasas_mgmt_fw_ioctl(struct megasas_instance *instance,
 		opcode = le32_to_cpu(cmd->frame->dcmd.opcode);
 
 	if (opcode == MR_DCMD_CTRL_SHUTDOWN) {
+		mutex_lock(&instance->reset_mutex);
 		if (megasas_get_ctrl_info(instance) != DCMD_SUCCESS) {
 			megasas_return_cmd(instance, cmd);
+			mutex_unlock(&instance->reset_mutex);
 			return -1;
 		}
+		mutex_unlock(&instance->reset_mutex);
 	}
 
 	if (opcode == MR_DRIVER_SET_APP_CRASHDUMP_MODE) {
