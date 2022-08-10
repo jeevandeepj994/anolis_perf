@@ -1340,7 +1340,6 @@ static void smc_llc_delete_asym_link(struct smc_link_group *lgr)
 		return; /* no asymmetric link */
 	if (!smc_link_downing(&lnk_asym->state))
 		return;
-	smcr_lnk_cluster_on_lnk_state(lnk_asym, NULL);
 	lnk_new = smc_switch_conns(lgr, lnk_asym, false);
 	smc_wr_tx_wait_no_pending_sends(lnk_asym);
 	if (!lnk_new)
@@ -1560,7 +1559,6 @@ int smc_llc_srv_add_link(struct smc_link *link,
 out_err:
 	if (link_new) {
 		link_new->state = SMC_LNK_INACTIVE;
-		smcr_lnk_cluster_on_lnk_state(link_new, NULL);
 		smcr_link_clear(link_new, false);
 	}
 out:
@@ -1671,10 +1669,8 @@ static void smc_llc_process_cli_delete_link(struct smc_link_group *lgr)
 	del_llc->reason = 0;
 	smc_llc_send_message(lnk, &qentry->msg); /* response */
 
-	if (smc_link_downing(&lnk_del->state)) {
-		smcr_lnk_cluster_on_lnk_state(lnk, NULL);
+	if (smc_link_downing(&lnk_del->state))
 		smc_switch_conns(lgr, lnk_del, false);
-	}
 	smcr_link_clear(lnk_del, true);
 
 	active_links = smc_llc_active_link_count(lgr);
@@ -1747,7 +1743,6 @@ static void smc_llc_process_srv_delete_link(struct smc_link_group *lgr)
 		goto out; /* asymmetric link already deleted */
 
 	if (smc_link_downing(&lnk_del->state)) {
-		smcr_lnk_cluster_on_lnk_state(lnk, NULL);
 		if (smc_switch_conns(lgr, lnk_del, false))
 			smc_wr_tx_wait_no_pending_sends(lnk_del);
 	}
@@ -2267,7 +2262,6 @@ void smc_llc_link_active(struct smc_link *link)
 		schedule_delayed_work(&link->llc_testlink_wrk,
 				      link->llc_testlink_time);
 	}
-	smcr_lnk_cluster_on_lnk_state(link, NULL);
 }
 
 /* called in worker context */
