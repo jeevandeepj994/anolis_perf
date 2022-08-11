@@ -459,7 +459,7 @@ static void smc_wr_tasklet_fn(struct tasklet_struct *t)
 {
 	struct smc_ib_cq *smcibcq = from_tasklet(smcibcq, t, tasklet);
 	struct ib_wc wc[SMC_WR_MAX_POLL_CQE];
-	int i, rc, completed = 0;
+	int i, rc;
 
 again:
 	do {
@@ -480,9 +480,6 @@ again:
 				break;
 			}
 		}
-
-		if (rc > 0)
-			completed += rc;
 	} while (rc > 0);
 
 	/* With IB_CQ_REPORT_MISSED_EVENTS, if ib_req_notify_cq() returns 0,
@@ -493,9 +490,6 @@ again:
 			     IB_CQ_NEXT_COMP |
 			     IB_CQ_REPORT_MISSED_EVENTS) > 0)
 		goto again;
-
-	if (smcibcq->ib_cq->dim)
-		rdma_dim(smcibcq->ib_cq->dim, completed);
 }
 
 void smc_wr_cq_handler(struct ib_cq *ib_cq, void *cq_context)
