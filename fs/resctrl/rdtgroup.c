@@ -3012,7 +3012,10 @@ static int rdtgroup_mkdir_mon(struct kernfs_node *parent_kn,
 	if (resctrl_arch_mon_capable()) {
 		ret = alloc_rmid(rdtgrp->closid);
 		if (ret < 0) {
-			rdt_last_cmd_puts("Out of RMIDs\n");
+			if (ret == -EBUSY)
+				rdt_last_cmd_puts("Out of clean RMIDs\n");
+			else
+				rdt_last_cmd_puts("Out of RMIDs\n");
 			goto out_destroy;
 		}
 
@@ -3061,7 +3064,10 @@ static int rdtgroup_mkdir_ctrl_mon(struct kernfs_node *parent_kn,
 	kn = rdtgrp->kn;
 	ret = closid_alloc();
 	if (ret < 0) {
-		rdt_last_cmd_puts("Out of CLOSIDs\n");
+		if (closid_free_map)
+			rdt_last_cmd_puts("Out of clean CLOSIDs\n");
+		else
+			rdt_last_cmd_puts("Out of CLOSIDs\n");
 		goto out_common_fail;
 	}
 	rdtgrp->closid = ret;
@@ -3069,7 +3075,10 @@ static int rdtgroup_mkdir_ctrl_mon(struct kernfs_node *parent_kn,
 	if (resctrl_arch_mon_capable()) {
 		ret = alloc_rmid(rdtgrp->closid);
 		if (ret < 0) {
-			rdt_last_cmd_puts("Out of RMIDs\n");
+			if (ret == -EBUSY)
+				rdt_last_cmd_puts("Out of clean RMIDs\n");
+			else
+				rdt_last_cmd_puts("Out of RMIDs\n");
 			goto out_closid_free;
 		}
 
