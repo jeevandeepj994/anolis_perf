@@ -66,6 +66,10 @@
 #define PCI_DEVICE_ID_LSI_AERO_10E2		0x10e2
 #define PCI_DEVICE_ID_LSI_AERO_10E5		0x10e5
 #define PCI_DEVICE_ID_LSI_AERO_10E6		0x10e6
+#define PCI_DEVICE_ID_LSI_AERO_10E0		0x10e0
+#define PCI_DEVICE_ID_LSI_AERO_10E3		0x10e3
+#define PCI_DEVICE_ID_LSI_AERO_10E4		0x10e4
+#define PCI_DEVICE_ID_LSI_AERO_10E7		0x10e7
 
 /*
  * Intel HBA SSDIDs
@@ -1547,7 +1551,10 @@ enum FW_BOOT_CONTEXT {
 
 #define MR_CAN_HANDLE_SYNC_CACHE_OFFSET		0X01000000
 
+#define MR_ATOMIC_DESCRIPTOR_SUPPORT_OFFSET	(1 << 24)
+
 #define MR_CAN_HANDLE_64_BIT_DMA_OFFSET		(1 << 25)
+#define MR_INTR_COALESCING_SUPPORT_OFFSET	(1 << 26)
 
 #define MEGASAS_WATCHDOG_THREAD_INTERVAL	1000
 #define MEGASAS_WAIT_FOR_NEXT_DMA_MSECS		20
@@ -1724,7 +1731,7 @@ struct megasas_init_frame {
 	__le32 pad_0;		/*0Ch */
 
 	__le16 flags;		/*10h */
-	__le16 reserved_3;		/*12h */
+	__le16 replyqueue_mask;		/*12h */
 	__le32 data_xfer_len;	/*14h */
 
 	__le32 queue_info_new_phys_addr_lo;	/*18h */
@@ -2155,6 +2162,23 @@ enum MR_PD_TYPE {
 #define MR_DEFAULT_NVME_MDTS_KB		128
 #define MR_NVME_PAGE_SIZE_MASK		0x000000FF
 
+/*Aero performance parameters*/
+#define MR_HIGH_IOPS_QUEUE_COUNT	8
+#define MR_DEVICE_HIGH_IOPS_DEPTH	8
+#define MR_HIGH_IOPS_BATCH_COUNT	16
+
+enum MR_PERF_MODE {
+	MR_BALANCED_PERF_MODE		= 0,
+	MR_IOPS_PERF_MODE		= 1,
+	MR_LATENCY_PERF_MODE		= 2,
+};
+
+#define MEGASAS_PERF_MODE_2STR(mode) \
+		((mode) == MR_BALANCED_PERF_MODE ? "Balanced" : \
+		 (mode) == MR_IOPS_PERF_MODE ? "IOPS" : \
+		 (mode) == MR_LATENCY_PERF_MODE ? "Latency" : \
+		 "Unknown")
+
 struct megasas_instance {
 
 	unsigned int *reply_map;
@@ -2205,6 +2229,7 @@ struct megasas_instance {
 	u32 secure_jbod_support;
 	u32 support_morethan256jbod; /* FW support for more than 256 PD/JBOD */
 	bool use_seqnum_jbod_fp;   /* Added for PD sequence */
+	bool smp_affinity_enable;
 	spinlock_t crashdump_lock;
 
 	struct megasas_register_set __iomem *reg_set;
@@ -2222,6 +2247,7 @@ struct megasas_instance {
 	u16 ldio_threshold;
 	u16 cur_can_queue;
 	u32 max_sectors_per_req;
+	bool msix_load_balance;
 	struct megasas_aen_event *ev;
 
 	struct megasas_cmd **cmd_list;
@@ -2254,11 +2280,8 @@ struct megasas_instance {
 	atomic_t fw_outstanding;
 	atomic_t ldio_outstanding;
 	atomic_t fw_reset_no_pci_access;
-	atomic_t ieee_sgl;
-	atomic_t prp_sgl;
-	atomic_t sge_holes_type1;
-	atomic_t sge_holes_type2;
-	atomic_t sge_holes_type3;
+	atomic64_t total_io_count;
+	atomic64_t high_iops_outstanding;
 
 	struct megasas_instance_template *instancet;
 	struct tasklet_struct isr_tasklet;
@@ -2325,7 +2348,12 @@ struct megasas_instance {
 	bool support_nvme_passthru;
 	u8 task_abort_tmo;
 	u8 max_reset_tmo;
+	bool support_seqnum_jbod_fp;
+	bool atomic_desc_support;
+	u8  low_latency_index_start;
+	int perf_mode;
 };
+
 struct MR_LD_VF_MAP {
 	u32 size;
 	union MR_LD_REF ref;

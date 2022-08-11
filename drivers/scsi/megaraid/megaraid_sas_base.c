@@ -107,6 +107,18 @@ unsigned int scmd_timeout = MEGASAS_DEFAULT_CMD_TIMEOUT;
 module_param(scmd_timeout, int, S_IRUGO);
 MODULE_PARM_DESC(scmd_timeout, "scsi command timeout (10-90s), default 90s. See megasas_reset_timer.");
 
+int perf_mode = -1;
+module_param(perf_mode, int, 0444);
+MODULE_PARM_DESC(perf_mode, "Performance mode (only for Aero adapters), options:\n\t\t"
+		"0 - balanced: High iops and low latency queues are allocated &\n\t\t"
+		"interrupt coalescing is enabled only on high iops queues\n\t\t"
+		"1 - iops: High iops queues are not allocated &\n\t\t"
+		"interrupt coalescing is enabled on all queues\n\t\t"
+		"2 - latency: High iops queues are not allocated &\n\t\t"
+		"interrupt coalescing is disabled on all queues\n\t\t"
+		"default mode is 'balanced'"
+		);
+
 MODULE_LICENSE("GPL");
 MODULE_VERSION(MEGASAS_VERSION);
 MODULE_AUTHOR("megaraidlinux.pdl@avagotech.com");
@@ -170,6 +182,10 @@ static struct pci_device_id megasas_pci_table[] = {
 	{PCI_DEVICE(PCI_VENDOR_ID_LSI_LOGIC, PCI_DEVICE_ID_LSI_AERO_10E2)},
 	{PCI_DEVICE(PCI_VENDOR_ID_LSI_LOGIC, PCI_DEVICE_ID_LSI_AERO_10E5)},
 	{PCI_DEVICE(PCI_VENDOR_ID_LSI_LOGIC, PCI_DEVICE_ID_LSI_AERO_10E6)},
+	{PCI_DEVICE(PCI_VENDOR_ID_LSI_LOGIC, PCI_DEVICE_ID_LSI_AERO_10E0)},
+	{PCI_DEVICE(PCI_VENDOR_ID_LSI_LOGIC, PCI_DEVICE_ID_LSI_AERO_10E3)},
+	{PCI_DEVICE(PCI_VENDOR_ID_LSI_LOGIC, PCI_DEVICE_ID_LSI_AERO_10E4)},
+	{PCI_DEVICE(PCI_VENDOR_ID_LSI_LOGIC, PCI_DEVICE_ID_LSI_AERO_10E7)},
 	{}
 };
 
@@ -4770,7 +4786,7 @@ megasas_get_ctrl_info(struct megasas_instance *instance)
 		 * in case of Firmware upgrade without system reboot.
 		 */
 		megasas_update_ext_vd_details(instance);
-		instance->use_seqnum_jbod_fp =
+		instance->support_seqnum_jbod_fp =
 			ci->adapterOperations3.useSeqNumJbodFP;
 		instance->support_morethan256jbod =
 			ci->adapter_operations4.support_pd_map_target_id;
@@ -4799,6 +4815,8 @@ megasas_get_ctrl_info(struct megasas_instance *instance)
 		dev_info(&instance->pdev->dev,
 			 "FW provided TM TaskAbort/Reset timeout\t: %d secs/%d secs\n",
 			 instance->task_abort_tmo, instance->max_reset_tmo);
+		dev_info(&instance->pdev->dev, "JBOD sequence map support\t: %s\n",
+			 instance->support_seqnum_jbod_fp ? "Yes" : "No");
 
 		break;
 
@@ -5120,6 +5138,8 @@ megasas_setup_irqs_ioapic(struct megasas_instance *instance)
 				__func__, __LINE__);
 		return -1;
 	}
+	instance->perf_mode = MR_LATENCY_PERF_MODE;
+	instance->low_latency_index_start = 0;
 	return 0;
 }
 
@@ -5154,6 +5174,7 @@ megasas_setup_irqs_msix(struct megasas_instance *instance, u8 is_probe)
 					 &instance->irq_context[j]);
 			/* Retry irq register for IO_APIC*/
 			instance->msix_vectors = 0;
+			instance->msix_load_balance = false;
 			if (is_probe) {
 				pci_free_irq_vectors(instance->pdev);
 				return megasas_setup_irqs_ioapic(instance);
@@ -5162,6 +5183,7 @@ megasas_setup_irqs_msix(struct megasas_instance *instance, u8 is_probe)
 			}
 		}
 	}
+
 	return 0;
 }
 
@@ -5212,10 +5234,12 @@ megasas_setup_jbod_map(struct megasas_instance *instance)
 	pd_seq_map_sz = sizeof(struct MR_PD_CFG_SEQ_NUM_SYNC) +
 		(sizeof(struct MR_PD_CFG_SEQ) * (MAX_PHYSICAL_DEVICES - 1));
 
+	instance->use_seqnum_jbod_fp =
+		instance->support_seqnum_jbod_fp;
 	if (reset_devices || !fusion ||
-		!instance->ctrl_info_buf->adapterOperations3.useSeqNumJbodFP) {
+		!instance->support_seqnum_jbod_fp) {
 		dev_info(&instance->pdev->dev,
-			"Jbod map is not supported %s %d\n",
+			"JBOD sequence map is disabled %s %d\n",
 			__func__, __LINE__);
 		instance->use_seqnum_jbod_fp = false;
 		return;
@@ -5254,9 +5278,11 @@ skip_alloc:
 static void megasas_setup_reply_map(struct megasas_instance *instance)
 {
 	const struct cpumask *mask;
-	unsigned int queue, cpu;
+	unsigned int queue, cpu, low_latency_index_start;
 
-	for (queue = 0; queue < instance->msix_vectors; queue++) {
+	low_latency_index_start = instance->low_latency_index_start;
+
+	for (queue = low_latency_index_start; queue < instance->msix_vectors; queue++) {
 		mask = pci_irq_get_affinity(instance->pdev, queue);
 		if (!mask)
 			goto fallback;
@@ -5267,8 +5293,96 @@ static void megasas_setup_reply_map(struct megasas_instance *instance)
 	return;
 
 fallback:
-	for_each_possible_cpu(cpu)
-		instance->reply_map[cpu] = cpu % instance->msix_vectors;
+	queue = low_latency_index_start;
+	for_each_possible_cpu(cpu) {
+		instance->reply_map[cpu] = queue;
+		if (queue == (instance->msix_vectors - 1))
+			queue = low_latency_index_start;
+		else
+			queue++;
+	}
+}
+
+/**
+ * megasas_set_high_iops_queue_affinity_hint -	Set affinity hint for high IOPS queues
+ * @instance:					Adapter soft state
+ * return:					void
+ */
+static inline void
+megasas_set_high_iops_queue_affinity_hint(struct megasas_instance *instance)
+{
+	int i;
+	int local_numa_node;
+
+	if (instance->perf_mode == MR_BALANCED_PERF_MODE) {
+		local_numa_node = dev_to_node(&instance->pdev->dev);
+
+		for (i = 0; i < instance->low_latency_index_start; i++)
+			irq_set_affinity_hint(pci_irq_vector(instance->pdev, i),
+				cpumask_of_node(local_numa_node));
+	}
+}
+
+static int
+__megasas_alloc_irq_vectors(struct megasas_instance *instance)
+{
+	int i, irq_flags;
+	struct irq_affinity desc = { .pre_vectors = instance->low_latency_index_start };
+	struct irq_affinity *descp = &desc;
+
+	irq_flags = PCI_IRQ_MSIX;
+
+	if (instance->smp_affinity_enable)
+		irq_flags |= PCI_IRQ_AFFINITY;
+	else
+		descp = NULL;
+
+	i = pci_alloc_irq_vectors_affinity(instance->pdev,
+		instance->low_latency_index_start,
+		instance->msix_vectors, irq_flags, descp);
+
+	return i;
+}
+
+/**
+ * megasas_alloc_irq_vectors -	Allocate IRQ vectors/enable MSI-x vectors
+ * @instance:			Adapter soft state
+ * return:			void
+ */
+static void
+megasas_alloc_irq_vectors(struct megasas_instance *instance)
+{
+	int i;
+	unsigned int num_msix_req;
+
+	i = __megasas_alloc_irq_vectors(instance);
+
+	if ((instance->perf_mode == MR_BALANCED_PERF_MODE) &&
+	    (i != instance->msix_vectors)) {
+		if (instance->msix_vectors)
+			pci_free_irq_vectors(instance->pdev);
+		/* Disable Balanced IOPS mode and try realloc vectors */
+		instance->perf_mode = MR_LATENCY_PERF_MODE;
+		instance->low_latency_index_start = 1;
+		num_msix_req = num_online_cpus() + instance->low_latency_index_start;
+
+		instance->msix_vectors = min(num_msix_req,
+				instance->msix_vectors);
+
+		i = __megasas_alloc_irq_vectors(instance);
+
+	}
+
+	dev_info(&instance->pdev->dev,
+		"requested/available msix %d/%d\n", instance->msix_vectors, i);
+
+	if (i > 0)
+		instance->msix_vectors = i;
+	else
+		instance->msix_vectors = 0;
+
+	if (instance->smp_affinity_enable)
+		megasas_set_high_iops_queue_affinity_hint(instance);
 }
 
 /**
@@ -5289,6 +5403,9 @@ static int megasas_init_fw(struct megasas_instance *instance)
 	int i, j, loop, fw_msix_count = 0;
 	struct IOV_111 *iovPtr;
 	struct fusion_context *fusion;
+	bool intr_coalescing;
+	unsigned int num_msix_req;
+	u16 lnksta, speed;
 
 	fusion = instance->ctrl_context;
 
@@ -5388,14 +5505,21 @@ static int megasas_init_fw(struct megasas_instance *instance)
 			MR_MAX_RAID_MAP_SIZE_MASK);
 	}
 
-	if (instance->adapter_type == VENTURA_SERIES)
+	switch (instance->adapter_type) {
+	case VENTURA_SERIES:
 		fusion->pcie_bw_limitation = true;
+		break;
+	case AERO_SERIES:
+		fusion->r56_div_offload = true;
+		break;
+	default:
+		break;
+	}
 
 	/* Check if MSI-X is supported while in ready state */
 	msix_enable = (instance->instancet->read_fw_status_reg(instance) &
 		       0x4000000) >> 0x1a;
 	if (msix_enable && !msix_disable) {
-		int irq_flags = PCI_IRQ_MSIX;
 
 		scratch_pad_1 = megasas_readl
 			(instance, &instance->reg_set->outbound_scratch_pad_1);
@@ -5434,6 +5558,12 @@ static int megasas_init_fw(struct megasas_instance *instance)
 				if (rdpq_enable)
 					instance->is_rdpq = (scratch_pad_1 & MR_RDPQ_MODE_OFFSET) ?
 								1 : 0;
+
+				if (!instance->msix_combined) {
+					instance->msix_load_balance = true;
+					instance->smp_affinity_enable = false;
+				}
+
 				fw_msix_count = instance->msix_vectors;
 				/* Save 1-15 reply post index address to local memory
 				 * Index 0 is already saved from reg offset
@@ -5452,17 +5582,82 @@ static int megasas_init_fw(struct megasas_instance *instance)
 					instance->msix_vectors);
 		} else /* MFI adapters */
 			instance->msix_vectors = 1;
-		/* Don't bother allocating more MSI-X vectors than cpus */
-		instance->msix_vectors = min(instance->msix_vectors,
-					     (unsigned int)num_online_cpus());
-		if (smp_affinity_enable)
-			irq_flags |= PCI_IRQ_AFFINITY;
-		i = pci_alloc_irq_vectors(instance->pdev, 1,
-					  instance->msix_vectors, irq_flags);
-		if (i > 0)
-			instance->msix_vectors = i;
+
+
+		/*
+		 * For Aero (if some conditions are met), driver will configure a
+		 * few additional reply queues with interrupt coalescing enabled.
+		 * These queues with interrupt coalescing enabled are called
+		 * High IOPS queues and rest of reply queues (based on number of
+		 * logical CPUs) are termed as Low latency queues.
+		 *
+		 * Total Number of reply queues = High IOPS queues + low latency queues
+		 *
+		 * For rest of fusion adapters, 1 additional reply queue will be
+		 * reserved for management commands, rest of reply queues
+		 * (based on number of logical CPUs) will be used for IOs and
+		 * referenced as IO queues.
+		 * Total Number of reply queues = 1 + IO queues
+		 *
+		 * MFI adapters supports single MSI-x so single reply queue
+		 * will be used for IO and management commands.
+		 */
+
+		intr_coalescing = (scratch_pad_1 & MR_INTR_COALESCING_SUPPORT_OFFSET) ?
+								true : false;
+		if (intr_coalescing &&
+			(num_online_cpus() >= MR_HIGH_IOPS_QUEUE_COUNT) &&
+			(instance->msix_vectors == MEGASAS_MAX_MSIX_QUEUES))
+			instance->perf_mode = MR_BALANCED_PERF_MODE;
 		else
-			instance->msix_vectors = 0;
+			instance->perf_mode = MR_LATENCY_PERF_MODE;
+
+
+		if (instance->adapter_type == AERO_SERIES) {
+			pcie_capability_read_word(instance->pdev, PCI_EXP_LNKSTA, &lnksta);
+			speed = lnksta & PCI_EXP_LNKSTA_CLS;
+
+			/*
+			 * For Aero, if PCIe link speed is <16 GT/s, then driver should operate
+			 * in latency perf mode and enable R1 PCI bandwidth algorithm
+			 */
+			if (speed < 0x4) {
+				instance->perf_mode = MR_LATENCY_PERF_MODE;
+				fusion->pcie_bw_limitation = true;
+			}
+
+			/*
+			 * Performance mode settings provided through module parameter-perf_mode will
+			 * take affect only for:
+			 * 1. Aero family of adapters.
+			 * 2. When user sets module parameter- perf_mode in range of 0-2.
+			 */
+			if ((perf_mode >= MR_BALANCED_PERF_MODE) &&
+				(perf_mode <= MR_LATENCY_PERF_MODE))
+				instance->perf_mode = perf_mode;
+			/*
+			 * If intr coalescing is not supported by controller FW, then IOPS
+			 * and Balanced modes are not feasible.
+			 */
+			if (!intr_coalescing)
+				instance->perf_mode = MR_LATENCY_PERF_MODE;
+
+		}
+
+		if (instance->perf_mode == MR_BALANCED_PERF_MODE)
+			instance->low_latency_index_start =
+				MR_HIGH_IOPS_QUEUE_COUNT;
+		else
+			instance->low_latency_index_start = 1;
+
+		num_msix_req = num_online_cpus() + instance->low_latency_index_start;
+
+		instance->msix_vectors = min(num_msix_req,
+				instance->msix_vectors);
+
+		megasas_alloc_irq_vectors(instance);
+		if (!instance->msix_vectors)
+			instance->msix_load_balance = false;
 	}
 	/*
 	 * MSI-X host index 0 is common for all adapter.
@@ -5658,8 +5853,8 @@ static int megasas_init_fw(struct megasas_instance *instance)
 		instance->UnevenSpanSupport ? "yes" : "no");
 	dev_info(&instance->pdev->dev, "firmware crash dump	: %s\n",
 		instance->crash_dump_drv_support ? "yes" : "no");
-	dev_info(&instance->pdev->dev, "jbod sync map		: %s\n",
-		instance->use_seqnum_jbod_fp ? "yes" : "no");
+	dev_info(&instance->pdev->dev, "JBOD sequence map	: %s\n",
+		instance->use_seqnum_jbod_fp ? "enabled" : "disabled");
 
 
 	instance->max_sectors_per_req = instance->max_num_sge *
@@ -6546,6 +6741,7 @@ static inline void megasas_init_ctrl_params(struct megasas_instance *instance)
 	INIT_LIST_HEAD(&instance->internal_reset_pending_q);
 
 	atomic_set(&instance->fw_outstanding, 0);
+	atomic64_set(&instance->total_io_count, 0);
 
 	init_waitqueue_head(&instance->int_cmd_wait_q);
 	init_waitqueue_head(&instance->abort_cmd_wait_q);
@@ -6568,6 +6764,8 @@ static inline void megasas_init_ctrl_params(struct megasas_instance *instance)
 	instance->last_time = 0;
 	instance->disableOnlineCtrlReset = 1;
 	instance->UnevenSpanSupport = 0;
+	instance->smp_affinity_enable = smp_affinity_enable ? true : false;
+	instance->msix_load_balance = false;
 
 	if (instance->adapter_type != MFI_SERIES)
 		INIT_WORK(&instance->work_init, megasas_fusion_ocr_wq);
@@ -6589,6 +6787,12 @@ static int megasas_probe_one(struct pci_dev *pdev,
 	u16 control = 0;
 
 	switch (pdev->device) {
+	case PCI_DEVICE_ID_LSI_AERO_10E0:
+	case PCI_DEVICE_ID_LSI_AERO_10E3:
+	case PCI_DEVICE_ID_LSI_AERO_10E4:
+	case PCI_DEVICE_ID_LSI_AERO_10E7:
+		dev_err(&pdev->dev, "Adapter is in non secure mode\n");
+		return 1;
 	case PCI_DEVICE_ID_LSI_AERO_10E1:
 	case PCI_DEVICE_ID_LSI_AERO_10E5:
 		dev_info(&pdev->dev, "Adapter is in configurable secure mode\n");
@@ -6838,6 +7042,10 @@ megasas_suspend(struct pci_dev *pdev, pm_message_t state)
 	struct megasas_instance *instance;
 
 	instance = pci_get_drvdata(pdev);
+
+	if (!instance)
+		return 0;
+
 	host = instance->host;
 	instance->unload = 1;
 
@@ -6890,6 +7098,10 @@ megasas_resume(struct pci_dev *pdev)
 	int irq_flags = PCI_IRQ_LEGACY;
 
 	instance = pci_get_drvdata(pdev);
+
+	if (!instance)
+		return 0;
+
 	host = instance->host;
 	pci_set_power_state(pdev, PCI_D0);
 	pci_enable_wake(pdev, PCI_D0, 0);
@@ -6926,7 +7138,7 @@ megasas_resume(struct pci_dev *pdev)
 	/* Now re-enable MSI-X */
 	if (instance->msix_vectors) {
 		irq_flags = PCI_IRQ_MSIX;
-		if (smp_affinity_enable)
+		if (instance->smp_affinity_enable)
 			irq_flags |= PCI_IRQ_AFFINITY;
 	}
 	rval = pci_alloc_irq_vectors(instance->pdev, 1,
@@ -7057,6 +7269,10 @@ static void megasas_detach_one(struct pci_dev *pdev)
 	u32 pd_seq_map_sz;
 
 	instance = pci_get_drvdata(pdev);
+
+	if (!instance)
+		return;
+
 	host = instance->host;
 	fusion = instance->ctrl_context;
 
@@ -7182,6 +7398,9 @@ skip_firing_dcmds:
 static void megasas_shutdown(struct pci_dev *pdev)
 {
 	struct megasas_instance *instance = pci_get_drvdata(pdev);
+
+	if (!instance)
+		return;
 
 	instance->unload = 1;
 
