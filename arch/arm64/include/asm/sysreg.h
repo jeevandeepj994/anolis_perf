@@ -11,6 +11,7 @@
 
 #include <linux/bits.h>
 #include <linux/stringify.h>
+#include <asm/gpr-num.h>
 
 /*
  * ARMv8 ARM reserves the following encoding for system registers:
@@ -97,6 +98,10 @@
 #define SET_PSTATE_UAO(x)		__emit_inst(0xd500401f | PSTATE_UAO | ((!!x) << PSTATE_Imm_shift))
 #define SET_PSTATE_SSBS(x)		__emit_inst(0xd500401f | PSTATE_SSBS | ((!!x) << PSTATE_Imm_shift))
 #define SET_PSTATE_TCO(x)		__emit_inst(0xd500401f | PSTATE_TCO | ((!!x) << PSTATE_Imm_shift))
+
+#define set_pstate_pan(x)		asm volatile(SET_PSTATE_PAN(x))
+#define set_pstate_uao(x)		asm volatile(SET_PSTATE_UAO(x))
+#define set_pstate_ssbs(x)		asm volatile(SET_PSTATE_SSBS(x))
 
 #define __SYS_BARRIER_INSN(CRm, op2, Rt) \
 	__emit_inst(0xd5000000 | sys_insn(0, 3, 3, (CRm), (op2)) | ((Rt) & 0x1f))
@@ -645,6 +650,9 @@
 #define ENDIAN_SET_EL2		0
 #endif
 
+#define INIT_SCTLR_EL2_MMU_OFF \
+	(SCTLR_EL2_RES1 | ENDIAN_SET_EL2)
+
 /* SCTLR_EL1 specific flags. */
 #define SCTLR_EL1_ATA0		(BIT(42))
 
@@ -678,12 +686,15 @@
 #define ENDIAN_SET_EL1		0
 #endif
 
-#define SCTLR_EL1_SET	(SCTLR_ELx_M    | SCTLR_ELx_C    | SCTLR_ELx_SA   |\
-			 SCTLR_EL1_SA0  | SCTLR_EL1_SED  | SCTLR_ELx_I    |\
-			 SCTLR_EL1_DZE  | SCTLR_EL1_UCT                   |\
-			 SCTLR_EL1_NTWE | SCTLR_ELx_IESB | SCTLR_EL1_SPAN |\
-			 SCTLR_ELx_ITFSB| SCTLR_ELx_ATA  | SCTLR_EL1_ATA0 |\
-			 ENDIAN_SET_EL1 | SCTLR_EL1_UCI  | SCTLR_EL1_RES1)
+#define INIT_SCTLR_EL1_MMU_OFF \
+	(ENDIAN_SET_EL1 | SCTLR_EL1_RES1)
+
+#define INIT_SCTLR_EL1_MMU_ON \
+	(SCTLR_ELx_M    | SCTLR_ELx_C    | SCTLR_ELx_SA   | SCTLR_EL1_SA0   | \
+	 SCTLR_EL1_SED  | SCTLR_ELx_I    | SCTLR_EL1_DZE  | SCTLR_EL1_UCT   | \
+	 SCTLR_EL1_NTWE | SCTLR_ELx_IESB | SCTLR_EL1_SPAN | SCTLR_ELx_ITFSB | \
+	 SCTLR_ELx_ATA  | SCTLR_EL1_ATA0 | ENDIAN_SET_EL1 | SCTLR_EL1_UCI   | \
+	 SCTLR_EL1_RES1)
 
 /* MAIR_ELx memory attributes (used by Linux) */
 #define MAIR_ATTR_DEVICE_nGnRnE		UL(0x00)
@@ -1089,17 +1100,12 @@
 
 #ifdef __ASSEMBLY__
 
-	.irp	num,0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30
-	.equ	.L__reg_num_x\num, \num
-	.endr
-	.equ	.L__reg_num_xzr, 31
-
 	.macro	mrs_s, rt, sreg
-	 __emit_inst(0xd5200000|(\sreg)|(.L__reg_num_\rt))
+	 __emit_inst(0xd5200000|(\sreg)|(.L__gpr_num_\rt))
 	.endm
 
 	.macro	msr_s, sreg, rt
-	__emit_inst(0xd5000000|(\sreg)|(.L__reg_num_\rt))
+	__emit_inst(0xd5000000|(\sreg)|(.L__gpr_num_\rt))
 	.endm
 
 #else
@@ -1108,22 +1114,16 @@
 #include <linux/types.h>
 #include <asm/alternative.h>
 
-#define __DEFINE_MRS_MSR_S_REGNUM				\
-"	.irp	num,0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30\n" \
-"	.equ	.L__reg_num_x\\num, \\num\n"			\
-"	.endr\n"						\
-"	.equ	.L__reg_num_xzr, 31\n"
-
 #define DEFINE_MRS_S						\
-	__DEFINE_MRS_MSR_S_REGNUM				\
+	__DEFINE_ASM_GPR_NUMS					\
 "	.macro	mrs_s, rt, sreg\n"				\
-	__emit_inst(0xd5200000|(\\sreg)|(.L__reg_num_\\rt))	\
+	__emit_inst(0xd5200000|(\\sreg)|(.L__gpr_num_\\rt))	\
 "	.endm\n"
 
 #define DEFINE_MSR_S						\
-	__DEFINE_MRS_MSR_S_REGNUM				\
+	__DEFINE_ASM_GPR_NUMS					\
 "	.macro	msr_s, sreg, rt\n"				\
-	__emit_inst(0xd5000000|(\\sreg)|(.L__reg_num_\\rt))	\
+	__emit_inst(0xd5000000|(\\sreg)|(.L__gpr_num_\\rt))	\
 "	.endm\n"
 
 #define UNDEFINE_MRS_S						\

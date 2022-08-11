@@ -159,10 +159,6 @@ EXPORT_SYMBOL(cpu_hwcap_keys);
 		.width = 0,				\
 	}
 
-/* meta feature for alternatives */
-static bool __maybe_unused
-cpufeature_pan_not_uao(const struct arm64_cpu_capabilities *entry, int __unused);
-
 static void cpu_enable_cnp(struct arm64_cpu_capabilities const *cap);
 
 static bool __system_matches_cap(unsigned int n);
@@ -896,7 +892,7 @@ void __init init_cpu_features(struct cpuinfo_arm64 *info)
 		sve_init_vq_map();
 	}
 
-	if (id_aa64pfr0_mpam(info->reg_id_aa64pfr0))
+	if (is_hyp_mode_available() && id_aa64pfr0_mpam(info->reg_id_aa64pfr0))
 		init_cpu_ftr_reg(SYS_MPAMIDR_EL1, info->reg_mpamidr);
 
 	/*
@@ -1124,7 +1120,7 @@ void update_cpu_features(int cpu,
 			sve_update_vq_map();
 	}
 
-	if (id_aa64pfr0_mpam(info->reg_id_aa64pfr0)) {
+	if (is_hyp_mode_available() && id_aa64pfr0_mpam(info->reg_id_aa64pfr0)) {
 		taint |= check_update_ftr_reg(SYS_MPAMIDR_EL1, cpu,
 					info->reg_mpamidr, boot->reg_mpamidr);
 	}
@@ -1655,7 +1651,7 @@ static void cpu_enable_pan(const struct arm64_cpu_capabilities *__unused)
 	WARN_ON_ONCE(in_interrupt());
 
 	sysreg_clear_set(sctlr_el1, SCTLR_EL1_SPAN, 0);
-	asm(SET_PSTATE_PAN(1));
+	set_pstate_pan(1);
 }
 #endif /* CONFIG_ARM64_PAN */
 
@@ -1782,7 +1778,7 @@ cpucap_panic_on_conflict(const struct arm64_cpu_capabilities *cap)
 static bool __maybe_unused
 test_has_mpam(const struct arm64_cpu_capabilities *entry, int scope)
 {
-	if (!has_cpuid_feature(entry, scope))
+	if (!is_hyp_mode_available() || !has_cpuid_feature(entry, scope))
 		return false;
 
 	/* Check firmware actually enabled MPAM on this cpu. */
@@ -1791,7 +1787,12 @@ test_has_mpam(const struct arm64_cpu_capabilities *entry, int scope)
 
 static void mpam_extra_caps(void)
 {
-	u64 idr = read_sanitised_ftr_reg(SYS_MPAMIDR_EL1);
+	u64 idr;
+
+	if (!is_hyp_mode_available())
+		return;
+
+	idr = read_sanitised_ftr_reg(SYS_MPAMIDR_EL1);
 
 	if (!IS_ENABLED(CONFIG_ARM64_MPAM))
 		return;
@@ -1842,28 +1843,6 @@ static const struct arm64_cpu_capabilities arm64_features[] = {
 		.type = ARM64_CPUCAP_WEAK_LOCAL_CPU_FEATURE,
 		.matches = has_no_hw_prefetch,
 	},
-#ifdef CONFIG_ARM64_UAO
-	{
-		.desc = "User Access Override",
-		.capability = ARM64_HAS_UAO,
-		.type = ARM64_CPUCAP_SYSTEM_FEATURE,
-		.matches = has_cpuid_feature,
-		.sys_reg = SYS_ID_AA64MMFR2_EL1,
-		.field_pos = ID_AA64MMFR2_UAO_SHIFT,
-		.min_field_value = 1,
-		/*
-		 * We rely on stop_machine() calling uao_thread_switch() to set
-		 * UAO immediately after patching.
-		 */
-	},
-#endif /* CONFIG_ARM64_UAO */
-#ifdef CONFIG_ARM64_PAN
-	{
-		.capability = ARM64_ALT_PAN_NOT_UAO,
-		.type = ARM64_CPUCAP_SYSTEM_FEATURE,
-		.matches = cpufeature_pan_not_uao,
-	},
-#endif /* CONFIG_ARM64_PAN */
 #ifdef CONFIG_ARM64_VHE
 	{
 		.desc = "Virtualization Host Extensions",
@@ -2739,7 +2718,7 @@ bool this_cpu_has_cap(unsigned int n)
  * - The SYSTEM_FEATURE cpu_hwcaps may not have been set.
  * In all other cases cpus_have_{const_}cap() should be used.
  */
-static bool __system_matches_cap(unsigned int n)
+static bool __maybe_unused __system_matches_cap(unsigned int n)
 {
 	if (n < ARM64_NCAPS) {
 		const struct arm64_cpu_capabilities *cap = cpu_hwcaps_ptrs[n];
@@ -2818,12 +2797,6 @@ void __init setup_cpu_features(void)
 	if (!cwg)
 		pr_warn("No Cache Writeback Granule information, assuming %d\n",
 			ARCH_DMA_MINALIGN);
-}
-
-static bool __maybe_unused
-cpufeature_pan_not_uao(const struct arm64_cpu_capabilities *entry, int __unused)
-{
-	return (__system_matches_cap(ARM64_HAS_PAN) && !__system_matches_cap(ARM64_HAS_UAO));
 }
 
 static void __maybe_unused cpu_enable_cnp(struct arm64_cpu_capabilities const *cap)

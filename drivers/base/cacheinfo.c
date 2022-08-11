@@ -30,6 +30,7 @@ struct cpu_cacheinfo *get_cpu_cacheinfo(unsigned int cpu)
 {
 	return ci_cacheinfo(cpu);
 }
+EXPORT_SYMBOL_GPL(get_cpu_cacheinfo);
 
 #ifdef CONFIG_OF
 static inline bool cache_leaves_are_shared(struct cacheinfo *this_leaf,

@@ -14,6 +14,7 @@
 
 #include <asm-generic/export.h>
 
+#include <asm/asm-extable.h>
 #include <asm/asm-offsets.h>
 #include <asm/cpufeature.h>
 #include <asm/cputype.h>
@@ -125,20 +126,6 @@ alternative_endif
 	nop
 	.endr
 	.endm
-
-/*
- * Emit an entry into the exception table
- */
-	.macro		_asm_extable, from, to
-	.pushsection	__ex_table, "a"
-	.align		3
-	.long		(\from - .), (\to - .)
-	.popsection
-	.endm
-
-#define USER(l, x...)				\
-9999:	x;					\
-	_asm_extable	9999b, l
 
 /*
  * Register aliases.
@@ -362,49 +349,52 @@ alternative_endif
 
 /*
  * Macro to perform a data cache maintenance for the interval
- * [kaddr, kaddr + size)
+ * [addr, addr + size)
  *
  * 	op:		operation passed to dc instruction
  * 	domain:		domain used in dsb instruciton
- * 	kaddr:		starting virtual address of the region
+ * 	addr:		starting virtual address of the region
  * 	size:		size of the region
- * 	Corrupts:	kaddr, size, tmp1, tmp2
+ * 	fixup:		optional label to branch to on user fault
+ * 	Corrupts:	addr, size, tmp1, tmp2
  */
-	.macro __dcache_op_workaround_clean_cache, op, kaddr
+	.macro __dcache_op_workaround_clean_cache, op, addr
 alternative_if_not ARM64_WORKAROUND_CLEAN_CACHE
-	dc	\op, \kaddr
+	dc	\op, \addr
 alternative_else
-	dc	civac, \kaddr
+	dc	civac, \addr
 alternative_endif
 	.endm
 
-	.macro dcache_by_line_op op, domain, kaddr, size, tmp1, tmp2
+	.macro dcache_by_line_op op, domain, addr, size, tmp1, tmp2, fixup
 	dcache_line_size \tmp1, \tmp2
-	add	\size, \kaddr, \size
+	add	\size, \addr, \size
 	sub	\tmp2, \tmp1, #1
-	bic	\kaddr, \kaddr, \tmp2
-9998:
+	bic	\addr, \addr, \tmp2
+.Ldcache_op\@:
 	.ifc	\op, cvau
-	__dcache_op_workaround_clean_cache \op, \kaddr
+	__dcache_op_workaround_clean_cache \op, \addr
 	.else
 	.ifc	\op, cvac
-	__dcache_op_workaround_clean_cache \op, \kaddr
+	__dcache_op_workaround_clean_cache \op, \addr
 	.else
 	.ifc	\op, cvap
-	sys	3, c7, c12, 1, \kaddr	// dc cvap
+	sys	3, c7, c12, 1, \addr	// dc cvap
 	.else
 	.ifc	\op, cvadp
-	sys	3, c7, c13, 1, \kaddr	// dc cvadp
+	sys	3, c7, c13, 1, \addr	// dc cvadp
 	.else
-	dc	\op, \kaddr
+	dc	\op, \addr
 	.endif
 	.endif
 	.endif
 	.endif
-	add	\kaddr, \kaddr, \tmp1
-	cmp	\kaddr, \size
-	b.lo	9998b
+	add	\addr, \addr, \tmp1
+	cmp	\addr, \size
+	b.lo	.Ldcache_op\@
 	dsb	\domain
+
+	_cond_extable .Ldcache_op\@, \fixup
 	.endm
 
 /*
@@ -412,20 +402,22 @@ alternative_endif
  * [start, end)
  *
  * 	start, end:	virtual addresses describing the region
- *	label:		A label to branch to on user fault.
+ *	fixup:		optional label to branch to on user fault
  * 	Corrupts:	tmp1, tmp2
  */
-	.macro invalidate_icache_by_line start, end, tmp1, tmp2, label
+	.macro invalidate_icache_by_line start, end, tmp1, tmp2, fixup
 	icache_line_size \tmp1, \tmp2
 	sub	\tmp2, \tmp1, #1
 	bic	\tmp2, \start, \tmp2
-9997:
-USER(\label, ic	ivau, \tmp2)			// invalidate I line PoU
+.Licache_op\@:
+	ic	ivau, \tmp2			// invalidate I line PoU
 	add	\tmp2, \tmp2, \tmp1
 	cmp	\tmp2, \end
-	b.lo	9997b
+	b.lo	.Licache_op\@
 	dsb	ish
 	isb
+
+	_cond_extable .Licache_op\@, \fixup
 	.endm
 
 /*
