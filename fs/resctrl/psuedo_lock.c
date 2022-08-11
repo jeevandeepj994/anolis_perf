@@ -573,7 +573,10 @@ int rdtgroup_locksetup_exit(struct rdtgroup *rdtgrp)
 	if (resctrl_arch_mon_capable()) {
 		ret = alloc_rmid(rdtgrp->closid);
 		if (ret < 0) {
-			rdt_last_cmd_puts("Out of RMIDs\n");
+			if (ret == -EBUSY)
+				rdt_last_cmd_puts("Out of clean RMIDs\n");
+			else
+				rdt_last_cmd_puts("Out of RMIDs\n");
 			return ret;
 		}
 		rdtgrp->mon.rmid = ret;
