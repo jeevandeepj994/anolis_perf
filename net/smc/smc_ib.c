@@ -865,69 +865,13 @@ void smc_ib_buf_unmap_sg(struct smc_link *lnk,
 	buf_slot->sgt[lnk->link_idx].sgl->dma_address = 0;
 }
 
-static const struct dim_cq_moder
-smc_dim_profile[RDMA_DIM_PARAMS_NUM_PROFILES] = {
-	{1,   0, 1,  0},
-	{1,   0, 4,  0},
-	{2,   0, 4,  0},
-	{2,   0, 8,  0},
-	{4,   0, 8,  0},
-	{16,  0, 8,  0},
-	{16,  0, 16, 0},
-	{32,  0, 16, 0},
-	{32,  0, 32, 0},
-};
-
-static void smc_ib_dim_work(struct work_struct *w)
-{
-	struct dim *dim = container_of(w, struct dim, work);
-	struct ib_cq *cq = dim->priv;
-
-	u16 usec = smc_dim_profile[dim->profile_ix].usec;
-	u16 comps = smc_dim_profile[dim->profile_ix].comps;
-
-	dim->state = DIM_START_MEASURE;
-	cq->device->ops.modify_cq(cq, comps, usec);
-}
-
-static void smc_ib_dim_init(struct ib_cq *cq)
-{
-	struct dim *dim;
-
-	if (!cq->device->ops.modify_cq || !cq->device->use_cq_dim)
-		return;
-
-	dim = kzalloc(sizeof(*dim), GFP_KERNEL);
-	if (!dim)
-		return;
-
-	dim->state = DIM_START_MEASURE;
-	dim->tune_state = DIM_GOING_RIGHT;
-	dim->profile_ix = RDMA_DIM_START_PROFILE;
-	dim->priv = cq;
-	cq->dim = dim;
-
-	INIT_WORK(&dim->work, smc_ib_dim_work);
-}
-
-static void smc_ib_dim_destroy(struct ib_cq *cq)
-{
-	if (!cq->dim)
-		return;
-
-	cancel_work_sync(&cq->dim->work);
-	kfree(cq->dim);
-}
-
 static void smc_ib_cleanup_cq(struct smc_ib_device *smcibdev)
 {
 	int i;
 
 	for (i = 0; i < smcibdev->num_cq; i++) {
-		if (smcibdev->smcibcq[i].ib_cq) {
-			smc_ib_dim_destroy(smcibdev->smcibcq[i].ib_cq);
+		if (smcibdev->smcibcq[i].ib_cq)
 			ib_destroy_cq(smcibdev->smcibcq[i].ib_cq);
-		}
 	}
 
 	kfree(smcibdev->smcibcq);
@@ -973,7 +917,6 @@ long smc_ib_setup_per_ibdev(struct smc_ib_device *smcibdev)
 			goto err;
 		}
 
-		smc_ib_dim_init(smcibcq->ib_cq);
 		rc = ib_req_notify_cq(smcibcq->ib_cq, IB_CQ_NEXT_COMP);
 		if (rc)
 			goto err;

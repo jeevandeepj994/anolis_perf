@@ -16,7 +16,6 @@
 #include <linux/if_ether.h>
 #include <linux/mutex.h>
 #include <linux/wait.h>
-#include <linux/dim.h>
 #include <rdma/ib_verbs.h>
 #include <net/smc.h>
 
