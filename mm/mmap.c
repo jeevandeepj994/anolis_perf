@@ -1177,13 +1177,13 @@ struct vm_area_struct *vma_merge(struct mm_struct *mm,
 		return NULL;
 
 	if (prev)
-		fcm_fixup_vma(prev);
+		fcm_sync_vma(prev);
 	next = vma_next(mm, prev);
 	area = next;
 	if (area && area->vm_end == end)		/* cases 6, 7, 8 */
 		next = next->vm_next;
 	if (next)
-		fcm_fixup_vma(next);
+		fcm_sync_vma(next);
 
 	/* verify some invariant that must be enforced by the caller */
 	VM_WARN_ON(prev && addr <= prev->vm_start);
@@ -2452,7 +2452,7 @@ int expand_upwards(struct vm_area_struct *vma, unsigned long address)
 	if (unlikely(anon_vma_prepare(vma)))
 		return -ENOMEM;
 
-	fcm_fixup_vma(vma);
+	fcm_sync_vma(vma);
 
 	/*
 	 * vma->vm_start/vm_end cannot change under us because the caller
@@ -2534,7 +2534,7 @@ int expand_downwards(struct vm_area_struct *vma,
 	if (unlikely(anon_vma_prepare(vma)))
 		return -ENOMEM;
 
-	fcm_fixup_vma(vma);
+	fcm_sync_vma(vma);
 
 	/*
 	 * vma->vm_start/vm_end cannot change under us because the caller
@@ -2714,7 +2714,7 @@ detach_vmas_to_be_unmapped(struct mm_struct *mm, struct vm_area_struct *vma,
 	insertion_point = (prev ? &prev->vm_next : &mm->mmap);
 	vma->vm_prev = NULL;
 	do {
-		fcm_fixup_vma(vma);
+		fcm_sync_vma(vma);
 		vma_rb_erase(vma, &mm->mm_rb);
 		mm->map_count--;
 		tail_vma = vma;
@@ -2753,7 +2753,7 @@ int __split_vma(struct mm_struct *mm, struct vm_area_struct *vma,
 	struct vm_area_struct *new;
 	int err;
 
-	fcm_fixup_vma(vma);
+	fcm_sync_vma(vma);
 
 	if (vma->vm_ops && vma->vm_ops->split) {
 		err = vma->vm_ops->split(vma, addr);
