@@ -59,19 +59,23 @@ struct smc_lnk_cluster {
 	u8		peer_systemid[SMC_SYSTEMID_LEN];
 	u8		peer_mac[ETH_ALEN];	/* = gid[8:10||13:15] */
 	u8		peer_gid[SMC_GID_SIZE];	/* gid of peer*/
-};
-
-struct smc_lnk_cluster_compare_arg	/* key for smc_lnk_cluster */
-{
-	int	smcr_version;
-	u8	*peer_systemid;
-	u8	*peer_gid;
-	u8	*peer_mac;
+	int		clcqpn;
+	int		role;
 };
 
 enum smc_lgr_role {		/* possible roles of a link group */
 	SMC_CLNT,	/* client */
 	SMC_SERV	/* server */
+};
+
+struct smc_lnk_cluster_compare_arg	/* key for smc_lnk_cluster */
+{
+	int	smcr_version;
+	enum smc_lgr_role role;
+	u8	*peer_systemid;
+	u8	*peer_gid;
+	u8	*peer_mac;
+	int clcqpn;
 };
 
 enum smc_link_state {			/* possible states of a link */
@@ -157,6 +161,7 @@ struct smc_link {
 	u32			wr_tx_cnt;	/* number of WR send buffers */
 	wait_queue_head_t	wr_tx_wait;	/* wait for free WR send buf */
 	atomic_t		wr_tx_refcnt;	/* tx refs to link */
+	rwlock_t		rtokens_lock;
 
 	struct smc_wr_buf	*wr_rx_bufs;	/* WR recv payload buffers */
 	struct ib_recv_wr	*wr_rx_ibs;	/* WR recv meta data */
@@ -640,7 +645,7 @@ static inline void smc_conn_leave_rtoken_pending(struct smc_sock *smc, struct sm
 		atomic_dec(&lgr->rtoken_pendings);
 }
 
-void smcr_lnk_cluster_on_lnk_state(struct smc_link *lnk, struct smc_init_info *ini);
+void smcr_lnk_cluster_on_lnk_state(struct smc_link *lnk);
 
 static inline struct smc_link_group *smc_get_lgr(struct smc_link *link)
 {
