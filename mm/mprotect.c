@@ -579,7 +579,7 @@ static int do_mprotect_pkey(unsigned long start, size_t len,
 		unsigned long newflags;
 		int new_vma_pkey;
 
-		fcm_fixup_vma(vma);
+		fcm_sync_vma(vma);
 		/* Here we know that vma->vm_start <= nstart < vma->vm_end. */
 
 		/* Does the application expect PROT_READ to imply PROT_EXEC */

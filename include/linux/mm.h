@@ -3372,6 +3372,10 @@ void fcm_cpr_done(struct mm_struct *mm, bool r, bool l);
 bool maybe_pmd_fcm(pmd_t pmd);
 void fcm_fixup_pmd(struct vm_area_struct *mpnt, pmd_t *pmd, unsigned long addr);
 void fcm_fixup_vma(struct vm_area_struct *mpnt);
+#define fcm_sync_vma(mpnt)	do {		\
+	if (unlikely(READ_ONCE(mpnt->fcm_vma)))	\
+		fcm_fixup_vma(mpnt);		\
+} while (0)
 #else
 static inline bool fcm_enabled(void)
 {
@@ -3403,6 +3407,7 @@ static inline void fcm_fixup_pmd(struct vm_area_struct *mpnt, pmd_t *pmd,
 static inline void fcm_fixup_vma(struct vm_area_struct *mpnt)
 {
 }
+#define fcm_sync_vma(mpnt)	do { } while (0)
 #endif
 
 #endif /* __KERNEL__ */
