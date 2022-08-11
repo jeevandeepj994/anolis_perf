@@ -30,6 +30,7 @@
 
 #include "smc.h"
 #include "smc_wr.h"
+#include "smc_dim.h"
 
 #define SMC_WR_MAX_POLL_CQE 10	/* max. # of compl. queue elements in 1 poll */
 
@@ -495,7 +496,7 @@ again:
 		goto again;
 
 	if (smcibcq->ib_cq->dim)
-		rdma_dim(smcibcq->ib_cq->dim, completed);
+		smc_dim(smcibcq->ib_cq->dim, completed);
 }
 
 void smc_wr_cq_handler(struct ib_cq *ib_cq, void *cq_context)
