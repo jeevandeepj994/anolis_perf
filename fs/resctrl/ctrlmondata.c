@@ -272,6 +272,8 @@ next:
 			goto next;
 		}
 	}
+
+	rdt_last_cmd_puts("Unknown domain\n");
 	return -EINVAL;
 }
 
