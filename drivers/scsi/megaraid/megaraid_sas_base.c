@@ -5559,7 +5559,8 @@ static int megasas_init_fw(struct megasas_instance *instance)
 					instance->is_rdpq = (scratch_pad_1 & MR_RDPQ_MODE_OFFSET) ?
 								1 : 0;
 
-				if (!instance->msix_combined) {
+				if (instance->adapter_type >= INVADER_SERIES &&
+				    !instance->msix_combined) {
 					instance->msix_load_balance = true;
 					instance->smp_affinity_enable = false;
 				}
@@ -6914,10 +6915,15 @@ static int megasas_probe_one(struct pci_dev *pdev,
 	return 0;
 
 fail_start_aen:
+	instance->unload = 1;
+	scsi_remove_host(instance->host);
 fail_io_attach:
 	megasas_mgmt_info.count--;
 	megasas_mgmt_info.max_index--;
 	megasas_mgmt_info.instance[megasas_mgmt_info.max_index] = NULL;
+
+	if (instance->requestorId && !instance->skip_heartbeat_timer_del)
+		del_timer_sync(&instance->sriov_heartbeat_timer);
 
 	instance->instancet->disable_intr(instance);
 	megasas_destroy_irqs(instance);
@@ -6926,8 +6932,16 @@ fail_io_attach:
 		megasas_release_fusion(instance);
 	else
 		megasas_release_mfi(instance);
+
 	if (instance->msix_vectors)
 		pci_free_irq_vectors(instance->pdev);
+	instance->msix_vectors = 0;
+
+	if (instance->fw_crash_state != UNAVAILABLE)
+		megasas_free_host_crash_buffer(instance);
+
+	if (instance->adapter_type != MFI_SERIES)
+		megasas_fusion_stop_watchdog(instance);
 fail_init_mfi:
 	scsi_host_put(host);
 fail_alloc_instance:
@@ -7095,7 +7109,7 @@ megasas_resume(struct pci_dev *pdev)
 	int rval;
 	struct Scsi_Host *host;
 	struct megasas_instance *instance;
-	int irq_flags = PCI_IRQ_LEGACY;
+	u32 status_reg;
 
 	instance = pci_get_drvdata(pdev);
 
@@ -7122,9 +7136,35 @@ megasas_resume(struct pci_dev *pdev)
 	/*
 	 * We expect the FW state to be READY
 	 */
-	if (megasas_transition_to_ready(instance, 0))
-		goto fail_ready_state;
 
+	if (megasas_transition_to_ready(instance, 0)) {
+		dev_info(&instance->pdev->dev,
+			 "Failed to transition controller to ready from %s!\n",
+			 __func__);
+		if (instance->adapter_type != MFI_SERIES) {
+			status_reg =
+				instance->instancet->read_fw_status_reg(instance);
+			if (!(status_reg & MFI_RESET_ADAPTER) ||
+				((megasas_adp_reset_wait_for_ready
+				(instance, true, 0)) == FAILED))
+				goto fail_ready_state;
+		} else {
+			atomic_set(&instance->fw_reset_no_pci_access, 1);
+			instance->instancet->adp_reset
+				(instance, instance->reg_set);
+			atomic_set(&instance->fw_reset_no_pci_access, 0);
+
+			/* waiting for about 30 seconds before retry */
+			ssleep(30);
+
+			if (megasas_transition_to_ready(instance, 0))
+				goto fail_ready_state;
+		}
+
+		dev_info(&instance->pdev->dev,
+			 "FW restarted successfully from %s!\n",
+			 __func__);
+	}
 	if (megasas_set_dma_mask(instance))
 		goto fail_set_dma_mask;
 
@@ -7136,16 +7176,15 @@ megasas_resume(struct pci_dev *pdev)
 	atomic_set(&instance->ldio_outstanding, 0);
 
 	/* Now re-enable MSI-X */
-	if (instance->msix_vectors) {
-		irq_flags = PCI_IRQ_MSIX;
-		if (instance->smp_affinity_enable)
-			irq_flags |= PCI_IRQ_AFFINITY;
+	if (instance->msix_vectors)
+		megasas_alloc_irq_vectors(instance);
+
+	if (!instance->msix_vectors) {
+		rval = pci_alloc_irq_vectors(instance->pdev, 1, 1,
+					     PCI_IRQ_LEGACY);
+		if (rval < 0)
+			goto fail_reenable_msix;
 	}
-	rval = pci_alloc_irq_vectors(instance->pdev, 1,
-				     instance->msix_vectors ?
-				     instance->msix_vectors : 1, irq_flags);
-	if (rval < 0)
-		goto fail_reenable_msix;
 
 	megasas_setup_reply_map(instance);
 
