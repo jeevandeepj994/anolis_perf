@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 #include <linux/kernel.h>
 #include <linux/spinlock.h>
+#include <linux/delay.h>
 #include <linux/slab.h>
 #include <linux/pci.h>
 #include <linux/errno.h>
@@ -349,7 +350,7 @@ void ycc_dev_rings_release(struct ycc_dev *ydev, int user_rings)
 /*
  * Check if the command queue is full.
  */
-static int ycc_ring_full(struct ycc_ring *ring)
+static inline bool ycc_ring_full(struct ycc_ring *ring)
 {
 	return ring->cmd_rd_ptr == (ring->cmd_wr_ptr + 1) % ring->max_desc;
 }
@@ -357,7 +358,7 @@ static int ycc_ring_full(struct ycc_ring *ring)
 /*
  * Check if the response queue is empty
  */
-static int ycc_ring_empty(struct ycc_ring *ring)
+static inline bool ycc_ring_empty(struct ycc_ring *ring)
 {
 	return ring->resp_rd_ptr == ring->resp_wr_ptr;
 }
@@ -380,8 +381,11 @@ static struct ycc_ring *ycc_select_ring(void)
 
 		for (i = 0; i < YCC_RINGPAIR_NUM; i++) {
 			cur_r = ydev->rings + i;
+
+			/* Ring is not for kernel */
 			if (cur_r->type != KERN_RING)
 				continue;
+
 			if (!base_r) {
 				/* It means ycc is first used */
 				base_r = cur_r;
@@ -458,11 +462,13 @@ int ycc_enqueue(struct ycc_ring *ring, void *cmd)
 	if (!ring || !ring->ydev || !cmd)
 		return -EINVAL;
 
-	/* TODO: Will use tasklet to handle cqe in bottom half */
 	spin_lock_bh(&ring->lock);
-	if (!test_bit(YDEV_STATUS_READY, &ring->ydev->status)) {
-		pr_debug("YCC: equeue error, status is not ready\n");
-		ret = -EIO;
+	if (!test_bit(YDEV_STATUS_READY, &ring->ydev->status) || ycc_ring_stopped(ring)) {
+		pr_debug("YCC: equeue error, device status: %ld, ring stopped: %d\n",
+			 ring->ydev->status, ycc_ring_stopped(ring));
+
+		/* Fallback to software */
+		ret = -EAGAIN;
 		goto out;
 	}
 
@@ -565,6 +571,9 @@ void ycc_dequeue(struct ycc_ring *ring)
 	struct ycc_resp_desc *resp;
 	int cnt = 0;
 
+	if (!test_bit(YDEV_STATUS_READY, &ring->ydev->status) || ycc_ring_stopped(ring))
+		return;
+
 	ring->resp_wr_ptr = YCC_CSR_RD(ring->csr_vaddr, REG_RING_RSP_WR_PTR);
 	while (!ycc_ring_empty(ring)) {
 		resp = (struct ycc_resp_desc *)ring->resp_base_vaddr +
@@ -581,26 +590,72 @@ void ycc_dequeue(struct ycc_ring *ring)
 }
 
 /*
- * Clear incompletion cmds in command queue. Before been invoked, must ensure that
- * 1. device error occurs in ycc internal.
- * 2. enqueue has been disabled. So no need to lock.
+ * Clear incompletion cmds in command queue while rollback cmd_wr_ptr.
+ *
+ * Note: Make sure been invoked when error occurs in YCC internal and
+ * YCC status is not ready.
  */
-void ycc_clear_ring(struct ycc_ring *ring, u32 pending_cmd)
+void ycc_clear_cmd_ring(struct ycc_ring *ring)
 {
 	struct ycc_cmd_desc *desc = NULL;
 
 	ring->cmd_rd_ptr = YCC_CSR_RD(ring->csr_vaddr, REG_RING_CMD_RD_PTR);
 	ring->cmd_wr_ptr = YCC_CSR_RD(ring->csr_vaddr, REG_RING_CMD_WR_PTR);
 
-	if (ring->cmd_rd_ptr - pending_cmd < 0)
-		ring->cmd_rd_ptr += ring->max_desc - pending_cmd;
-
 	while (ring->cmd_rd_ptr != ring->cmd_wr_ptr) {
-		desc = (struct ycc_cmd_desc *)ring->cmd_base_vaddr +
-			ring->cmd_rd_ptr;
+		desc = (struct ycc_cmd_desc *)ring->cmd_base_vaddr + ring->cmd_rd_ptr;
 		ycc_cancel_cmd(ring, desc);
 
-		if (++ring->cmd_rd_ptr == ring->max_desc)
-			ring->cmd_rd_ptr = 0;
+		if (--ring->cmd_wr_ptr == 0)
+			ring->cmd_wr_ptr = ring->max_desc;
 	}
+
+	YCC_CSR_WR(ring->csr_vaddr, REG_RING_CMD_WR_PTR, ring->cmd_wr_ptr);
+}
+
+/*
+ * Clear response queue
+ *
+ * Note: Make sure been invoked when error occurs in YCC internal and
+ * YCC status is not ready.
+ */
+void ycc_clear_resp_ring(struct ycc_ring *ring)
+{
+	struct ycc_resp_desc *resp;
+	int retry;
+	u32 pending_cmd;
+
+	/*
+	 * Check if the ring has been stopped. *stop* means no
+	 * new transactions, No need to wait for pending_cmds
+	 * been processed under this condition.
+	 */
+	retry = ycc_ring_stopped(ring) ? 0 : MAX_ERROR_RETRY;
+	pending_cmd = YCC_CSR_RD(ring->csr_vaddr, REG_RING_PENDING_CMD);
+
+	ring->resp_wr_ptr = YCC_CSR_RD(ring->csr_vaddr, REG_RING_RSP_WR_PTR);
+	while (!ycc_ring_empty(ring) || (retry && pending_cmd)) {
+		if (!ycc_ring_empty(ring)) {
+			resp = (struct ycc_resp_desc *)ring->resp_base_vaddr +
+				ring->resp_rd_ptr;
+			resp->state = CMD_CANCELLED;
+			ycc_handle_resp(ring, resp);
+
+			if (++ring->resp_rd_ptr == ring->max_desc)
+				ring->resp_rd_ptr = 0;
+
+			YCC_CSR_WR(ring->csr_vaddr, REG_RING_RSP_RD_PTR, ring->resp_rd_ptr);
+		} else {
+			udelay(MAX_SLEEP_US_PER_CHECK);
+			retry--;
+		}
+
+		pending_cmd = YCC_CSR_RD(ring->csr_vaddr, REG_RING_PENDING_CMD);
+		ring->resp_wr_ptr = YCC_CSR_RD(ring->csr_vaddr, REG_RING_RSP_WR_PTR);
+	}
+
+	if (!retry && pending_cmd)
+		ring->type = INVAL_RING;
+
+	ring->status = 0;
 }

@@ -5,14 +5,14 @@
 #include <linux/pci.h>
 #include <linux/slab.h>
 #include <linux/errno.h>
-#include <linux/delay.h>
 #include <linux/interrupt.h>
 
 #include "ycc_isr.h"
 #include "ycc_dev.h"
 #include "ycc_ring.h"
 
-#define MAX_ERROR_RETRY		50000  /* every 100us, 5s in total */
+extern void ycc_clear_cmd_ring(struct ycc_ring *ring);
+extern void ycc_clear_resp_ring(struct ycc_ring *ring);
 
 static irqreturn_t ycc_resp_isr(int irq, void *data)
 {
@@ -21,19 +21,6 @@ static irqreturn_t ycc_resp_isr(int irq, void *data)
 	schedule_work(&ring->work);
 
 	return IRQ_HANDLED;
-}
-
-static inline void ycc_clear_bme_and_wait_pending(struct pci_dev *pdev)
-{
-	pci_clear_master(pdev);
-
-	if (pci_wait_for_pending_transaction(pdev))
-		pr_warn("Failed to pending transaction\n");
-}
-
-static inline void ycc_set_bme(struct pci_dev *pdev)
-{
-	pci_set_master(pdev);
 }
 
 static int ycc_send_uevent(struct ycc_dev *ydev, const char *event)
@@ -61,29 +48,23 @@ static int ycc_send_uevent(struct ycc_dev *ydev, const char *event)
 static void ycc_fatal_error(struct ycc_dev *ydev)
 {
 	struct ycc_ring *ring;
-	u32 pending_cmd;
-	int retry = MAX_ERROR_RETRY;
 	int i;
 
 	for (i = 0; i < YCC_RINGPAIR_NUM; i++) {
-		/*
-		 * First we make sure all ycc rings's prefetched cmds
-		 * have been processed.
-		 * If timeout, regard it as processed
-		 */
-		ring = &ydev->rings[i];
+		ring = ydev->rings + i;
+
 		if (ring->type != KERN_RING)
 			continue;
 
-		pending_cmd = YCC_CSR_RD(ring->csr_vaddr, REG_RING_PENDING_CMD);
-		while (pending_cmd && retry--)
-			udelay(100);
+		spin_lock_bh(&ring->lock);
+		ycc_clear_cmd_ring(ring);
+		spin_unlock_bh(&ring->lock);
 
-		ycc_clear_ring(ring, pending_cmd);
+		ycc_clear_resp_ring(ring);
 	}
 
 	/*
-	 * After ring had been cleared, we should notify
+	 * After all rings had been cleared, we should notify
 	 * user space that ycc has fatal error
 	 */
 	ycc_send_uevent(ydev, "YCC_STATUS=fatal");
@@ -97,15 +78,12 @@ static void ycc_process_global_err(struct work_struct *work)
 	u32 hclk_err, xclk_err;
 	u32 xclk_ecc_uncor_err_0, xclk_ecc_uncor_err_1;
 	u32 hclk_ecc_uncor_err;
-	u64 ycc_ring_status;
-	u32 pending_cmd;
-	int retry = MAX_ERROR_RETRY;
 	int i;
 
-	/* First disable ycc mastering, no new transactions */
-	ycc_clear_bme_and_wait_pending(ydev->pdev);
+	if (pci_wait_for_pending_transaction(ydev->pdev))
+		pr_warn("YCC: Failed to pending transaction\n");
 
-	/* Notify user space ycc is in error handling */
+	/* Notify user space YCC is in error handling */
 	ycc_send_uevent(ydev, "YCC_STATUS=stopped");
 
 	hclk_err = YCC_CSR_RD(cfg_bar->vaddr, REG_YCC_HCLK_INT_STATUS);
@@ -115,41 +93,52 @@ static void ycc_process_global_err(struct work_struct *work)
 	hclk_ecc_uncor_err = YCC_CSR_RD(cfg_bar->vaddr, REG_YCC_HCLK_MEM_ECC_UNCOR);
 
 	if ((hclk_err & ~(YCC_HCLK_TRNG_ERR)) || xclk_err || hclk_ecc_uncor_err) {
-		pr_debug("YCC: Got uncorrected error, must be reset\n");
+		pr_err("YCC: Got uncorrected error, must be reset\n");
 		/*
-		 * Fatal error, as ycc cannot be reset in REE,
-		 * clear ring data.
+		 * Fatal error, as YCC cannot be reset in REE, clear ring data.
 		 */
 		return ycc_fatal_error(ydev);
 	}
 
 	if (xclk_ecc_uncor_err_0 || xclk_ecc_uncor_err_1) {
-		pr_debug("YCC: Got algorithm ECC error: %x ,%x\n",
+		pr_err("YCC: Got algorithm ECC error: %x ,%x\n",
 		       xclk_ecc_uncor_err_0, xclk_ecc_uncor_err_1);
 		return ycc_fatal_error(ydev);
 	}
 
-	/*
-	 * This has to be queue error. As response can respond
-	 * any way, just log the error and ignore it
-	 */
+	/* This has to be queue error. Handling command rings. */
 	for (i = 0; i < YCC_RINGPAIR_NUM; i++) {
-		ring = &ydev->rings[i];
-		pending_cmd = YCC_CSR_RD(ring->csr_vaddr, REG_RING_PENDING_CMD);
-		while (pending_cmd && retry--)
-			udelay(100);
+		ring = ydev->rings + i;
 
-		/* Regard as fatal error */
-		if (!retry)
-			return ycc_fatal_error(ydev);
+		if (ring->type != KERN_RING)
+			continue;
 
-		ycc_ring_status = YCC_CSR_RD(ring->csr_vaddr, REG_RING_STATUS);
-		if (ycc_ring_status)
-			pr_debug("YCC: Dev:%d, Ring:%d got ring err:%llx\n",
-				 ydev->id, ring->ring_id, ycc_ring_status);
+		ring->status = YCC_CSR_RD(ring->csr_vaddr, REG_RING_STATUS);
+		if (ring->status) {
+			pr_err("YCC: Dev: %d, Ring: %d got ring err: %x\n",
+			       ydev->id, ring->ring_id, ring->status);
+			spin_lock_bh(&ring->lock);
+			ycc_clear_cmd_ring(ring);
+			spin_unlock_bh(&ring->lock);
+		}
 	}
 
-	ycc_set_bme(ydev->pdev);
+	/*
+	 * Give HW a chance to process all pending_cmds
+	 * through recovering transactions.
+	 */
+	pci_set_master(ydev->pdev);
+
+	/* Handling response rings. */
+	for (i = 0; i < YCC_RINGPAIR_NUM; i++) {
+		ring = ydev->rings + i;
+
+		if (ring->type != KERN_RING || !ring->status)
+			continue;
+
+		ycc_clear_resp_ring(ring);
+	}
+
 	ycc_g_err_unmask(cfg_bar->vaddr);
 	clear_bit(YDEV_STATUS_ERR, &ydev->status);
 	set_bit(YDEV_STATUS_READY, &ydev->status);
@@ -161,15 +150,17 @@ static irqreturn_t ycc_g_err_isr(int irq, void *data)
 	struct ycc_dev *ydev = (struct ycc_dev *)data;
 	struct ycc_bar *cfg_bar;
 
+	if (test_and_set_bit(YDEV_STATUS_ERR, &ydev->status))
+		return IRQ_HANDLED;
+
 	/* Mask global errors until it has been processed */
 	cfg_bar = &ydev->ycc_bars[YCC_SEC_CFG_BAR];
 	ycc_g_err_mask(cfg_bar->vaddr);
 
-	if (test_and_set_bit(YDEV_STATUS_ERR, &ydev->status)) {
-		ycc_g_err_unmask(cfg_bar->vaddr);
-		return IRQ_HANDLED;
-	}
 	clear_bit(YDEV_STATUS_READY, &ydev->status);
+
+	/* Disable YCC mastering, no new transactions */
+	pci_clear_master(ydev->pdev);
 
 	schedule_work(&ydev->work);
 	return IRQ_HANDLED;
@@ -180,10 +171,8 @@ void ycc_resp_work_process(struct work_struct *work)
 	struct ycc_ring *ring = container_of(work, struct ycc_ring, work);
 
 	ycc_dequeue(ring);
-	if (ring->ydev->is_polling) {
-		udelay(100);
+	if (ring->ydev->is_polling)
 		schedule_work(work);
-	}
 }
 
 int ycc_enable_msix(struct ycc_dev *ydev)
