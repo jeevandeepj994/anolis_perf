@@ -1655,11 +1655,20 @@ static void domain_flush_piotlb(struct intel_iommu *iommu,
 				u64 addr, unsigned long npages, bool ih)
 {
 	u16 did = domain->iommu_did[iommu->seq_id];
+	struct iommu_domain *iommu_domain = &domain->domain;
 
 	if (domain->default_pasid)
 		qi_flush_piotlb(iommu, did, domain->default_pasid,
 				addr, npages, ih);
-
+	/* flush additional kernel DMA PASIDs attached */
+	if (iommu_domain->dma_pasid && !domain_type_is_si(domain)) {
+		/*
+		 * REVISIT: we only do PASID IOTLB inval for FL, we could have SL
+		 * for PASID in the future such as vIOMMU PT. this doesn't get hit.
+		 */
+		qi_flush_piotlb(iommu, did, iommu_domain->dma_pasid,
+				addr, npages, ih);
+	}
 	if (!list_empty(&domain->devices))
 		qi_flush_piotlb(iommu, did, PASID_RID2PASID, addr, npages, ih);
 }

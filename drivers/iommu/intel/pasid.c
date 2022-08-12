@@ -495,6 +495,7 @@ devtlb_invalidation_with_pasid(struct intel_iommu *iommu,
 {
 	struct device_domain_info *info;
 	u16 sid, qdep, pfsid;
+	struct iommu_domain *iommu_domain;
 
 	info = get_domain_info(dev);
 	if (!info || !info->ats_enabled)
@@ -503,6 +504,7 @@ devtlb_invalidation_with_pasid(struct intel_iommu *iommu,
 	sid = info->bus << 8 | info->devfn;
 	qdep = info->ats_qdep;
 	pfsid = info->pfsid;
+	iommu_domain = &info->domain->domain;
 
 	/*
 	 * When PASID 0 is used, it indicates RID2PASID(DMA request w/o PASID),
@@ -514,6 +516,13 @@ devtlb_invalidation_with_pasid(struct intel_iommu *iommu,
 		qi_flush_dev_iotlb(iommu, sid, pfsid, qdep, 0, 64 - VTD_PAGE_SHIFT);
 	else
 		qi_flush_dev_iotlb_pasid(iommu, sid, pfsid, pasid, qdep, 0, 64 - VTD_PAGE_SHIFT);
+	/*
+	 * Flush the kernel PASID if used by the device. This is the case where
+	 * a device driver uses IOVA via DMA map APIs for request with PASID.
+	 */
+	if (iommu_domain->dma_pasid)
+		qi_flush_dev_iotlb_pasid(iommu, sid, pfsid, iommu_domain->dma_pasid, qdep, 0,
+					 64 - VTD_PAGE_SHIFT);
 }
 
 static void
