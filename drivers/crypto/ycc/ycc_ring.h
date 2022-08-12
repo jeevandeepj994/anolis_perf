@@ -1,8 +1,11 @@
 // SPDX-License-Identifier: GPL-2.0
 #ifndef __YCC_RING_H
 #define __YCC_RING_H
+
 #include <linux/spinlock.h>
 #include <linux/interrupt.h>
+
+#include "ycc_dev.h"
 
 #define CMD_ILLEGAL			0x15
 #define CMD_UNDERATTACK			0x25
@@ -17,6 +20,9 @@
 #define CMD_INVALID_CONTENT_U8		0x7f
 #define CMD_INVALID_CONTENT_U64		0x7f7f7f7f7f7f7f7fULL
 
+#define MAX_SLEEP_US_PER_CHECK		100   /* every 100us to check register */
+#define MAX_ERROR_RETRY			10000 /* 1s in total */
+
 enum ring_type {
 	FREE_RING,
 	USER_RING,
@@ -26,6 +32,7 @@ enum ring_type {
 
 struct ycc_ring {
 	u16 ring_id;
+	u32 status;
 	atomic_t ref_cnt;
 	void __iomem *csr_vaddr;	/* config register address */
 	resource_size_t csr_paddr;
@@ -163,9 +170,13 @@ static inline void ycc_ring_put(struct ycc_ring *ring)
 	atomic_dec(&ring->ref_cnt);
 }
 
+static inline bool ycc_ring_stopped(struct ycc_ring *ring)
+{
+	return !!(YCC_CSR_RD(ring->csr_vaddr, REG_RING_CFG) & RING_STOP_BIT);
+}
+
 int ycc_enqueue(struct ycc_ring *ring, void *cmd);
 void ycc_dequeue(struct ycc_ring *ring);
-void ycc_clear_ring(struct ycc_ring *ring, u32 pending_cmd);
 struct ycc_ring *ycc_crypto_get_ring(void);
 void ycc_crypto_free_ring(struct ycc_ring *ring);
 int ycc_dev_rings_init(struct ycc_dev *ydev, u32 max_desc, int user_rings);
