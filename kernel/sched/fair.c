@@ -7118,6 +7118,9 @@ find_idlest_group(struct sched_domain *sd, struct task_struct *p,
 	unsigned long imbalance = scale_load_down(NICE_0_LOAD) *
 				(sd->imbalance_pct-100) / 100;
 
+	if ((sd->flags & SD_NUMA) && (sd_flag & SD_BALANCE_FORK))
+		imbalance = imbalance / 2;
+
 	do {
 		unsigned long load, avg_load, runnable_load;
 		unsigned long spare_cap, max_spare_cap;
