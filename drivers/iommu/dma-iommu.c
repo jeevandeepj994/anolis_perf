@@ -215,14 +215,14 @@ int iommu_attach_dma_pasid(struct device *dev, ioasid_t *pasid)
 		/* TODO: use per dev max_pasid instead of PCI */
 		max = PCI_PASID_MAX;
 
-		id = ioasid_alloc(host_pasid_set, 1, max, dev);
+		id = ioasid_alloc(host_pasid_set, IOASID_ALLOC_BASE, max, dev);
 		if (id == INVALID_IOASID) {
 			ret = -ENOMEM;
 			goto done_unlock;
 		}
 
 		dom->dma_pasid = id;
-		atomic_set(&dom->dma_pasid_users, 1);
+		atomic_set(&dom->dma_pasid_users, 0);
 	}
 
 	ret = iommu_attach_device_pasid(dom, dev, id);
