@@ -4672,12 +4672,12 @@ static void __dmar_remove_one_dev_info(struct device_domain_info *info)
 	if (info->dev && !dev_is_real_dma_subdevice(info->dev)) {
 		if (dev_is_pci(info->dev) && sm_supported(iommu)) {
 			intel_pasid_tear_down_entry(iommu, info->dev,
-					PASID_RID2PASID, false);
+					PASID_RID2PASID, false, false);
 			pasid = iommu_get_pasid_from_domain(info->dev,
 							&info->domain->domain);
 			if (pasid != INVALID_IOASID)
 				intel_pasid_tear_down_entry(iommu, info->dev,
-							    pasid, false);
+							    pasid, false, false);
 		}
 
 		iommu_disable_dev_iotlb(info);
@@ -4938,7 +4938,7 @@ static void aux_domain_remove_dev(struct dmar_domain *domain,
 	if (!auxiliary_unlink_device(domain, dev)) {
 		spin_lock(&iommu->lock);
 		intel_pasid_tear_down_entry(iommu, dev,
-					    domain->default_pasid, false);
+					    domain->default_pasid, false, false);
 		domain_detach_iommu(domain, iommu);
 		spin_unlock(&iommu->lock);
 	}
@@ -6492,7 +6492,7 @@ static void intel_iommu_detach_dev_pasid(struct iommu_domain *domain,
 		return;
 
 	spin_lock_irqsave(&iommu->lock, flags);
-	intel_pasid_tear_down_entry(iommu, dev, pasid, false);
+	intel_pasid_tear_down_entry(iommu, dev, pasid, false, false);
 	spin_unlock_irqrestore(&iommu->lock, flags);
 }
 

@@ -185,7 +185,7 @@ static void intel_svm_free_async_fn(struct work_struct *work)
 		list_del_rcu(&sdev->list);
 		spin_lock(&sdev->iommu->lock);
 		intel_pasid_tear_down_entry(sdev->iommu, sdev->dev,
-					svm->pasid, true);
+					svm->pasid, true, false);
 		intel_svm_drain_prq(sdev->dev, svm->pasid);
 		spin_unlock(&sdev->iommu->lock);
 		/*
@@ -355,7 +355,7 @@ static void intel_mm_release(struct mmu_notifier *mn, struct mm_struct *mm)
 	rcu_read_lock();
 	list_for_each_entry_rcu(sdev, &svm->devs, list)
 		intel_pasid_tear_down_entry(sdev->iommu, sdev->dev,
-					    svm->pasid, true);
+					    svm->pasid, true, false);
 	rcu_read_unlock();
 
 }
@@ -590,6 +590,7 @@ int intel_svm_unbind_gpasid(struct iommu_domain *domain,
 	int ret;
 	struct dmar_domain *dmar_domain;
 	struct ioasid_set *pasid_set;
+	bool keep_pte = false;
 
 	if (WARN_ON(!iommu))
 		return -EINVAL;
@@ -603,6 +604,7 @@ int intel_svm_unbind_gpasid(struct iommu_domain *domain,
 			return ret;
 		pasid = ret;
 		pasid_set = host_pasid_set;
+		keep_pte = true;
 	}
 
 	mutex_lock(&pasid_mutex);
@@ -615,9 +617,8 @@ int intel_svm_unbind_gpasid(struct iommu_domain *domain,
 			sdev->users--;
 		if (!sdev->users) {
 			list_del_rcu(&sdev->list);
-			iommu->flags |= VTD_FLAG_PGTT_SL_ONLY;
 			intel_pasid_tear_down_entry(iommu, dev,
-						    svm->pasid, false);
+						    svm->pasid, false, keep_pte);
 			intel_svm_drain_prq(dev, svm->pasid);
 			/*
 			 * Partial assignment needs to delete fault data
@@ -870,7 +871,7 @@ static int intel_svm_unbind_mm(struct device *dev, u32 pasid)
 			 * large and has to be physically contiguous. So it's
 			 * hard to be as defensive as we might like. */
 			intel_pasid_tear_down_entry(iommu, dev,
-						    svm->pasid, false);
+						    svm->pasid, false, false);
 			intel_svm_drain_prq(dev, svm->pasid);
 			kfree_rcu(sdev, rcu);
 

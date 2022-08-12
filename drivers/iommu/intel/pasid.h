@@ -124,7 +124,7 @@ int intel_pasid_setup_nested(struct intel_iommu *iommu,
 			     struct dmar_domain *domain, int addr_width);
 void intel_pasid_tear_down_entry(struct intel_iommu *iommu,
 				 struct device *dev, u32 pasid,
-				 bool fault_ignore);
+				 bool fault_ignore, bool keep_pte);
 int vcmd_alloc_pasid(struct intel_iommu *iommu, u32 *pasid);
 void vcmd_free_pasid(struct intel_iommu *iommu, u32 pasid);
 int intel_pasid_setup_slade(struct device *dev, struct dmar_domain *domain,

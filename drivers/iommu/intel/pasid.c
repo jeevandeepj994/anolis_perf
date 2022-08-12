@@ -310,7 +310,7 @@ static inline void pasid_clear_entry_with_fpd(struct pasid_entry *pe)
 
 static void
 intel_pasid_clear_entry(struct intel_iommu *iommu, struct device *dev,
-			u32 pasid, bool fault_ignore)
+			u32 pasid, bool fault_ignore, bool keep_pte)
 {
 	struct pasid_entry *pe;
 	u64 pe_val;
@@ -327,10 +327,9 @@ intel_pasid_clear_entry(struct intel_iommu *iommu, struct device *dev,
 	 */
 	pe_val = READ_ONCE(pe->val[0]);
 	nested = (((pe_val >> 6) & 0x7) == PASID_ENTRY_PGTT_NESTED) ? true : false;
-	if (nested && (iommu->flags & VTD_FLAG_PGTT_SL_ONLY)) {
+	if (nested && keep_pte) {
 		pe_val &= 0xfffffffffffffebf;
 		WRITE_ONCE(pe->val[0], pe_val);
-		iommu->flags &= ~VTD_FLAG_PGTT_SL_ONLY;
 		return;
 	}
 
@@ -558,7 +557,7 @@ flush_iotlb_all(struct intel_iommu *iommu, struct device *dev,
 }
 
 void intel_pasid_tear_down_entry(struct intel_iommu *iommu, struct device *dev,
-				 u32 pasid, bool fault_ignore)
+				 u32 pasid, bool fault_ignore, bool keep_pte)
 {
 	struct pasid_entry *pte;
 	u16 did, pgtt;
@@ -571,7 +570,7 @@ void intel_pasid_tear_down_entry(struct intel_iommu *iommu, struct device *dev,
 		return;
 
 	did = pasid_get_domain_id(pte);
-	intel_pasid_clear_entry(iommu, dev, pasid, fault_ignore);
+	intel_pasid_clear_entry(iommu, dev, pasid, fault_ignore, keep_pte);
 
 	if (!ecap_coherent(iommu->ecap))
 		clflush_cache_range(pte, sizeof(*pte));
