@@ -1655,11 +1655,20 @@ static void domain_flush_piotlb(struct intel_iommu *iommu,
 				u64 addr, unsigned long npages, bool ih)
 {
 	u16 did = domain->iommu_did[iommu->seq_id];
+	struct iommu_domain *iommu_domain = &domain->domain;
 
 	if (domain->default_pasid)
 		qi_flush_piotlb(iommu, did, domain->default_pasid,
 				addr, npages, ih);
-
+	/* flush additional kernel DMA PASIDs attached */
+	if (iommu_domain->dma_pasid && !domain_type_is_si(domain)) {
+		/*
+		 * REVISIT: we only do PASID IOTLB inval for FL, we could have SL
+		 * for PASID in the future such as vIOMMU PT. this doesn't get hit.
+		 */
+		qi_flush_piotlb(iommu, did, iommu_domain->dma_pasid,
+				addr, npages, ih);
+	}
 	if (!list_empty(&domain->devices))
 		qi_flush_piotlb(iommu, did, PASID_RID2PASID, addr, npages, ih);
 }
@@ -3210,7 +3219,7 @@ static ioasid_t intel_vcmd_ioasid_alloc(ioasid_t min, ioasid_t max, void *data)
 	 * PASID range. Host can partition guest PASID range based on
 	 * policies but it is out of guest's control.
 	 */
-	if (min < PASID_MIN || max > intel_pasid_max_id)
+	if (min < IOASID_ALLOC_BASE || max > intel_pasid_max_id)
 		return INVALID_IOASID;
 
 	if (vcmd_alloc_pasid(iommu, &ioasid))
@@ -4850,7 +4859,7 @@ static int aux_domain_add_dev(struct dmar_domain *domain,
 		u32 pasid;
 
 		/* No private data needed for the default pasid */
-		pasid = ioasid_alloc(host_pasid_set, PASID_MIN,
+		pasid = ioasid_alloc(host_pasid_set, IOASID_ALLOC_BASE,
 				     pci_max_pasids(to_pci_dev(dev)) - 1,
 				     NULL);
 		if (pasid == INVALID_IOASID) {
@@ -6397,6 +6406,19 @@ out:
 	return ret;
 }
 
+/* Temporary check */
+static inline bool check_pasid_pt_sre(void)
+{
+	struct cpuinfo_x86 *c = &cpu_data(0);
+
+	if (c->x86_model == 0x8f && c->x86_stepping >= 4) {
+               pr_debug("SPR E0+, PASID PT SRE enabled");
+               return true;
+	}
+	pr_alert("No PASID PT SRE, in-kernel PASID DMA not supported!!!");
+	return false;
+}
+
 static int intel_iommu_attach_dev_pasid(struct iommu_domain *domain,
 					struct device *dev,
 					ioasid_t pasid)
@@ -6406,6 +6428,12 @@ static int intel_iommu_attach_dev_pasid(struct iommu_domain *domain,
 	struct intel_iommu *iommu = info->iommu;
 	unsigned long flags;
 	int ret = 0;
+
+	/*
+	 * We don't bail here in that some drivers tie user SVM with
+	 * kernel PASID support.
+	 */
+	check_pasid_pt_sre();
 
 	if (!sm_supported(iommu) || !info)
 		return -ENODEV;

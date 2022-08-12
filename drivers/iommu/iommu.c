@@ -3583,10 +3583,15 @@ int iommu_attach_device_pasid(struct iommu_domain *domain,
 		return -EINVAL;
 
 	group = iommu_group_get(dev);
+	if (!group)
+		return -EINVAL;
+
 	mutex_lock(&group->mutex);
 	curr = xa_cmpxchg(&group->pasid_array, pasid, NULL, domain, GFP_KERNEL);
-	if (curr)
+	if (curr) {
+		ret = xa_err(curr) ? : -EBUSY;
 		goto out_unlock;
+	}
 	ret = domain->ops->attach_dev_pasid(domain, dev, pasid);
 	if (ret)
 		xa_erase(&group->pasid_array, pasid);
