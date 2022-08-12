@@ -6397,6 +6397,19 @@ out:
 	return ret;
 }
 
+/* Temporary check */
+static inline bool check_pasid_pt_sre(void)
+{
+	struct cpuinfo_x86 *c = &cpu_data(0);
+
+	if (c->x86_model == 0x8f && c->x86_stepping >= 4) {
+               pr_debug("SPR E0+, PASID PT SRE enabled");
+               return true;
+	}
+	pr_alert("No PASID PT SRE, in-kernel PASID DMA not supported!!!");
+	return false;
+}
+
 static int intel_iommu_attach_dev_pasid(struct iommu_domain *domain,
 					struct device *dev,
 					ioasid_t pasid)
@@ -6406,6 +6419,12 @@ static int intel_iommu_attach_dev_pasid(struct iommu_domain *domain,
 	struct intel_iommu *iommu = info->iommu;
 	unsigned long flags;
 	int ret = 0;
+
+	/*
+	 * We don't bail here in that some drivers tie user SVM with
+	 * kernel PASID support.
+	 */
+	check_pasid_pt_sre();
 
 	if (!sm_supported(iommu) || !info)
 		return -ENODEV;
