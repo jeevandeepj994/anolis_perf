@@ -147,13 +147,11 @@ static bool is_same(const char *reference, const char *test)
 	return !strcmp(reference, test);
 }
 
-static const struct pmu_events_map *__test_pmu_get_events_map(void)
+static const struct pmu_event *__test_pmu_get_events_table(void)
 {
-	const struct pmu_events_map *map;
-
-	for (map = &pmu_events_map[0]; map->cpuid; map++) {
+	for (const struct pmu_events_map *map = &pmu_events_map[0]; map->cpuid; map++) {
 		if (!strcmp(map->cpuid, "testcpu"))
-			return map;
+			return map->table;
 	}
 
 	pr_err("could not find test events map\n");
@@ -164,18 +162,17 @@ static const struct pmu_events_map *__test_pmu_get_events_map(void)
 /* Verify generated events from pmu-events.c is as expected */
 static int test_pmu_event_table(void)
 {
-	const struct pmu_events_map *map = __test_pmu_get_events_map();
-	const struct pmu_event *table;
+	const struct pmu_event *table = __test_pmu_get_events_table();
 	int map_events = 0, expected_events;
 
 	/* ignore 2x sentinels */
 	expected_events = ARRAY_SIZE(test_cpu_events) +
 			  ARRAY_SIZE(test_uncore_events) - 2;
 
-	if (!map)
+	if (!table)
 		return -1;
 
-	for (table = map->table; table->name; table++) {
+	for (; table->name; table++) {
 		struct perf_pmu_test_event *test;
 		struct pmu_event *te;
 		bool found = false;
@@ -287,10 +284,10 @@ static int __test__pmu_event_aliases(char *pmu_name, int *count)
 	LIST_HEAD(aliases);
 	int res = 0;
 	bool use_uncore_table;
-	const struct pmu_events_map *map = __test_pmu_get_events_map();
+	const struct pmu_event *table = __test_pmu_get_events_table();
 	struct perf_pmu_alias *a, *tmp;
 
-	if (!map)
+	if (!table)
 		return -1;
 
 	if (is_pmu_core(pmu_name)) {
@@ -307,7 +304,7 @@ static int __test__pmu_event_aliases(char *pmu_name, int *count)
 
 	pmu->name = pmu_name;
 
-	pmu_add_cpu_aliases_map(&aliases, pmu, map);
+	pmu_add_cpu_aliases_table(&aliases, pmu, table);
 
 	for (te = &test->event; te->name; test++, te = &test->event) {
 		struct perf_pmu_alias *alias = find_alias(te->name, &aliases);
@@ -473,13 +470,9 @@ static int check_parse_fake(const char *id)
 	return ret;
 }
 
-static void expr_failure(const char *msg,
-			 const struct pmu_events_map *map,
-			 const struct pmu_event *pe)
+static void expr_failure(const char *msg, const struct pmu_event *pe)
 {
-	pr_debug("%s for map %s %s\n", msg, map->arch, map->cpuid);
-	pr_debug("On metric %s\n", pe->metric_name);
-	pr_debug("On expression %s\n", pe->metric_expr);
+	pr_debug("%s\nOn metric %s\nOn expression %s\n", msg, pe->metric_name, pe->metric_expr);
 }
 
 struct metric {
@@ -489,7 +482,7 @@ struct metric {
 
 static int resolve_metric_simple(struct expr_parse_ctx *pctx,
 				 struct list_head *compound_list,
-				 const struct pmu_events_map *map,
+				 const struct pmu_event *map,
 				 const char *metric_name)
 {
 	struct hashmap_entry *cur, *cur_tmp;
@@ -549,8 +542,7 @@ out_err:
 
 static int test_parsing(void)
 {
-	const struct pmu_events_map *cpus_map = pmu_events_map__find();
-	const struct pmu_events_map *map;
+	const struct pmu_event *cpus_table = pmu_events_table__find();
 	const struct pmu_event *pe;
 	int i, j, k;
 	int ret = 0;
@@ -564,7 +556,8 @@ static int test_parsing(void)
 	}
 	i = 0;
 	for (;;) {
-		map = &pmu_events_map[i++];
+		const struct pmu_events_map *map = &pmu_events_map[i++];
+
 		if (!map->table)
 			break;
 		j = 0;
@@ -581,14 +574,14 @@ static int test_parsing(void)
 				continue;
 			expr__ctx_clear(ctx);
 			if (expr__find_ids(pe->metric_expr, NULL, ctx) < 0) {
-				expr_failure("Parse find ids failed", map, pe);
+				expr_failure("Parse find ids failed", pe);
 				ret++;
 				continue;
 			}
 
-			if (resolve_metric_simple(ctx, &compound_list, map,
+			if (resolve_metric_simple(ctx, &compound_list, map->table,
 						  pe->metric_name)) {
-				expr_failure("Could not resolve metrics", map, pe);
+				expr_failure("Could not resolve metrics", pe);
 				ret++;
 				goto exit; /* Don't tolerate errors due to severity */
 			}
@@ -603,7 +596,7 @@ static int test_parsing(void)
 				expr__add_id_val(ctx, strdup(cur->key), k++);
 
 			hashmap__for_each_entry(ctx->ids, cur, bkt) {
-				if (check_parse_cpu(cur->key, map == cpus_map,
+				if (check_parse_cpu(cur->key, map->table == cpus_table,
 						   pe))
 					ret++;
 			}
@@ -614,7 +607,7 @@ static int test_parsing(void)
 			}
 
 			if (expr__parse(&result, ctx, pe->metric_expr)) {
-				expr_failure("Parse failed", map, pe);
+				expr_failure("Parse failed", pe);
 				ret++;
 			}
 		}
@@ -691,8 +684,6 @@ out:
  */
 static int test_parsing_fake(void)
 {
-	const struct pmu_events_map *map;
-	const struct pmu_event *pe;
 	unsigned int i, j;
 	int err = 0;
 
@@ -704,12 +695,14 @@ static int test_parsing_fake(void)
 
 	i = 0;
 	for (;;) {
-		map = &pmu_events_map[i++];
+		const struct pmu_events_map *map = &pmu_events_map[i++];
+
 		if (!map->table)
 			break;
 		j = 0;
 		for (;;) {
-			pe = &map->table[j++];
+			const struct pmu_event *pe = &map->table[j++];
+
 			if (!pe->name && !pe->metric_group && !pe->metric_name)
 				break;
 			if (!pe->metric_expr)

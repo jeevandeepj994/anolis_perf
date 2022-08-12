@@ -708,9 +708,9 @@ static char *perf_pmu__getcpuid(struct perf_pmu *pmu)
 	return cpuid;
 }
 
-const struct pmu_events_map *perf_pmu__find_map(struct perf_pmu *pmu)
+const struct pmu_event *perf_pmu__find_table(struct perf_pmu *pmu)
 {
-	const struct pmu_events_map *map;
+	const struct pmu_event *table = NULL;
 	char *cpuid = perf_pmu__getcpuid(pmu);
 	int i;
 
@@ -722,22 +722,23 @@ const struct pmu_events_map *perf_pmu__find_map(struct perf_pmu *pmu)
 
 	i = 0;
 	for (;;) {
-		map = &pmu_events_map[i++];
-		if (!map->table) {
-			map = NULL;
+		const struct pmu_events_map *map = &pmu_events_map[i++];
+
+		if (!map->table)
+			break;
+
+		if (!strcmp_cpuid_str(map->cpuid, cpuid)) {
+			table = map->table;
 			break;
 		}
-
-		if (!strcmp_cpuid_str(map->cpuid, cpuid))
-			break;
 	}
 	free(cpuid);
-	return map;
+	return table;
 }
 
-const struct pmu_events_map *__weak pmu_events_map__find(void)
+__weak const struct pmu_event *pmu_events_table__find(void)
 {
-	return perf_pmu__find_map(NULL);
+	return perf_pmu__find_table(NULL);
 }
 
 bool pmu_uncore_alias_match(const char *pmu_name, const char *name)
@@ -785,8 +786,8 @@ out:
  * to the current running CPU. Then, add all PMU events from that table
  * as aliases.
  */
-void pmu_add_cpu_aliases_map(struct list_head *head, struct perf_pmu *pmu,
-			     const struct pmu_events_map *map)
+void pmu_add_cpu_aliases_table(struct list_head *head, struct perf_pmu *pmu,
+			       const struct pmu_event *table)
 {
 	int i;
 	const char *name = pmu->name;
@@ -796,7 +797,7 @@ void pmu_add_cpu_aliases_map(struct list_head *head, struct perf_pmu *pmu,
 	i = 0;
 	while (1) {
 		const char *cpu_name = is_arm_pmu_core(name) ? name : "cpu";
-		const struct pmu_event *pe = &map->table[i++];
+		const struct pmu_event *pe = &table[i++];
 		const char *pname = pe->pmu ? pe->pmu : cpu_name;
 
 		if (!pe->name) {
@@ -821,13 +822,13 @@ new_alias:
 
 static void pmu_add_cpu_aliases(struct list_head *head, struct perf_pmu *pmu)
 {
-	const struct pmu_events_map *map;
+	const struct pmu_event *table;
 
-	map = perf_pmu__find_map(pmu);
-	if (!map)
+	table = perf_pmu__find_table(pmu);
+	if (!table)
 		return;
 
-	pmu_add_cpu_aliases_map(head, pmu, map);
+	pmu_add_cpu_aliases_table(head, pmu, table);
 }
 
 struct pmu_sys_event_iter_data {
