@@ -1073,6 +1073,11 @@ static inline int is_zero_pfn(unsigned long pfn)
 	return offset_from_zero_pfn <= (zero_page_mask >> PAGE_SHIFT);
 }
 
+static inline int is_zero_page(struct page *page)
+{
+	return is_zero_pfn(page_to_pfn(page));
+}
+
 #define my_zero_pfn(addr)	page_to_pfn(ZERO_PAGE(addr))
 
 #else
@@ -1080,6 +1085,12 @@ static inline int is_zero_pfn(unsigned long pfn)
 {
 	extern unsigned long zero_pfn;
 	return pfn == zero_pfn;
+}
+
+static inline int is_zero_page(struct page *page)
+{
+	extern struct page *my_zero_page;
+	return page == my_zero_page;
 }
 
 static inline unsigned long my_zero_pfn(unsigned long addr)
