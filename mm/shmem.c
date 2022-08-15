@@ -1809,7 +1809,14 @@ alloc_huge:
 		huge_gfp = limit_gfp_mask(huge_gfp, gfp);
 		page = shmem_alloc_and_acct_page(huge_gfp, inode, index, true);
 		if (IS_ERR(page)) {
-alloc_nohuge:		page = shmem_alloc_and_acct_page(gfp, inode,
+alloc_nohuge:
+			if (vmf && !mm_forbids_zeropage(vma->vm_mm) &&
+			    !(vma->vm_flags & VM_SHARED)) {
+				page = ZERO_PAGE(0);
+				get_page(page);
+				goto out;
+			}
+			page = shmem_alloc_and_acct_page(gfp, inode,
 					index, false);
 		}
 		if (IS_ERR(page)) {
@@ -1916,6 +1923,14 @@ clear:
 		error = -EINVAL;
 		goto unlock;
 	}
+	/*
+	 * If the VMA that fault page belongs to is VM_SHARED, we should unmap all
+	 * zero page mappings to make the MMAP_PRIVATE VMA do page fault again
+	 * to catch page cache.
+	 */
+	if (page && vmf && (vma->vm_flags & VM_SHARED))
+		try_to_unmap_zeropage(page, TTU_ZEROPAGE);
+out:
 	*pagep = page + index - hindex;
 	return 0;
 
