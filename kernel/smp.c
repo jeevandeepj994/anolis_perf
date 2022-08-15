@@ -801,17 +801,38 @@ void __init setup_nr_cpu_ids(void)
 	nr_cpu_ids = find_last_bit(cpumask_bits(cpu_possible_mask),NR_CPUS) + 1;
 }
 
+/* Setup configured maximum number of CPUs to activate */
+unsigned int boot_cpu_count = NR_CPUS;
+EXPORT_SYMBOL(boot_cpu_count);
+
+/* get boot cpu count from cmdline */
+static int __init bootcpus(char *str)
+{
+	int boot_cpus;
+
+	if (get_option(&str, &boot_cpus) && boot_cpus > 0 && boot_cpus <= setup_max_cpus)
+		boot_cpu_count = boot_cpus;
+
+	return 0;
+}
+early_param("bootcpus", bootcpus);
+
 /* Called by boot processor to activate the rest. */
 void __init smp_init(void)
 {
 	int num_nodes, num_cpus;
+	int cpu_count = setup_max_cpus;
 
 	idle_threads_init();
 	cpuhp_threads_init();
 
 	pr_info("Bringing up secondary CPUs ...\n");
 
-	bringup_nonboot_cpus(setup_max_cpus);
+#if defined(CONFIG_ARM64)
+	if (boot_cpu_count != NR_CPUS)
+		cpu_count = boot_cpu_count;
+#endif
+	bringup_nonboot_cpus(cpu_count);
 
 	num_nodes = num_online_nodes();
 	num_cpus  = num_online_cpus();
