@@ -3746,6 +3746,10 @@ static vm_fault_t __do_fault(struct vm_fault *vmf)
 		return poisonret;
 	}
 
+	/* Do not lock the zero page */
+	if (unlikely(is_zero_page(vmf->page)))
+		return ret;
+
 	if (unlikely(!(ret & VM_FAULT_LOCKED)))
 		lock_page(vmf->page);
 	else
@@ -3935,11 +3939,41 @@ vm_fault_t alloc_set_pte(struct vm_fault *vmf, struct page *page)
 
 	flush_icache_page(vma, page);
 	entry = mk_pte(page, vma->vm_page_prot);
+
+	/*
+	 * If it's zero page, vmf->ptl should be held to avoid other VMAs that share
+	 * the same xarray do the same page fault simultaneously, which may
+	 * leads to wrong semantic of MMAP_PRIVATE.
+	 *
+	 * E.g:
+	 *          MMAP_PRIVATE                         MMAP_SHARED
+	 *          do_read_fault
+	 *						do_shared_fault
+	 *	    check pagecache
+	 *						   alloc_page
+	 *						add_to_pagecache
+	 *					      try_to_unmap_zeropage
+	 *		set_pte
+	 *
+	 * In this scenario, zero page can not be unmapped.
+	 */
+	if (unlikely(is_zero_page(page))) {
+		/*
+		 * If found the page cache entry here, corresponding page cache
+		 * has been set. Thus retry it to get the valid page cache not
+		 * the zero page.
+		 */
+		struct page *new_page = find_get_entry(vma->vm_file->f_mapping,
+						       vmf->pgoff);
+		if (new_page)
+			return VM_FAULT_RETRY;
+
+		entry = pte_mkspecial(entry);
+	}
+
 	entry = pte_sw_mkyoung(entry);
 	if (write)
 		entry = maybe_mkwrite(pte_mkdirty(entry), vma);
-	if (unlikely(is_zero_page(page)))
-		entry = pte_mkspecial(entry);
 	/* copy-on-write page */
 	if (write && !(vma->vm_flags & VM_SHARED)) {
 		inc_mm_counter_fast(vma->vm_mm, MM_ANONPAGES);
@@ -4154,7 +4188,8 @@ static vm_fault_t do_read_fault(struct vm_fault *vmf)
 #endif
 
 	ret |= finish_fault(vmf);
-	unlock_page(vmf->page);
+	if (likely(!is_zero_page(vmf->page)))
+		unlock_page(vmf->page);
 #ifdef CONFIG_DUPTEXT
 	if (vmf->dup_page)
 		put_page(vmf->page);
@@ -4196,7 +4231,8 @@ static vm_fault_t do_cow_fault(struct vm_fault *vmf)
 	__SetPageUptodate(vmf->cow_page);
 
 	ret |= finish_fault(vmf);
-	unlock_page(vmf->page);
+	if (likely(!is_zero_page(vmf->page)))
+		unlock_page(vmf->page);
 	put_page(vmf->page);
 	if (unlikely(ret & (VM_FAULT_ERROR | VM_FAULT_NOPAGE | VM_FAULT_RETRY)))
 		goto uncharge_out;
