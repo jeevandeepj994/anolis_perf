@@ -147,6 +147,9 @@ __setup("norandmaps", disable_randmaps);
 unsigned long zero_pfn __read_mostly;
 EXPORT_SYMBOL(zero_pfn);
 
+struct page *my_zero_page;
+EXPORT_SYMBOL(my_zero_page);
+
 unsigned long highest_memmap_pfn __read_mostly;
 
 /*
@@ -154,6 +157,7 @@ unsigned long highest_memmap_pfn __read_mostly;
  */
 static int __init init_zero_pfn(void)
 {
+	my_zero_page = ZERO_PAGE(0);
 	zero_pfn = page_to_pfn(ZERO_PAGE(0));
 	return 0;
 }
