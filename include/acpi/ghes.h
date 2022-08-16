@@ -145,16 +145,17 @@ int ghes_notify_sea(void);
 static inline int ghes_notify_sea(void) { return -ENOENT; }
 #endif
 
+#ifdef CONFIG_YITIAN_CPER_RAWDATA
 #pragma pack(1)
-struct raw_data_header {
+struct yitian_raw_data_header {
 	uint32_t signature; /* 'r' 'a' 'w' 'd' */
 	uint8_t type;
-	uint8_t ras_count;
+	uint8_t common_reg_nr;
 	/* one record may have multiple sub-record (up to 6) */
 	uint8_t sub_type[6];
 };
 
-struct ras_reg_common {
+struct yitian_ras_common_reg {
 	uint64_t fr;
 	uint64_t ctrl;
 	uint64_t status;
@@ -165,7 +166,7 @@ struct ras_reg_common {
 	uint64_t misc3;
 };
 
-enum ras_type {
+enum yitian_ras_type {
 	ERR_TYPE_GENERIC = 0x40,
 	ERR_TYPE_CORE = 0x41,
 	ERR_TYPE_GIC = 0x42,
@@ -174,6 +175,7 @@ enum ras_type {
 	ERR_TYPE_DDR = 0x50,
 	ERR_TYPE_PCI = 0x60
 };
+
 enum cmn_node_type {
 	NODE_TYPE_DVM = 0x1,
 	NODE_TYPE_CFG = 0x2,
@@ -197,11 +199,49 @@ enum cmn_node_type {
 	NODE_TYPE_CCHA = 0x104,
 	NODE_TYPE_CCLA = 0x105,
 };
+
+struct yitian_ddr_sys_reg {
+	uint64_t esr;
+	uint64_t elr;
+	uint64_t far;
+	uint64_t scr;
+	uint64_t sctlr;
+	uint64_t lr;
+};
+
+struct yitian_ddr_ecc_data {
+	uint32_t eccerrcnt;
+	uint32_t eccstat;
+	uint32_t adveccstat;
+	uint32_t eccsymbol;
+	uint32_t eccerrcntstat;
+	uint32_t eccerrcnt0;
+	uint32_t eccerrcnt1;
+	uint32_t ecccaddr0;
+	uint32_t ecccaddr1;
+	uint32_t ecccdata0;
+	uint32_t ecccdata1;
+	uint32_t eccuaddr0;
+	uint32_t eccuaddr1;
+	uint32_t eccudata0;
+	uint32_t eccudata1;
+};
+
+struct yitian_ddr_raw_data {
+	uint32_t intr; /* interrupt num, valid for interrupt only, for exception intr=0 */
+	uint8_t ex_type; /* 1:sync exception 2:interrupt 3:Serror */
+	uint8_t el_nr; /* error el, only valid for ex_type==1, 0:el0 1:el1 2:el2 */
+	uint8_t err_type; /* 1:ecc 2:CA parity 3:R/W CRC */
+	struct yitian_ddr_sys_reg sys_regs; /* Only valid for ex_type==1 */
+	struct yitian_ddr_ecc_data ecc_data; /* Only valid for err_type==1 */
+};
+
 #pragma pack()
 
-#define apei_estatus_for_each_raw_reg_common(r_data_header, reg_common) \
-	for (reg_common = (struct ras_reg_common *)(r_data_header + 1); \
-	     (void *)(reg_common) - (void *)(r_data_header + 1) < r_data_header->ras_count; \
-	     reg_common = (((void *)(reg_common)) + 1))
+#define yitian_estatus_for_each_raw_reg_common(header, reg) \
+	for (reg = (struct yitian_ras_common_reg *)(header + 1); \
+	     (void *)(reg) - (void *)(header + 1) < header->common_reg_nr; \
+	     reg = (((void *)(reg)) + 1))
+#endif /* CONFIG_YITIAN_CPER_RAWDATA */
 
 #endif /* GHES_H */
