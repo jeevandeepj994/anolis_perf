@@ -1065,6 +1065,7 @@ struct kvm_ppc_resize_hpt {
 
 #define KVM_CAP_XSAVE2 208
 #define KVM_CAP_SYS_ATTRIBUTES 209
+#define KVM_CAP_X86_TRIPLE_FAULT_EVENT 218
 
 #ifdef KVM_CAP_IRQ_ROUTING
 
