@@ -150,6 +150,7 @@ void ext4_fc_init_inode(struct inode *inode)
 	ext4_fc_reset_inode(inode);
 	ext4_clear_inode_state(inode, EXT4_STATE_FC_COMMITTING);
 	INIT_LIST_HEAD(&ei->i_fc_list);
+	INIT_LIST_HEAD(&ei->i_fc_dilist);
 	init_waitqueue_head(&ei->i_fc_wait);
 	atomic_set(&ei->i_fc_updates, 0);
 }
@@ -230,6 +231,8 @@ void ext4_fc_stop_update(struct inode *inode)
 void ext4_fc_del(struct inode *inode)
 {
 	struct ext4_inode_info *ei = EXT4_I(inode);
+	struct ext4_sb_info *sbi = EXT4_SB(inode->i_sb);
+	struct ext4_fc_dentry_update *fc_dentry;
 
 	if (!test_opt2(inode->i_sb, JOURNAL_FAST_COMMIT) ||
 	    (EXT4_SB(inode->i_sb)->s_mount_state & EXT4_FC_REPLAY))
@@ -237,7 +240,7 @@ void ext4_fc_del(struct inode *inode)
 
 restart:
 	spin_lock(&EXT4_SB(inode->i_sb)->s_fc_lock);
-	if (list_empty(&ei->i_fc_list)) {
+	if (list_empty(&ei->i_fc_list) && list_empty(&ei->i_fc_dilist)) {
 		spin_unlock(&EXT4_SB(inode->i_sb)->s_fc_lock);
 		return;
 	}
@@ -246,8 +249,33 @@ restart:
 		ext4_fc_wait_committing_inode(inode);
 		goto restart;
 	}
-	list_del_init(&ei->i_fc_list);
-	spin_unlock(&EXT4_SB(inode->i_sb)->s_fc_lock);
+
+	if (!list_empty(&ei->i_fc_list))
+		list_del_init(&ei->i_fc_list);
+
+	/*
+	 * Since this inode is getting removed, let's also remove all FC
+	 * dentry create references, since it is not needed to log it anyways.
+	 */
+	if (list_empty(&ei->i_fc_dilist)) {
+		spin_unlock(&sbi->s_fc_lock);
+		return;
+	}
+
+	fc_dentry = list_first_entry(&ei->i_fc_dilist, struct ext4_fc_dentry_update, fcd_dilist);
+	WARN_ON(fc_dentry->fcd_op != EXT4_FC_TAG_CREAT);
+	list_del_init(&fc_dentry->fcd_list);
+	list_del_init(&fc_dentry->fcd_dilist);
+
+	WARN_ON(!list_empty(&ei->i_fc_dilist));
+	spin_unlock(&sbi->s_fc_lock);
+
+	if (fc_dentry->fcd_name.name &&
+		fc_dentry->fcd_name.len > DNAME_INLINE_LEN)
+		kfree(fc_dentry->fcd_name.name);
+	kmem_cache_free(ext4_fc_dentry_cachep, fc_dentry);
+
+	return;
 }
 
 /*
@@ -401,13 +429,27 @@ static int __track_dentry_update(struct inode *inode, void *arg, bool update)
 		node->fcd_name.name = node->fcd_iname;
 	}
 	node->fcd_name.len = dentry->d_name.len;
-
+	INIT_LIST_HEAD(&node->fcd_dilist);
 	spin_lock(&sbi->s_fc_lock);
 	if (ext4_test_mount_flag(inode->i_sb, EXT4_MF_FC_COMMITTING))
 		list_add_tail(&node->fcd_list,
 				&sbi->s_fc_dentry_q[FC_Q_STAGING]);
 	else
 		list_add_tail(&node->fcd_list, &sbi->s_fc_dentry_q[FC_Q_MAIN]);
+
+	/*
+	 * This helps us keep a track of all fc_dentry updates which is part of
+	 * this ext4 inode. So in case the inode is getting unlinked, before
+	 * even we get a chance to fsync, we could remove all fc_dentry
+	 * references while evicting the inode in ext4_fc_del().
+	 * Also with this, we don't need to loop over all the inodes in
+	 * sbi->s_fc_q to get the corresponding inode in
+	 * ext4_fc_commit_dentry_updates().
+	 */
+	if (dentry_update->op == EXT4_FC_TAG_CREAT) {
+		WARN_ON(!list_empty(&ei->i_fc_dilist));
+		list_add_tail(&node->fcd_dilist, &ei->i_fc_dilist);
+	}
 	spin_unlock(&sbi->s_fc_lock);
 	mutex_lock(&ei->i_fc_lock);
 
@@ -548,13 +590,13 @@ void ext4_fc_track_range(handle_t *handle, struct inode *inode, ext4_lblk_t star
 	trace_ext4_fc_track_range(inode, start, end, ret);
 }
 
-static void ext4_fc_submit_bh(struct super_block *sb)
+static void ext4_fc_submit_bh(struct super_block *sb, bool is_tail)
 {
 	int write_flags = REQ_SYNC;
 	struct buffer_head *bh = EXT4_SB(sb)->s_fc_bh;
 
-	/* TODO: REQ_FUA | REQ_PREFLUSH is unnecessarily expensive. */
-	if (test_opt(sb, BARRIER))
+	/* Add REQ_FUA | REQ_PREFLUSH only its tail */
+	if (test_opt(sb, BARRIER) && is_tail)
 		write_flags |= REQ_FUA | REQ_PREFLUSH;
 	lock_buffer(bh);
 	set_buffer_dirty(bh);
@@ -628,7 +670,7 @@ static u8 *ext4_fc_reserve_space(struct super_block *sb, int len, u32 *crc)
 		*crc = ext4_chksum(sbi, *crc, tl, sizeof(*tl));
 	if (pad_len > 0)
 		ext4_fc_memzero(sb, tl + 1, pad_len, crc);
-	ext4_fc_submit_bh(sb);
+	ext4_fc_submit_bh(sb, false);
 
 	ret = jbd2_fc_get_buf(EXT4_SB(sb)->s_journal, &bh);
 	if (ret)
@@ -685,7 +727,7 @@ static int ext4_fc_write_tail(struct super_block *sb, u32 crc)
 	tail.fc_crc = cpu_to_le32(crc);
 	ext4_fc_memcpy(sb, dst, &tail.fc_crc, sizeof(tail.fc_crc), NULL);
 
-	ext4_fc_submit_bh(sb);
+	ext4_fc_submit_bh(sb, true);
 
 	return 0;
 }
@@ -759,7 +801,9 @@ static int ext4_fc_write_inode(struct inode *inode, u32 *crc)
 	if (ret)
 		return ret;
 
-	if (EXT4_INODE_SIZE(inode->i_sb) > EXT4_GOOD_OLD_INODE_SIZE)
+	if (ext4_test_inode_flag(inode, EXT4_INODE_INLINE_DATA))
+		inode_len = EXT4_INODE_SIZE(inode->i_sb);
+	else if (EXT4_INODE_SIZE(inode->i_sb) > EXT4_GOOD_OLD_INODE_SIZE)
 		inode_len += ei->i_extra_isize;
 
 	fc_inode.fc_ino = cpu_to_le32(inode->i_ino);
@@ -930,7 +974,7 @@ __releases(&sbi->s_fc_lock)
 	struct ext4_sb_info *sbi = EXT4_SB(sb);
 	struct ext4_fc_dentry_update *fc_dentry;
 	struct inode *inode;
-	struct list_head *pos, *n, *fcd_pos, *fcd_n;
+	struct list_head *fcd_pos, *fcd_n;
 	struct ext4_inode_info *ei;
 	int ret;
 
@@ -953,20 +997,16 @@ __releases(&sbi->s_fc_lock)
 			continue;
 		}
 
-		inode = NULL;
-		list_for_each_safe(pos, n, &sbi->s_fc_q[FC_Q_MAIN]) {
-			ei = list_entry(pos, struct ext4_inode_info, i_fc_list);
-			if (ei->vfs_inode.i_ino == fc_dentry->fcd_ino) {
-				inode = &ei->vfs_inode;
-				break;
-			}
-		}
 		/*
-		 * If we don't find inode in our list, then it was deleted,
-		 * in which case, we don't need to record it's create tag.
+		 * With fcd_dilist we need not loop in sbi->s_fc_q to get the
+		 * corresponding inode pointer
 		 */
-		if (!inode)
-			continue;
+		WARN_ON(list_empty(&fc_dentry->fcd_dilist));
+		ei = list_first_entry(&fc_dentry->fcd_dilist,
+				struct ext4_inode_info, i_fc_dilist);
+		inode = &ei->vfs_inode;
+		WARN_ON(inode->i_ino != fc_dentry->fcd_ino);
+
 		spin_unlock(&sbi->s_fc_lock);
 
 		/*
@@ -1090,15 +1130,15 @@ int ext4_fc_commit(journal_t *journal, tid_t commit_tid)
 	int reason = EXT4_FC_REASON_OK, fc_bufs_before = 0;
 	ktime_t start_time, commit_time;
 
-	trace_ext4_fc_commit_start(sb);
-
-	start_time = ktime_get();
-
 	if (!test_opt2(sb, JOURNAL_FAST_COMMIT) ||
 		(ext4_fc_is_ineligible(sb))) {
 		reason = EXT4_FC_REASON_INELIGIBLE;
 		goto out;
 	}
+
+	trace_ext4_fc_commit_start(sb);
+
+	start_time = ktime_get();
 
 restart_fc:
 	ret = jbd2_fc_begin_commit(journal, commit_tid);
@@ -1208,6 +1248,7 @@ static void ext4_fc_cleanup(journal_t *journal, int full)
 					     struct ext4_fc_dentry_update,
 					     fcd_list);
 		list_del_init(&fc_dentry->fcd_list);
+		list_del_init(&fc_dentry->fcd_dilist);
 		spin_unlock(&sbi->s_fc_lock);
 
 		if (fc_dentry->fcd_name.name &&
@@ -1482,7 +1523,8 @@ static int ext4_fc_replay_inode(struct super_block *sb, struct ext4_fc_tl *tl,
 	 * crashing. This should be fixed but until then, we calculate
 	 * the number of blocks the inode.
 	 */
-	ext4_ext_replay_set_iblocks(inode);
+	if (!ext4_test_inode_flag(inode, EXT4_INODE_INLINE_DATA))
+		ext4_ext_replay_set_iblocks(inode);
 
 	inode->i_generation = le32_to_cpu(ext4_raw_inode(&iloc)->i_generation);
 	ext4_reset_inode_seed(inode);
@@ -1831,6 +1873,10 @@ static void ext4_fc_set_bitmaps_and_counters(struct super_block *sb)
 		}
 		cur = 0;
 		end = EXT_MAX_BLOCKS;
+		if (ext4_test_inode_flag(inode, EXT4_INODE_INLINE_DATA)) {
+			iput(inode);
+			continue;
+		}
 		while (cur < end) {
 			map.m_lblk = cur;
 			map.m_len = end - cur;
