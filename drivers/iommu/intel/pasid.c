@@ -309,13 +309,29 @@ static inline void pasid_clear_entry_with_fpd(struct pasid_entry *pe)
 }
 
 static void
-intel_pasid_clear_entry(struct device *dev, u32 pasid, bool fault_ignore)
+intel_pasid_clear_entry(struct intel_iommu *iommu, struct device *dev,
+			u32 pasid, bool fault_ignore, bool keep_pte)
 {
 	struct pasid_entry *pe;
+	u64 pe_val;
+	bool nested;
 
 	pe = intel_pasid_get_entry(dev, pasid);
 	if (WARN_ON(!pe))
 		return;
+
+	/*
+	 * The guest may reboot from scalable mode to legacy mode. During this
+	 * phase, there is no chance to setup SLT. So, we should only reset PGTT
+	 * from NESTED to SL and keep other bits when unbind gpasid is executed.
+	 */
+	pe_val = READ_ONCE(pe->val[0]);
+	nested = (((pe_val >> 6) & 0x7) == PASID_ENTRY_PGTT_NESTED) ? true : false;
+	if (nested && keep_pte) {
+		pe_val &= 0xfffffffffffffebf;
+		WRITE_ONCE(pe->val[0], pe_val);
+		return;
+	}
 
 	if (fault_ignore && pasid_pte_is_present(pe))
 		pasid_clear_entry_with_fpd(pe);
@@ -527,13 +543,13 @@ devtlb_invalidation_with_pasid(struct intel_iommu *iommu,
 
 static void
 flush_iotlb_all(struct intel_iommu *iommu, struct device *dev,
-		u16 did, u16 pgtt, u32 pasid, u64 type)
+		u16 did, u32 pasid, u64 type)
 {
 	pasid_cache_invalidation_with_pasid(iommu, did, pasid);
 
 	if (type)
 		iommu->flush.flush_iotlb(iommu, did, 0, 0, type);
-	else if (pgtt == PASID_ENTRY_PGTT_PT || pgtt == PASID_ENTRY_PGTT_FL_ONLY)
+	else
 		qi_flush_piotlb(iommu, did, pasid, 0, -1, 0);
 
 	if (!cap_caching_mode(iommu->cap))
@@ -541,10 +557,12 @@ flush_iotlb_all(struct intel_iommu *iommu, struct device *dev,
 }
 
 void intel_pasid_tear_down_entry(struct intel_iommu *iommu, struct device *dev,
-				 u32 pasid, bool fault_ignore)
+				 u32 pasid, bool fault_ignore, bool keep_pte)
 {
 	struct pasid_entry *pte;
-	u16 did, pgtt;
+	u16 did;
+	u64 pe_val;
+	u16 pgtt_type;
 
 	pte = intel_pasid_get_entry(dev, pasid);
 	if (WARN_ON(!pte))
@@ -554,14 +572,19 @@ void intel_pasid_tear_down_entry(struct intel_iommu *iommu, struct device *dev,
 		return;
 
 	did = pasid_get_domain_id(pte);
-	pgtt = pasid_pte_get_pgtt(pte);
+	pe_val = READ_ONCE(pte->val[0]);
+	pgtt_type = (pe_val >> 6) & 0x7;
 
-	intel_pasid_clear_entry(dev, pasid, fault_ignore);
+	intel_pasid_clear_entry(iommu, dev, pasid, fault_ignore, keep_pte);
 
 	if (!ecap_coherent(iommu->ecap))
 		clflush_cache_range(pte, sizeof(*pte));
 
-	flush_iotlb_all(iommu, dev, did, pgtt, pasid, 0);
+	if (pgtt_type == PASID_ENTRY_PGTT_FL_ONLY ||
+			pgtt_type == PASID_ENTRY_PGTT_PT)
+		flush_iotlb_all(iommu, dev, did, pasid, 0);
+	else
+		flush_iotlb_all(iommu, dev, did, pasid, DMA_TLB_DSI_FLUSH);
 }
 
 /*
@@ -873,10 +896,11 @@ int intel_pasid_setup_nested(struct intel_iommu *iommu, struct device *dev,
 		return -EINVAL;
 
 	/*
-	 * Caller must ensure PASID entry is not in use, i.e. not bind the
-	 * same PASID to the same device twice.
+	 * PASID entries with nesting translation type should not be set
+	 * multiple times. If caller tries to setup nesting for a PASID
+	 * entry which is already nested mode, should fail it.
 	 */
-	if (pasid_pte_is_present(pte))
+	if (pasid_pte_is_present(pte) && pasid_pte_is_nested(pte))
 		return -EBUSY;
 
 	pasid_clear_entry(pte);
@@ -978,7 +1002,7 @@ int intel_pasid_setup_slade(struct device *dev, struct dmar_domain *domain,
 
 	pasid_set_slade(pte, value);
 
-	flush_iotlb_all(iommu, dev, did, 0, pasid, DMA_TLB_DSI_FLUSH);
+	flush_iotlb_all(iommu, dev, did, pasid, DMA_TLB_DSI_FLUSH);
 
 	return 0;
 }

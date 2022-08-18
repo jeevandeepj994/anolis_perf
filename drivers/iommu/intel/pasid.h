@@ -98,10 +98,10 @@ static inline bool pasid_pte_is_present(struct pasid_entry *pte)
 	return READ_ONCE(pte->val[0]) & PASID_PTE_PRESENT;
 }
 
-/* Get PGTT field of a PASID table entry */
-static inline u16 pasid_pte_get_pgtt(struct pasid_entry *pte)
+/* Check if PGTT bits of a PASID table entry is nested. */
+static inline bool pasid_pte_is_nested(struct pasid_entry *pte)
 {
-	return (u16)((READ_ONCE(pte->val[0]) >> 6) & 0x7);
+	return ((READ_ONCE(pte->val[0]) >> 6) & 0x7) == PASID_ENTRY_PGTT_NESTED;
 }
 
 extern unsigned int intel_pasid_max_id;
@@ -124,7 +124,7 @@ int intel_pasid_setup_nested(struct intel_iommu *iommu,
 			     struct dmar_domain *domain, int addr_width);
 void intel_pasid_tear_down_entry(struct intel_iommu *iommu,
 				 struct device *dev, u32 pasid,
-				 bool fault_ignore);
+				 bool fault_ignore, bool keep_pte);
 int vcmd_alloc_pasid(struct intel_iommu *iommu, u32 *pasid);
 void vcmd_free_pasid(struct intel_iommu *iommu, u32 pasid);
 int intel_pasid_setup_slade(struct device *dev, struct dmar_domain *domain,

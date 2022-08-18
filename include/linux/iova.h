@@ -162,7 +162,6 @@ struct iova *find_iova(struct iova_domain *iovad, unsigned long pfn);
 void put_iova_domain(struct iova_domain *iovad);
 struct iova *split_and_remove_iova(struct iova_domain *iovad,
 	struct iova *iova, unsigned long pfn_lo, unsigned long pfn_hi);
-void free_cpu_cached_iovas(unsigned int cpu, struct iova_domain *iovad);
 #else
 static inline int iova_cache_get(void)
 {
@@ -266,10 +265,6 @@ static inline struct iova *split_and_remove_iova(struct iova_domain *iovad,
 	return NULL;
 }
 
-static inline void free_cpu_cached_iovas(unsigned int cpu,
-					 struct iova_domain *iovad)
-{
-}
 #endif
 
 #endif

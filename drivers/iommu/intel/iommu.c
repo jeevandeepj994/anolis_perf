@@ -4279,35 +4279,6 @@ static struct notifier_block intel_iommu_memory_nb = {
 	.priority = 0
 };
 
-static void free_all_cpu_cached_iovas(unsigned int cpu)
-{
-	int i;
-
-	for (i = 0; i < g_num_of_iommus; i++) {
-		struct intel_iommu *iommu = g_iommus[i];
-		struct dmar_domain *domain;
-		int did;
-
-		if (!iommu)
-			continue;
-
-		for (did = 0; did < cap_ndoms(iommu->cap); did++) {
-			domain = get_iommu_domain(iommu, (u16)did);
-
-			if (!domain || domain->domain.type != IOMMU_DOMAIN_DMA)
-				continue;
-
-			iommu_dma_free_cpu_cached_iovas(cpu, &domain->domain);
-		}
-	}
-}
-
-static int intel_iommu_cpu_dead(unsigned int cpu)
-{
-	free_all_cpu_cached_iovas(cpu);
-	return 0;
-}
-
 static void intel_disable_iommus(void)
 {
 	struct intel_iommu *iommu = NULL;
@@ -4602,8 +4573,6 @@ int __init intel_iommu_init(void)
 	bus_set_iommu(&pci_bus_type, &intel_iommu_ops);
 	if (si_domain && !hw_pass_through)
 		register_memory_notifier(&intel_iommu_memory_nb);
-	cpuhp_setup_state(CPUHP_IOMMU_INTEL_DEAD, "iommu/intel:dead", NULL,
-			  intel_iommu_cpu_dead);
 
 	down_read(&dmar_global_lock);
 	if (probe_acpi_namespace_devices())
@@ -4672,12 +4641,12 @@ static void __dmar_remove_one_dev_info(struct device_domain_info *info)
 	if (info->dev && !dev_is_real_dma_subdevice(info->dev)) {
 		if (dev_is_pci(info->dev) && sm_supported(iommu)) {
 			intel_pasid_tear_down_entry(iommu, info->dev,
-					PASID_RID2PASID, false);
+					PASID_RID2PASID, false, false);
 			pasid = iommu_get_pasid_from_domain(info->dev,
 							&info->domain->domain);
 			if (pasid != INVALID_IOASID)
 				intel_pasid_tear_down_entry(iommu, info->dev,
-							    pasid, false);
+							    pasid, false, false);
 		}
 
 		iommu_disable_dev_iotlb(info);
@@ -4777,8 +4746,8 @@ static void intel_iommu_domain_free(struct iommu_domain *domain)
  * Check whether a @domain could be attached to the @dev through the
  * aux-domain attach/detach APIs.
  */
-static inline bool
-is_aux_domain(struct device *dev, struct iommu_domain *domain)
+inline bool is_aux_domain(struct device *dev,
+			  struct iommu_domain *domain)
 {
 	struct device_domain_info *info = get_domain_info(dev);
 
@@ -4938,7 +4907,7 @@ static void aux_domain_remove_dev(struct dmar_domain *domain,
 	if (!auxiliary_unlink_device(domain, dev)) {
 		spin_lock(&iommu->lock);
 		intel_pasid_tear_down_entry(iommu, dev,
-					    domain->default_pasid, false);
+					    domain->default_pasid, false, false);
 		domain_detach_iommu(domain, iommu);
 		spin_unlock(&iommu->lock);
 	}
@@ -5108,6 +5077,7 @@ intel_iommu_sva_invalidate(struct iommu_domain *domain, struct device *dev,
 	u16 did, sid;
 	int ret = 0;
 	u64 size = 0;
+	bool default_pasid = false;
 
 	if (!inv_info || !dmar_domain)
 		return -EINVAL;
@@ -5155,14 +5125,29 @@ intel_iommu_sva_invalidate(struct iommu_domain *domain, struct device *dev,
 		 * PASID is stored in different locations based on the
 		 * granularity.
 		 */
-		if (inv_info->granularity == IOMMU_INV_GRANU_PASID &&
-		    (inv_info->granu.pasid_info.flags & IOMMU_INV_PASID_FLAGS_PASID))
-			pasid = inv_info->granu.pasid_info.pasid;
-		else if (inv_info->granularity == IOMMU_INV_GRANU_ADDR &&
-			 (inv_info->granu.addr_info.flags & IOMMU_INV_ADDR_FLAGS_PASID))
-			pasid = inv_info->granu.addr_info.pasid;
+		if (inv_info->granularity == IOMMU_INV_GRANU_PASID) {
+			if (inv_info->granu.pasid_info.flags &
+			    IOMMU_INV_PASID_FLAGS_PASID) {
+				pasid = inv_info->granu.pasid_info.pasid;
+			} else {
+				pasid = domain_get_pasid(domain, dev);
+				default_pasid = true;
+			}
+		} else if (inv_info->granularity == IOMMU_INV_GRANU_ADDR) {
+			if (inv_info->granu.addr_info.flags &
+			    IOMMU_INV_ADDR_FLAGS_PASID) {
+				pasid = inv_info->granu.addr_info.pasid;
+			} else {
+				pasid = domain_get_pasid(domain, dev);
+				default_pasid = true;
+			}
+		}
 
-		ret = ioasid_get_if_owned(pasid);
+		if (default_pasid)
+			ret = ioasid_get(NULL, pasid);
+		else
+			ret = ioasid_get_if_owned(pasid);
+
 		if (ret)
 			goto out_unlock;
 
@@ -5862,8 +5847,13 @@ static int intel_iommu_get_nesting_info(struct iommu_domain *domain,
 
 	info->addr_width = dmar_domain->gaw;
 	info->format = IOMMU_PASID_FORMAT_INTEL_VTD;
+	/* REVISIT:
+	 * to be precise, may only report SYSWIDE_PASID when pasid is
+	 * supported, also may only report page_resp when PRS is supported
+	 */
 	info->features = IOMMU_NESTING_FEAT_BIND_PGTBL |
-			 IOMMU_NESTING_FEAT_CACHE_INVLD;
+			 IOMMU_NESTING_FEAT_CACHE_INVLD |
+			 IOMMU_NESTING_FEAT_PAGE_RESP;
 	info->pasid_bits = ilog2(intel_pasid_max_id);
 	memset(&info->padding, 0x0, 12);
 
@@ -6471,7 +6461,7 @@ static void intel_iommu_detach_dev_pasid(struct iommu_domain *domain,
 		return;
 
 	spin_lock_irqsave(&iommu->lock, flags);
-	intel_pasid_tear_down_entry(iommu, dev, pasid, false);
+	intel_pasid_tear_down_entry(iommu, dev, pasid, false, false);
 	spin_unlock_irqrestore(&iommu->lock, flags);
 }
 
