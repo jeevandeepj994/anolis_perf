@@ -3689,6 +3689,8 @@ retry:
 		    zone != ac->preferred_zoneref->zone) {
 			int local_nid;
 
+			BUG();
+
 			/*
 			 * If moving to a remote node, retry but allow
 			 * fragmenting fallbacks. Locality is more important
