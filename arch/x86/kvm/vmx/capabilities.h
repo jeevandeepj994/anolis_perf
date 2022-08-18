@@ -399,7 +399,12 @@ static inline u64 vmx_get_perf_capabilities(void)
 
 static inline u64 vmx_supported_debugctl(void)
 {
-	return 0;
+	u64 debugctl = 0;
+
+	if (boot_cpu_has(X86_FEATURE_BUS_LOCK_DETECT))
+		debugctl |= DEBUGCTLMSR_BUS_LOCK_DETECT;
+
+	return debugctl;
 }
 
 #endif /* __KVM_X86_VMX_CAPS_H */
