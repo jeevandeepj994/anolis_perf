@@ -2564,57 +2564,34 @@ static int
 _base_config_dma_addressing(struct MPT3SAS_ADAPTER *ioc, struct pci_dev *pdev)
 {
 	struct sysinfo s;
-	u64 consistent_dma_mask;
+	int dma_mask;
+
+	if (ioc->is_mcpu_endpoint ||
+		sizeof(dma_addr_t) == 4 || ioc->use_32bit_dma ||
+		dma_get_required_mask(&pdev->dev) <= 32)
+		dma_mask = 32;
 	/* Set 63 bit DMA mask for all SAS3 and SAS35 controllers */
-	int dma_mask = (ioc->hba_mpi_version_belonged > MPI2_VERSION) ? 63 : 64;
-
-	if (ioc->is_mcpu_endpoint)
-		goto try_32bit;
-
-	if (ioc->dma_mask)
-		consistent_dma_mask = DMA_BIT_MASK(dma_mask);
+	else if (ioc->hba_mpi_version_belonged > MPI2_VERSION)
+		dma_mask = 63;
 	else
-		consistent_dma_mask = DMA_BIT_MASK(32);
+		dma_mask = 64;
 
-	if (sizeof(dma_addr_t) > 4) {
-		const uint64_t required_mask =
-		    dma_get_required_mask(&pdev->dev);
-		if ((required_mask > DMA_BIT_MASK(32)) &&
-		    !pci_set_dma_mask(pdev, DMA_BIT_MASK(dma_mask)) &&
-		    !pci_set_consistent_dma_mask(pdev, consistent_dma_mask)) {
-			ioc->base_add_sg_single = &_base_add_sg_single_64;
-			ioc->sge_size = sizeof(Mpi2SGESimple64_t);
-			ioc->dma_mask = dma_mask;
-			goto out;
-		}
-	}
-
- try_32bit:
-	if (!pci_set_dma_mask(pdev, DMA_BIT_MASK(32))
-	    && !pci_set_consistent_dma_mask(pdev, DMA_BIT_MASK(32))) {
-		ioc->base_add_sg_single = &_base_add_sg_single_32;
-		ioc->sge_size = sizeof(Mpi2SGESimple32_t);
-		ioc->dma_mask = 32;
-	} else
+	if (dma_set_mask(&pdev->dev, DMA_BIT_MASK(dma_mask)) ||
+		dma_set_coherent_mask(&pdev->dev, DMA_BIT_MASK(dma_mask)))
 		return -ENODEV;
 
- out:
-	si_meminfo(&s);
-	pr_info(MPT3SAS_FMT
-		"%d BIT PCI BUS DMA ADDRESSING SUPPORTED, total mem (%ld kB)\n",
-		ioc->name, ioc->dma_mask, convert_to_kb(s.totalram));
-
-	return 0;
-}
-
-static int
-_base_change_consistent_dma_mask(struct MPT3SAS_ADAPTER *ioc,
-				      struct pci_dev *pdev)
-{
-	if (pci_set_consistent_dma_mask(pdev, DMA_BIT_MASK(ioc->dma_mask))) {
-		if (pci_set_consistent_dma_mask(pdev, DMA_BIT_MASK(32)))
-			return -ENODEV;
+	if (dma_mask > 32) {
+		ioc->base_add_sg_single = &_base_add_sg_single_64;
+		ioc->sge_size = sizeof(Mpi2SGESimple64_t);
+	} else {
+		ioc->base_add_sg_single = &_base_add_sg_single_32;
+		ioc->sge_size = sizeof(Mpi2SGESimple32_t);
 	}
+
+	si_meminfo(&s);
+	ioc_info(ioc, "%d BIT PCI BUS DMA ADDRESSING SUPPORTED, total mem (%ld kB)\n",
+			dma_mask, convert_to_kb(s.totalram));
+
 	return 0;
 }
 
@@ -4195,8 +4172,8 @@ _base_release_memory_pools(struct MPT3SAS_ADAPTER *ioc)
 {
 	int i = 0;
 	int j = 0;
+	int dma_alloc_count = 0;
 	struct chain_tracker *ct;
-	struct reply_post_struct *rps;
 
 	dexitprintk(ioc, pr_info(MPT3SAS_FMT "%s\n", ioc->name,
 	    __func__));
@@ -4239,20 +4216,26 @@ _base_release_memory_pools(struct MPT3SAS_ADAPTER *ioc)
 	}
 
 	if (ioc->reply_post) {
-		do {
-			rps = &ioc->reply_post[i];
-			if (rps->reply_post_free) {
-				dma_pool_free(
-				    ioc->reply_post_free_dma_pool,
-				    rps->reply_post_free,
-				    rps->reply_post_free_dma);
-				dexitprintk(ioc, pr_info(MPT3SAS_FMT
-				    "reply_post_free_pool(0x%p): free\n",
-				    ioc->name, rps->reply_post_free));
-				rps->reply_post_free = NULL;
+		dma_alloc_count = DIV_ROUND_UP(ioc->reply_queue_count,
+						RDPQ_MAX_INDEX_IN_ONE_CHUNK);
+		for (i = 0; i < ioc->reply_queue_count; i++) {
+			if (i % RDPQ_MAX_INDEX_IN_ONE_CHUNK == 0
+				&& dma_alloc_count) {
+				if (ioc->reply_post[i].reply_post_free) {
+					dma_pool_free(
+						ioc->reply_post_free_dma_pool,
+						ioc->reply_post[i].reply_post_free,
+					ioc->reply_post[i].reply_post_free_dma);
+					dexitprintk(ioc, ioc_info(ioc,
+						"reply_post_free_pool(0x%p): free\n",
+						ioc->reply_post[i].reply_post_free));
+					ioc->reply_post[i].reply_post_free =
+						NULL;
+				}
+				--dma_alloc_count;
 			}
-		} while (ioc->rdpq_array_enable &&
-			   (++i < ioc->reply_queue_count));
+		}
+		dma_pool_destroy(ioc->reply_post_free_dma_pool);
 		if (ioc->reply_post_free_array &&
 			ioc->rdpq_array_enable) {
 			dma_pool_free(ioc->reply_post_free_array_dma_pool,
@@ -4261,7 +4244,6 @@ _base_release_memory_pools(struct MPT3SAS_ADAPTER *ioc)
 			ioc->reply_post_free_array = NULL;
 		}
 		dma_pool_destroy(ioc->reply_post_free_array_dma_pool);
-		dma_pool_destroy(ioc->reply_post_free_dma_pool);
 		kfree(ioc->reply_post);
 	}
 
@@ -4304,7 +4286,7 @@ _base_release_memory_pools(struct MPT3SAS_ADAPTER *ioc)
 }
 
 /**
- * is_MSB_are_same - checks whether all reply queues in a set are
+ * mpt3sas_check_same_4gb_region - checks whether all reply queues in a set are
  *	having same upper 32bits in their base memory address.
  * @reply_pool_start_address: Base address of a reply queue set
  * @pool_sz: Size of single Reply Descriptor Post Queues pool size
@@ -4314,7 +4296,7 @@ _base_release_memory_pools(struct MPT3SAS_ADAPTER *ioc)
  */
 
 static int
-is_MSB_are_same(long reply_pool_start_address, u32 pool_sz)
+mpt3sas_check_same_4gb_region(long reply_pool_start_address, u32 pool_sz)
 {
 	long reply_pool_end_address;
 
@@ -4325,6 +4307,87 @@ is_MSB_are_same(long reply_pool_start_address, u32 pool_sz)
 		return 1;
 	else
 		return 0;
+}
+
+/**
+ * base_alloc_rdpq_dma_pool - Allocating DMA'able memory
+ *                     for reply queues.
+ * @ioc: per adapter object
+ * @sz: DMA Pool size
+ * Return: 0 for success, non-zero for failure.
+ */
+static int
+base_alloc_rdpq_dma_pool(struct MPT3SAS_ADAPTER *ioc, int sz)
+{
+	int i = 0;
+	u32 dma_alloc_count = 0;
+	int reply_post_free_sz = ioc->reply_post_queue_depth *
+			sizeof(Mpi2DefaultReplyDescriptor_t);
+	int count = ioc->rdpq_array_enable ? ioc->reply_queue_count : 1;
+
+	ioc->reply_post = kcalloc(count, sizeof(struct reply_post_struct),
+					GFP_KERNEL);
+	if (!ioc->reply_post)
+		return -ENOMEM;
+	/*
+	 *  For INVADER_SERIES each set of 8 reply queues(0-7, 8-15, ..) and
+	 *  VENTURA_SERIES each set of 16 reply queues(0-15, 16-31, ..) should
+	 *  be within 4GB boundary i.e reply queues in a set must have same
+	 *  upper 32-bits in their memory address. so here driver is allocating
+	 *  the DMA'able memory for reply queues according.
+	 *  Driver uses limitation of
+	 *  VENTURA_SERIES to manage INVADER_SERIES as well.
+	 */
+	dma_alloc_count = DIV_ROUND_UP(ioc->reply_queue_count,
+				RDPQ_MAX_INDEX_IN_ONE_CHUNK);
+	ioc->reply_post_free_dma_pool =
+	dma_pool_create("reply_post_free pool",
+		&ioc->pdev->dev, sz, 16, 0);
+	if (!ioc->reply_post_free_dma_pool)
+		return -ENOMEM;
+	for (i = 0; i < ioc->reply_queue_count; i++) {
+		if ((i % RDPQ_MAX_INDEX_IN_ONE_CHUNK == 0) && dma_alloc_count) {
+			ioc->reply_post[i].reply_post_free =
+				dma_pool_alloc(ioc->reply_post_free_dma_pool,
+					GFP_KERNEL,
+					&ioc->reply_post[i].reply_post_free_dma);
+			if (!ioc->reply_post[i].reply_post_free)
+				return -ENOMEM;
+			/*
+			 * Each set of RDPQ pool must satisfy 4gb boundary
+			 * restriction.
+			 * 1) Check if allocated resources for RDPQ pool are in
+			 *	the same 4GB range.
+			 * 2) If #1 is true, continue with 64 bit DMA.
+			 * 3) If #1 is false, return 1. which means free all the
+			 * resources and set DMA mask to 32 and allocate.
+			 */
+			if (!mpt3sas_check_same_4gb_region(
+				(long)ioc->reply_post[i].reply_post_free, sz)) {
+				dinitprintk(ioc,
+					ioc_err(ioc, "bad Replypost free pool(0x%p) reply_post_free_dma = (0x%llx)\n",
+					ioc->reply_post[i].reply_post_free,
+					(unsigned long long)
+					ioc->reply_post[i].reply_post_free_dma));
+				return -EAGAIN;
+			}
+			memset(ioc->reply_post[i].reply_post_free, 0,
+				RDPQ_MAX_INDEX_IN_ONE_CHUNK *
+				reply_post_free_sz);
+			dma_alloc_count--;
+
+		} else {
+			ioc->reply_post[i].reply_post_free =
+				(Mpi2ReplyDescriptorsUnion_t *)
+				((long)ioc->reply_post[i-1].reply_post_free
+				+ reply_post_free_sz);
+			ioc->reply_post[i].reply_post_free_dma =
+				(dma_addr_t)
+				(ioc->reply_post[i-1].reply_post_free_dma +
+				reply_post_free_sz);
+		}
+	}
+	return 0;
 }
 
 /**
@@ -4341,10 +4404,12 @@ _base_allocate_memory_pools(struct MPT3SAS_ADAPTER *ioc)
 	u16 chains_needed_per_io;
 	u32 sz, total_sz, reply_post_free_sz, reply_post_free_array_sz;
 	u32 retry_sz;
+	u32 rdpq_sz = 0;
 	u16 max_request_credit, nvme_blocks_needed;
 	unsigned short sg_tablesize;
 	u16 sge_size;
 	int i, j;
+	int ret = 0;
 	struct chain_tracker *ct;
 
 	dinitprintk(ioc, pr_info(MPT3SAS_FMT "%s\n", ioc->name,
@@ -4500,62 +4565,28 @@ _base_allocate_memory_pools(struct MPT3SAS_ADAPTER *ioc)
 	/* reply post queue, 16 byte align */
 	reply_post_free_sz = ioc->reply_post_queue_depth *
 	    sizeof(Mpi2DefaultReplyDescriptor_t);
-
-	sz = reply_post_free_sz;
+	rdpq_sz = reply_post_free_sz * RDPQ_MAX_INDEX_IN_ONE_CHUNK;
 	if (_base_is_controller_msix_enabled(ioc) && !ioc->rdpq_array_enable)
-		sz *= ioc->reply_queue_count;
-
-	ioc->reply_post = kcalloc((ioc->rdpq_array_enable) ?
-	    (ioc->reply_queue_count):1,
-	    sizeof(struct reply_post_struct), GFP_KERNEL);
-
-	if (!ioc->reply_post) {
-		pr_err(MPT3SAS_FMT "reply_post_free pool: kcalloc failed\n",
-			ioc->name);
-		goto out;
-	}
-	ioc->reply_post_free_dma_pool = dma_pool_create("reply_post_free pool",
-	    &ioc->pdev->dev, sz, 16, 0);
-	if (!ioc->reply_post_free_dma_pool) {
-		pr_err(MPT3SAS_FMT
-		 "reply_post_free pool: dma_pool_create failed\n",
-		 ioc->name);
-		goto out;
-	}
-	i = 0;
-	do {
-		ioc->reply_post[i].reply_post_free =
-		    dma_pool_alloc(ioc->reply_post_free_dma_pool,
-		    GFP_KERNEL,
-		    &ioc->reply_post[i].reply_post_free_dma);
-		if (!ioc->reply_post[i].reply_post_free) {
-			pr_err(MPT3SAS_FMT
-			"reply_post_free pool: dma_pool_alloc failed\n",
-			ioc->name);
-			goto out;
+		rdpq_sz = reply_post_free_sz * ioc->reply_queue_count;
+	ret = base_alloc_rdpq_dma_pool(ioc, rdpq_sz);
+	if (ret == -EAGAIN) {
+		/*
+		 * Free allocated bad RDPQ memory pools.
+		 * Change dma coherent mask to 32 bit and reallocate RDPQ
+		 */
+		_base_release_memory_pools(ioc);
+		ioc->use_32bit_dma = true;
+		if (_base_config_dma_addressing(ioc, ioc->pdev) != 0) {
+			ioc_err(ioc,
+				"32 DMA mask failed %s\n", pci_name(ioc->pdev));
+			return -ENODEV;
 		}
-		memset(ioc->reply_post[i].reply_post_free, 0, sz);
-		dinitprintk(ioc, pr_info(MPT3SAS_FMT
-		    "reply post free pool (0x%p): depth(%d),"
-		    "element_size(%d), pool_size(%d kB)\n", ioc->name,
-		    ioc->reply_post[i].reply_post_free,
-		    ioc->reply_post_queue_depth, 8, sz/1024));
-		dinitprintk(ioc, pr_info(MPT3SAS_FMT
-		    "reply_post_free_dma = (0x%llx)\n", ioc->name,
-		    (unsigned long long)
-		    ioc->reply_post[i].reply_post_free_dma));
-		total_sz += sz;
-	} while (ioc->rdpq_array_enable && (++i < ioc->reply_queue_count));
-
-	if (ioc->dma_mask > 32) {
-		if (_base_change_consistent_dma_mask(ioc, ioc->pdev) != 0) {
-			pr_warn(MPT3SAS_FMT
-			    "no suitable consistent DMA mask for %s\n",
-			    ioc->name, pci_name(ioc->pdev));
-			goto out;
-		}
-	}
-
+		if (base_alloc_rdpq_dma_pool(ioc, rdpq_sz))
+			return -ENOMEM;
+	} else if (ret == -ENOMEM)
+		return -ENOMEM;
+	total_sz = rdpq_sz * (!ioc->rdpq_array_enable ? 1 :
+	    DIV_ROUND_UP(ioc->reply_queue_count, RDPQ_MAX_INDEX_IN_ONE_CHUNK));
 	ioc->scsiio_depth = ioc->hba_queue_depth -
 	    ioc->hi_priority_depth - ioc->internal_depth;
 
@@ -4796,7 +4827,7 @@ _base_allocate_memory_pools(struct MPT3SAS_ADAPTER *ioc)
 	 * Actual requirement is not alignment, but we need start and end of
 	 * DMA address must have same upper 32 bit address.
 	 */
-	if (!is_MSB_are_same((long)ioc->sense, sz)) {
+	if (!mpt3sas_check_same_4gb_region((long)ioc->sense, sz)) {
 		//Release Sense pool & Reallocate
 		dma_pool_free(ioc->sense_dma_pool, ioc->sense, ioc->sense_dma);
 		dma_pool_destroy(ioc->sense_dma_pool);
@@ -6534,7 +6565,7 @@ mpt3sas_base_attach(struct MPT3SAS_ADAPTER *ioc)
 	}
 
 	ioc->rdpq_array_enable_assigned = 0;
-	ioc->dma_mask = 0;
+	ioc->use_32bit_dma = 0;
 	r = mpt3sas_base_map_resources(ioc);
 	if (r)
 		goto out_free_resources;
