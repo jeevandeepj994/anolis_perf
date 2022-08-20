@@ -4306,6 +4306,48 @@ mpt3sas_check_same_4gb_region(long reply_pool_start_address, u32 pool_sz)
 }
 
 /**
+ * base_alloc_rdpq_dma_pool - Allocating DMA'able memory
+ *                     for reply queues.
+ * @ioc: per adapter object
+ * @sz: DMA Pool size
+ * Return: 0 for success, non-zero for failure.
+ */
+static int
+base_alloc_rdpq_dma_pool(struct MPT3SAS_ADAPTER *ioc, int sz)
+{
+	int i;
+	int count = ioc->rdpq_array_enable ? ioc->reply_queue_count : 1;
+
+	ioc->reply_post = kcalloc(count, sizeof(struct reply_post_struct),
+			GFP_KERNEL);
+	if (!ioc->reply_post)
+		return -ENOMEM;
+	ioc->reply_post_free_dma_pool =
+	    dma_pool_create("reply_post_free pool",
+	    &ioc->pdev->dev, sz, 16, 0);
+	if (!ioc->reply_post_free_dma_pool)
+		return -ENOMEM;
+	i = 0;
+	do {
+		ioc->reply_post[i].reply_post_free =
+		    dma_pool_zalloc(ioc->reply_post_free_dma_pool,
+		    GFP_KERNEL,
+		    &ioc->reply_post[i].reply_post_free_dma);
+		if (!ioc->reply_post[i].reply_post_free)
+			return -ENOMEM;
+		dinitprintk(ioc,
+			ioc_info(ioc, "reply post free pool (0x%p): depth(%d), element_size(%d), pool_size(%d kB)\n",
+			    ioc->reply_post[i].reply_post_free,
+			    ioc->reply_post_queue_depth, 8, sz / 1024));
+		dinitprintk(ioc,
+			ioc_info(ioc, "reply_post_free_dma = (0x%llx)\n",
+			    (u64)ioc->reply_post[i].reply_post_free_dma));
+
+	} while (ioc->rdpq_array_enable && ++i < ioc->reply_queue_count);
+	return 0;
+}
+
+/**
  * _base_allocate_memory_pools - allocate start of day memory pools
  * @ioc: per adapter object
  *
@@ -4482,48 +4524,9 @@ _base_allocate_memory_pools(struct MPT3SAS_ADAPTER *ioc)
 	sz = reply_post_free_sz;
 	if (_base_is_controller_msix_enabled(ioc) && !ioc->rdpq_array_enable)
 		sz *= ioc->reply_queue_count;
-
-	ioc->reply_post = kcalloc((ioc->rdpq_array_enable) ?
-	    (ioc->reply_queue_count):1,
-	    sizeof(struct reply_post_struct), GFP_KERNEL);
-
-	if (!ioc->reply_post) {
-		pr_err(MPT3SAS_FMT "reply_post_free pool: kcalloc failed\n",
-			ioc->name);
+	if (base_alloc_rdpq_dma_pool(ioc, sz))
 		goto out;
-	}
-	ioc->reply_post_free_dma_pool = dma_pool_create("reply_post_free pool",
-	    &ioc->pdev->dev, sz, 16, 0);
-	if (!ioc->reply_post_free_dma_pool) {
-		pr_err(MPT3SAS_FMT
-		 "reply_post_free pool: dma_pool_create failed\n",
-		 ioc->name);
-		goto out;
-	}
-	i = 0;
-	do {
-		ioc->reply_post[i].reply_post_free =
-		    dma_pool_alloc(ioc->reply_post_free_dma_pool,
-		    GFP_KERNEL,
-		    &ioc->reply_post[i].reply_post_free_dma);
-		if (!ioc->reply_post[i].reply_post_free) {
-			pr_err(MPT3SAS_FMT
-			"reply_post_free pool: dma_pool_alloc failed\n",
-			ioc->name);
-			goto out;
-		}
-		memset(ioc->reply_post[i].reply_post_free, 0, sz);
-		dinitprintk(ioc, pr_info(MPT3SAS_FMT
-		    "reply post free pool (0x%p): depth(%d),"
-		    "element_size(%d), pool_size(%d kB)\n", ioc->name,
-		    ioc->reply_post[i].reply_post_free,
-		    ioc->reply_post_queue_depth, 8, sz/1024));
-		dinitprintk(ioc, pr_info(MPT3SAS_FMT
-		    "reply_post_free_dma = (0x%llx)\n", ioc->name,
-		    (unsigned long long)
-		    ioc->reply_post[i].reply_post_free_dma));
-		total_sz += sz;
-	} while (ioc->rdpq_array_enable && (++i < ioc->reply_queue_count));
+	total_sz += sz * (!ioc->rdpq_array_enable ? 1 : ioc->reply_queue_count);
 
 	ioc->scsiio_depth = ioc->hba_queue_depth -
 	    ioc->hi_priority_depth - ioc->internal_depth;
