@@ -347,6 +347,7 @@ struct mpt3sas_nvme_cmd {
 #define MFG10_GF0_SINGLE_DRIVE_R0              (0x00000010)
 
 #define VIRTUAL_IO_FAILED_RETRY			(0x32010081)
+#define RDPQ_MAX_INDEX_IN_ONE_CHUNK		16
 
 /* OEM Specific Flags will come from OEM specific header files */
 struct Mpi2ManufacturingPage10_t {
@@ -1009,6 +1010,7 @@ typedef void (*MPT3SAS_FLUSH_RUNNING_CMDS)(struct MPT3SAS_ADAPTER *ioc);
  * @cpu_msix_table: table for mapping cpus to msix index
  * @cpu_msix_table_sz: table size
  * @schedule_dead_ioc_flush_running_cmds: callback to flush pending commands
+ * @use_32bit_dma: Flag to use 32 bit consistent dma mask
  * @scsi_io_cb_idx: shost generated commands
  * @tm_cb_idx: task management commands
  * @scsih_cb_idx: scsih internal commands
@@ -1183,6 +1185,7 @@ struct MPT3SAS_ADAPTER {
 	u32		ioc_reset_count;
 	MPT3SAS_FLUSH_RUNNING_CMDS schedule_dead_ioc_flush_running_cmds;
 	u32             non_operational_loop;
+	bool	use_32bit_dma;
 
 	/* internal commands, callback index */
 	u8		scsi_io_cb_idx;
