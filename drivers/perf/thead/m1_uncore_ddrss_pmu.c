@@ -40,6 +40,8 @@
 #define M1_DRW_PMU_OV_INT_ENABLE_STATUS 0xCC0
 #define M1_DRW_PMU_OV_INT_CLR		0xCC4
 #define M1_DRW_PMU_OV_INT_STATUS	0xCC8
+#define M1_DRW_PMCOM_CNT_OV_INTR_MASK	GENMASK(23, 8)
+#define M1_DRW_PMBW_CNT_OV_INTR_MASK	GENMASK(7, 0)
 #define M1_DRW_PMU_OV_INT_MASK		GENMASK_ULL(63, 0)
 
 /* offset of the registers for a given counter.*/
@@ -655,8 +657,8 @@ static int m1_ddrss_pmu_probe(struct platform_device *pdev)
 	writel(1 << 2, ddrss_pmu->drw_cfg_base + M1_DRW_PMU_CNT_CTRL);
 
 	/* enable the generation of interrupt by all common counters */
-	for (i = 0; i < M1_DRW_PMU_COMMON_MAX_COUNTERS; i++)
-		writel(1 << (8 + i), ddrss_pmu->drw_cfg_base + M1_DRW_PMU_OV_INT_ENABLE_CTL);
+	writel(M1_DRW_PMCOM_CNT_OV_INTR_MASK,
+	       ddrss_pmu->drw_cfg_base + M1_DRW_PMU_OV_INT_ENABLE_CTL);
 
 	/* clearing interrupt status */
 	writel(0xffffff, ddrss_pmu->drw_cfg_base + M1_DRW_PMU_OV_INT_CLR);
@@ -695,8 +697,8 @@ static int m1_ddrss_pmu_remove(struct platform_device *pdev)
 	int i;
 
 	/* disable the generation of interrupt by all common counters */
-	for (i = 0; i < M1_DRW_PMU_COMMON_MAX_COUNTERS; i++)
-		writel(1 << (8 + i), ddrss_pmu->drw_cfg_base + M1_DRW_PMU_OV_INT_DISABLE_CTL);
+	writel(M1_DRW_PMCOM_CNT_OV_INTR_MASK,
+	       ddrss_pmu->drw_cfg_base + M1_DRW_PMU_OV_INT_DISABLE_CTL);
 
 	m1_ddrss_pmu_uninit_irq(ddrss_pmu);
 	perf_pmu_unregister(&ddrss_pmu->pmu);
