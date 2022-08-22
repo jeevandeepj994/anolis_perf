@@ -1870,9 +1870,8 @@ static irqreturn_t mpam_irq_handler(int irq, void *dev_id)
 	u16 partid;
 	struct mpam_msc *msc;
 	u8 errcode, pmg, ris;
-	struct mpam_msc **msc_p = dev_id;
 
-	msc = *msc_p;
+	msc = dev_id;
 
 	if (WARN_ON_ONCE(!msc) ||
 	    WARN_ON_ONCE(!cpumask_test_cpu(smp_processor_id(),
