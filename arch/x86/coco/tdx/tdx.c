@@ -869,10 +869,6 @@ static int handle_io(struct pt_regs *regs, struct ve_info *ve)
 	if (!ret)
 		return -EIO;
 
-	regs->ax &= ~mask;
-	regs->ax |= tdx_fuzz(ret || tdx_fuzz_err(TDX_FUZZ_PORT_IN_ERR) ?
-			     UINT_MAX : regs->r11, TDX_FUZZ_PORT_IN) & mask;
-
 	return ve_instr_len(ve);
 }
 
