@@ -260,6 +260,9 @@ static void smc_fback_restore_callbacks(struct smc_sock *smc)
 {
 	struct sock *clcsk = smc->clcsock->sk;
 
+	if (!clcsk)
+		return;
+
 	write_lock_bh(&clcsk->sk_callback_lock);
 	clcsk->sk_user_data = NULL;
 
