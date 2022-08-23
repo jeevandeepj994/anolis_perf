@@ -57,7 +57,7 @@
 					 * Steering */
 #define VIRTIO_NET_F_CTRL_MAC_ADDR 23	/* Set MAC address */
 
-#define VIRTIO_NET_F_NOTF_COAL	53	/* Guest can handle notifications coalescing */
+#define VIRTIO_NET_F_NOTF_COAL	53	/* Device supports notifications coalescing */
 #define VIRTIO_NET_F_GUEST_USO4	54	/* Guest can handle USOv4 in. */
 #define VIRTIO_NET_F_GUEST_USO6	55	/* Guest can handle USOv6 in. */
 #define VIRTIO_NET_F_HOST_USO	56	/* Host can handle USO in. */
@@ -369,24 +369,24 @@ struct virtio_net_hash_config {
  */
 #define VIRTIO_NET_CTRL_NOTF_COAL		6
 /*
- * Set the tx-usecs/tx-max-packets patameters.
- * tx-usecs - Maximum number of usecs to delay a TX notification.
- * tx-max-packets - Maximum number of packets to send before a TX notification.
+ * Set the tx-usecs/tx-max-packets parameters.
  */
 struct virtio_net_ctrl_coal_tx {
+	/* Maximum number of packets to send before a TX notification */
 	__le32 tx_max_packets;
+	/* Maximum number of usecs to delay a TX notification */
 	__le32 tx_usecs;
 };
 
 #define VIRTIO_NET_CTRL_NOTF_COAL_TX_SET		0
 
 /*
- * Set the rx-usecs/rx-max-packets patameters.
- * rx-usecs - Maximum number of usecs to delay a RX notification.
- * rx-max-frames - Maximum number of packets to receive before a RX notification.
+ * Set the rx-usecs/rx-max-packets parameters.
  */
 struct virtio_net_ctrl_coal_rx {
+	/* Maximum number of packets to receive before a RX notification */
 	__le32 rx_max_packets;
+	/* Maximum number of usecs to delay a RX notification */
 	__le32 rx_usecs;
 };
 
