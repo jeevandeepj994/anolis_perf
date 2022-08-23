@@ -467,19 +467,10 @@ again:
 		memset(&wc, 0, sizeof(wc));
 		rc = ib_poll_cq(smcibcq->ib_cq, SMC_WR_MAX_POLL_CQE, wc);
 		for (i = 0; i < rc; i++) {
-			switch (wc[i].opcode) {
-			case IB_WC_REG_MR:
-			case IB_WC_SEND:
-				smc_wr_tx_process_cqe(&wc[i]);
-				break;
-			case IB_WC_RECV:
+			if (wc[i].opcode & IB_WC_RECV)
 				smc_wr_rx_process_cqe(&wc[i]);
-				break;
-			default:
-				pr_warn("smc: unexpected wc opcode %d, status %d, wr_id %llu.\n",
-					wc[i].opcode, wc[i].status, wc[i].wr_id);
-				break;
-			}
+			else
+				smc_wr_tx_process_cqe(&wc[i]);
 		}
 
 		if (rc > 0)
