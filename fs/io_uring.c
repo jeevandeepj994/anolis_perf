@@ -4014,8 +4014,10 @@ static int io_uring_cmd(struct io_kiocb *req, unsigned int issue_flags)
 		return -EAGAIN;
 	}
 
-	if (ret != -EIOCBQUEUED)
+	if (ret != -EIOCBQUEUED) {
 		io_uring_cmd_done(ioucmd, ret, 0);
+		return ret;
+	}
 	return 0;
 }
 
