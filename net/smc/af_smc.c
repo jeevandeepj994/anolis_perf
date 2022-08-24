@@ -476,7 +476,11 @@ static int smc_bind(struct socket *sock, struct sockaddr *uaddr,
 	if (sk->sk_state != SMC_INIT || smc->connect_nonblock)
 		goto out_rel;
 
-	smc->clcsock->sk->sk_reuse = sk->sk_reuse;
+	/* use SO_REUSEADDR to keep first contact clcsock  */
+	if (sock_net(sk)->smc.sysctl_keep_first_contact_clcsock)
+		smc->clcsock->sk->sk_reuse = SK_CAN_REUSE;
+	else
+		smc->clcsock->sk->sk_reuse = sk->sk_reuse;
 	rc = kernel_bind(smc->clcsock, uaddr, addr_len);
 
 out_rel:
@@ -945,6 +949,10 @@ static int smc_switch_to_fallback(struct smc_sock *smc, int reason_code)
 		smc->clcsock->file->private_data = smc->clcsock;
 		smc->clcsock->wq.fasync_list =
 			smc->sk.sk_socket->wq.fasync_list;
+		/* restore sk_reuse which is SK_CAN_REUSE when
+		 * sysctl_keep_first_contact_clcsock enabled.
+		 */
+		smc->clcsock->sk->sk_reuse = smc->sk.sk_reuse;
 
 		/* There might be some wait entries remaining
 		 * in smc sk->sk_wq and they should be woken up
