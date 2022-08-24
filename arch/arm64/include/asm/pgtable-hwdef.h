@@ -122,6 +122,7 @@
 #define PMD_SECT_CONT		(_AT(pmdval_t, 1) << 52)
 #define PMD_SECT_PXN		(_AT(pmdval_t, 1) << 53)
 #define PMD_SECT_UXN		(_AT(pmdval_t, 1) << 54)
+#define PMD_SECT_AP_WRPROTECT	(_AT(pmdval_t, 2) << 61)	/* APTable[1:0] */
 
 /*
  * AttrIndx[2:0] encoding (mapping attributes defined in the MAIR* registers).

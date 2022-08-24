@@ -2156,7 +2156,8 @@ static int gup_pte_range(pmd_t pmd, unsigned long addr, unsigned long end,
 	 * checked in gup_pmd_range().
 	 */
 	if (unlikely(maybe_pmd_fcm(pmd)))
-		return 0;
+		if (is_pmd_fcm(pmd))
+			return 0;
 #endif
 
 	ptem = ptep = pte_offset_map(&pmd, addr);

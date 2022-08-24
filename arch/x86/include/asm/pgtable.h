@@ -825,6 +825,18 @@ static inline int pmd_bad(pmd_t pmd)
 #endif
 }
 
+#ifdef CONFIG_FAST_COPY_MM
+static inline bool maybe_pmd_fcm(pmd_t pmd)
+{
+	return !(pmd_flags(pmd) & _PAGE_RW);
+}
+#else
+static inline bool maybe_pmd_fcm(pmd_t pmd)
+{
+	return false;
+}
+#endif
+
 static inline unsigned long pages_to_mb(unsigned long npg)
 {
 	return npg >> (20 - PAGE_SHIFT);
