@@ -308,11 +308,7 @@ static int dwc_pcie_find_ras_des_cap_position(struct pci_dev *pdev, int *pos)
 
 static int dwc_pcie_pmu_discover(struct dwc_pcie_pmu_priv *priv)
 {
-	int ret;
-	int val;
-	int where;
-	bool is_rp;
-	int index = 0;
+	int ret, val, where, index = 0;
 	struct pci_dev *pdev = NULL;
 	struct dwc_pcie_info_table *pcie_info;
 
@@ -322,10 +318,9 @@ static int dwc_pcie_pmu_discover(struct dwc_pcie_pmu_priv *priv)
 		return -EINVAL;
 
 	pcie_info = priv->pcie_table;
-	while ((pdev = pci_get_device(PCI_ANY_ID, PCI_ANY_ID, pdev)) != NULL
-		&& index < RP_NUM_MAX) {
-		is_rp = pci_dev_is_rootport(pdev);
-		if (!is_rp)
+	while ((pdev = pci_get_device(PCI_ANY_ID, PCI_ANY_ID, pdev)) != NULL &&
+	       index < RP_NUM_MAX) {
+		if (!pci_dev_is_rootport(pdev))
 			continue;
 
 		pcie_info[index].bdf = dwc_pcie_get_bdf(pdev);
@@ -344,7 +339,7 @@ static int dwc_pcie_pmu_discover(struct dwc_pcie_pmu_priv *priv)
 				pdev->pcie_cap + DWC_PCIE_LINK_CAPABILITIES_REG,
 				&val);
 		pcie_info[index].num_lanes =
-		(val & DWC_PCIE_LANE_MASK) >> DWC_PCIE_LANE_SHIFT;
+			(val & DWC_PCIE_LANE_MASK) >> DWC_PCIE_LANE_SHIFT;
 		index++;
 	}
 
