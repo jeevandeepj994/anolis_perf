@@ -21,18 +21,14 @@
 #define DRV_NAME "dwc_pcie_pmu"
 #define DEV_NAME "dwc_pcie_pmu"
 #define RP_NUM_MAX 32		/*2die * 4RC * 4Ctrol */
-#define PCIE_RAS_CAP_ID 0xb
 #define ATTRI_NAME_MAX_SIZE 32
+
+#define DWC_PCIE_VSEC_ID			0x02
+#define DWC_PCIE_VSEC_REV			0x04
 
 #define DWC_PCIE_LINK_CAPABILITIES_REG		0xC
 #define DWC_PCIE_LANE_SHIFT			4
 #define DWC_PCIE_LANE_MASK			GENMASK(9, 4)
-
-#define DWC_PCIE_RAS_DES_CAP_HDR		0x0
-
-#define DWC_PCIE_VENDOR_SPECIFIC_HDR		0x4
-#define DWC_PCIE__VSEC_ID_MASK			GENMASK(15, 0)
-#define DWC_PCIE_VSEC_ID			0x02
 
 #define DWC_PCIE_EVENT_CNT_CTRL			0x8
 #define DWC_PCIE__CNT_EVENT_SELECT_SHIFT	16
@@ -274,36 +270,21 @@ static inline unsigned int dwc_pcie_get_bdf(struct pci_dev *dev)
 
 static int dwc_pcie_find_ras_des_cap_position(struct pci_dev *pdev, int *pos)
 {
-	int ret = -1;
-	int start = 0;
-	u32 val;
-	u32 vsec_id;
-	int where;
-	int count = 0;
-	int end = 256;
+	u32 header;
+	int vsec = 0;
 
-	do {
-		where = pci_find_next_ext_capability(pdev, start, PCIE_RAS_CAP_ID);
-		if (!where)
-			return -EINVAL;
-
-		pci_read_config_dword(pdev,
-				      where + DWC_PCIE_VENDOR_SPECIFIC_HDR,
-				      &val);
-		vsec_id = val & DWC_PCIE__VSEC_ID_MASK;
-
-		if (vsec_id == DWC_PCIE_VSEC_ID) {
-			*pos = where;
-			ret = 0;
-			break;
+	while ((vsec = pci_find_next_ext_capability(pdev, vsec,
+						    PCI_EXT_CAP_ID_VNDR))) {
+		pci_read_config_dword(pdev, vsec + PCI_VNDR_HEADER, &header);
+		/* Is the device part of a DesignWare Cores PCIe Controller ? */
+		if (PCI_VNDR_HEADER_ID(header) == DWC_PCIE_VSEC_ID &&
+		    PCI_VNDR_HEADER_REV(header) == DWC_PCIE_VSEC_REV) {
+			*pos = vsec;
+			return 0;
 		}
+	}
 
-		pci_read_config_dword(pdev, where, &val);
-		start = PCI_EXT_CAP_NEXT(val);
-		count++;
-	} while (count < end);
-
-	return ret;
+	return -ENODEV;
 }
 
 static int dwc_pcie_pmu_discover(struct dwc_pcie_pmu_priv *priv)
