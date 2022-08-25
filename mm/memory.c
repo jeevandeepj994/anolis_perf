@@ -1391,10 +1391,8 @@ static inline unsigned long zap_pmd_range(struct mmu_gather *tlb,
 		 * because MADV_DONTNEED holds the mmap_lock in read
 		 * mode.
 		 */
-#ifdef CONFIG_FAST_COPY_MM
-		if (maybe_pmd_fcm(*pmd))
-			fcm_fixup_pmd(vma, pmd, addr);
-#endif
+		fcm_fixup_pmd(vma, pmd, addr);
+
 		if (pmd_none_or_trans_huge_or_clear_bad(pmd))
 			goto next;
 		next = zap_pte_range(tlb, vma, pmd, addr, next, details);
@@ -4667,10 +4665,7 @@ retry_pud:
 			}
 		}
 
-#ifdef CONFIG_FAST_COPY_MM
-		if (maybe_pmd_fcm(orig_pmd))
-			fcm_fixup_pmd(vma, vmf.pmd, address);
-#endif
+		fcm_fixup_pmd(vma, vmf.pmd, address);
 	}
 
 	return handle_pte_fault(&vmf);

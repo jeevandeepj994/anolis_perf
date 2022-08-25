@@ -3769,9 +3769,7 @@ asmlinkage __visible void schedule_tail(struct task_struct *prev)
 	balance_callback(rq);
 	preempt_enable();
 
-#ifdef CONFIG_FAST_COPY_MM
 	fcm_cpr_rest();
-#endif
 
 	if (current->set_child_tid)
 		put_user(task_pid_vnr(current), current->set_child_tid);
