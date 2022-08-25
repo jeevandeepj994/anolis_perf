@@ -1870,9 +1870,8 @@ static irqreturn_t mpam_irq_handler(int irq, void *dev_id)
 	u16 partid;
 	struct mpam_msc *msc;
 	u8 errcode, pmg, ris;
-	struct mpam_msc **msc_p = dev_id;
 
-	msc = *msc_p;
+	msc = dev_id;
 
 	if (WARN_ON_ONCE(!msc) ||
 	    WARN_ON_ONCE(!cpumask_test_cpu(smp_processor_id(),
@@ -1895,16 +1894,16 @@ static irqreturn_t mpam_irq_handler(int irq, void *dev_id)
 	pr_err("error irq from msc:%u '%s', partid:%u, pmg: %u, ris: %u\n",
 	       msc->id, mpam_errcode_names[errcode], partid, pmg, ris);
 
-	if (irq_is_percpu(irq)) {
-		mpam_disable_msc_ecr(msc);
-		schedule_work(&mpam_broken_work);
-		return IRQ_HANDLED;
-	}
+	/*
+	 * To prevent this interrupt from repeatedly cancelling the scheduled
+	 * work to disable mpam, disable the error interrupt.
+	 */
+	mpam_disable_msc_ecr(msc);
 
-	return IRQ_WAKE_THREAD;
+	schedule_work(&mpam_broken_work);
+
+	return IRQ_HANDLED;
 }
-
-static irqreturn_t mpam_disable_thread(int irq, void *dev_id);
 
 static int mpam_register_irqs(void)
 {
@@ -1935,11 +1934,9 @@ static int mpam_register_irqs(void)
 					       true);
 			spin_unlock(&msc->lock);
 		} else {
-			err = devm_request_threaded_irq(&msc->pdev->dev, irq,
-							&mpam_irq_handler,
-							&mpam_disable_thread,
-							IRQF_SHARED,
-							"mpam:msc:error", msc);
+			err = devm_request_irq(&msc->pdev->dev, irq,
+					       &mpam_irq_handler, IRQF_SHARED,
+					       "mpam:msc:error", msc);
 			if (err)
 				return err;
 		}
@@ -2139,7 +2136,7 @@ void mpam_reset_class(struct mpam_class *class)
  * All of MPAMs errors indicate a software bug, restore any modified
  * controls to their reset values.
  */
-static irqreturn_t mpam_disable_thread(int irq, void *dev_id)
+void mpam_disable(struct work_struct *ignored)
 {
 	struct mpam_class *class;
 
@@ -2160,13 +2157,6 @@ static irqreturn_t mpam_disable_thread(int irq, void *dev_id)
 	list_for_each_entry_rcu(class, &mpam_classes, classes_list)
 		mpam_reset_class(class);
 	rcu_read_unlock();
-
-	return IRQ_HANDLED;
-}
-
-void mpam_disable(struct work_struct *ignored)
-{
-	mpam_disable_thread(0, NULL);
 }
 
 /*
