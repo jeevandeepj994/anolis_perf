@@ -9,3 +9,10 @@ config THEAD_M1_PMU
 	  help
 	  Support for PMU events monitoring on Alibaba THead M1 SoC,
 		includes CMN-700, DDR Subsystem, and PCIe Controller
+
+config DWC_UNCORE_PCIE_PMU
+	  tristate "Enable PMU support for the DesignWare PCI Express controller"
+	  depends on ARM64
+	  help
+	    Enable perf support for the DesignWare PCI Express controller,
+	    which provides time based analysis and event counters.
