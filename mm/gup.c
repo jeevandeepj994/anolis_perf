@@ -410,13 +410,11 @@ retry:
 	if (unlikely(pmd_bad(*pmd)))
 		return no_page_table(vma, flags);
 
-#ifdef CONFIG_FAST_COPY_MM
-	if (unlikely(maybe_pmd_fcm(*pmd))) {
+	if (fcm_staging()) {
 		fcm_fixup_pmd(vma, pmd, address);
-		if (maybe_pmd_fcm(*pmd))
+		if (is_pmd_fcm(*pmd))
 			return no_page_table(vma, flags);
 	}
-#endif
 
 	ptep = pte_offset_map_lock(mm, pmd, address, &ptl);
 	pte = *ptep;
@@ -2150,14 +2148,8 @@ static int gup_pte_range(pmd_t pmd, unsigned long addr, unsigned long end,
 	int nr_start = *nr, ret = 0;
 	pte_t *ptep, *ptem;
 
-#ifdef CONFIG_FAST_COPY_MM
-	/*
-	 * Note that pmd_present/pmd_trans_huge/pmd_devmap has already been
-	 * checked in gup_pmd_range().
-	 */
-	if (unlikely(maybe_pmd_fcm(pmd)))
+	if (is_pmd_fcm(pmd))
 		return 0;
-#endif
 
 	ptem = ptep = pte_offset_map(&pmd, addr);
 	do {

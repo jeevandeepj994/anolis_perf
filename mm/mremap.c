@@ -485,7 +485,7 @@ static struct vm_area_struct *vma_to_resize(unsigned long addr,
 	if (!vma || vma->vm_start > addr)
 		return ERR_PTR(-EFAULT);
 
-	fcm_sync_vma(vma);
+	fcm_fixup_vma(vma);
 
 	/*
 	 * !old_len is a special case where an attempt is made to 'duplicate'
