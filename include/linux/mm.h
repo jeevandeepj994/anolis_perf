@@ -3369,7 +3369,7 @@ void fcm_cpr_bind(struct mm_struct *oldmm, struct mm_struct *mm, int err);
 void fcm_cpr_rest(void);
 void fcm_cpr_done(struct mm_struct *mm, bool r, bool l);
 
-bool maybe_pmd_fcm(pmd_t pmd);
+bool is_pmd_fcm(pmd_t pmd);
 void fcm_fixup_pmd(struct vm_area_struct *mpnt, pmd_t *pmd, unsigned long addr);
 void fcm_fixup_vma(struct vm_area_struct *mpnt);
 #define fcm_sync_vma(mpnt)	do {		\
@@ -3396,7 +3396,7 @@ static inline void fcm_cpr_rest(void)
 static inline void fcm_cpr_done(struct mm_struct *mm, bool r, bool l)
 {
 }
-static inline bool maybe_pmd_fcm(pmd_t pmd)
+static inline bool is_pmd_fcm(pmd_t pmd)
 {
 	return false;
 }

@@ -519,6 +519,18 @@ extern pgprot_t phys_mem_access_prot(struct file *file, unsigned long pfn,
 #define pmd_leaf(pmd)		(pmd_present(pmd) && !pmd_table(pmd))
 #define pmd_bad(pmd)		(!pmd_table(pmd))
 
+#ifdef CONFIG_FAST_COPY_MM
+static inline bool maybe_pmd_fcm(pmd_t pmd)
+{
+	return pmd_val(pmd) & PMD_SECT_AP_WRPROTECT;
+}
+#else
+static inline bool maybe_pmd_fcm(pmd_t pmd)
+{
+	return false;
+}
+#endif
+
 #if defined(CONFIG_ARM64_64K_PAGES) || CONFIG_PGTABLE_LEVELS < 3
 static inline bool pud_sect(pud_t pud) { return false; }
 static inline bool pud_table(pud_t pud) { return true; }

@@ -24,7 +24,7 @@ noinline void fcm_cpr_done(struct mm_struct *mm, bool r, bool l)
 {
 }
 
-noinline bool maybe_pmd_fcm(pmd_t pmd)
+noinline bool is_pmd_fcm(pmd_t pmd)
 {
 	return false;
 }
