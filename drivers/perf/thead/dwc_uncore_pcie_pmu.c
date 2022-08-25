@@ -18,10 +18,10 @@
 #include <linux/sysfs.h>
 #include <linux/types.h>
 
-#define DRV_NAME "dwc_pcie_pmu"
-#define DEV_NAME "dwc_pcie_pmu"
-#define RP_NUM_MAX 32		/*2die * 4RC * 4Ctrol */
-#define ATTRI_NAME_MAX_SIZE 32
+#define DRV_NAME				"dwc_pcie_pmu"
+#define DEV_NAME				"dwc_pcie_pmu"
+#define RP_NUM_MAX				32 /* 2die * 4RC * 4Ctrol */
+#define ATTRI_NAME_MAX_SIZE			32
 
 #define DWC_PCIE_VSEC_ID			0x02
 #define DWC_PCIE_VSEC_REV			0x04
@@ -289,7 +289,7 @@ static int dwc_pcie_find_ras_des_cap_position(struct pci_dev *pdev, int *pos)
 
 static int dwc_pcie_pmu_discover(struct dwc_pcie_pmu_priv *priv)
 {
-	int ret, val, where, index = 0;
+	int val, where, index = 0;
 	struct pci_dev *pdev = NULL;
 	struct dwc_pcie_info_table *pcie_info;
 
@@ -307,12 +307,8 @@ static int dwc_pcie_pmu_discover(struct dwc_pcie_pmu_priv *priv)
 		pcie_info[index].bdf = dwc_pcie_get_bdf(pdev);
 		pcie_info[index].pdev = pdev;
 
-		ret = dwc_pcie_find_ras_des_cap_position(pdev, &where);
-		if (ret != 0) {
-			pci_err(pcie_info->pdev,
-			"Get extern capability offset fail\n");
-			return -EINVAL;
-		}
+		if (dwc_pcie_find_ras_des_cap_position(pdev, &where))
+			continue;
 
 		pcie_info[index].cap_pos = where;
 
@@ -324,10 +320,8 @@ static int dwc_pcie_pmu_discover(struct dwc_pcie_pmu_priv *priv)
 		index++;
 	}
 
-	if (!index) {
-		pci_err(pcie_info->pdev, "No pcie controller\n");
-		return -EINVAL;
-	}
+	if (!index)
+		return -ENODEV;
 
 	priv->pcie_ctrl_num = index;
 
@@ -917,19 +911,20 @@ static int dwc_pcie_pmu_probe(struct platform_device *pdev)
 	priv->dev = &pdev->dev;
 	platform_set_drvdata(pdev, priv);
 
-	ret = dwc_pcie_pmu_discover(priv);
-	if (ret) {
-		dev_err(&pdev->dev, "Input parameter is invalid\n");
-		return ret;
-	}
+	/* If PMU is not support on current platform, keep slient */
+	if (dwc_pcie_pmu_discover(priv))
+		return 0;
 
 	for (pcie_index = 0; pcie_index < priv->pcie_ctrl_num; pcie_index++) {
+		struct pci_dev *rp = priv->pcie_table[pcie_index].pdev;
+
 		ret = __dwc_pcie_pmu_probe(priv, &priv->pcie_table[pcie_index]);
 		if (ret) {
-			dev_err(&pdev->dev, "PCIe pmu probe fail\n");
+			dev_err(&rp->dev, "PCIe PMU probe fail\n");
 			goto pmu_unregister;
 		}
 	}
+	dev_info(&pdev->dev, "PCIe PMUs registered\n");
 
 	return 0;
 
