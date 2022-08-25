@@ -362,7 +362,7 @@ struct vm_area_struct *vm_area_dup(struct vm_area_struct *orig)
 {
 	struct vm_area_struct *new = kmem_cache_alloc(vm_area_cachep, GFP_KERNEL);
 
-	fcm_sync_vma(orig);
+	fcm_fixup_vma(orig);
 
 	if (new) {
 		ASSERT_EXCLUSIVE_WRITER(orig->vm_flags);
