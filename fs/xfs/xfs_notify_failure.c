@@ -175,7 +175,7 @@ xfs_dax_notify_failure(
 	}
 
 	if (mp->m_rtdev_targp && mp->m_rtdev_targp->bt_daxdev == dax_dev) {
-		xfs_warn(mp,
+		xfs_debug(mp,
 			 "notify_failure() not supported on realtime device!");
 		return -EOPNOTSUPP;
 	}
@@ -188,7 +188,7 @@ xfs_dax_notify_failure(
 	}
 
 	if (!xfs_sb_version_hasrmapbt(&mp->m_sb)) {
-		xfs_warn(mp, "notify_failure() needs rmapbt enabled!");
+		xfs_debug(mp, "notify_failure() needs rmapbt enabled!");
 		return -EOPNOTSUPP;
 	}
 
