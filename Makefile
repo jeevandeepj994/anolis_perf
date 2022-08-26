@@ -747,8 +747,15 @@ KBUILD_CFLAGS 	+= $(call cc-option, -femit-struct-debug-baseonly) \
 endif
 
 ifdef CONFIG_FUNCTION_TRACER
+ifdef CONFIG_HAVE_BUILDTIME_NOP_INSERT
+ifdef CONFIG_HAVE_FENTRY
+  ifeq ($(call cc-option-yn, -mfentry),y)
+    CC_FLAGS_FTRACE     += -mfentry
+    CC_FLAGS_USING      += -DCC_USING_FENTRY
+  endif
+endif
+else
 ifdef CONFIG_FTRACE_MCOUNT_RECORD
-ifneq ($(ARCH),x86_64)
   # gcc 5 supports generating the mcount tables directly
   ifeq ($(call cc-option-yn,-mrecord-mcount),y)
     CC_FLAGS_FTRACE	+= -mrecord-mcount
@@ -761,12 +768,12 @@ ifneq ($(ARCH),x86_64)
     endif
   endif
 endif
-endif
 ifdef CONFIG_HAVE_FENTRY
   ifeq ($(call cc-option-yn, -mfentry),y)
     CC_FLAGS_FTRACE	+= -mfentry
     CC_FLAGS_USING	+= -DCC_USING_FENTRY
   endif
+endif
 endif
 export CC_FLAGS_FTRACE
 KBUILD_CFLAGS	+= $(CC_FLAGS_FTRACE) $(CC_FLAGS_USING)
