@@ -36,11 +36,11 @@ struct smc_lgr_list {			/* list of link group definition */
 };
 
 struct smc_lgr_manager {		/* manager for link group */
-	struct rhashtable	lnk_cluster_maps;	/* maps of smc_lnk_cluster */
+	struct rhashtable	link_cluster_maps;	/* maps of smc_link_cluster */
 	spinlock_t		lock;	/* lock for lgr_cm_maps */
 };
 
-struct smc_lnk_cluster {
+struct smc_link_cluster {
 	struct rhash_head	rnode;	/* node for rhashtable */
 	struct wait_queue_head	first_contact_waitqueue;
 					/* queue for non first contact to wait
@@ -56,6 +56,10 @@ struct smc_lnk_cluster {
 					/* connections that are waiting for first contact
 					 * complete
 					 */
+	u32					lacking_first_contact;
+					/* indicate that the connection
+					 * should perform first contact.
+					 */
 	u8		peer_systemid[SMC_SYSTEMID_LEN];
 	u8		peer_mac[ETH_ALEN];	/* = gid[8:10||13:15] */
 	u8		peer_gid[SMC_GID_SIZE];	/* gid of peer*/
@@ -68,7 +72,7 @@ enum smc_lgr_role {		/* possible roles of a link group */
 	SMC_SERV	/* server */
 };
 
-struct smc_lnk_cluster_compare_arg	/* key for smc_lnk_cluster */
+struct smc_link_cluster_compare_arg	/* key for smc_link_cluster */
 {
 	int	smcr_version;
 	enum smc_lgr_role role;
@@ -83,7 +87,7 @@ enum smc_link_state {			/* possible states of a link */
 	SMC_LNK_INACTIVE,	/* link is inactive */
 	SMC_LNK_ACTIVATING,	/* link is being activated */
 	SMC_LNK_ACTIVE,		/* link is active */
-	SMC_LNK_TEAR_DWON,	/* link is tear down */
+	SMC_LNK_TEAR_DOWN,	/* link is tear down */
 };
 
 #define SMC_LNK_STATE_BIT(state)	(1 << (state))
@@ -214,7 +218,6 @@ struct smc_link {
 	struct completion	llc_testlink_resp; /* wait for rx of testlink */
 	int			llc_testlink_time; /* testlink interval */
 	atomic_t		conn_cnt; /* connections on this link */
-
 	struct socket		*clcsock;	/* keep for eRDMA */
 };
 
@@ -627,25 +630,22 @@ int smcr_nl_get_lgr(struct sk_buff *skb, struct netlink_callback *cb);
 int smcr_nl_get_link(struct sk_buff *skb, struct netlink_callback *cb);
 int smcd_nl_get_lgr(struct sk_buff *skb, struct netlink_callback *cb);
 
+void smcr_link_cluster_on_link_state(struct smc_link *lnk);
 static inline void smc_conn_enter_rtoken_pending(struct smc_sock *smc, struct smc_init_info *ini)
 {
-	struct smc_link_group *lgr;
+	struct smc_link_group *lgr = smc->conn.lgr;
 
-	lgr = smc->conn.lgr;
 	if (lgr && !ini->first_contact_local)
 		atomic_inc(&lgr->rtoken_pendings);
 }
 
 static inline void smc_conn_leave_rtoken_pending(struct smc_sock *smc, struct smc_init_info *ini)
 {
-	struct smc_link_group *lgr;
+	struct smc_link_group *lgr = smc->conn.lgr;
 
-	lgr = smc->conn.lgr;
 	if (lgr && !ini->first_contact_local)
 		atomic_dec(&lgr->rtoken_pendings);
 }
-
-void smcr_lnk_cluster_on_lnk_state(struct smc_link *lnk);
 
 static inline struct smc_link_group *smc_get_lgr(struct smc_link *link)
 {

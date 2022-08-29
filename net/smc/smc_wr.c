@@ -467,19 +467,11 @@ again:
 		memset(&wc, 0, sizeof(wc));
 		rc = ib_poll_cq(smcibcq->ib_cq, SMC_WR_MAX_POLL_CQE, wc);
 		for (i = 0; i < rc; i++) {
-			switch (wc[i].opcode) {
-			case IB_WC_REG_MR:
-			case IB_WC_SEND:
-				smc_wr_tx_process_cqe(&wc[i]);
-				break;
-			case IB_WC_RECV:
+			if ((wc[i].opcode & IB_WC_RECV) ||
+			    (wc[i].opcode == 0 && smc_wr_id_is_rx(wc[i].wr_id)))
 				smc_wr_rx_process_cqe(&wc[i]);
-				break;
-			default:
-				pr_warn("smc: unexpected wc opcode %d, status %d, wr_id %llu.\n",
-					wc[i].opcode, wc[i].status, wc[i].wr_id);
-				break;
-			}
+			else
+				smc_wr_tx_process_cqe(&wc[i]);
 		}
 
 		if (rc > 0)
@@ -843,7 +835,7 @@ int smc_wr_create_link(struct smc_link *lnk)
 	int rc = 0;
 
 	smc_wr_tx_set_wr_id(&lnk->wr_tx_id, 0);
-	lnk->wr_rx_id = 0;
+	lnk->wr_rx_id = 1;
 	lnk->wr_rx_dma_addr = ib_dma_map_single(
 		ibdev, lnk->wr_rx_bufs,	SMC_WR_BUF_SIZE * lnk->wr_rx_cnt,
 		DMA_FROM_DEVICE);

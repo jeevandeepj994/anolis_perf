@@ -46,7 +46,7 @@ struct smc_lgr_list smc_lgr_list = {	/* established link groups */
 	.num = 0,
 };
 
-struct smc_lgr_manager smc_lgr_manager = {
+static struct smc_lgr_manager smc_lgr_manager = {
 	.lock = __SPIN_LOCK_UNLOCKED(smc_lgr_manager.lock),
 };
 
@@ -59,11 +59,18 @@ static void __smc_lgr_terminate(struct smc_link_group *lgr, bool soft);
 
 static void smc_link_down_work(struct work_struct *work);
 
-/* SMC-R lgr cluster compare func */
-static int smcr_lnk_cluster_cmpfn(struct rhashtable_compare_arg *arg, const void *obj)
+/* SMC-R lnk cluster compare func
+ * All lnks that meet the description conditions of this function
+ * are logically aggregated, called lnk cluster.
+ * For the server side, lnk cluster is used to determine whether
+ * a new group needs to be created when processing new imcoming connections.
+ * For the client side, lnk cluster is used to determine whether
+ * to wait for link ready (in other words, first contact ready).
+ */
+static int smcr_link_cluster_cmpfn(struct rhashtable_compare_arg *arg, const void *obj)
 {
-	const struct smc_lnk_cluster_compare_arg *key = arg->key;
-	const struct smc_lnk_cluster *lnkc = obj;
+	const struct smc_link_cluster_compare_arg *key = arg->key;
+	const struct smc_link_cluster *lnkc = obj;
 
 	if (memcmp(key->peer_systemid, lnkc->peer_systemid, SMC_SYSTEMID_LEN))
 		return 1;
@@ -79,43 +86,42 @@ static int smcr_lnk_cluster_cmpfn(struct rhashtable_compare_arg *arg, const void
 	return 1;
 }
 
-/* SMC-R lgr cluster hash func */
-static u32 smcr_lnk_cluster_hashfn(const void *data, u32 len, u32 seed)
+/* SMC-R lnk cluster hash func */
+static u32 smcr_link_cluster_hashfn(const void *data, u32 len, u32 seed)
 {
-	const struct smc_lnk_cluster *lnkc = data;
+	const struct smc_link_cluster *lnkc = data;
 
 	return jhash2((u32 *)lnkc->peer_systemid, SMC_SYSTEMID_LEN / sizeof(u32), seed)
-		+ (lnkc->role == SMC_SERV) ? 0 : lnkc->clcqpn;
+		+ ((lnkc->role == SMC_SERV) ? 0 : lnkc->clcqpn);
 }
 
-/* SMC-R lgr cluster compare arg hash func */
-static u32 smcr_lnk_cluster_compare_arg_hashfn(const void *data, u32 len, u32 seed)
+/* SMC-R lnk cluster compare arg hash func */
+static u32 smcr_link_cluster_compare_arg_hashfn(const void *data, u32 len, u32 seed)
 {
-	const struct smc_lnk_cluster_compare_arg *key = data;
+	const struct smc_link_cluster_compare_arg *key = data;
 
 	return jhash2((u32 *)key->peer_systemid, SMC_SYSTEMID_LEN / sizeof(u32), seed)
-		+ (key->role == SMC_SERV) ? 0 : key->clcqpn;
+		+ ((key->role == SMC_SERV) ? 0 : key->clcqpn);
 }
 
-static const struct rhashtable_params smcr_lnk_cluster_rhl_params = {
-	.head_offset = offsetof(struct smc_lnk_cluster, rnode),
-	.key_len = sizeof(struct smc_lnk_cluster_compare_arg),
-	.obj_cmpfn = smcr_lnk_cluster_cmpfn,
-	.obj_hashfn = smcr_lnk_cluster_hashfn,
-	.hashfn = smcr_lnk_cluster_compare_arg_hashfn,
+static const struct rhashtable_params smcr_link_cluster_rhl_params = {
+	.head_offset = offsetof(struct smc_link_cluster, rnode),
+	.key_len = sizeof(struct smc_link_cluster_compare_arg),
+	.obj_cmpfn = smcr_link_cluster_cmpfn,
+	.obj_hashfn = smcr_link_cluster_hashfn,
+	.hashfn = smcr_link_cluster_compare_arg_hashfn,
 	.automatic_shrinking = true,
 };
 
-/* hold a reference for smc_lnk_cluster */
-static inline struct smc_lnk_cluster *smc_lnk_cluster_hold(struct smc_lnk_cluster *lnkc)
+/* hold a reference for smc_link_cluster */
+static inline void smc_link_cluster_hold(struct smc_link_cluster *lnkc)
 {
-	if (lnkc)
+	if (likely(lnkc))
 		refcount_inc(&lnkc->ref);
-	return lnkc;
 }
 
-/* release a reference for smc_lnk_cluster */
-static inline void smc_lnk_cluster_put(struct smc_lnk_cluster *lnkc)
+/* release a reference for smc_link_cluster */
+static inline void smc_link_cluster_put(struct smc_link_cluster *lnkc)
 {
 	bool do_free = false;
 
@@ -129,36 +135,32 @@ static inline void smc_lnk_cluster_put(struct smc_lnk_cluster *lnkc)
 	/* last ref */
 	if (refcount_dec_and_test(&lnkc->ref)) {
 		do_free = true;
-		rhashtable_remove_fast(&smc_lgr_manager.lnk_cluster_maps, &lnkc->rnode,
-				       smcr_lnk_cluster_rhl_params);
+		rhashtable_remove_fast(&smc_lgr_manager.link_cluster_maps, &lnkc->rnode,
+				       smcr_link_cluster_rhl_params);
 	}
 	spin_unlock_bh(&smc_lgr_manager.lock);
 	if (do_free)
 		kfree(lnkc);
 }
 
-/* Get or create smc_lnk_cluster by key
- * This function will hold a reference of returned smc_lnk_cluster
- * or set refcount to one if have to create.
- * caller MUST call smc_lnk_cluster_put after this.
+/* Get or create smc_link_cluster by key
+ * This function will hold a reference of returned smc_link_cluster
+ * or create a new smc_link_cluster with the reference initialized to 1。
+ * caller MUST call smc_link_cluster_put after this.
  */
-static inline struct smc_lnk_cluster *
-smcr_lnk_get_or_create_cluster(struct smc_lnk_cluster_compare_arg *key)
+static inline struct smc_link_cluster *
+smcr_link_get_or_create_cluster(struct smc_link_cluster_compare_arg *key)
 {
-	struct smc_lnk_cluster *lnkc, *tmp_lnkc;
-	bool busy_retry;
+	struct smc_link_cluster *lnkc;
 	int err;
 
-	/* serving a hardware or software interrupt, or preemption is disabled */
-	busy_retry = !in_interrupt();
-
 	spin_lock_bh(&smc_lgr_manager.lock);
-	lnkc = rhashtable_lookup_fast(&smc_lgr_manager.lnk_cluster_maps, key,
-				      smcr_lnk_cluster_rhl_params);
+	lnkc = rhashtable_lookup_fast(&smc_lgr_manager.link_cluster_maps, key,
+				      smcr_link_cluster_rhl_params);
 	if (!lnkc) {
 		lnkc = kzalloc(sizeof(*lnkc), GFP_ATOMIC);
 		if (unlikely(!lnkc))
-			goto fail;	/* decline */
+			goto fail;
 
 		/* init cluster */
 		spin_lock_init(&lnkc->lock);
@@ -171,55 +173,27 @@ smcr_lnk_get_or_create_cluster(struct smc_lnk_cluster_compare_arg *key)
 		memcpy(lnkc->peer_mac, key->peer_mac, ETH_ALEN);
 		refcount_set(&lnkc->ref, 1);
 
-		do {
-			err = rhashtable_insert_fast(&smc_lgr_manager.lnk_cluster_maps,
-						     &lnkc->rnode, smcr_lnk_cluster_rhl_params);
-
-			/* success or fatal error */
-			if (err != -EBUSY)
-				break;
-
-			/* impossible in fact right now */
-			if (unlikely(!busy_retry)) {
-				pr_warn_ratelimited("smc: create lnk cluster in softirq\n");
-				break;
-			}
-
-			spin_unlock_bh(&smc_lgr_manager.lock);
-			/* yeild */
-			cond_resched();
-			spin_lock_bh(&smc_lgr_manager.lock);
-
-			/* after spin_unlock_bh(), lnk_cluster_maps maybe changed */
-			tmp_lnkc = rhashtable_lookup_fast(&smc_lgr_manager.lnk_cluster_maps, key,
-							  smcr_lnk_cluster_rhl_params);
-
-			if (unlikely(tmp_lnkc)) {
-				pr_warn_ratelimited("smc: create cluster failed by duplicat key");
-				kfree(lnkc);
-				lnkc = NULL;
-				goto fail;
-			}
-		} while (1);
-
+		err = rhashtable_insert_fast(&smc_lgr_manager.link_cluster_maps,
+					     &lnkc->rnode, smcr_link_cluster_rhl_params);
 		if (unlikely(err)) {
 			pr_warn_ratelimited("smc: rhashtable_insert_fast failed (%d)", err);
 			kfree(lnkc);
 			lnkc = NULL;
 		}
 	} else {
-		smc_lnk_cluster_hold(lnkc);
+		smc_link_cluster_hold(lnkc);
 	}
 fail:
 	spin_unlock_bh(&smc_lgr_manager.lock);
 	return lnkc;
 }
 
-/* caller MUST call smc_lnk_cluster_put after this.
+/* Get or create a smc_link_cluster by lnk
+ * caller MUST call smc_link_cluster_put after this.
  */
-static inline struct smc_lnk_cluster *smcr_lnk_get_cluster(struct smc_link *lnk)
+static inline struct smc_link_cluster *smcr_link_get_cluster(struct smc_link *lnk)
 {
-	struct smc_lnk_cluster_compare_arg key;
+	struct smc_link_cluster_compare_arg key;
 	struct smc_link_group *lgr;
 
 	lgr = lnk->lgr;
@@ -234,15 +208,16 @@ static inline struct smc_lnk_cluster *smcr_lnk_get_cluster(struct smc_link *lnk)
 	if (key.role == SMC_CLNT)
 		key.clcqpn = lnk->peer_qpn;
 
-	return smcr_lnk_get_or_create_cluster(&key);
+	return smcr_link_get_or_create_cluster(&key);
 }
 
-/* caller MUST call smc_lnk_cluster_put after this.
+/* Get or create a smc_link_cluster by ini
+ * caller MUST call smc_link_cluster_put after this.
  */
-static inline struct smc_lnk_cluster *
-smcr_lnk_get_cluster_by_ini(struct smc_init_info *ini, int role)
+static inline struct smc_link_cluster *
+smcr_link_get_cluster_by_ini(struct smc_init_info *ini, int role)
 {
-	struct smc_lnk_cluster_compare_arg key;
+	struct smc_link_cluster_compare_arg key;
 
 	if (ini->is_smcd)
 		return NULL;
@@ -255,17 +230,17 @@ smcr_lnk_get_cluster_by_ini(struct smc_init_info *ini, int role)
 	if (role == SMC_CLNT)
 		key.clcqpn	= ini->ib_clcqpn;
 
-	return smcr_lnk_get_or_create_cluster(&key);
+	return smcr_link_get_or_create_cluster(&key);
 }
 
 /* callback when smc link state change */
-void smcr_lnk_cluster_on_lnk_state(struct smc_link *lnk)
+void smcr_link_cluster_on_link_state(struct smc_link *lnk)
 {
-	struct smc_lnk_cluster *lnkc;
+	struct smc_link_cluster *lnkc;
 	int nr = 0;
 
 	/* barrier for lnk->state */
-	smp_rmb();
+	smp_mb();
 
 	/* only first link can made connections block on
 	 * first_contact_waitqueue
@@ -277,10 +252,7 @@ void smcr_lnk_cluster_on_lnk_state(struct smc_link *lnk)
 	if (lnk->state_record & SMC_LNK_STATE_BIT(lnk->state))
 		return;
 
-	/* before smc_link_save_peer_info, we can't find lnkc
-	 * by lnk
-	 */
-	lnkc = smcr_lnk_get_cluster(lnk);
+	lnkc = smcr_link_get_cluster(lnk);
 
 	if (unlikely(!lnkc))
 		return;
@@ -288,35 +260,41 @@ void smcr_lnk_cluster_on_lnk_state(struct smc_link *lnk)
 	spin_lock_bh(&lnkc->lock);
 
 	/* all lnk state change should be
-	 * 1. SMC_LNK_UNUSED -> SMC_LNK_TEAR_DWON (link init failed)
-	 * 2. SMC_LNK_UNUSED -> SMC_LNK_ACTIVATING -> SMC_LNK_TEAR_DWON
-	 * 3. SMC_LNK_UNUSED -> SMC_LNK_ACTIVATING -> SMC_LNK_INACTIVE -> SMC_LNK_TEAR_DWON
-	 * 4. SMC_LNK_UNUSED -> SMC_LNK_ACTIVATING -> SMC_LNK_INACTIVE -> SMC_LNK_TEAR_DWON
+	 * 1. SMC_LNK_UNUSED -> SMC_LNK_TEAR_DOWN (link init failed)
+	 * 2. SMC_LNK_UNUSED -> SMC_LNK_ACTIVATING -> SMC_LNK_TEAR_DOWN
+	 * 3. SMC_LNK_UNUSED -> SMC_LNK_ACTIVATING -> SMC_LNK_INACTIVE -> SMC_LNK_TEAR_DOWN
+	 * 4. SMC_LNK_UNUSED -> SMC_LNK_ACTIVATING -> SMC_LNK_INACTIVE -> SMC_LNK_TEAR_DOWN
 	 * 5. SMC_LNK_UNUSED -> SMC_LNK_ATIVATING -> SMC_LNK_ACTIVE ->SMC_LNK_INACTIVE
-	 * -> SMC_LNK_TEAR_DWON
+	 * -> SMC_LNK_TEAR_DOWN
 	 */
 	switch (lnk->state) {
 	case SMC_LNK_ACTIVATING:
 		/* It's safe to hold a reference without lock
-		 * dues to the smcr_lnk_get_cluster already hold one
+		 * dues to the smcr_link_get_cluster already hold one
 		 */
-		smc_lnk_cluster_hold(lnkc);
+		smc_link_cluster_hold(lnkc);
 		break;
-	case SMC_LNK_TEAR_DWON:
+	case SMC_LNK_TEAR_DOWN:
 		if (lnk->state_record & SMC_LNK_STATE_BIT(SMC_LNK_ACTIVATING))
-			/* smc_lnk_cluster_hold in SMC_LNK_ACTIVATING */
-			smc_lnk_cluster_put(lnkc);
-			fallthrough;
+			/* smc_link_cluster_hold in SMC_LNK_ACTIVATING */
+			smc_link_cluster_put(lnkc);
+		fallthrough;
 	case SMC_LNK_ACTIVE:
 	case SMC_LNK_INACTIVE:
 		if (!(lnk->state_record &
 			(SMC_LNK_STATE_BIT(SMC_LNK_ACTIVE)
 			| SMC_LNK_STATE_BIT(SMC_LNK_INACTIVE)))) {
 			lnkc->pending_capability -= (SMC_RMBS_PER_LGR_MAX - 1);
-			/* TODO: wakeup just one to perfrom first contact
-			 * if record state has no SMC_LNK_ACTIVE
-			 */
 			nr = SMC_RMBS_PER_LGR_MAX - 1;
+			if (unlikely(lnk->state != SMC_LNK_ACTIVE)) {
+				lnkc->lacking_first_contact++;
+				/* only to wake up one connection to perfrom
+				 * first contact in server side, client MUST wake up
+				 * all to decline.
+				 */
+				if (lnkc->role == SMC_SERV)
+					nr = 1;
+			}
 		}
 		break;
 	case SMC_LNK_UNUSED:
@@ -327,7 +305,7 @@ void smcr_lnk_cluster_on_lnk_state(struct smc_link *lnk)
 	spin_unlock_bh(&lnkc->lock);
 	if (nr)
 		wake_up_nr(&lnkc->first_contact_waitqueue, nr);
-	smc_lnk_cluster_put(lnkc);	/* smc_lnk_cluster_hold in smcr_lnk_get_cluster */
+	smc_link_cluster_put(lnkc);	/* smc_link_cluster_hold in smcr_link_get_cluster */
 }
 
 /* return head of link group list and its lock for a given link group */
@@ -925,7 +903,7 @@ static void smcr_lgr_link_deactivate_all(struct smc_link_group *lgr)
 
 		if (smc_link_sendable(lnk)) {
 			lnk->state = SMC_LNK_INACTIVE;
-			smcr_lnk_cluster_on_lnk_state(lnk);
+			smcr_link_cluster_on_link_state(lnk);
 		}
 	}
 	wake_up_all(&lgr->llc_msg_waiter);
@@ -1054,7 +1032,6 @@ int smcr_link_init(struct smc_link_group *lgr, struct smc_link *lnk,
 	atomic_set(&lnk->conn_cnt, 0);
 	smc_llc_link_set_uid(lnk);
 	INIT_WORK(&lnk->link_down_wrk, smc_link_down_work);
-
 	lnk->peer_qpn = ini->ib_clcqpn;
 	memcpy(lnk->peer_gid, ini->peer_gid, SMC_GID_SIZE);
 	memcpy(lnk->peer_mac, ini->peer_mac, sizeof(lnk->peer_mac));
@@ -1088,7 +1065,7 @@ int smcr_link_init(struct smc_link_group *lgr, struct smc_link *lnk,
 	if (rc)
 		goto destroy_qp;
 	lnk->state = SMC_LNK_ACTIVATING;
-	smcr_lnk_cluster_on_lnk_state(lnk);
+	smcr_link_cluster_on_link_state(lnk);
 	return 0;
 
 destroy_qp:
@@ -1103,8 +1080,8 @@ out:
 	smc_ibdev_cnt_dec(lnk);
 	put_device(&lnk->smcibdev->ibdev->dev);
 	smcibdev = lnk->smcibdev;
-	lnk->state = SMC_LNK_TEAR_DWON;
-	smcr_lnk_cluster_on_lnk_state(lnk);
+	lnk->state = SMC_LNK_TEAR_DOWN;
+	smcr_link_cluster_on_link_state(lnk);
 	memset(lnk, 0, sizeof(struct smc_link));
 	lnk->state = SMC_LNK_UNUSED;
 	if (!atomic_dec_return(&smcibdev->lnk_cnt))
@@ -1201,7 +1178,8 @@ static int smc_lgr_create(struct smc_sock *smc, struct smc_init_info *ini)
 		link_idx = SMC_SINGLE_LINK;
 		lnk = &lgr->lnk[link_idx];
 		smcr_link_iw_extension(&lnk->iw_conn_param, smc->clcsock->sk);
-		lnk->clcsock = smc->clcsock;
+		if (smc->keep_clcsock)
+			lnk->clcsock = smc->clcsock;
 
 		rc = smcr_link_init(lgr, lnk, link_idx, ini);
 		if (rc) {
@@ -1547,15 +1525,20 @@ static void __smcr_link_clear(struct smc_link *lnk)
 {
 	struct smc_link_group *lgr = lnk->lgr;
 	struct smc_ib_device *smcibdev;
+	struct socket *clcsock;
 
+	smcr_buf_unmap_lgr(lnk);
+	smc_ib_destroy_queue_pair(lnk);
+	smc_ib_dealloc_protection_domain(lnk);
 	smc_wr_free_link_mem(lnk);
 	smc_ibdev_cnt_dec(lnk);
-	if (lnk->clcsock)
-		sock_release(lnk->clcsock);
+	clcsock = lnk->clcsock;
 	put_device(&lnk->smcibdev->ibdev->dev);
 	smcibdev = lnk->smcibdev;
 	memset(lnk, 0, sizeof(struct smc_link));
 	lnk->state = SMC_LNK_UNUSED;
+	if (clcsock)
+		sock_release(clcsock);
 	if (!atomic_dec_return(&smcibdev->lnk_cnt))
 		wake_up(&smcibdev->lnks_deleted);
 	smc_lgr_put(lgr); /* lgr_hold in smcr_link_init() */
@@ -1567,17 +1550,14 @@ void smcr_link_clear(struct smc_link *lnk, bool log)
 	if (!lnk->lgr || lnk->clearing ||
 	    lnk->state == SMC_LNK_UNUSED)
 		return;
-	lnk->state = SMC_LNK_TEAR_DWON;
-	smcr_lnk_cluster_on_lnk_state(lnk);
+	lnk->state = SMC_LNK_TEAR_DOWN;
+	smcr_link_cluster_on_link_state(lnk);
 	lnk->clearing = 1;
 	lnk->peer_qpn = 0;
 	smc_llc_link_clear(lnk, log);
-	smcr_buf_unmap_lgr(lnk);
 	smcr_rtoken_clear_link(lnk);
 	smc_ib_modify_qp_error(lnk);
 	smc_wr_free_link(lnk);
-	smc_ib_destroy_queue_pair(lnk);
-	smc_ib_dealloc_protection_domain(lnk);
 	smcr_link_put(lnk); /* theoretically last link_put */
 }
 
@@ -1769,8 +1749,6 @@ static void __smc_lgr_terminate(struct smc_link_group *lgr, bool soft)
 	/* cancel free_work sync, will terminate when lgr->freeing is set */
 	cancel_delayed_work_sync(&lgr->free_work);
 	lgr->terminating = 1;
-	/* memory barrier */
-	smp_wmb();
 
 	/* kill remaining link group connections */
 	read_lock_bh(&lgr->conns_lock);
@@ -1780,8 +1758,6 @@ static void __smc_lgr_terminate(struct smc_link_group *lgr, bool soft)
 		conn = rb_entry(node, struct smc_connection, alert_node);
 		smc = container_of(conn, struct smc_sock, conn);
 		sock_hold(&smc->sk); /* sock_put below */
-		/* try wakeup all */
-		wake_up_all(&conn->cdc_pend_tx_wq);
 		lock_sock(&smc->sk);
 		smc_conn_kill(conn, soft);
 		release_sock(&smc->sk);
@@ -2028,7 +2004,7 @@ void smcr_link_down_cond(struct smc_link *lnk)
 {
 	if (smc_link_downing(&lnk->state)) {
 		trace_smcr_link_down(lnk, __builtin_return_address(0));
-		smcr_lnk_cluster_on_lnk_state(lnk);
+		smcr_link_cluster_on_link_state(lnk);
 		smcr_link_down(lnk);
 	}
 }
@@ -2038,7 +2014,7 @@ void smcr_link_down_cond_sched(struct smc_link *lnk)
 {
 	if (smc_link_downing(&lnk->state)) {
 		trace_smcr_link_down(lnk, __builtin_return_address(0));
-		smcr_lnk_cluster_on_lnk_state(lnk);
+		smcr_link_cluster_on_link_state(lnk);
 		schedule_work(&lnk->link_down_wrk);
 	}
 }
@@ -2183,7 +2159,7 @@ int smc_conn_create(struct smc_sock *smc, struct smc_init_info *ini)
 	struct smc_connection *conn = &smc->conn;
 	struct net *net = sock_net(&smc->sk);
 	DECLARE_WAITQUEUE(wait, current);
-	struct smc_lnk_cluster *lnkc = NULL;
+	struct smc_link_cluster *lnkc = NULL;
 	struct list_head *lgr_list;
 	struct smc_link_group *lgr;
 	enum smc_lgr_role role;
@@ -2198,23 +2174,26 @@ int smc_conn_create(struct smc_sock *smc, struct smc_init_info *ini)
 	role = smc->listen_smc ? SMC_SERV : SMC_CLNT;
 
 	if (!ini->is_smcd) {
-		lnkc = smcr_lnk_get_cluster_by_ini(ini, role);
+		lnkc = smcr_link_get_cluster_by_ini(ini, role);
 		if (unlikely(!lnkc))
 			return SMC_CLC_DECL_INTERR;
 	}
 
 	if (role == SMC_CLNT && ini->first_contact_peer) {
-		/* first_contact */
-		spin_lock_bh(&lnkc->lock);
-		lnkc->pending_capability += (SMC_RMBS_PER_LGR_MAX - 1);
-		spin_unlock_bh(&lnkc->lock);
+		if (!ini->is_smcd) {
+			/* first_contact */
+			spin_lock_bh(&lnkc->lock);
+			lnkc->pending_capability += (SMC_RMBS_PER_LGR_MAX - 1);
+			spin_unlock_bh(&lnkc->lock);
+		}
 		/* create new link group as well */
 		goto create;
 	}
 
 	/* determine if an existing link group can be reused */
 	spin_lock_bh(lgr_lock);
-	spin_lock(&lnkc->lock);
+	if (!ini->is_smcd)
+		spin_lock(&lnkc->lock);
 again:
 	list_for_each_entry(lgr, lgr_list, list) {
 		write_lock_bh(&lgr->conns_lock);
@@ -2247,7 +2226,7 @@ again:
 		}
 		write_unlock_bh(&lgr->conns_lock);
 	}
-	if (lnkc && ini->first_contact_local) {
+	if (!ini->is_smcd && ini->first_contact_local) {
 		if (lnkc->pending_capability > lnkc->conns_pending) {
 			lnkc->conns_pending++;
 			add_wait_queue(&lnkc->first_contact_waitqueue, &wait);
@@ -2262,15 +2241,23 @@ again:
 			spin_lock(&lnkc->lock);
 
 			lnkc->conns_pending--;
-			if (timeo)
+			if (likely(timeo && !lnkc->lacking_first_contact))
 				goto again;
+
+			/* lnk create failed, only server side can raise
+			 * a new first contact. client side here will
+			 * fallback by SMC_CLC_DECL_SYNCERR.
+			 */
+			if (role == SMC_SERV && lnkc->lacking_first_contact)
+				lnkc->lacking_first_contact--;
 		}
 		if (role == SMC_SERV) {
 			/* first_contact */
 			lnkc->pending_capability += (SMC_RMBS_PER_LGR_MAX - 1);
 		}
 	}
-	spin_unlock(&lnkc->lock);
+	if (!ini->is_smcd)
+		spin_unlock(&lnkc->lock);
 	spin_unlock_bh(lgr_lock);
 	if (rc)
 		goto out;
@@ -2289,7 +2276,7 @@ create:
 	if (ini->first_contact_local) {
 		/* keep this clcsock for QP reuse */
 		if (net->smc.sysctl_keep_first_contact_clcsock)
-			smc->keep_clcsock = 1;
+			smc->keep_clcsock = true;
 		rc = smc_lgr_create(smc, ini);
 		if (rc)
 			goto out;
@@ -2323,8 +2310,9 @@ create:
 #endif
 
 out:
-	/* smc_lnk_cluster_hold in smcr_lnk_get_or_create_cluster */
-	smc_lnk_cluster_put(lnkc);
+	/* smc_link_cluster_hold in smcr_link_get_or_create_cluster */
+	if (!ini->is_smcd)
+		smc_link_cluster_put(lnkc);
 	return rc;
 }
 
@@ -2992,11 +2980,11 @@ static struct notifier_block smc_reboot_notifier = {
 int __init smc_core_init(void)
 {
 	/* init smc lnk cluster maps */
-	rhashtable_init(&smc_lgr_manager.lnk_cluster_maps, &smcr_lnk_cluster_rhl_params);
+	rhashtable_init(&smc_lgr_manager.link_cluster_maps, &smcr_link_cluster_rhl_params);
 	return register_reboot_notifier(&smc_reboot_notifier);
 }
 
-static void smc_lnk_cluster_free_cb(void *ptr, void *arg)
+static void smc_link_cluster_free_cb(void *ptr, void *arg)
 {
 	pr_warn("smc: smc lnk cluster refcnt leak.\n");
 	kfree(ptr);
@@ -3008,6 +2996,6 @@ void smc_core_exit(void)
 	unregister_reboot_notifier(&smc_reboot_notifier);
 	smc_lgrs_shutdown();
 	/* destroy smc lnk cluster maps */
-	rhashtable_free_and_destroy(&smc_lgr_manager.lnk_cluster_maps, smc_lnk_cluster_free_cb,
+	rhashtable_free_and_destroy(&smc_lgr_manager.link_cluster_maps, smc_link_cluster_free_cb,
 				    NULL);
 }

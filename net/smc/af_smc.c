@@ -136,6 +136,8 @@ static struct sock *smc_tcp_syn_recv_sock(const struct sock *sk,
 	struct sock *child;
 
 	smc = smc_clcsock_user_data(sk);
+	if (unlikely(!smc))
+		goto drop;
 
 	if (READ_ONCE(sk->sk_ack_backlog) + atomic_read(&smc->queued_smc_hs) >
 				sk->sk_max_ack_backlog)
@@ -260,6 +262,9 @@ EXPORT_SYMBOL_GPL(smc_proto6);
 static void smc_fback_restore_callbacks(struct smc_sock *smc)
 {
 	struct sock *clcsk = smc->clcsock->sk;
+
+	if (!clcsk)
+		return;
 
 	write_lock_bh(&clcsk->sk_callback_lock);
 	clcsk->sk_user_data = NULL;
@@ -417,7 +422,7 @@ static struct sock *smc_sock_alloc(struct net *net, struct socket *sock,
 	sk->sk_sndbuf = net->smc.sysctl_wmem_default;
 	sk->sk_rcvbuf = net->smc.sysctl_rmem_default;
 	smc = smc_sk(sk);
-	smc->keep_clcsock = 0;
+	smc->keep_clcsock = false;
 	for (i = 0; i < SMC_MAX_TCP_LISTEN_WORKS; i++) {
 		smc->tcp_listen_works[i].smc = smc;
 		INIT_WORK(&smc->tcp_listen_works[i].work, smc_tcp_listen_work);
@@ -473,7 +478,11 @@ static int smc_bind(struct socket *sock, struct sockaddr *uaddr,
 	if (sk->sk_state != SMC_INIT || smc->connect_nonblock)
 		goto out_rel;
 
-	smc->clcsock->sk->sk_reuse = sk->sk_reuse;
+	/* use SO_REUSEADDR to keep first contact clcsock  */
+	if (sock_net(sk)->smc.sysctl_keep_first_contact_clcsock)
+		smc->clcsock->sk->sk_reuse = SK_CAN_REUSE;
+	else
+		smc->clcsock->sk->sk_reuse = sk->sk_reuse;
 	rc = kernel_bind(smc->clcsock, uaddr, addr_len);
 
 out_rel:
@@ -942,6 +951,10 @@ static int smc_switch_to_fallback(struct smc_sock *smc, int reason_code)
 		smc->clcsock->file->private_data = smc->clcsock;
 		smc->clcsock->wq.fasync_list =
 			smc->sk.sk_socket->wq.fasync_list;
+		/* restore sk_reuse which is SK_CAN_REUSE when
+		 * sysctl_keep_first_contact_clcsock enabled.
+		 */
+		smc->clcsock->sk->sk_reuse = smc->sk.sk_reuse;
 
 		/* There might be some wait entries remaining
 		 * in smc sk->sk_wq and they should be woken up
@@ -1834,7 +1847,8 @@ struct sock *smc_accept_dequeue(struct sock *parent,
 			new_sk->sk_prot->unhash(new_sk);
 			down_write(&isk->clcsock_release_lock);
 			if (isk->clcsock) {
-				sock_release(isk->clcsock);
+				if (!isk->keep_clcsock)
+					sock_release(isk->clcsock);
 				isk->clcsock = NULL;
 			}
 			up_write(&isk->clcsock_release_lock);
@@ -2491,8 +2505,6 @@ static void smc_listen_work(struct work_struct *work)
 	rc = smc_clc_wait_msg(new_smc, cclc, sizeof(*buf),
 			      SMC_CLC_CONFIRM, CLC_WAIT_TIME);
 	if (rc) {
-		if (!ini->is_smcd)
-			goto out_unlock;
 		goto out_decl;
 	}
 
