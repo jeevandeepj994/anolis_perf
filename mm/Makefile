@@ -66,7 +66,7 @@ obj-y += init-mm.o
 obj-y += memblock.o
 obj-y += dma_page_copy.o
 obj-y += $(memory-hotplug-y)
-
+obj-y += file_zeropage.o
 ifdef CONFIG_MMU
 	obj-$(CONFIG_ADVISE_SYSCALLS)	+= madvise.o
 endif
