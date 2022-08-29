@@ -634,7 +634,7 @@ static int m1_ddrss_pmu_probe(struct platform_device *pdev)
 	struct m1_ddrss_pmu *ddrss_pmu;
 	struct resource *res;
 	char *name;
-	int i, ret;
+	int ret;
 
 	ddrss_pmu = devm_kzalloc(&pdev->dev, sizeof(*ddrss_pmu), GFP_KERNEL);
 	if (!ddrss_pmu)
@@ -694,7 +694,6 @@ static int m1_ddrss_pmu_probe(struct platform_device *pdev)
 static int m1_ddrss_pmu_remove(struct platform_device *pdev)
 {
 	struct m1_ddrss_pmu *ddrss_pmu = platform_get_drvdata(pdev);
-	int i;
 
 	/* disable the generation of interrupt by all common counters */
 	writel(M1_DRW_PMCOM_CNT_OV_INTR_MASK,
