@@ -18,21 +18,17 @@
 #include <linux/sysfs.h>
 #include <linux/types.h>
 
-#define DRV_NAME "dwc_pcie_pmu"
-#define DEV_NAME "dwc_pcie_pmu"
-#define RP_NUM_MAX 32		/*2die * 4RC * 4Ctrol */
-#define PCIE_RAS_CAP_ID 0xb
-#define ATTRI_NAME_MAX_SIZE 32
+#define DRV_NAME				"dwc_pcie_pmu"
+#define DEV_NAME				"dwc_pcie_pmu"
+#define RP_NUM_MAX				32 /* 2die * 4RC * 4Ctrol */
+#define ATTRI_NAME_MAX_SIZE			32
+
+#define DWC_PCIE_VSEC_ID			0x02
+#define DWC_PCIE_VSEC_REV			0x04
 
 #define DWC_PCIE_LINK_CAPABILITIES_REG		0xC
 #define DWC_PCIE_LANE_SHIFT			4
 #define DWC_PCIE_LANE_MASK			GENMASK(9, 4)
-
-#define DWC_PCIE_RAS_DES_CAP_HDR		0x0
-
-#define DWC_PCIE_VENDOR_SPECIFIC_HDR		0x4
-#define DWC_PCIE__VSEC_ID_MASK			GENMASK(15, 0)
-#define DWC_PCIE_VSEC_ID			0x02
 
 #define DWC_PCIE_EVENT_CNT_CTRL			0x8
 #define DWC_PCIE__CNT_EVENT_SELECT_SHIFT	16
@@ -274,45 +270,26 @@ static inline unsigned int dwc_pcie_get_bdf(struct pci_dev *dev)
 
 static int dwc_pcie_find_ras_des_cap_position(struct pci_dev *pdev, int *pos)
 {
-	int ret = -1;
-	int start = 0;
-	u32 val;
-	u32 vsec_id;
-	int where;
-	int count = 0;
-	int end = 256;
+	u32 header;
+	int vsec = 0;
 
-	do {
-		where = pci_find_next_ext_capability(pdev, start, PCIE_RAS_CAP_ID);
-		if (!where)
-			return -EINVAL;
-
-		pci_read_config_dword(pdev,
-				      where + DWC_PCIE_VENDOR_SPECIFIC_HDR,
-				      &val);
-		vsec_id = val & DWC_PCIE__VSEC_ID_MASK;
-
-		if (vsec_id == DWC_PCIE_VSEC_ID) {
-			*pos = where;
-			ret = 0;
-			break;
+	while ((vsec = pci_find_next_ext_capability(pdev, vsec,
+						    PCI_EXT_CAP_ID_VNDR))) {
+		pci_read_config_dword(pdev, vsec + PCI_VNDR_HEADER, &header);
+		/* Is the device part of a DesignWare Cores PCIe Controller ? */
+		if (PCI_VNDR_HEADER_ID(header) == DWC_PCIE_VSEC_ID &&
+		    PCI_VNDR_HEADER_REV(header) == DWC_PCIE_VSEC_REV) {
+			*pos = vsec;
+			return 0;
 		}
+	}
 
-		pci_read_config_dword(pdev, where, &val);
-		start = PCI_EXT_CAP_NEXT(val);
-		count++;
-	} while (count < end);
-
-	return ret;
+	return -ENODEV;
 }
 
 static int dwc_pcie_pmu_discover(struct dwc_pcie_pmu_priv *priv)
 {
-	int ret;
-	int val;
-	int where;
-	bool is_rp;
-	int index = 0;
+	int val, where, index = 0;
 	struct pci_dev *pdev = NULL;
 	struct dwc_pcie_info_table *pcie_info;
 
@@ -322,21 +299,16 @@ static int dwc_pcie_pmu_discover(struct dwc_pcie_pmu_priv *priv)
 		return -EINVAL;
 
 	pcie_info = priv->pcie_table;
-	while ((pdev = pci_get_device(PCI_ANY_ID, PCI_ANY_ID, pdev)) != NULL
-		&& index < RP_NUM_MAX) {
-		is_rp = pci_dev_is_rootport(pdev);
-		if (!is_rp)
+	while ((pdev = pci_get_device(PCI_ANY_ID, PCI_ANY_ID, pdev)) != NULL &&
+	       index < RP_NUM_MAX) {
+		if (!pci_dev_is_rootport(pdev))
 			continue;
 
 		pcie_info[index].bdf = dwc_pcie_get_bdf(pdev);
 		pcie_info[index].pdev = pdev;
 
-		ret = dwc_pcie_find_ras_des_cap_position(pdev, &where);
-		if (ret != 0) {
-			pci_err(pcie_info->pdev,
-			"Get extern capability offset fail\n");
-			return -EINVAL;
-		}
+		if (dwc_pcie_find_ras_des_cap_position(pdev, &where))
+			continue;
 
 		pcie_info[index].cap_pos = where;
 
@@ -344,14 +316,12 @@ static int dwc_pcie_pmu_discover(struct dwc_pcie_pmu_priv *priv)
 				pdev->pcie_cap + DWC_PCIE_LINK_CAPABILITIES_REG,
 				&val);
 		pcie_info[index].num_lanes =
-		(val & DWC_PCIE_LANE_MASK) >> DWC_PCIE_LANE_SHIFT;
+			(val & DWC_PCIE_LANE_MASK) >> DWC_PCIE_LANE_SHIFT;
 		index++;
 	}
 
-	if (!index) {
-		pci_err(pcie_info->pdev, "No pcie controller\n");
-		return -EINVAL;
-	}
+	if (!index)
+		return -ENODEV;
 
 	priv->pcie_ctrl_num = index;
 
@@ -941,19 +911,20 @@ static int dwc_pcie_pmu_probe(struct platform_device *pdev)
 	priv->dev = &pdev->dev;
 	platform_set_drvdata(pdev, priv);
 
-	ret = dwc_pcie_pmu_discover(priv);
-	if (ret) {
-		dev_err(&pdev->dev, "Input parameter is invalid\n");
-		return ret;
-	}
+	/* If PMU is not support on current platform, keep slient */
+	if (dwc_pcie_pmu_discover(priv))
+		return 0;
 
 	for (pcie_index = 0; pcie_index < priv->pcie_ctrl_num; pcie_index++) {
+		struct pci_dev *rp = priv->pcie_table[pcie_index].pdev;
+
 		ret = __dwc_pcie_pmu_probe(priv, &priv->pcie_table[pcie_index]);
 		if (ret) {
-			dev_err(&pdev->dev, "PCIe pmu probe fail\n");
+			dev_err(&rp->dev, "PCIe PMU probe fail\n");
 			goto pmu_unregister;
 		}
 	}
+	dev_info(&pdev->dev, "PCIe PMUs registered\n");
 
 	return 0;
 
