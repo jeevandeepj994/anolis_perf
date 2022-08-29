@@ -149,4 +149,6 @@ static inline bool fpstate_is_confidential(struct fpu_guest *gfpu)
 	return gfpu->fpstate->is_confidential;
 }
 
+extern void fpu_idle_fpregs(void);
+
 #endif /* _ASM_X86_FPU_API_H */
