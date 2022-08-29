@@ -1899,7 +1899,8 @@ alloc_huge:
 	if (IS_ERR(page)) {
 alloc_nohuge:
 		if (vmf && !mm_forbids_zeropage(vma->vm_mm) &&
-		    !(vma->vm_flags & VM_SHARED)) {
+		    !(vma->vm_flags & VM_SHARED) &&
+		    !(vmf->flags & FAULT_FLAG_NONZEROPAGE)) {
 			page = ZERO_PAGE(0);
 			get_page(page);
 			goto out;
