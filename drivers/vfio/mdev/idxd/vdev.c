@@ -69,29 +69,6 @@ void vidxd_notify_revoked_handles(struct vdcm_idxd *vidxd)
 	vidxd_send_interrupt(vidxd, 0);
 }
 
-static int vidxd_set_ims_pasid(struct vdcm_idxd *vidxd, int index, bool pasid_en, u32 gpasid)
-{
-	struct device *dev = mdev_dev(vidxd->ivdev.mdev);
-	u64 auxval;
-	u32 pasid;
-	int irq;
-	int rc;
-
-	irq = dev_msi_irq_vector(dev, index);
-
-	if (pasid_en)
-		rc = idxd_mdev_get_host_pasid(vidxd->ivdev.mdev, gpasid, &pasid);
-	else
-		rc = idxd_mdev_get_pasid(vidxd->ivdev.mdev, &pasid);
-	if (rc < 0)
-		return rc;
-	dev_dbg(dev, "IMS entry: %d pasid_en: %u guest pasid %u host pasid: %u\n",
-		index, pasid_en, gpasid, pasid);
-	auxval = ims_ctrl_pasid_aux(pasid, 1);
-	return irq_set_auxdata(irq, IMS_AUXDATA_CONTROL_WORD, auxval);
-
-}
-
 int vidxd_mmio_write(struct vdcm_idxd *vidxd, u64 pos, void *buf, unsigned int size)
 {
 	u32 offset = pos & (vidxd->bar_size[0] - 1);
