@@ -827,8 +827,10 @@ intel_pasid_setup_bind_data(struct intel_iommu *iommu, struct pasid_entry *pte,
 		}
 		pasid_set_sre(pte);
 		/* Enable write protect WP if guest requested */
-		if (pasid_data->flags & IOMMU_SVA_VTD_GPASID_WPE)
-			pasid_set_wpe(pte);
+		if (pasid_data->flags & IOMMU_SVA_VTD_GPASID_WPE) {
+			if (pasid_enable_wpe(pte))
+				return -EINVAL;
+		}
 	}
 
 	if (pasid_data->flags & IOMMU_SVA_VTD_GPASID_EAFE) {
@@ -878,6 +880,7 @@ int intel_pasid_setup_nested(struct intel_iommu *iommu, struct device *dev,
 	u64 pgd_val;
 	int agaw;
 	u16 did;
+	bool pasid_present;
 
 	if (!ecap_nest(iommu->ecap)) {
 		pr_err_ratelimited("IOMMU: %s: No nested translation support\n",
@@ -900,10 +903,17 @@ int intel_pasid_setup_nested(struct intel_iommu *iommu, struct device *dev,
 	 * multiple times. If caller tries to setup nesting for a PASID
 	 * entry which is already nested mode, should fail it.
 	 */
-	if (pasid_pte_is_present(pte) && pasid_pte_is_nested(pte))
+	pasid_present = pasid_pte_is_present(pte);
+
+	if (pasid_present && pasid_pte_is_nested(pte))
 		return -EBUSY;
 
 	pasid_clear_entry(pte);
+
+	did = domain->iommu_did[iommu->seq_id];
+
+	if (pasid_present)
+		flush_iotlb_all(iommu, dev, did, pasid, DMA_TLB_DSI_FLUSH);
 
 	/* Sanity checking performed by caller to make sure address
 	 * width matching in two dimensions:
@@ -957,7 +967,6 @@ int intel_pasid_setup_nested(struct intel_iommu *iommu, struct device *dev,
 	pasid_set_slptr(pte, pgd_val);
 	pasid_set_fault_enable(pte);
 
-	did = domain->iommu_did[iommu->seq_id];
 	pasid_set_domain_id(pte, did);
 
 	pasid_set_address_width(pte, agaw);

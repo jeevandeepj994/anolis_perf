@@ -30,22 +30,7 @@ static irqreturn_t prq_event_thread(int irq, void *d);
 static void intel_svm_drain_prq(struct device *dev, u32 pasid);
 #define to_intel_svm_dev(handle) container_of(handle, struct intel_svm_dev, sva)
 
-static struct intel_svm_dev *
-svm_lookup_device_by_sid(struct intel_svm *svm, u16 sid)
-{
-	struct intel_svm_dev *sdev = NULL, *t;
-
-	rcu_read_lock();
-	list_for_each_entry_rcu(t, &svm->devs, list) {
-		if (t->sid == sid) {
-			sdev = t;
-			break;
-		}
-	}
-	rcu_read_unlock();
-
-	return sdev;
-}
+extern int prq_size_page_order;
 
 static struct intel_svm_dev *
 svm_lookup_device_by_dev(struct intel_svm *svm, struct device *dev)
@@ -70,7 +55,7 @@ int intel_svm_enable_prq(struct intel_iommu *iommu)
 	struct page *pages;
 	int irq, ret;
 
-	pages = alloc_pages(GFP_KERNEL | __GFP_ZERO, PRQ_ORDER);
+	pages = alloc_pages(GFP_KERNEL | __GFP_ZERO, prq_size_page_order);
 	if (!pages) {
 		pr_warn("IOMMU: %s: Failed to allocate page request queue\n",
 			iommu->name);
@@ -108,7 +93,7 @@ int intel_svm_enable_prq(struct intel_iommu *iommu)
 	}
 	dmar_writeq(iommu->reg + DMAR_PQH_REG, 0ULL);
 	dmar_writeq(iommu->reg + DMAR_PQT_REG, 0ULL);
-	dmar_writeq(iommu->reg + DMAR_PQA_REG, virt_to_phys(iommu->prq) | PRQ_ORDER);
+	dmar_writeq(iommu->reg + DMAR_PQA_REG, virt_to_phys(iommu->prq) | prq_size_page_order);
 
 	init_completion(&iommu->prq_complete);
 
@@ -121,7 +106,7 @@ free_hwirq:
 	dmar_free_hwirq(irq);
 	iommu->pr_irq = 0;
 free_prq:
-	free_pages((unsigned long)iommu->prq, PRQ_ORDER);
+	free_pages((unsigned long)iommu->prq, prq_size_page_order);
 	iommu->prq = NULL;
 
 	return ret;
@@ -144,7 +129,7 @@ int intel_svm_finish_prq(struct intel_iommu *iommu)
 		iommu->iopf_queue = NULL;
 	}
 
-	free_pages((unsigned long)iommu->prq, PRQ_ORDER);
+	free_pages((unsigned long)iommu->prq, prq_size_page_order);
 	iommu->prq = NULL;
 
 	return 0;
@@ -962,7 +947,7 @@ struct page_req_dsc {
 	u64 priv_data[2];
 };
 
-#define PRQ_RING_MASK	((0x1000 << PRQ_ORDER) - 0x20)
+#define PRQ_RING_MASK	((0x1000 << prq_size_page_order) - 0x20)
 
 static bool access_error(struct vm_area_struct *vma, struct page_req_dsc *req)
 {
@@ -1144,96 +1129,6 @@ static int intel_svm_prq_report(struct intel_iommu *iommu, struct device *dev,
 		event.vector = desc->pasid;
 	}
 	return iommu_report_device_fault(dev, &event);
-}
-
-static void handle_bad_prq_event(struct intel_iommu *iommu,
-				 struct page_req_dsc *req, int result)
-{
-	struct qi_desc desc;
-
-	pr_err("%s: Invalid page request: %08llx %08llx\n",
-	       iommu->name, ((unsigned long long *)req)[0],
-	       ((unsigned long long *)req)[1]);
-
-	/*
-	 * Per VT-d spec. v3.0 ch7.7, system software must
-	 * respond with page group response if private data
-	 * is present (PDP) or last page in group (LPIG) bit
-	 * is set. This is an additional VT-d feature beyond
-	 * PCI ATS spec.
-	 */
-	if (!req->lpig && !req->priv_data_present)
-		return;
-
-	desc.qw0 = QI_PGRP_PASID(req->pasid) |
-			QI_PGRP_DID(req->rid) |
-			QI_PGRP_PASID_P(req->pasid_present) |
-			QI_PGRP_PDP(req->priv_data_present) |
-			QI_PGRP_RESP_CODE(result) |
-			QI_PGRP_RESP_TYPE;
-	desc.qw1 = QI_PGRP_IDX(req->prg_index) |
-			QI_PGRP_LPIG(req->lpig);
-	desc.qw2 = 0;
-	desc.qw3 = 0;
-
-	if (req->priv_data_present)
-		memcpy(&desc.qw2, req->priv_data, sizeof(req->priv_data));
-	qi_submit_sync(iommu, &desc, 1, 0);
-}
-
-static void handle_single_prq_event(struct intel_iommu *iommu,
-				    struct mm_struct *mm,
-				    struct page_req_dsc *req)
-{
-	u64 address = (u64)req->addr << VTD_PAGE_SHIFT;
-	int result = QI_RESP_INVALID;
-	struct vm_area_struct *vma;
-	struct qi_desc desc;
-	unsigned int flags;
-	vm_fault_t ret;
-
-	/* If the mm is already defunct, don't handle faults. */
-	if (!mmget_not_zero(mm))
-		goto response;
-
-	mmap_read_lock(mm);
-	vma = find_extend_vma(mm, address);
-	if (!vma || address < vma->vm_start)
-		goto invalid;
-
-	if (access_error(vma, req))
-		goto invalid;
-
-	flags = FAULT_FLAG_USER | FAULT_FLAG_REMOTE;
-	if (req->wr_req)
-		flags |= FAULT_FLAG_WRITE;
-
-	ret = handle_mm_fault(vma, address, flags, NULL);
-	if (!(ret & VM_FAULT_ERROR))
-		result = QI_RESP_SUCCESS;
-invalid:
-	mmap_read_unlock(mm);
-	mmput(mm);
-
-response:
-	if (!(req->lpig || req->priv_data_present))
-		return;
-
-	desc.qw0 = QI_PGRP_PASID(req->pasid) |
-			QI_PGRP_DID(req->rid) |
-			QI_PGRP_PASID_P(req->pasid_present) |
-			QI_PGRP_PDP(req->priv_data_present) |
-			QI_PGRP_RESP_CODE(result) |
-			QI_PGRP_RESP_TYPE;
-	desc.qw1 = QI_PGRP_IDX(req->prg_index) |
-			QI_PGRP_LPIG(req->lpig);
-	desc.qw2 = 0;
-	desc.qw3 = 0;
-
-	if (req->priv_data_present)
-		memcpy(&desc.qw2, req->priv_data, sizeof(req->priv_data));
-
-	qi_submit_sync(iommu, &desc, 1, 0);
 }
 
 static irqreturn_t prq_event_thread(int irq, void *d)

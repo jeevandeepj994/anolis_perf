@@ -647,6 +647,178 @@ static const struct file_operations dmar_perf_latency_fops = {
 	.release	= single_release,
 };
 
+/* Count queued invalidation execution time? */
+static bool qi_done_counting;
+static DEFINE_RWLOCK(qi_done_lock);
+static char *qi_counts_names[] = {"    <0.1us", " 0.1us-1us", "  1us-10us",
+				  "10us-100us", " 100us-1ms", "  1ms-10ms",
+				  "    >=10ms"};
+
+/* Log start time before queued invalidation. */
+void log_qi_done_start(struct intel_iommu *iommu)
+{
+	read_lock(&qi_done_lock);
+
+	if (qi_done_counting)
+		iommu->qi->start_ktime_100ns = ktime_to_ns(ktime_get()) / 100;
+}
+
+static void _log_qi_done_end(u64 time_100ns, u64 *counts)
+{
+	if (time_100ns < 1)
+		counts[QI_COUNTS_1]++;		 /* <0.1us */
+	else if (time_100ns < 10)
+		counts[QI_COUNTS_10]++;		 /* 0.1us-1us */
+	else if (time_100ns < 100)
+		counts[QI_COUNTS_100]++;	 /* 1us-10us */
+	else if (time_100ns < 1000)
+		counts[QI_COUNTS_1000]++;	 /* 10us-100us */
+	else if (time_100ns < 10000)
+		counts[QI_COUNTS_10000]++;	 /* 100us-1ms */
+	else if (time_100ns < 100000)
+		counts[QI_COUNTS_100000]++;	 /* 1ms-10ms */
+	else
+		counts[QI_COUNTS_100000_plus]++; /* >=10ms */
+}
+
+/* Log execution time of queued invalidation in a time range per iommu. */
+void log_qi_done_end(struct intel_iommu *iommu, u64 qw0)
+{
+	u64 time_100ns, type, tmp;
+	struct q_inval *qi;
+
+	if (!qi_done_counting)
+		goto out;
+
+	/* Get type from [11:9] and [3:0] in qw0. */
+	tmp = qw0 & 0xF;
+	type = qw0 & 0xE00;
+	type >>= 5;
+	type = type | tmp;
+
+	qi = iommu->qi;
+	time_100ns = ktime_to_ns(ktime_get()) / 100 - qi->start_ktime_100ns;
+	if (type == QI_IOTLB_TYPE || type == QI_EIOTLB_TYPE ||
+	    type == QI_IEC_TYPE)
+		_log_qi_done_end(time_100ns, qi->iotlb_qi_counts);
+	else if (type == QI_DIOTLB_TYPE || type == QI_DEIOTLB_TYPE)
+		_log_qi_done_end(time_100ns, qi->diotlb_qi_counts);
+
+out:
+	read_unlock(&qi_done_lock);
+}
+
+static void one_qi_done_show(struct seq_file *m, struct intel_iommu *iommu,
+			     struct dmar_drhd_unit *drhd)
+{
+	struct q_inval *qi = iommu->qi;
+	int i;
+
+	seq_printf(m, "IOMMU: %s Register Base Address: %llx\n",
+		   iommu->name, drhd->reg_base_addr);
+	seq_puts(m, "iotlb counts:\n");
+	for (i = 0; i < QI_COUNTS_NUM; i++) {
+		seq_printf(m, "%s: %lld\n", qi_counts_names[i],
+			   qi->iotlb_qi_counts[i]);
+	}
+
+	seq_puts(m, "diotlb counts:\n");
+	for (i = 0; i < QI_COUNTS_NUM; i++) {
+		seq_printf(m, "%s: %lld\n", qi_counts_names[i],
+			   qi->diotlb_qi_counts[i]);
+	}
+	seq_puts(m, "\n");
+}
+
+static int qi_done_show(struct seq_file *m, void *v)
+{
+	struct dmar_drhd_unit *drhd;
+	struct intel_iommu *iommu;
+
+	read_lock(&qi_done_lock);
+
+	if (!qi_done_counting) {
+		seq_puts(m, "Disabled. Write 1/0 to enable/disable counting.\n");
+		goto out;
+	}
+
+	rcu_read_lock();
+	for_each_active_iommu(iommu, drhd)
+		one_qi_done_show(m, iommu, drhd);
+	rcu_read_unlock();
+out:
+	read_unlock(&qi_done_lock);
+
+	return 0;
+}
+
+static void qi_done_clear(struct q_inval *qi)
+{
+	int i;
+
+	for (i = 0; i < QI_COUNTS_NUM; i++) {
+		qi->iotlb_qi_counts[i] = 0;
+		qi->diotlb_qi_counts[i] = 0;
+	}
+}
+
+static ssize_t qi_done_write(struct file *filp, const char __user *ubuf,
+			     size_t cnt, loff_t *ppos)
+{
+	struct dmar_drhd_unit *drhd;
+	struct intel_iommu *iommu;
+	int counting;
+	char buf[64];
+
+	if (cnt > 63)
+		cnt = 63;
+
+	if (copy_from_user(&buf, ubuf, cnt))
+		return -EFAULT;
+
+	buf[cnt] = 0;
+
+	if (kstrtoint(buf, 0, &counting))
+		return -EINVAL;
+
+	write_lock(&qi_done_lock);
+	switch (counting) {
+	case 0:
+		qi_done_counting = false;
+		break;
+	case 1:
+		qi_done_counting = true;
+		/* Clear all counts. */
+		rcu_read_lock();
+		for_each_active_iommu(iommu, drhd)
+			qi_done_clear(iommu->qi);
+		rcu_read_unlock();
+		break;
+	default:
+		write_unlock(&qi_done_lock);
+
+		return -EINVAL;
+	}
+
+	write_unlock(&qi_done_lock);
+	*ppos += cnt;
+
+	return cnt;
+}
+
+static int qi_done_open(struct inode *inode, struct file *filp)
+{
+	return single_open(filp, qi_done_show, NULL);
+}
+
+static const struct file_operations qi_done_fops = {
+	.open		= qi_done_open,
+	.write		= qi_done_write,
+	.read		= seq_read,
+	.llseek		= seq_lseek,
+	.release	= single_release,
+};
+
 void __init intel_iommu_debugfs_init(void)
 {
 	struct dentry *intel_iommu_debug = debugfs_create_dir("intel",
@@ -667,4 +839,6 @@ void __init intel_iommu_debugfs_init(void)
 #endif
 	debugfs_create_file("dmar_perf_latency", 0644, intel_iommu_debug,
 			    NULL, &dmar_perf_latency_fops);
+	debugfs_create_file("qi_done", 0644, intel_iommu_debug,
+			    NULL, &qi_done_fops);
 }
