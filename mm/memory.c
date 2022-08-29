@@ -129,6 +129,9 @@ __setup("norandmaps", disable_randmaps);
 unsigned long zero_pfn __read_mostly;
 EXPORT_SYMBOL(zero_pfn);
 
+struct page *my_zero_page;
+EXPORT_SYMBOL(my_zero_page);
+
 unsigned long highest_memmap_pfn __read_mostly;
 
 /*
@@ -136,6 +139,7 @@ unsigned long highest_memmap_pfn __read_mostly;
  */
 static int __init init_zero_pfn(void)
 {
+	my_zero_page = ZERO_PAGE(0);
 	zero_pfn = page_to_pfn(ZERO_PAGE(0));
 	return 0;
 }
@@ -1346,12 +1350,23 @@ again:
 				if (details->check_mapping &&
 				    details->check_mapping != page_rmapping(page))
 					continue;
+
+				/*
+				 * unmap_mapping_zeropages() only unmaps zero
+				 * pages filled in the VMA. Page cache should
+				 * not be unmapped.
+				 */
+				if (unlikely(details->flags & ZAP_ZEROPAGE))
+					continue;
 			}
 			ptent = ptep_get_and_clear_full(mm, addr, pte,
 							tlb->fullmm);
 			tlb_remove_tlb_entry(tlb, pte, addr);
-			if (unlikely(!page))
+			if (unlikely(!page)) {
+				if (unlikely(details && (details->flags & ZAP_ZEROPAGE)))
+					force_flush = 1;
 				continue;
+			}
 
 			if (!PageAnon(page)) {
 				if (pte_dirty(ptent)) {
@@ -3076,6 +3091,30 @@ void unmap_mapping_pages(struct address_space *mapping, pgoff_t start,
 	details.last_index = start + nr - 1;
 	if (details.last_index < details.first_index)
 		details.last_index = ULONG_MAX;
+
+	i_mmap_lock_write(mapping);
+	if (unlikely(!RB_EMPTY_ROOT(&mapping->i_mmap.rb_root)))
+		unmap_mapping_range_tree(&mapping->i_mmap, &details);
+	i_mmap_unlock_write(mapping);
+}
+
+/**
+ * unmap_mapping_zeropages() - Unmap zeropages from processes.
+ * @mapping: The address space containing pages to be unmapped.
+ * @start: Index of first page to be unmapped.
+ * @nr: Number of pages to be unmapped.  0 to unmap to end of file.
+ *
+ * Unmap the zero pages in this address space from any userspace process which
+ * has them mmaped.
+ */
+void unmap_mapping_zeropages(struct address_space *mapping)
+{
+	struct zap_details details = { };
+
+	details.check_mapping = mapping;
+	details.first_index = 0;
+	details.last_index = ULONG_MAX;
+	details.flags = ZAP_ZEROPAGE;
 
 	i_mmap_lock_write(mapping);
 	if (unlikely(!RB_EMPTY_ROOT(&mapping->i_mmap.rb_root)))
