@@ -74,6 +74,7 @@
 #include <linux/kfence.h>
 #include <linux/buffer_head.h>
 #include <linux/vmalloc.h>
+#include <linux/prezero.h>
 
 #include <asm/sections.h>
 #include <asm/tlbflush.h>
@@ -943,6 +944,9 @@ static inline void del_page_from_free_list(struct page *page, struct zone *zone,
 	if (page_reported(page))
 		__ClearPageReported(page);
 
+	/* clear pre-zeroed state */
+	__ClearPageZeroed(page);
+
 	list_del(&page->lru);
 	__ClearPageBuddy(page);
 	set_page_private(page, 0);
@@ -1041,6 +1045,10 @@ continue_merging:
 			goto done_merging;
 		if (!page_is_buddy(page, buddy, order))
 			goto done_merging;
+
+		/* Clear PG_zeroed when merging. */
+		__ClearPageZeroed(page);
+
 		/*
 		 * Our buddy is free or it is CONFIG_DEBUG_PAGEALLOC guard page,
 		 * merge with it and move up one order.
@@ -1217,6 +1225,13 @@ out:
 static void kernel_init_free_pages(struct page *page, int numpages)
 {
 	int i;
+
+	/*
+	 * Skip clear if page is pre-zeroed.
+	 * But force clear if !prezero_enabled().
+	 */
+	if (prezero_enabled() && page_zeroed(page))
+		return;
 
 	/* s390's use of memset() could override KASAN redzones. */
 	kasan_disable_current();
@@ -1426,6 +1441,13 @@ static void free_pcppages_bulk(struct zone *zone, int count,
 			/* must delete to avoid corrupting pcp list */
 			list_del(&page->lru);
 			pcp->count--;
+
+			/*
+			 * PAGE_ZEROED bit may be set for pcp pages, see
+			 * comments in __rmqueue_smallest(). Clear this bit
+			 * if any.
+			 */
+			clear_page_zeroed(page);
 
 			if (bulkfree_pcp_prepare(page))
 				continue;
@@ -2209,7 +2231,7 @@ void __init init_cma_reserved_pageblock(struct page *page)
  * -- nyc
  */
 static inline void expand(struct zone *zone, struct page *page,
-	int low, int high, int migratetype)
+	int low, int high, int migratetype, bool zeroed)
 {
 	unsigned long size = 1 << high;
 
@@ -2227,8 +2249,14 @@ static inline void expand(struct zone *zone, struct page *page,
 		if (set_page_guard(zone, &page[size], high, migratetype))
 			continue;
 
-		add_to_free_list(&page[size], zone, high, migratetype);
 		set_buddy_order(&page[size], high);
+		if (zeroed) {
+			add_to_free_list_tail(&page[size], zone, high,
+					      migratetype);
+			__SetPageZeroed(&page[size]);
+		} else {
+			add_to_free_list(&page[size], zone, high, migratetype);
+		}
 	}
 }
 
@@ -2335,6 +2363,9 @@ static void prep_new_page(struct page *page, unsigned int order, gfp_t gfp_flags
 	if (!free_pages_prezeroed() && want_init_on_alloc(gfp_flags))
 		kernel_init_free_pages(page, 1 << order);
 
+	/* Clear pre-zeroed state (PAGE_ZEROED bit) if any. */
+	clear_page_zeroed(page);
+
 	if (order && (gfp_flags & __GFP_COMP))
 		prep_compound_page(page, order);
 
@@ -2364,13 +2395,25 @@ struct page *__rmqueue_smallest(struct zone *zone, unsigned int order,
 
 	/* Find a page of the appropriate size in the preferred list */
 	for (current_order = order; current_order < MAX_ORDER; ++current_order) {
+		bool zeroed;
 		area = &(zone->free_area[current_order]);
 		page = get_page_from_free_area(area, migratetype);
 		if (!page)
 			continue;
+
+		/* Stash this away before del_page_from_free_list() zaps it */
+		zeroed = PageZeroed(page);
+
 		del_page_from_free_list(page, zone, current_order);
-		expand(zone, page, order, current_order, migratetype);
+		expand(zone, page, order, current_order, migratetype, zeroed);
 		set_pcppage_migratetype(page, migratetype);
+		/*
+		 * NOTE This is a hack.  The pre-zeroed state was zapped
+		 * above and restored here, and should finally be cleared
+		 * in prep_new_page() or free_pcppages_bulk().
+		 */
+		if (zeroed)
+			set_page_zeroed(page);
 		return page;
 	}
 
