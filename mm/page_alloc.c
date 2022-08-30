@@ -944,8 +944,14 @@ static inline void del_page_from_free_list(struct page *page, struct zone *zone,
 	if (page_reported(page))
 		__ClearPageReported(page);
 
+#ifdef CONFIG_PAGE_PREZERO
 	/* clear pre-zeroed state */
-	__ClearPageZeroed(page);
+	if (PageZeroed(page)) {
+		__ClearPageZeroed(page);
+		zone->free_area[order].nr_zeroed--;
+		__mod_zone_page_state(zone, NR_ZEROED_PAGES, -(1 << order));
+	}
+#endif
 
 	list_del(&page->lru);
 	__ClearPageBuddy(page);
@@ -1090,6 +1096,13 @@ continue_merging:
 done_merging:
 	set_buddy_order(page, order);
 
+#ifdef CONFIG_PAGE_PREZERO
+	if (PageZeroed(page)) {
+		zone->free_area[order].nr_zeroed++;
+		__mod_zone_page_state(zone, NR_ZEROED_PAGES, 1 << order);
+	}
+#endif
+
 	if (fpi_flags & FPI_TO_TAIL)
 		to_tail = true;
 	else if (is_shuffle_order(order))
@@ -1226,12 +1239,17 @@ static void kernel_init_free_pages(struct page *page, int numpages)
 {
 	int i;
 
+#ifdef CONFIG_PAGE_PREZERO
 	/*
 	 * Skip clear if page is pre-zeroed.
 	 * But force clear if !prezero_enabled().
 	 */
-	if (prezero_enabled() && page_zeroed(page))
+	if (prezero_enabled() && page_zeroed(page)) {
+		count_vm_event(PREZERO_ALLOC);
+		__count_vm_events(PREZERO_ALLOC_PAGES, numpages);
 		return;
+	}
+#endif
 
 	/* s390's use of memset() could override KASAN redzones. */
 	kasan_disable_current();
@@ -2250,13 +2268,19 @@ static inline void expand(struct zone *zone, struct page *page,
 			continue;
 
 		set_buddy_order(&page[size], high);
+#ifdef CONFIG_PAGE_PREZERO
 		if (zeroed) {
 			add_to_free_list_tail(&page[size], zone, high,
 					      migratetype);
 			__SetPageZeroed(&page[size]);
+			zone->free_area[high].nr_zeroed++;
+			__mod_zone_page_state(zone, NR_ZEROED_PAGES, 1 << high);
 		} else {
 			add_to_free_list(&page[size], zone, high, migratetype);
 		}
+#else
+		add_to_free_list(&page[size], zone, high, migratetype);
+#endif
 	}
 }
 
@@ -6325,6 +6349,9 @@ static void __meminit zone_init_free_lists(struct zone *zone)
 	for_each_migratetype_order(order, t) {
 		INIT_LIST_HEAD(&zone->free_area[order].free_list[t]);
 		zone->free_area[order].nr_free = 0;
+#ifdef CONFIG_PAGE_PREZERO
+		zone->free_area[order].nr_zeroed = 0;
+#endif
 	}
 }
 
