@@ -98,6 +98,9 @@ extern int page_group_by_mobility_disabled;
 struct free_area {
 	struct list_head	free_list[MIGRATE_TYPES];
 	unsigned long		nr_free;
+#ifdef CONFIG_PAGE_PREZERO
+	unsigned long		nr_zeroed;  /* Pre-zeroed pages */
+#endif
 };
 
 static inline struct page *get_page_from_free_area(struct free_area *area,
@@ -161,6 +164,9 @@ enum zone_stat_item {
 	NR_ZSPAGES,		/* allocated in zsmalloc */
 #endif
 	NR_FREE_CMA_PAGES,
+#ifdef CONFIG_PAGE_PREZERO
+	NR_ZEROED_PAGES,	/* Pre-zeroed pages */
+#endif
 	NR_VM_ZONE_STAT_ITEMS };
 
 enum node_stat_item {
