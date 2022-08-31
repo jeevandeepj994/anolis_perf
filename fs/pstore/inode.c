@@ -287,9 +287,14 @@ static const struct super_operations pstore_ops = {
 	.show_options	= pstore_show_options,
 };
 
-static struct dentry *psinfo_lock_root(struct pstore_info *psinfo)
+static struct dentry *psinfo_lock(struct pstore_info *psinfo)
 {
-	struct dentry *root;
+	struct dentry *dentry;
+	struct qstr qname;
+
+	qname.name = psinfo->name;
+	qname.len  = strlen(psinfo->name);
+	qname.hash = full_name_hash(pstore_sb->s_root, qname.name, qname.len);
 
 	mutex_lock(&pstore_sb_lock);
 	/*
@@ -301,11 +306,16 @@ static struct dentry *psinfo_lock_root(struct pstore_info *psinfo)
 		return NULL;
 	}
 
-	root = pstore_sb->s_root;
-	inode_lock(d_inode(root));
+	dentry = d_lookup(pstore_sb->s_root, &qname);
+	if (!dentry) {
+		mutex_unlock(&pstore_sb_lock);
+		return NULL;
+	}
+
+	inode_lock(d_inode(dentry));
 	mutex_unlock(&pstore_sb_lock);
 
-	return root;
+	return dentry;
 }
 
 int pstore_put_backend_records(struct pstore_info *psi)
@@ -314,7 +324,7 @@ int pstore_put_backend_records(struct pstore_info *psi)
 	struct dentry *root;
 	int rc = 0;
 
-	root = psinfo_lock_root(psi);
+	root = psinfo_lock(psi);
 	if (!root)
 		return 0;
 
@@ -415,14 +425,60 @@ fail:
  */
 void pstore_get_records(struct pstore_info *psi, int pos, int quiet)
 {
-	struct dentry *root;
+	struct dentry *dentry;
 
-	root = psinfo_lock_root(psi);
-	if (!root)
+	dentry = psinfo_lock(psi);
+	if (!dentry)
 		return;
 
-	pstore_get_backend_records(psi, root, quiet, pos);
+	pstore_get_backend_records(psi, dentry, quiet, pos);
+	inode_unlock(d_inode(dentry));
+}
+
+void pstore_mksubdir(struct pstore_info *psi)
+{
+	struct dentry *dentry;
+	struct inode *inode;
+	struct dentry *root;
+	struct qstr qname;
+
+	if (!psi || !pstore_sb)
+		return;
+
+	root = pstore_sb->s_root;
+	qname.name = psi->name;
+	qname.len = strlen(psi->name);
+	qname.hash = full_name_hash(root, qname.name, qname.len);
+	dentry = d_lookup(root, &qname);
+
+	/* Skip if subdir is already present in the filesystem. */
+	if (dentry)
+		return;
+
+	inode_lock(d_inode(root));
+
+	dentry = d_alloc_name(root, psi->name);
+	if (!dentry)
+		goto fail;
+
+	inode = pstore_get_inode(pstore_sb);
+	if (!inode) {
+		dput(dentry);
+		dentry = ERR_PTR(-ENOMEM);
+		goto fail;
+	}
+	inode->i_mode = S_IFDIR | 0750;
+	inode->i_op = &pstore_dir_inode_operations;
+	inode->i_fop = &simple_dir_operations;
+
+	inc_nlink(inode);
+	inc_nlink(d_inode(root));
+
+	d_add(dentry, inode);
+
+fail:
 	inode_unlock(d_inode(root));
+	return;
 }
 
 static int pstore_fill_super(struct super_block *sb, void *data, int silent)
@@ -455,9 +511,13 @@ static int pstore_fill_super(struct super_block *sb, void *data, int silent)
 	mutex_unlock(&pstore_sb_lock);
 
 	rcu_read_lock();
-	list_for_each_entry_rcu(entry, &psback->list_entry, list)
+	list_for_each_entry_rcu(entry, &psback->list_entry, list) {
+		pstore_mksubdir(entry->psi);
 		pstore_get_records(entry->psi, entry->index, 0);
+	}
 	rcu_read_unlock();
+
+	psback->fs_ready = true;
 
 	return 0;
 }
