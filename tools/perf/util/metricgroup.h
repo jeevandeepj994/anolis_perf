@@ -70,6 +70,8 @@ int metricgroup__parse_groups(const struct option *opt,
 			      const char *str,
 			      bool metric_no_group,
 			      bool metric_no_merge,
+			      const char *user_requested_cpu_list,
+			      bool system_wide,
 			      struct rblist *metric_events);
 const struct pmu_event *metricgroup__find_metric(const char *metric,
 						 const struct pmu_event *table);
