@@ -222,6 +222,11 @@ static inline unsigned long get_trans_granule(void)
  *		determined by 'stride' and only affect any walk-cache entries
  *		if 'last_level' is equal to false.
  *
+ *	__flush_tlb_kernel_pgtable_entry(addr)
+ *		Invalidate a single kernel mapping for address "addr" on all
+ *		CPUs. Must be called if the corresponding page table is
+ *		last_level entry.
+ *
  *
  *	Finally, take a look at asm/tlb.h to see how tlb_flush() is implemented
  *	on top of these routines, since that is our interface to the mmu_gather
@@ -403,6 +408,17 @@ static inline void __flush_tlb_kernel_pgtable(unsigned long kaddr)
 	dsb(ish);
 	isb();
 }
+
+static inline void __flush_tlb_kernel_pgtable_entry(unsigned long kaddr)
+{
+	unsigned long addr = __TLBI_VADDR(kaddr, 0);
+
+	dsb(ishst);
+	__tlbi(vaale1is, addr);
+	dsb(ish);
+	isb();
+}
+
 #endif
 
 #endif
