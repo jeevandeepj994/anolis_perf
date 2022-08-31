@@ -1060,6 +1060,8 @@ static int parse_metric_groups(const struct option *opt,
 	return metricgroup__parse_groups(opt, str,
 					 stat_config.metric_no_group,
 					 stat_config.metric_no_merge,
+					 stat_config.user_requested_cpu_list,
+					 stat_config.system_wide,
 					 &stat_config.metric_events);
 }
 
@@ -1654,7 +1656,9 @@ static int add_default_attributes(void)
 
 			return metricgroup__parse_groups(&opt, "transaction",
 							 stat_config.metric_no_group,
-							stat_config.metric_no_merge,
+							 stat_config.metric_no_merge,
+							 stat_config.user_requested_cpu_list,
+							 stat_config.system_wide,
 							 &stat_config.metric_events);
 		}
 
@@ -2250,6 +2254,15 @@ int cmd_stat(int argc, const char **argv)
 		goto out;
 	}
 
+	stat_config.system_wide = target.system_wide;
+	if (target.cpu_list) {
+		stat_config.user_requested_cpu_list = strdup(target.cpu_list);
+		if (!stat_config.user_requested_cpu_list) {
+			status = -ENOMEM;
+			goto out;
+		}
+	}
+
 	if (add_default_attributes())
 		goto out;
 
@@ -2424,6 +2437,7 @@ int cmd_stat(int argc, const char **argv)
 	evlist__free_stats(evsel_list);
 out:
 	zfree(&stat_config.walltime_run);
+	zfree(&stat_config.user_requested_cpu_list);
 
 	if (smi_cost && smi_reset)
 		sysfs__write_int(FREEZE_ON_SMI_PATH, 0);
