@@ -139,6 +139,9 @@ int test__expr(struct test *t __maybe_unused, int subtest __maybe_unused)
 	{
 		struct cpu_topology *topology = cpu_topology__new();
 		bool smton = smt_on(topology);
+		bool corewide = core_wide(/*system_wide=*/false,
+					  /*user_requested_cpus=*/false,
+					  topology);
 
 		cpu_topology__delete(topology);
 		expr__ctx_clear(ctx);
@@ -149,6 +152,16 @@ int test__expr(struct test *t __maybe_unused, int subtest __maybe_unused)
 		TEST_ASSERT_VAL("find ids", hashmap__find(ctx->ids,
 							  smton ? "EVENT1" : "EVENT2",
 							  (void **)&val_ptr));
+
+		expr__ctx_clear(ctx);
+		TEST_ASSERT_VAL("find ids",
+				expr__find_ids("EVENT1 if #core_wide else EVENT2",
+					NULL, ctx) == 0);
+		TEST_ASSERT_VAL("find ids", hashmap__size(ctx->ids) == 1);
+		TEST_ASSERT_VAL("find ids", hashmap__find(ctx->ids,
+							  corewide ? "EVENT1" : "EVENT2",
+							  (void **)&val_ptr));
+
 	}
 	/* The expression is a constant 1.0 without needing to evaluate EVENT1. */
 	expr__ctx_clear(ctx);
