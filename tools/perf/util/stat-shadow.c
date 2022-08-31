@@ -874,7 +874,10 @@ static void generic_metric(struct perf_stat_config *config,
 	if (!pctx)
 		return;
 
+	if (config->user_requested_cpu_list)
+		pctx->sctx.user_requested_cpu_list = strdup(config->user_requested_cpu_list);
 	pctx->sctx.runtime = runtime;
+	pctx->sctx.system_wide = config->system_wide;
 	i = prepare_metric(metric_events, metric_refs, pctx, cpu, st);
 	if (i < 0) {
 		expr__ctx_free(pctx);
@@ -1261,7 +1264,6 @@ void perf_stat__print_shadow_stats(struct perf_stat_config *config,
 	} else if (runtime_stat_n(st, STAT_NSECS, 0, cpu) != 0) {
 		char unit = 'M';
 		char unit_buf[10];
-
 		total = runtime_stat_avg(st, STAT_NSECS, 0, cpu);
 
 		if (total)
@@ -1285,8 +1287,9 @@ void perf_stat__print_shadow_stats(struct perf_stat_config *config,
 			if (num++ > 0)
 				out->new_line(config, ctxp);
 			generic_metric(config, mexp->metric_expr, mexp->metric_events,
-					mexp->metric_refs, evsel->name, mexp->metric_name,
-					mexp->metric_unit, mexp->runtime, cpu, out, st);
+				       mexp->metric_refs, evsel->name, mexp->metric_name,
+				       mexp->metric_unit, mexp->runtime,
+				       cpu, out, st);
 		}
 	}
 	if (num == 0)

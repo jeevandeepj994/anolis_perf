@@ -310,7 +310,9 @@ struct expr_parse_ctx *expr__ctx_new(void)
 		free(ctx);
 		return NULL;
 	}
+	ctx->sctx.user_requested_cpu_list = NULL;
 	ctx->sctx.runtime = 0;
+	ctx->sctx.system_wide = false;
 
 	return ctx;
 }
@@ -332,6 +334,10 @@ void expr__ctx_free(struct expr_parse_ctx *ctx)
 	struct hashmap_entry *cur;
 	size_t bkt;
 
+	if (!ctx)
+		return;
+
+	free(ctx->sctx.user_requested_cpu_list);
 	hashmap__for_each_entry(ctx->ids, cur, bkt) {
 		free((char *)cur->key);
 		free(cur->value);
@@ -400,7 +406,7 @@ double expr_id_data__source_count(const struct expr_id_data *data)
 	return data->val.source_count;
 }
 
-double expr__get_literal(const char *literal)
+double expr__get_literal(const char *literal, const struct expr_scanner_ctx *ctx)
 {
 	static struct cpu_topology *topology;
 	double result = NAN;
@@ -425,6 +431,11 @@ double expr__get_literal(const char *literal)
 	}
 	if (!strcasecmp("#smt_on", literal)) {
 		result = smt_on(topology) ? 1.0 : 0.0;
+		goto out;
+	}
+	if (!strcmp("#core_wide", literal)) {
+		result = core_wide(ctx->system_wide, ctx->user_requested_cpu_list, topology)
+			? 1.0 : 0.0;
 		goto out;
 	}
 	if (!strcmp("#num_packages", literal)) {
