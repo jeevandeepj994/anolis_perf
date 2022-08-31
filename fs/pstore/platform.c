@@ -76,10 +76,6 @@ static DECLARE_WORK(pstore_work, pstore_dowork);
 static DEFINE_MUTEX(psback_lock);
 struct pstore_backends *psback;
 
-static char *backend;
-module_param(backend, charp, 0444);
-MODULE_PARM_DESC(backend, "specific backend to use");
-
 static char *compress =
 #ifdef CONFIG_PSTORE_COMPRESS_DEFAULT
 		CONFIG_PSTORE_COMPRESS_DEFAULT;
