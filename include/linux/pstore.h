@@ -215,6 +215,7 @@ struct pstore_info_list {
  * @list_entry:	entry of pstore backend driver information list
  * @front_cnt:	count of each enabled frontend
  * @flag:	bitmap of enabled pstore backend
+ * @fs_ready:	whether the pstore filesystem is ready
  *
  */
 
@@ -222,6 +223,7 @@ struct pstore_backends {
 	struct list_head list_entry;
 	int front_cnt[PSTORE_TYPE_MAX];
 	u16 flag;
+	bool fs_ready;
 };
 
 /* Supported frontends */

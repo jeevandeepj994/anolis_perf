@@ -641,7 +641,10 @@ int pstore_register(struct pstore_info *psi)
 	if (psi->flags & PSTORE_FLAGS_DMESG && !psback->front_cnt[PSTORE_TYPE_DMESG])
 		allocate_buf_for_compression(psi, pslist->index);
 
-	pstore_get_records(psi, pslist->index, 0);
+	if (psback->fs_ready) {
+		pstore_mksubdir(psi);
+		pstore_get_records(psi, pslist->index, 0);
+	}
 
 	if (psi->flags & PSTORE_FLAGS_DMESG && !psback->front_cnt[PSTORE_TYPE_DMESG]++) {
 		pstore_dumper.max_reason = psi->max_reason;
