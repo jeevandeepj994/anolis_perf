@@ -831,11 +831,13 @@ out:
 /* create a new SMC link group */
 static int smc_lgr_create(struct smc_sock *smc, struct smc_init_info *ini)
 {
+	struct smc_ib_device *ibdev;
 	struct smc_link_group *lgr;
 	struct list_head *lgr_list;
 	struct smc_link *lnk;
 	spinlock_t *lgr_lock;
 	u8 link_idx;
+	int ibport;
 	int rc = 0;
 	int i;
 
@@ -889,9 +891,6 @@ static int smc_lgr_create(struct smc_sock *smc, struct smc_init_info *ini)
 		atomic_inc(&ini->ism_dev[ini->ism_selected]->lgr_cnt);
 	} else {
 		/* SMC-R specific settings */
-		struct smc_ib_device *ibdev;
-		int ibport;
-
 		lgr->role = smc->listen_smc ? SMC_SERV : SMC_CLNT;
 		lgr->smc_version = ini->smcr_version;
 		memcpy(lgr->peer_systemid, ini->peer_systemid,
@@ -906,6 +905,13 @@ static int smc_lgr_create(struct smc_sock *smc, struct smc_init_info *ini)
 		} else {
 			ibdev = ini->ib_dev;
 			ibport = ini->ib_port;
+		}
+		mutex_lock(&smc_ib_devices.mutex);
+		if (list_empty(&ibdev->list) ||
+		    test_bit(ibport, ibdev->ports_going_away)) {
+			/* ibdev unavailable */
+			rc = SMC_CLC_DECL_NOSMCRDEV;
+			goto free_wq;
 		}
 		memcpy(lgr->pnet_id, ibdev->pnetid[ibport - 1],
 		       SMC_MAX_PNETID_LEN);
@@ -935,9 +941,13 @@ static int smc_lgr_create(struct smc_sock *smc, struct smc_init_info *ini)
 	spin_lock_bh(lgr_lock);
 	list_add_tail(&lgr->list, lgr_list);
 	spin_unlock_bh(lgr_lock);
+	if (!ini->is_smcd)
+		mutex_unlock(&smc_ib_devices.mutex);
 	return 0;
 
 free_wq:
+	if (!ini->is_smcd)
+		mutex_unlock(&smc_ib_devices.mutex);
 	destroy_workqueue(lgr->tx_wq);
 free_lgr:
 	kfree(lgr);
@@ -946,10 +956,16 @@ ism_put_vlan:
 		smc_ism_put_vlan(ini->ism_dev[ini->ism_selected], ini->vlan_id);
 out:
 	if (rc < 0) {
-		if (rc == -ENOMEM)
+		switch (rc) {
+		case -ENOMEM:
 			rc = SMC_CLC_DECL_MEM;
-		else
+			break;
+		case SMC_CLC_DECL_NOSMCRDEV:
+			break;
+		default:
 			rc = SMC_CLC_DECL_INTERR;
+			break;
+		}
 	}
 	return rc;
 }
