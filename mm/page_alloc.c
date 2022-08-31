@@ -2409,12 +2409,25 @@ struct page *__rmqueue_smallest(struct zone *zone, unsigned int order,
 	unsigned int current_order;
 	struct free_area *area;
 	struct page *page;
+	struct list_head __maybe_unused *list;
 
 	/* Find a page of the appropriate size in the preferred list */
 	for (current_order = order; current_order < MAX_ORDER; ++current_order) {
 		bool zeroed;
 		area = &(zone->free_area[current_order]);
+#ifdef CONFIG_PAGE_PREZERO
+		list = &area->free_list[migratetype];
+
+		if (unlikely(list_empty(list)))
+			page = NULL;
+		else if (zone->alloc_zero)
+			page = list_last_entry(list, struct page, lru);
+		else
+			page = list_first_entry(list, struct page, lru);
+#else
 		page = get_page_from_free_area(area, migratetype);
+#endif
+
 		if (!page)
 			continue;
 
@@ -2997,6 +3010,9 @@ static int rmqueue_bulk(struct zone *zone, unsigned int order,
 	int i, alloced = 0;
 
 	spin_lock(&zone->lock);
+#ifdef CONFIG_PAGE_PREZERO
+	zone->alloc_zero = prezero_pcp_enabled() && (gfp_flags & __GFP_ZERO);
+#endif
 	for (i = 0; i < count; ++i) {
 		struct page *page = __rmqueue(zone, order, migratetype,
 								alloc_flags);
@@ -3030,6 +3046,9 @@ static int rmqueue_bulk(struct zone *zone, unsigned int order,
 	 * pages added to the pcp list.
 	 */
 	__mod_zone_page_state(zone, NR_FREE_PAGES, -(i << order));
+#ifdef CONFIG_PAGE_PREZERO
+	zone->alloc_zero = false;
+#endif
 	spin_unlock(&zone->lock);
 	return alloced;
 }
@@ -3563,6 +3582,10 @@ struct page *rmqueue(struct zone *preferred_zone,
 	WARN_ON_ONCE((gfp_flags & __GFP_NOFAIL) && (order > 1));
 	spin_lock_irqsave(&zone->lock, flags);
 
+#ifdef CONFIG_PAGE_PREZERO
+	zone->alloc_zero = prezero_buddy_enabled() && (gfp_flags & __GFP_ZERO);
+#endif
+
 	do {
 		page = NULL;
 		/*
@@ -3579,6 +3602,11 @@ struct page *rmqueue(struct zone *preferred_zone,
 		if (!page)
 			page = __rmqueue(zone, order, migratetype, alloc_flags);
 	} while (page && check_new_pages(page, order));
+
+#ifdef CONFIG_PAGE_PREZERO
+	zone->alloc_zero = false;
+#endif
+
 	spin_unlock(&zone->lock);
 	if (!page)
 		goto failed;

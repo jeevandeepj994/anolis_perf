@@ -605,6 +605,10 @@ struct zone {
 
 	bool			contiguous;
 
+#ifdef CONFIG_PAGE_PREZERO
+	bool			alloc_zero;
+#endif
+
 	ZONE_PADDING(_pad3_)
 	/* Zone statistics */
 	atomic_long_t		vm_stat[NR_VM_ZONE_STAT_ITEMS];
