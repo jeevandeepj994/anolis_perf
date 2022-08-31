@@ -40,9 +40,6 @@
 #include <asm/pgalloc.h>
 #include <asm/kfence.h>
 
-#define NO_BLOCK_MAPPINGS	BIT(0)
-#define NO_CONT_MAPPINGS	BIT(1)
-
 u64 idmap_t0sz = TCR_T0SZ(VA_BITS_MIN);
 EXPORT_SYMBOL(idmap_t0sz);
 u64 idmap_ptrs_per_pgd = PTRS_PER_PGD;
