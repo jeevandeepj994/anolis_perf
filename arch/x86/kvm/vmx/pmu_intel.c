@@ -312,6 +312,7 @@ static int intel_pmu_set_msr(struct kvm_vcpu *vcpu, struct msr_data *msr_info)
 			return 0;
 		if (!(data & pmu->pebs_enable_mask)) {
 			pmu->pebs_enable = data;
+			global_ctrl_changed(pmu, data);
 			return 0;
 		}
 		break;
