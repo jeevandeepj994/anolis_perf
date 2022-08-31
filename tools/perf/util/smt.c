@@ -1,52 +1,23 @@
-#include <stdio.h>
-#include <stdlib.h>
-#include <unistd.h>
-#include <linux/bitops.h>
+// SPDX-License-Identifier: GPL-2.0-only
+#include <string.h>
 #include "api/fs/fs.h"
+#include "cputopo.h"
 #include "smt.h"
 
-int smt_on(void)
+bool smt_on(const struct cpu_topology *topology)
 {
 	static bool cached;
-	static int cached_result;
-	int cpu;
-	int ncpu;
+	static bool cached_result;
+	int fs_value;
 
 	if (cached)
 		return cached_result;
 
-	if (sysfs__read_int("devices/system/cpu/smt/active", &cached_result) >= 0)
-		goto done;
+	if (sysfs__read_int("devices/system/cpu/smt/active", &fs_value) >= 0)
+		cached_result = (fs_value == 1);
+	else
+		cached_result = cpu_topology__smt_on(topology);
 
-	ncpu = sysconf(_SC_NPROCESSORS_CONF);
-	for (cpu = 0; cpu < ncpu; cpu++) {
-		unsigned long long siblings;
-		char *str;
-		size_t strlen;
-		char fn[256];
-
-		snprintf(fn, sizeof fn,
-			"devices/system/cpu/cpu%d/topology/core_cpus", cpu);
-		if (sysfs__read_str(fn, &str, &strlen) < 0) {
-			snprintf(fn, sizeof fn,
-				"devices/system/cpu/cpu%d/topology/thread_siblings",
-				cpu);
-			if (sysfs__read_str(fn, &str, &strlen) < 0)
-				continue;
-		}
-		/* Entry is hex, but does not have 0x, so need custom parser */
-		siblings = strtoull(str, NULL, 16);
-		free(str);
-		if (hweight64(siblings) > 1) {
-			cached_result = 1;
-			cached = true;
-			break;
-		}
-	}
-	if (!cached) {
-		cached_result = 0;
-done:
-		cached = true;
-	}
+	cached = true;
 	return cached_result;
 }
