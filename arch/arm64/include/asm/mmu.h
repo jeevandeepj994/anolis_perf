@@ -15,6 +15,9 @@
 #define BP_HARDEN_EL2_SLOTS 4
 #define __BP_HARDEN_HYP_VECS_SZ (BP_HARDEN_EL2_SLOTS * SZ_2K)
 
+#define NO_BLOCK_MAPPINGS	BIT(0)
+#define NO_CONT_MAPPINGS	BIT(1)
+
 #ifndef __ASSEMBLY__
 
 #include <linux/refcount.h>
