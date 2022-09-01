@@ -1818,6 +1818,7 @@ struct file_operations {
 	int (*dedupe_file_range)(struct file *, loff_t, struct file *, loff_t,
 			u64);
 	int (*fadvise)(struct file *, loff_t, loff_t, int);
+	bool may_pollfree;
 } __randomize_layout;
 
 struct inode_operations {

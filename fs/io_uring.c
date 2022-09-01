@@ -4904,6 +4904,11 @@ static __poll_t __io_arm_poll_handler(struct io_kiocb *req,
 	struct io_ring_ctx *ctx = req->ctx;
 	bool cancel = false;
 
+	if (req->file->f_op->may_pollfree) {
+		spin_lock_irq(&ctx->completion_lock);
+		return -EOPNOTSUPP;
+	}
+
 	poll->file = req->file;
 	io_init_poll_iocb(poll, mask, wake_func);
 	poll->wait.private = req;
