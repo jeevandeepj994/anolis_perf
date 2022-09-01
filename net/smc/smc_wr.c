@@ -406,7 +406,7 @@ static inline void smc_wr_rx_demultiplex(struct ib_wc *wc)
 
 	if (wc->byte_len < sizeof(*wr_rx))
 		return; /* short message */
-	temp_wr_id = wc->wr_id;
+	temp_wr_id = wc->wr_id / 2;
 	index = do_div(temp_wr_id, link->wr_rx_cnt);
 	wr_rx = (struct smc_wr_rx_hdr *)&link->wr_rx_bufs[index];
 	hash_for_each_possible(smc_wr_rx_hash, handler, list, wr_rx->type) {
@@ -467,8 +467,7 @@ again:
 		memset(&wc, 0, sizeof(wc));
 		rc = ib_poll_cq(smcibcq->ib_cq, SMC_WR_MAX_POLL_CQE, wc);
 		for (i = 0; i < rc; i++) {
-			if ((wc[i].opcode & IB_WC_RECV) ||
-			    (wc[i].opcode == 0 && smc_wr_id_is_rx(wc[i].wr_id)))
+			if (smc_wr_id_is_rx(wc[i].wr_id))
 				smc_wr_rx_process_cqe(&wc[i]);
 			else
 				smc_wr_tx_process_cqe(&wc[i]);
