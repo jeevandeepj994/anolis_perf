@@ -2316,7 +2316,7 @@ static bool check_new_pages(struct page *page, unsigned int order)
 inline void post_alloc_hook(struct page *page, unsigned int order,
 				gfp_t gfp_flags)
 {
-	set_page_private(page, 0);
+	WARN_ON_ONCE(page_private(page) & ~PAGE_ZEROED);
 	set_page_refcounted(page);
 
 	arch_alloc_page(page, order);
@@ -4197,8 +4197,10 @@ __alloc_pages_direct_compact(gfp_t gfp_mask, unsigned int order,
 	count_vm_event(COMPACTSTALL);
 
 	/* Prep a captured page if available */
-	if (page)
+	if (page) {
+		set_page_private(page, 0);
 		prep_new_page(page, order, gfp_mask, alloc_flags);
+	}
 
 	/* Try get a page from the freelist if available */
 	if (!page)
@@ -5022,6 +5024,7 @@ __alloc_pages_nodemask(gfp_t gfp_mask, unsigned int order, int preferred_nid,
 
 	page = kfence_alloc_page(order, preferred_nid, gfp_mask);
 	if (unlikely(page)) {
+		set_page_private(page, 0);
 		prep_new_page(page, 0, gfp_mask, alloc_mask);
 		goto out;
 	}
