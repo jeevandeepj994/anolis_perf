@@ -153,7 +153,7 @@ static inline int smc_wr_rx_post(struct smc_link *link)
 
 	link->wr_rx_id += 2;
 	wr_id = link->wr_rx_id; /* tasklet context, thus not atomic */
-	temp_wr_id = wr_id;
+	temp_wr_id = wr_id / 2;
 	index = do_div(temp_wr_id, link->wr_rx_cnt);
 	link->wr_rx_ibs[index].wr_id = wr_id;
 	rc = ib_post_recv(link->roce_qp, &link->wr_rx_ibs[index], NULL);
