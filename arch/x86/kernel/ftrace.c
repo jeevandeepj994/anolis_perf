@@ -127,10 +127,6 @@ ftrace_modify_code_direct(unsigned long ip, unsigned const char *old_code,
 	if (probe_kernel_read(replaced, (void *)ip, MCOUNT_INSN_SIZE))
 		return -EFAULT;
 
-	/* Make sure it is what we expect it to be */
-	if (memcmp(replaced, old_code, MCOUNT_INSN_SIZE) != 0)
-		return -EINVAL;
-
 	ip = text_ip_addr(ip);
 
 	/* replace the text with the new text */
