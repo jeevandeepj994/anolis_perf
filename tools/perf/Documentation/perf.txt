@@ -76,3 +76,5 @@ SEE ALSO
 linkperf:perf-stat[1], linkperf:perf-top[1],
 linkperf:perf-record[1], linkperf:perf-report[1],
 linkperf:perf-list[1]
+
+linkperf:perf-annotate[1],linkperf:perf-archive[1],linkperf:perf-arm-spe[1],

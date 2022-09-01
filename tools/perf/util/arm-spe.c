@@ -58,7 +58,10 @@ struct arm_spe {
 	u8				sample_tlb;
 	u8				sample_branch;
 	u8				sample_remote_access;
+	u8				sample_memory;
 	u8				sample_c2c_mode;
+	u8              sample_instructions;
+	u64             instructions_sample_period;
 
 	u64				l1d_miss_id;
 	u64				l1d_access_id;
@@ -68,10 +71,13 @@ struct arm_spe {
 	u64				tlb_access_id;
 	u64				branch_miss_id;
 	u64				remote_access_id;
+	u64				memory_id;
+	u64				instructions_id;
 
 	u64				kernel_start;
 
 	unsigned long			num_events;
+	u8              use_ctx_pkt_for_pid;
 	int have_sched_switch;
 	struct evsel *switch_evsel;
 	u64				ts_bit;
@@ -94,6 +100,7 @@ struct arm_spe_queue {
 	u64				time;
 	u64				timestamp;
 	struct thread			*thread;
+	u64             period_instructions;
 	bool				have_sample;
 };
 
@@ -163,7 +170,7 @@ static void arm_spe_dump(struct arm_spe *spe __maybe_unused,
 	const char *color = PERF_COLOR_BLUE;
 
 	color_fprintf(stdout, color,
-		      ". ... ARM SPE data: size %zu bytes\n",
+		      ". ... ARM SPE data: size %#zx bytes\n",
 		      len);
 
 	while (len) {
@@ -181,7 +188,7 @@ static void arm_spe_dump(struct arm_spe *spe __maybe_unused,
 		if (ret > 0) {
 			ret = arm_spe_pkt_desc(&packet, desc,
 					       ARM_SPE_PKT_DESC_MAX);
-			if (ret > 0)
+			if (!ret)
 				color_fprintf(stdout, color, " %s\n", desc);
 		} else {
 			color_fprintf(stdout, color, " Bad packet!\n");
@@ -263,6 +270,7 @@ static struct arm_spe_queue *arm_spe__alloc_queue(struct arm_spe *spe,
 	speq->pid = -1;
 	speq->tid = -1;
 	speq->cpu = -1;
+	speq->period_instructions = 0;
 
 	/* params set */
 	params.get_trace = arm_spe_get_trace;
@@ -289,6 +297,43 @@ static inline u8 arm_spe_cpumode(struct arm_spe *spe, u64 ip)
 		PERF_RECORD_MISC_USER;
 }
 
+static void arm_spe_set_pid_tid_cpu(struct arm_spe *spe,
+									struct auxtrace_queue *queue)
+{
+	struct arm_spe_queue *speq = queue->priv;
+	pid_t tid;
+	tid = machine__get_current_tid(spe->machine, speq->cpu);
+	if (tid != -1) {
+		speq->tid = tid;
+		thread__zput(speq->thread);
+	} else
+		speq->tid = queue->tid;
+
+	if ((!speq->thread) && (speq->tid != -1)) {
+		speq->thread = machine__find_thread(spe->machine, -1,
+											speq->tid);
+	}
+
+	if (speq->thread) {
+		speq->pid = speq->thread->pid_;
+		if (queue->cpu == -1)
+			speq->cpu = speq->thread->cpu;
+	}
+}
+
+static int arm_spe_set_tid(struct arm_spe_queue *speq, pid_t tid)
+{
+	struct arm_spe *spe = speq->spe;
+	int err = machine__set_current_tid(spe->machine, speq->cpu, -1, tid);
+
+	if (err)
+		return err;
+
+	arm_spe_set_pid_tid_cpu(spe, &spe->queues.queue_array[speq->queue_nr]);
+
+	return 0;
+}
+
 static void arm_spe_prep_sample(struct arm_spe *spe,
 				struct arm_spe_queue *speq,
 				union perf_event *event,
@@ -303,7 +348,7 @@ static void arm_spe_prep_sample(struct arm_spe *spe,
 	sample->cpumode = arm_spe_cpumode(spe, sample->ip);
 	sample->pid = speq->pid;
 	sample->tid = speq->tid;
-	sample->addr = record->addr;
+	sample->addr = record->virt_addr;
 	sample->phys_addr = record->phys_addr;
 	sample->period = 1;
 	sample->cpu = speq->cpu;
@@ -340,11 +385,11 @@ arm_spe_deliver_synth_event(struct arm_spe *spe,
 	return ret;
 }
 
-static int
-arm_spe_synth_spe_events_sample(struct arm_spe_queue *speq,
-				u64 spe_events_id __maybe_unused)
+static int arm_spe__synth_mem_sample(struct arm_spe_queue *speq,
+				u64 spe_events_id, u64 data_src)
 {
 	struct arm_spe *spe = speq->spe;
+	struct arm_spe_record *record = &speq->decoder->record;
 	union perf_event *event = speq->event_buf;
 	struct perf_sample sample = { .ip = 0, };
 
@@ -352,27 +397,121 @@ arm_spe_synth_spe_events_sample(struct arm_spe_queue *speq,
 
 	sample.id = spe_events_id;
 	sample.stream_id = spe_events_id;
+	sample.addr = record->virt_addr;
+	sample.phys_addr = record->phys_addr;
+	sample.data_src = data_src;
+	sample.weight = record->latency;
 
 	return arm_spe_deliver_synth_event(spe, speq, event, &sample);
+}
+
+static int arm_spe__synth_branch_sample(struct arm_spe_queue *speq,
+				u64 spe_events_id)
+{
+	struct arm_spe *spe = speq->spe;
+	struct arm_spe_record *record = &speq->decoder->record;
+	union perf_event *event = speq->event_buf;
+	struct perf_sample sample = { .ip = 0, };
+	arm_spe_prep_sample(spe, speq, event, &sample);
+	sample.id = spe_events_id;
+	sample.stream_id = spe_events_id;
+	sample.addr = record->to_ip;
+	sample.weight = record->latency;
+
+	return arm_spe_deliver_synth_event(spe, speq, event, &sample);
+}
+
+static int arm_spe__synth_instruction_sample(struct arm_spe_queue *speq,
+				u64 spe_events_id, u64 data_src)
+{
+	struct arm_spe *spe = speq->spe;
+	struct arm_spe_record *record = &speq->decoder->record;
+	union perf_event *event = speq->event_buf;
+	struct perf_sample sample = { .ip = 0, };
+
+	/*
+	 * Handles perf instruction sampling period.
+	 */
+	speq->period_instructions++;
+	if (speq->period_instructions < spe->instructions_sample_period)
+		return 0;
+	speq->period_instructions = 0;
+
+	arm_spe_prep_sample(spe, speq, event, &sample);
+
+	sample.id = spe_events_id;
+	sample.stream_id = spe_events_id;
+	sample.addr = record->virt_addr;
+	sample.phys_addr = record->phys_addr;
+	sample.data_src = data_src;
+	sample.period = spe->instructions_sample_period;
+	sample.weight = record->latency;
+
+	return arm_spe_deliver_synth_event(spe, speq, event, &sample);
+}
+
+static u64 arm_spe__synth_data_source(const struct arm_spe_record *record)
+{
+	union perf_mem_data_src	data_src = { 0 };
+
+	if (record->op == ARM_SPE_LD)
+		data_src.mem_op = PERF_MEM_OP_LOAD;
+	else if (record->op == ARM_SPE_ST)
+		data_src.mem_op = PERF_MEM_OP_STORE;
+	else
+		return 0;
+
+	if (record->type & (ARM_SPE_LLC_ACCESS | ARM_SPE_LLC_MISS)) {
+		data_src.mem_lvl = PERF_MEM_LVL_L3;
+
+		if (record->type & ARM_SPE_LLC_MISS)
+			data_src.mem_lvl |= PERF_MEM_LVL_MISS;
+		else
+			data_src.mem_lvl |= PERF_MEM_LVL_HIT;
+	} else if (record->type & (ARM_SPE_L1D_ACCESS | ARM_SPE_L1D_MISS)) {
+		data_src.mem_lvl = PERF_MEM_LVL_L1;
+
+		if (record->type & ARM_SPE_L1D_MISS)
+			data_src.mem_lvl |= PERF_MEM_LVL_MISS;
+		else
+			data_src.mem_lvl |= PERF_MEM_LVL_HIT;
+	}
+
+	if (record->type & ARM_SPE_REMOTE_ACCESS)
+		data_src.mem_lvl |= PERF_MEM_LVL_REM_CCE1;
+
+	if (record->type & (ARM_SPE_TLB_ACCESS | ARM_SPE_TLB_MISS)) {
+		data_src.mem_dtlb = PERF_MEM_TLB_WK;
+
+		if (record->type & ARM_SPE_TLB_MISS)
+			data_src.mem_dtlb |= PERF_MEM_TLB_MISS;
+		else
+			data_src.mem_dtlb |= PERF_MEM_TLB_HIT;
+	}
+
+	return data_src.val;
 }
 
 static int arm_spe_sample(struct arm_spe_queue *speq)
 {
 	const struct arm_spe_record *record = &speq->decoder->record;
 	struct arm_spe *spe = speq->spe;
+	u64 data_src;
 	int err;
+
+	data_src = arm_spe__synth_data_source(record);
 
 	if (spe->sample_flc) {
 		if (record->type & ARM_SPE_L1D_MISS) {
-			err = arm_spe_synth_spe_events_sample(
-					speq, spe->l1d_miss_id);
+			err = arm_spe__synth_mem_sample(speq, spe->l1d_miss_id,
+							data_src);
 			if (err)
 				return err;
 		}
 
 		if (record->type & ARM_SPE_L1D_ACCESS) {
-			err = arm_spe_synth_spe_events_sample(
-					speq, spe->l1d_access_id);
+			err = arm_spe__synth_mem_sample(speq, spe->l1d_access_id,
+							data_src);
 			if (err)
 				return err;
 		}
@@ -380,15 +519,15 @@ static int arm_spe_sample(struct arm_spe_queue *speq)
 
 	if (spe->sample_llc) {
 		if (record->type & ARM_SPE_LLC_MISS) {
-			err = arm_spe_synth_spe_events_sample(
-					speq, spe->llc_miss_id);
+			err = arm_spe__synth_mem_sample(speq, spe->llc_miss_id,
+							data_src);
 			if (err)
 				return err;
 		}
 
 		if (record->type & ARM_SPE_LLC_ACCESS) {
-			err = arm_spe_synth_spe_events_sample(
-					speq, spe->llc_access_id);
+			err = arm_spe__synth_mem_sample(speq, spe->llc_access_id,
+							data_src);
 			if (err)
 				return err;
 		}
@@ -396,31 +535,46 @@ static int arm_spe_sample(struct arm_spe_queue *speq)
 
 	if (spe->sample_tlb) {
 		if (record->type & ARM_SPE_TLB_MISS) {
-			err = arm_spe_synth_spe_events_sample(
-					speq, spe->tlb_miss_id);
+			err = arm_spe__synth_mem_sample(speq, spe->tlb_miss_id,
+							data_src);
 			if (err)
 				return err;
 		}
 
 		if (record->type & ARM_SPE_TLB_ACCESS) {
-			err = arm_spe_synth_spe_events_sample(
-					speq, spe->tlb_access_id);
+			err = arm_spe__synth_mem_sample(speq, spe->tlb_access_id,
+							data_src);
 			if (err)
 				return err;
 		}
 	}
 
 	if (spe->sample_branch && (record->type & ARM_SPE_BRANCH_MISS)) {
-		err = arm_spe_synth_spe_events_sample(speq,
-						      spe->branch_miss_id);
+		err = arm_spe__synth_branch_sample(speq, spe->branch_miss_id);
 		if (err)
 			return err;
 	}
 
 	if (spe->sample_remote_access &&
 	    (record->type & ARM_SPE_REMOTE_ACCESS)) {
-		err = arm_spe_synth_spe_events_sample(speq,
-						      spe->remote_access_id);
+		err = arm_spe__synth_mem_sample(speq, spe->remote_access_id,
+						data_src);
+		if (err)
+			return err;
+	}
+
+	/*
+	 * When data_src is zero it means the record is not a memory operation,
+	 * skip to synthesize memory sample for this case.
+	 */
+	if (spe->sample_memory && data_src) {
+		err = arm_spe__synth_mem_sample(speq, spe->memory_id, data_src);
+		if (err)
+			return err;
+	}
+
+	if (spe->sample_instructions) {
+		err = arm_spe__synth_instruction_sample(speq, spe->instructions_id, data_src);
 		if (err)
 			return err;
 	}
@@ -507,7 +661,7 @@ static void arm_spe_c2c_queue_store(struct arm_spe_queue *speq,
 		ret = spe_sample_insert(root, sample);
 		if (ret) {
 			pr_err("spe_c2c: The %lx(%lx) already exists.",
-					record->addr, record->ts);
+					record->virt_addr, record->ts);
 			free(sample);
 			return;
 		}
@@ -532,6 +686,18 @@ static int arm_spe_run_decoder(struct arm_spe_queue *speq, u64 *timestamp,
 		     speq->queue_nr, speq->cpu, speq->pid, speq->tid);
 
 	while (1) {
+		/*
+		 * Update pid/tid info.
+		 */
+		record = &speq->decoder->record;
+		if (!spe->timeless_decoding && record->context_id != (u64)-1) {
+			ret = arm_spe_set_tid(speq, record->context_id);
+			if (ret)
+				return ret;
+
+			spe->use_ctx_pkt_for_pid = true;
+		}
+
 		if (spe->sample_c2c_mode) {
 			if (spe_c2cq)
 				arm_spe_c2c_queue_store(speq, spe_c2cq);
@@ -686,28 +852,6 @@ static bool arm_spe__is_timeless_decoding(struct arm_spe *spe)	// FIXXUE
 	return timeless_decoding;
 }
 
-static void arm_spe_set_pid_tid_cpu(struct arm_spe *spe,
-				    struct auxtrace_queue *queue)
-{
-	struct arm_spe_queue *speq = queue->priv;
-
-	if (queue->tid == -1 || spe->have_sched_switch) {
-		speq->tid = machine__get_current_tid(spe->machine, speq->cpu);
-		thread__zput(speq->thread);
-	}
-
-	if ((!speq->thread) && (speq->tid != -1)) {
-		speq->thread = machine__find_thread(spe->machine, -1,
-						    speq->tid);
-	}
-
-	if (speq->thread) {
-		speq->pid = speq->thread->pid_;
-		if (queue->cpu == -1)
-			speq->cpu = speq->thread->cpu;
-	}
-}
-
 static struct spe_c2c_sample_queues*
 arm_spe_get_c2c_queue(struct arm_spe_queue *speq)
 {
@@ -768,6 +912,12 @@ static int arm_spe_process_queues(struct arm_spe *spe, u64 timestamp)
 		}
 
 		arm_spe_set_pid_tid_cpu(spe, queue);
+		/*
+		 * A previous context-switch event has set pid/tid in the machine's context, so
+		 * here we need to update the pid/tid in the thread and SPE queue.
+		 */
+		if (!spe->use_ctx_pkt_for_pid)
+			arm_spe_set_pid_tid_cpu(spe, queue);
 
 		spe_c2cq = arm_spe_get_c2c_queue(speq);
 
@@ -843,7 +993,7 @@ static void arm_spe_c2c_sample(struct spe_c2c_sample_queues *c2c_queues,
 	sample.cpumode = arm_spe_cpumode(speq->spe, sample.ip);
 	sample.pid = c2c_sample->pid;
 	sample.tid = c2c_sample->tid;
-	sample.addr = c2c_sample->record.addr;
+	sample.addr = c2c_sample->record.virt_addr;
 	if (arm_spe) {
 		srcp[0] = src;
 		srcp[1].val = c2c_sample->record.tot_lat;
@@ -1105,32 +1255,6 @@ static int arm_spe_process_switch(struct arm_spe *spe,
 	return machine__set_current_tid(spe->machine, cpu, -1, tid);
 }
 
-static int arm_spe_context_switch(struct arm_spe *spe, union perf_event *event,
-				   struct perf_sample *sample)
-{
-	bool out = event->header.misc & PERF_RECORD_MISC_SWITCH_OUT;
-	pid_t pid, tid;
-	int cpu;
-
-	cpu = sample->cpu;
-
-	if (out)
-		return 0;
-	pid = sample->pid;
-	tid = sample->tid;
-
-	if (tid == -1) {
-		pr_err("context_switch event has no tid\n");
-		return -EINVAL;
-	}
-
-	pr_debug4("context_switch: cpu %d pid %d tid %d time %"PRIu64" tsc %#"PRIx64"\n",
-		     cpu, pid, tid, sample->time, perf_time_to_tsc(sample->time,
-		     &spe->tc));
-
-	return machine__set_current_tid(spe->machine, cpu, pid, tid);
-}
-
 static int arm_spe_process_itrace_start(struct arm_spe *spe,
 					union perf_event *event,
 					struct perf_sample *sample)
@@ -1164,6 +1288,25 @@ static int arm_spe_process_timeless_queues(struct arm_spe *spe, pid_t tid,
 		}
 	}
 	return 0;
+}
+
+static int arm_spe_context_switch(struct arm_spe *spe, union perf_event *event,
+				  struct perf_sample *sample)
+{
+	pid_t pid, tid;
+	int cpu;
+
+	if (!(event->header.misc & PERF_RECORD_MISC_SWITCH_OUT))
+		return 0;
+
+	pid = event->context_switch.next_prev_pid;
+	tid = event->context_switch.next_prev_tid;
+	cpu = sample->cpu;
+
+	if (tid == -1)
+		pr_warning("context_switch event has no tid\n");
+
+	return machine__set_current_tid(spe->machine, cpu, pid, tid);
 }
 
 static int arm_spe_process_event(struct perf_session *session,
@@ -1205,6 +1348,10 @@ static int arm_spe_process_event(struct perf_session *session,
 		err = arm_spe_process_queues(spe, timestamp);
 		if (err)
 			return err;
+		if (!spe->use_ctx_pkt_for_pid &&
+			(event->header.type == PERF_RECORD_SWITCH_CPU_WIDE ||
+			event->header.type == PERF_RECORD_SWITCH))
+			err = arm_spe_context_switch(spe, event, sample);
 	}
 
 	if (spe->switch_evsel && event->header.type == PERF_RECORD_SAMPLE)
@@ -1285,6 +1432,9 @@ static int arm_spe_flush(struct perf_session *session __maybe_unused,
 	ret = arm_spe_process_queues(spe, MAX_TIMESTAMP);
 	if (ret < 0)
 		return ret;
+	if (!spe->use_ctx_pkt_for_pid)
+		ui__warning("Arm SPE CONTEXT packets not found in the traces.\n"
+				"Matching of TIDs to SPE events could be inaccurate.\n");
 
 	if (spe->sample_c2c_mode)
 		ret = arm_spe_c2c_process(spe);
@@ -1444,9 +1594,11 @@ arm_spe_synth_events(struct arm_spe *spe, struct perf_session *session)
 	memset(&attr, 0, sizeof(struct perf_event_attr));
 	attr.size = sizeof(struct perf_event_attr);
 	attr.type = PERF_TYPE_HARDWARE;
-	attr.sample_type = evsel->core.attr.sample_type & PERF_SAMPLE_MASK;
+	attr.sample_type = evsel->core.attr.sample_type &
+				(PERF_SAMPLE_MASK | PERF_SAMPLE_PHYS_ADDR);
 	attr.sample_type |= PERF_SAMPLE_IP | PERF_SAMPLE_TID |
-		PERF_SAMPLE_PERIOD;
+			    PERF_SAMPLE_PERIOD | PERF_SAMPLE_DATA_SRC |
+			    PERF_SAMPLE_WEIGHT | PERF_SAMPLE_ADDR;
 	if (spe->timeless_decoding)
 		attr.sample_type &= ~(u64)PERF_SAMPLE_TIME;
 	else
@@ -1551,6 +1703,38 @@ arm_spe_synth_events(struct arm_spe *spe, struct perf_session *session)
 		arm_spe_set_event_name(evlist, id, "remote-access");
 		id += 1;
 	}
+
+	if (spe->synth_opts.mem) {
+		spe->sample_memory = true;
+
+		err = arm_spe_synth_event(session, &attr, id);
+		if (err)
+			return err;
+		spe->memory_id = id;
+		arm_spe_set_event_name(evlist, id, "memory");
+		id += 1;
+	}
+
+	if (spe->synth_opts.instructions) {
+		if (spe->synth_opts.period_type != PERF_ITRACE_PERIOD_INSTRUCTIONS) {
+			pr_warning("Only instruction-based sampling period is currently supported by Arm SPE.\n");
+			goto synth_instructions_out;
+		}
+		if (spe->synth_opts.period > 1)
+			pr_warning("Arm SPE has a hardware-based sample period.\n"
+				   "Additional instruction events will be discarded by --itrace\n");
+
+		spe->sample_instructions = true;
+		attr.config = PERF_COUNT_HW_INSTRUCTIONS;
+		attr.sample_period = spe->synth_opts.period;
+		spe->instructions_sample_period = attr.sample_period;
+		err = arm_spe_synth_event(session, &attr, id);
+		if (err)
+			return err;
+		spe->instructions_id = id;
+		arm_spe_set_event_name(evlist, id, "instructions");
+	}
+synth_instructions_out:
 
 	return 0;
 }
