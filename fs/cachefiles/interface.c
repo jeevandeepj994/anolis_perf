@@ -11,6 +11,7 @@
 
 #include <linux/slab.h>
 #include <linux/mount.h>
+#include <linux/file.h>
 #include "internal.h"
 
 struct cachefiles_lookup_data {
@@ -310,6 +311,12 @@ static void cachefiles_drop_object(struct fscache_object *_object)
 		if (object->backer != object->dentry)
 			dput(object->backer);
 		object->backer = NULL;
+	}
+
+	/* clean up file descriptor for non-index object */
+	if (object->file) {
+		fput(object->file);
+		object->file = NULL;
 	}
 
 	/* note that the object is now inactive */
