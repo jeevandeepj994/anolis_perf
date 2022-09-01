@@ -1026,8 +1026,6 @@ struct perf_sample_data {
 	u64				sample_flags;
 	u64				addr;
 	struct perf_raw_record		*raw;
-	struct perf_branch_stack	*br_stack;
-	u64				*br_stack_cntr;
 	u64				period;
 	union perf_sample_weight	weight;
 	u64				txn;
@@ -1037,6 +1035,9 @@ struct perf_sample_data {
 	 * The other fields, optionally {set,used} by
 	 * perf_{prepare,output}_sample().
 	 */
+	struct perf_branch_stack	*br_stack;
+	u64				*br_stack_cntr;
+
 	u64				type;
 	u64				ip;
 	struct {
@@ -1077,7 +1078,6 @@ static inline void perf_sample_data_init(struct perf_sample_data *data,
 	data->sample_flags = 0;
 	data->addr = addr;
 	data->raw  = NULL;
-	data->br_stack = NULL;
 	data->br_stack_cntr = NULL;
 	data->period = period;
 	data->weight.full = 0;
