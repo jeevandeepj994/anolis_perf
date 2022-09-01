@@ -1686,9 +1686,11 @@ static void setup_pebs_fixed_sample_data(struct perf_event *event,
 			data->weight.full = intel_get_tsx_weight(pebs->tsx_tuning);
 			data->sample_flags |= PERF_SAMPLE_WEIGHT_TYPE;
 		}
-		if (sample_type & PERF_SAMPLE_TRANSACTION)
+		if (sample_type & PERF_SAMPLE_TRANSACTION) {
 			data->txn = intel_get_tsx_transaction(pebs->tsx_tuning,
 							      pebs->ax);
+			data->sample_flags |= PERF_SAMPLE_TRANSACTION;
+		}
 	}
 
 	/*
@@ -1842,9 +1844,11 @@ static void setup_pebs_adaptive_sample_data(struct perf_event *event,
 		if (sample_type & (PERF_SAMPLE_ADDR | PERF_SAMPLE_PHYS_ADDR))
 			data->addr = meminfo->address;
 
-		if (sample_type & PERF_SAMPLE_TRANSACTION)
+		if (sample_type & PERF_SAMPLE_TRANSACTION) {
 			data->txn = intel_get_tsx_transaction(meminfo->tsx_tuning,
 							  gprs ? gprs->ax : 0);
+			data->sample_flags |= PERF_SAMPLE_TRANSACTION;
+		}
 	}
 
 	if (format_size & PEBS_DATACFG_XMMS) {

@@ -1027,7 +1027,6 @@ struct perf_sample_data {
 	u64				addr;
 	struct perf_raw_record		*raw;
 	u64				period;
-	u64				txn;
 
 	/*
 	 * The other fields, optionally {set,used} by
@@ -1037,6 +1036,7 @@ struct perf_sample_data {
 	u64				*br_stack_cntr;
 	union perf_sample_weight	weight;
 	union  perf_mem_data_src	data_src;
+	u64				txn;
 
 	u64				type;
 	u64				ip;
@@ -1080,7 +1080,6 @@ static inline void perf_sample_data_init(struct perf_sample_data *data,
 	data->raw  = NULL;
 	data->br_stack_cntr = NULL;
 	data->period = period;
-	data->txn = 0;
 }
 
 /*
