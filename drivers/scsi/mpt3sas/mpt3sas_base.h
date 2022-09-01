@@ -1332,6 +1332,8 @@ struct MPT3SAS_ADAPTER {
 	bool            msix_load_balance;
 	u16		thresh_hold;
 	u8		high_iops_queues;
+	u32		drv_support_bitmap;
+	u32		dma_mask;
 	bool		enable_sdev_max_qd;
 
 	/* internal commands, callback index */
