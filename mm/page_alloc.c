@@ -2991,7 +2991,8 @@ out:
  */
 static int rmqueue_bulk(struct zone *zone, unsigned int order,
 			unsigned long count, struct list_head *list,
-			int migratetype, unsigned int alloc_flags)
+			gfp_t gfp_flags, int migratetype,
+			unsigned int alloc_flags)
 {
 	int i, alloced = 0;
 
@@ -3484,17 +3485,16 @@ static inline void zone_statistics(struct zone *preferred_zone, struct zone *z)
 }
 
 /* Remove page from the per-cpu list, caller must protect the list */
-static struct page *__rmqueue_pcplist(struct zone *zone, int migratetype,
-			unsigned int alloc_flags,
-			struct per_cpu_pages *pcp,
-			struct list_head *list)
+static struct page *__rmqueue_pcplist(struct zone *zone, gfp_t gfp_flags,
+			int migratetype, unsigned int alloc_flags,
+			struct per_cpu_pages *pcp, struct list_head *list)
 {
 	struct page *page;
 
 	do {
 		if (list_empty(list)) {
 			pcp->count += rmqueue_bulk(zone, 0,
-					pcp->batch, list,
+					pcp->batch, list, gfp_flags,
 					migratetype, alloc_flags);
 			if (unlikely(list_empty(list)))
 				return NULL;
@@ -3521,7 +3521,8 @@ static struct page *rmqueue_pcplist(struct zone *preferred_zone,
 	local_irq_save(flags);
 	pcp = &this_cpu_ptr(zone->pageset)->pcp;
 	list = &pcp->lists[migratetype];
-	page = __rmqueue_pcplist(zone,  migratetype, alloc_flags, pcp, list);
+	page = __rmqueue_pcplist(zone, gfp_flags, migratetype, alloc_flags,
+				 pcp, list);
 	if (page) {
 		__count_zid_vm_events(PGALLOC, page_zonenum(page), 1);
 		zone_statistics(preferred_zone, zone);
