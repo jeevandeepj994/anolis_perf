@@ -37,6 +37,7 @@
 #include <linux/pm_runtime.h>
 #include <linux/ratelimit.h>
 #include <linux/slab.h>
+#include <asm/machine_types.h>
 
 #include <linux/amba/bus.h>
 #include <linux/fsl/mc.h>
@@ -68,6 +69,14 @@ MODULE_PARM_DESC(disable_bypass,
 #define s2cr_init_val (struct arm_smmu_s2cr){				\
 	.type = disable_bypass ? S2CR_TYPE_FAULT : S2CR_TYPE_BYPASS,	\
 }
+
+bool ft2000_iommu_hwfix;
+static int __init ft2000_iommu_hwfix_hwfix(char *str)
+{
+	ft2000_iommu_hwfix = true;
+	return 0;
+}
+__setup("ft2000_iommu_hwfix", ft2000_iommu_hwfix_hwfix);
 
 static bool using_legacy_binding, using_generic_binding;
 
@@ -1020,9 +1029,16 @@ static int arm_smmu_find_sme(struct arm_smmu_device *smmu, u16 id, u16 mask)
 		 * expect simply identical entries for this case, but there's
 		 * no harm in accommodating the generalisation.
 		 */
-		if ((mask & smrs[i].mask) == mask &&
-		    !((id ^ smrs[i].id) & ~smrs[i].mask))
-			return i;
+		if (ft2000_iommu_hwfix) {
+			if (((mask & smrs[i].mask & ~0x7000)
+			     == (mask & ~0x7000)) &&
+			    !((id ^ smrs[i].id) & ~smrs[i].mask))
+				return i;
+		} else {
+			if ((mask & smrs[i].mask) == mask &&
+			    !((id ^ smrs[i].id) & ~smrs[i].mask))
+				return i;
+		}
 		/*
 		 * If the new entry has any other overlap with an existing one,
 		 * though, then there always exists at least one stream ID
@@ -1367,12 +1383,42 @@ struct arm_smmu_device *arm_smmu_get_by_fwnode(struct fwnode_handle *fwnode)
 	return dev ? dev_get_drvdata(dev) : NULL;
 }
 
+#include <asm/cputype.h>
+static const struct pci_device_id hw_blacklist_pci_ids[] = {
+	/* skip any PCI-Express port */
+	{PCI_DEVICE_CLASS(((PCI_CLASS_BRIDGE_PCI << 8) | 0x00), ~0),},
+	{ /* end: all zeroes */ }
+};
+
+static int arm_smmu_quirk_add_device(struct device *dev)
+{
+	/* 1. Judgment cpu type, FT2000+/64 */
+	if (read_cpuid_implementor() != 0x70 ||
+	    read_cpuid_part_number() != 0x662)
+		return 0;
+
+	/* 2. remove unimportant/unsupported device, avoid streamid conflict */
+	if (dev_is_pci(dev) &&
+	    pci_match_id(hw_blacklist_pci_ids, to_pci_dev(dev)))
+		return -ENODEV;
+
+	if (to_pci_dev(dev)->vendor == 0x1b4b)
+		return -ENODEV;
+
+	return 0;
+}
+
+/* calc read stream id */
+#define FWID_READ(id) (((u16)(id) >> 3) | \
+		       ((id & ARM_SMMU_SMR_MASK) | 0x70000000))
+
 static struct iommu_device *arm_smmu_probe_device(struct device *dev)
 {
 	struct arm_smmu_device *smmu = NULL;
 	struct arm_smmu_master_cfg *cfg;
 	struct iommu_fwspec *fwspec = dev_iommu_fwspec_get(dev);
-	int i, ret;
+	int i, num, ret;
+	u32 fwid;
 
 	if (using_legacy_binding) {
 		ret = arm_smmu_register_legacy_master(dev, &smmu);
@@ -1389,6 +1435,25 @@ static struct iommu_device *arm_smmu_probe_device(struct device *dev)
 		smmu = arm_smmu_get_by_fwnode(fwspec->iommu_fwnode);
 	} else {
 		return ERR_PTR(-ENODEV);
+	}
+
+	if (ft2000_iommu_hwfix) {
+		ret = arm_smmu_quirk_add_device(dev);
+		if (ret)
+			goto out_free;
+
+		/*
+		 * add by qiuwenbo, yanzhiwei
+		 * 2020/3/18
+		 * The read id is added to the device table to
+		 * make the device a multi-id device, and the subsequent
+		 * logic is handled by the iommu driver itself.
+		 */
+		num = fwspec->num_ids;
+		for (i = 0; i < num; i++) {
+			fwid = FWID_READ(fwspec->ids[i]);
+			iommu_fwspec_add_ids(dev, &fwid, 1);
+		}
 	}
 
 	ret = -EINVAL;
@@ -1475,12 +1540,23 @@ static struct iommu_group *arm_smmu_device_group(struct device *dev)
 	struct iommu_group *group = NULL;
 	int i, idx;
 
-	for_each_cfg_sme(cfg, fwspec, i, idx) {
-		if (group && smmu->s2crs[idx].group &&
-		    group != smmu->s2crs[idx].group)
-			return ERR_PTR(-EINVAL);
+	if (!(typeof_ft2000plus() || typeof_s2500())) {
+		for_each_cfg_sme(cfg, fwspec, i, idx) {
+			if (group && smmu->s2crs[idx].group &&
+			    group != smmu->s2crs[idx].group) {
+				dev_warn(smmu->dev,
+					 "unable handle %s stream conflict\n",
+					 dev_name(dev));
+				return ERR_PTR(-EINVAL);
+			}
 
-		group = smmu->s2crs[idx].group;
+			if (ft2000_iommu_hwfix) {
+				if (smmu->s2crs[idx].group)
+					group = smmu->s2crs[idx].group;
+			} else {
+				group = smmu->s2crs[idx].group;
+			}
+		}
 	}
 
 	if (group)

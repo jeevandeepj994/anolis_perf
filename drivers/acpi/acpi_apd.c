@@ -182,6 +182,12 @@ static const struct apd_device_desc hip08_spi_desc = {
 	.setup = acpi_apd_setup,
 	.fixed_clk_rate = 250000000,
 };
+
+static const struct apd_device_desc phytium_i2c_desc = {
+	.setup = acpi_apd_setup,
+	.fixed_clk_rate = 200000000,
+};
+
 #endif /* CONFIG_ARM64 */
 
 #endif
@@ -250,6 +256,7 @@ static const struct acpi_device_id acpi_apd_device_ids[] = {
 	{ "HISI02A2", APD_ADDR(hip08_i2c_desc) },
 	{ "HISI02A3", APD_ADDR(hip08_lite_i2c_desc) },
 	{ "HISI0173", APD_ADDR(hip08_spi_desc) },
+	{ "PHYT0003", APD_ADDR(phytium_i2c_desc) },
 	{ "NXP0001", APD_ADDR(nxp_i2c_desc) },
 	{ "BABA8000", APD_ADDR(baba_i2c_desc) },
 	{ "BABA8030", APD_ADDR(baba_spi_desc)},
