@@ -1023,8 +1023,10 @@ static void smc_conn_abort(struct smc_sock *smc, int local_first)
 		lgr_valid = true;
 
 	smc_conn_free(conn);
-	if (local_first && lgr_valid)
+	if (local_first && lgr_valid) {
+		smc->keep_clcsock = false;
 		smc_lgr_cleanup_early(lgr);
+	}
 }
 
 /* check if there is a rdma device available for this connection. */
