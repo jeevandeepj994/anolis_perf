@@ -1284,6 +1284,7 @@ static __always_inline bool free_pages_prepare(struct page *page,
 	}
 	if (PageMappingFlags(page))
 		page->mapping = NULL;
+	set_page_private(page, 0);
 	if (memcg_kmem_enabled() && PageKmemcg(page))
 		__memcg_kmem_uncharge_page(page, order);
 	if (check_free)
