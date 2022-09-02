@@ -876,6 +876,7 @@ static void smc_ib_cleanup_cq(struct smc_ib_device *smcibdev)
 			ib_destroy_cq(smcibdev->smcibcq[i].ib_cq);
 		}
 	}
+	smc_wr_remove_dev(smcibdev);
 
 	kfree(smcibdev->smcibcq);
 }
@@ -943,7 +944,6 @@ static void smc_ib_cleanup_per_ibdev(struct smc_ib_device *smcibdev)
 		goto out;
 	smcibdev->initialized = 0;
 	smc_ib_cleanup_cq(smcibdev);
-	smc_wr_remove_dev(smcibdev);
 out:
 	mutex_unlock(&smcibdev->mutex);
 }
