@@ -2636,7 +2636,7 @@ out:
 static int smcr_buf_map_usable_links(struct smc_link_group *lgr,
 				     struct smc_buf_desc *buf_desc, bool is_rmb)
 {
-	int i, rc = 0;
+	int i, rc = 0, lnk_cnt = 0;
 
 	/* protect against parallel link reconfiguration */
 	mutex_lock(&lgr->llc_conf_mutex);
@@ -2649,9 +2649,12 @@ static int smcr_buf_map_usable_links(struct smc_link_group *lgr,
 			rc = -ENOMEM;
 			goto out;
 		}
+		lnk_cnt++;
 	}
 out:
 	mutex_unlock(&lgr->llc_conf_mutex);
+	if (!lnk_cnt)
+		rc = -EINVAL;
 	return rc;
 }
 
@@ -2701,6 +2704,7 @@ static int __smc_buf_create(struct smc_sock *smc, bool is_smcd, bool is_rmb)
 	bool is_dgraded = false;
 	struct mutex *lock;	/* lock buffer list */
 	int sk_buf_size;
+	int rc = 0;
 
 	if (is_rmb)
 		/* use socket recv buffer size (w/o overhead) as start value */
@@ -2757,9 +2761,10 @@ static int __smc_buf_create(struct smc_sock *smc, bool is_smcd, bool is_rmb)
 		return PTR_ERR(buf_desc);
 
 	if (!is_smcd) {
-		if (smcr_buf_map_usable_links(lgr, buf_desc, is_rmb)) {
+		rc = smcr_buf_map_usable_links(lgr, buf_desc, is_rmb);
+		if (rc) {
 			smcr_buf_unuse(buf_desc, is_rmb, lgr);
-			return -ENOMEM;
+			return rc;
 		}
 	}
 
