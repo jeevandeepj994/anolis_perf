@@ -627,10 +627,19 @@ int smcd_nl_get_lgr(struct sk_buff *skb, struct netlink_callback *cb)
 
 void smc_lgr_cleanup_early(struct smc_link_group *lgr)
 {
+	struct smc_link *link;
 	spinlock_t *lgr_lock;
+	u8 link_idx;
 
 	if (!lgr)
 		return;
+
+	/* ONLY one link expected */
+	link_idx = SMC_SINGLE_LINK;
+	link = &lgr->lnk[link_idx];
+	if (link)
+		/* current is fallback, do not release clcsock */
+		link->clcsock = NULL;
 
 	smc_lgr_list_head(lgr, &lgr_lock);
 	spin_lock_bh(lgr_lock);
@@ -1979,6 +1988,7 @@ create:
 		rc = smc_lgr_register_conn(conn, true);
 		write_unlock_bh(&lgr->conns_lock);
 		if (rc) {
+			smc->keep_clcsock = false;
 			smc_lgr_cleanup_early(lgr);
 			goto out;
 		}
