@@ -561,10 +561,14 @@ int intel_svm_bind_gpasid(struct iommu_domain *domain,
 	 * call the nested mode setup function here.
 	 */
 	spin_lock_irqsave(&iommu->lock, iflags);
-	ret = intel_pasid_setup_nested(iommu, dev,
-				       (pgd_t *)(uintptr_t)data->gpgd,
-				       data->hpasid, &data->vendor.vtd, dmar_domain,
-				       data->addr_width);
+	if (data->flags & IOMMU_SVA_SL_ONLY) {
+		ret = intel_pasid_setup_second_level(iommu, dmar_domain, dev, data->hpasid);
+	} else {
+		ret = intel_pasid_setup_nested(iommu, dev,
+					       (pgd_t *)(uintptr_t)data->gpgd,
+					       data->hpasid, &data->vendor.vtd, dmar_domain,
+					       data->addr_width);
+	}
 	spin_unlock_irqrestore(&iommu->lock, iflags);
 	if (ret) {
 		dev_err_ratelimited(dev, "Failed to set up PASID %llu in nested mode, Err %d\n",
