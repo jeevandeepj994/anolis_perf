@@ -150,6 +150,7 @@
  * CLR_HANDSHAKE: FW is waiting for HANDSHAKE from BIOS or Driver
  * HOTPLUG	: Resume from Hotplug
  * MFI_STOP_ADP	: Send signal to FW to stop processing
+ * MFI_ADP_TRIGGER_SNAP_DUMP: Inform firmware to initiate snap dump
  */
 #define WRITE_SEQUENCE_OFFSET		(0x0000000FC) /* I20 */
 #define HOST_DIAGNOSTIC_OFFSET		(0x000000F8)  /* I20 */
@@ -166,6 +167,7 @@
 #define MFI_RESET_FLAGS				MFI_INIT_READY| \
 						MFI_INIT_MFIMODE| \
 						MFI_INIT_ABORT
+#define MFI_ADP_TRIGGER_SNAP_DUMP		0x00000100
 #define MPI2_IOCINIT_MSGFLAG_RDPQ_ARRAY_MODE    (0x01)
 
 /*
@@ -794,6 +796,38 @@ struct MR_LD_TARGETID_LIST {
 	u8	targetId[MAX_LOGICAL_DRIVES_EXT];
 };
 
+struct MR_HOST_DEVICE_LIST_ENTRY {
+	struct {
+		union {
+			struct {
+#if defined(__BIG_ENDIAN_BITFIELD)
+				u8 reserved:7;
+				u8 is_sys_pd:1;
+#else
+				u8 is_sys_pd:1;
+				u8 reserved:7;
+#endif
+			} bits;
+			u8 byte;
+		} u;
+	} flags;
+	u8 scsi_type;
+	__le16 target_id;
+	u8 reserved[4];
+	__le64 sas_addr[2];
+} __packed;
+
+struct MR_HOST_DEVICE_LIST {
+	__le32			size;
+	__le32			count;
+	__le32			reserved[2];
+	struct MR_HOST_DEVICE_LIST_ENTRY	host_device_list[1];
+} __packed;
+
+#define HOST_DEVICE_LIST_SZ (sizeof(struct MR_HOST_DEVICE_LIST) +	       \
+			      (sizeof(struct MR_HOST_DEVICE_LIST_ENTRY) *      \
+			      (MEGASAS_MAX_PD + MAX_LOGICAL_DRIVES_EXT - 1)))
+
 
 /*
  * SAS controller properties
@@ -868,8 +902,26 @@ struct megasas_ctrl_prop {
 		u32     reserved:18;
 #endif
 	} OnOffProperties;
-	u8 autoSnapVDSpace;
-	u8 viewSpace;
+
+	union {
+		u8 autoSnapVDSpace;
+		u8 viewSpace;
+		struct {
+#if   defined(__BIG_ENDIAN_BITFIELD)
+			u16 reserved3:9;
+			u16 enable_fw_dev_list:1;
+			u16 reserved2:1;
+			u16 enable_snap_dump:1;
+			u16 reserved1:4;
+#else
+			u16 reserved1:4;
+			u16 enable_snap_dump:1;
+			u16 reserved2:1;
+			u16 enable_fw_dev_list:1;
+			u16 reserved3:9;
+#endif
+		} on_off_properties2;
+	};
 	__le16 spinDownTime;
 	u8  reserved[24];
 } __packed;
@@ -1680,7 +1732,8 @@ union megasas_sgl_frame {
 typedef union _MFI_CAPABILITIES {
 	struct {
 #if   defined(__BIG_ENDIAN_BITFIELD)
-	u32     reserved:17;
+	u32     reserved:16;
+	u32	support_fw_exposed_dev_list:1;
 	u32	support_nvme_passthru:1;
 	u32     support_64bit_mode:1;
 	u32 support_pd_map_target_id:1;
@@ -1712,7 +1765,8 @@ typedef union _MFI_CAPABILITIES {
 	u32	support_pd_map_target_id:1;
 	u32     support_64bit_mode:1;
 	u32	support_nvme_passthru:1;
-	u32     reserved:17;
+	u32	support_fw_exposed_dev_list:1;
+	u32     reserved:16;
 #endif
 	} mfi_capabilities;
 	__le32		reg;
@@ -2217,6 +2271,12 @@ struct megasas_instance {
 	struct MR_LD_TARGETID_LIST *ld_targetid_list_buf;
 	dma_addr_t ld_targetid_list_buf_h;
 
+	struct MR_HOST_DEVICE_LIST *host_device_list_buf;
+	dma_addr_t host_device_list_buf_h;
+
+	struct MR_SNAPDUMP_PROPERTIES *snapdump_prop;
+	dma_addr_t snapdump_prop_h;
+
 	void *crash_buf[MAX_CRASH_DUMP_SIZE];
 	unsigned int    fw_crash_buffer_size;
 	unsigned int    fw_crash_state;
@@ -2348,6 +2408,8 @@ struct megasas_instance {
 	bool support_nvme_passthru;
 	u8 task_abort_tmo;
 	u8 max_reset_tmo;
+	u8 snapdump_wait_time;
+	u8 enable_fw_dev_list;
 	bool support_seqnum_jbod_fp;
 	bool atomic_desc_support;
 	u8  low_latency_index_start;
@@ -2578,6 +2640,7 @@ void megasas_set_dynamic_target_properties(struct scsi_device *sdev,
 					   bool is_target_prop);
 int megasas_get_target_prop(struct megasas_instance *instance,
 			    struct scsi_device *sdev);
+void megasas_get_snapdump_properties(struct megasas_instance *instance);
 
 int megasas_set_crash_dump_params(struct megasas_instance *instance,
 	u8 crash_buf_state);
