@@ -2517,7 +2517,6 @@ static void smc_listen_work(struct work_struct *work)
 		if (rc)
 			goto out_unlock;
 	}
-	smc_conn_leave_rtoken_pending(new_smc, ini);
 	smc_conn_save_peer_info(new_smc, cclc);
 	smc_listen_out_connected(new_smc);
 	SMC_STAT_SERV_SUCC_INC(sock_net(newclcsock->sk), ini);
@@ -2527,7 +2526,6 @@ out_unlock:
 	if (ini->is_smcd)
 		mutex_unlock(&smc_server_lgr_pending);
 out_decl:
-	smc_conn_leave_rtoken_pending(new_smc, ini);
 	smc_listen_decline(new_smc, rc, ini ? ini->first_contact_local : 0,
 			   proposal_version);
 out_free:

@@ -317,9 +317,6 @@ struct smc_link_group {
 	struct rb_root		conns_all;	/* connection tree */
 	rwlock_t		conns_lock;	/* protects conns_all */
 	unsigned int		conns_num;	/* current # of connections */
-	atomic_t		rtoken_pendings;/* number of connection that
-						 * lgr assigned but no rtoken got yet
-						 */
 	unsigned short		vlan_id;	/* vlan id of link group */
 
 	struct list_head	sndbufs[SMC_RMBE_SIZES];/* tx buffers */
@@ -631,21 +628,6 @@ int smcr_nl_get_link(struct sk_buff *skb, struct netlink_callback *cb);
 int smcd_nl_get_lgr(struct sk_buff *skb, struct netlink_callback *cb);
 
 void smcr_link_cluster_on_link_state(struct smc_link *lnk);
-static inline void smc_conn_enter_rtoken_pending(struct smc_sock *smc, struct smc_init_info *ini)
-{
-	struct smc_link_group *lgr = smc->conn.lgr;
-
-	if (lgr && !ini->first_contact_local)
-		atomic_inc(&lgr->rtoken_pendings);
-}
-
-static inline void smc_conn_leave_rtoken_pending(struct smc_sock *smc, struct smc_init_info *ini)
-{
-	struct smc_link_group *lgr = smc->conn.lgr;
-
-	if (lgr && !ini->first_contact_local)
-		atomic_dec(&lgr->rtoken_pendings);
-}
 
 static inline struct smc_link_group *smc_get_lgr(struct smc_link *link)
 {
