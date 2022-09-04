@@ -15,7 +15,6 @@
 #include <linux/atomic.h>
 #include <linux/smc.h>
 #include <linux/pci.h>
-#include <linux/rhashtable.h>
 #include <rdma/ib_verbs.h>
 #include <net/genetlink.h>
 
@@ -35,51 +34,9 @@ struct smc_lgr_list {			/* list of link group definition */
 	u32			num;	/* unique link group number */
 };
 
-struct smc_lgr_manager {		/* manager for link group */
-	struct rhashtable	link_cluster_maps;	/* maps of smc_link_cluster */
-	spinlock_t		lock;	/* lock for lgr_cm_maps */
-};
-
-struct smc_link_cluster {
-	struct rhash_head	rnode;	/* node for rhashtable */
-	struct wait_queue_head	first_contact_waitqueue;
-					/* queue for non first contact to wait
-					 * first contact to be established.
-					 */
-	spinlock_t		lock;	/* protection for link group */
-	refcount_t		ref;	/* refcount for cluster */
-	unsigned long		pending_capability;
-					/* maximum pending number of connections that
-					 * need wait first contact complete.
-					 */
-	unsigned long		conns_pending;
-					/* connections that are waiting for first contact
-					 * complete
-					 */
-	u32					lacking_first_contact;
-					/* indicate that the connection
-					 * should perform first contact.
-					 */
-	u8		peer_systemid[SMC_SYSTEMID_LEN];
-	u8		peer_mac[ETH_ALEN];	/* = gid[8:10||13:15] */
-	u8		peer_gid[SMC_GID_SIZE];	/* gid of peer*/
-	int		clcqpn;
-	int		role;
-};
-
 enum smc_lgr_role {		/* possible roles of a link group */
 	SMC_CLNT,	/* client */
 	SMC_SERV	/* server */
-};
-
-struct smc_link_cluster_compare_arg	/* key for smc_link_cluster */
-{
-	int	smcr_version;
-	enum smc_lgr_role role;
-	u8	*peer_systemid;
-	u8	*peer_gid;
-	u8	*peer_mac;
-	int clcqpn;
 };
 
 enum smc_link_state {			/* possible states of a link */
@@ -87,13 +44,7 @@ enum smc_link_state {			/* possible states of a link */
 	SMC_LNK_INACTIVE,	/* link is inactive */
 	SMC_LNK_ACTIVATING,	/* link is being activated */
 	SMC_LNK_ACTIVE,		/* link is active */
-	SMC_LNK_TEAR_DOWN,	/* link is tear down */
 };
-
-#define SMC_LNK_STATE_BIT(state)	(1 << (state))
-
-#define	SMC_LNK_STATE_RECORD(lnk, state)	\
-	((lnk)->state_record |= SMC_LNK_STATE_BIT(state))
 
 #define SMC_WR_BUF_SIZE		48	/* size of work request buffer */
 #define SMC_WR_BUF_V2_SIZE	8192	/* size of v2 work request buffer */
@@ -165,7 +116,6 @@ struct smc_link {
 	u32			wr_tx_cnt;	/* number of WR send buffers */
 	wait_queue_head_t	wr_tx_wait;	/* wait for free WR send buf */
 	atomic_t		wr_tx_refcnt;	/* tx refs to link */
-	rwlock_t		rtokens_lock;
 
 	struct smc_wr_buf	*wr_rx_bufs;	/* WR recv payload buffers */
 	struct ib_recv_wr	*wr_rx_ibs;	/* WR recv meta data */
@@ -213,7 +163,6 @@ struct smc_link {
 	int			ndev_ifidx; /* network device ifindex */
 
 	enum smc_link_state	state;		/* state of link */
-	int			state_record;		/* record of previous state */
 	struct delayed_work	llc_testlink_wrk; /* testlink worker */
 	struct completion	llc_testlink_resp; /* wait for rx of testlink */
 	int			llc_testlink_time; /* testlink interval */
@@ -626,8 +575,6 @@ int smc_nl_get_sys_info(struct sk_buff *skb, struct netlink_callback *cb);
 int smcr_nl_get_lgr(struct sk_buff *skb, struct netlink_callback *cb);
 int smcr_nl_get_link(struct sk_buff *skb, struct netlink_callback *cb);
 int smcd_nl_get_lgr(struct sk_buff *skb, struct netlink_callback *cb);
-
-void smcr_link_cluster_on_link_state(struct smc_link *lnk);
 
 static inline struct smc_link_group *smc_get_lgr(struct smc_link *link)
 {
