@@ -1022,8 +1022,10 @@ static void smc_conn_abort(struct smc_sock *smc, int local_first)
 		lgr_valid = true;
 
 	smc_conn_free(conn);
-	if (local_first && lgr_valid)
+	if (local_first && lgr_valid) {
+		smc->keep_clcsock = false;
 		smc_lgr_cleanup_early(lgr);
+	}
 }
 
 /* check if there is a rdma device available for this connection. */
@@ -1278,8 +1280,10 @@ static int smc_connect_rdma(struct smc_sock *smc,
 	if (reason_code)
 		return reason_code;
 
+	mutex_lock(&smc_client_lgr_pending);
 	reason_code = smc_conn_create(smc, ini);
 	if (reason_code) {
+		mutex_unlock(&smc_client_lgr_pending);
 		return reason_code;
 	}
 
@@ -1376,6 +1380,7 @@ static int smc_connect_rdma(struct smc_sock *smc,
 		if (reason_code)
 			goto connect_abort;
 	}
+	mutex_unlock(&smc_client_lgr_pending);
 
 	smc_copy_sock_settings_to_clc(smc);
 	smc->connect_nonblock = 0;
@@ -1385,6 +1390,7 @@ static int smc_connect_rdma(struct smc_sock *smc,
 	return 0;
 connect_abort:
 	smc_conn_abort(smc, ini->first_contact_local);
+	mutex_unlock(&smc_client_lgr_pending);
 	smc->connect_nonblock = 0;
 
 	return reason_code;
@@ -2477,8 +2483,7 @@ static void smc_listen_work(struct work_struct *work)
 	if (rc)
 		goto out_decl;
 
-	if (ini->is_smcd)
-		mutex_lock(&smc_server_lgr_pending);
+	mutex_lock(&smc_server_lgr_pending);
 	smc_close_init(new_smc);
 	smc_rx_init(new_smc);
 	smc_tx_init(new_smc);
@@ -2505,6 +2510,8 @@ static void smc_listen_work(struct work_struct *work)
 	rc = smc_clc_wait_msg(new_smc, cclc, sizeof(*buf),
 			      SMC_CLC_CONFIRM, CLC_WAIT_TIME);
 	if (rc) {
+		if (!ini->is_smcd)
+			goto out_unlock;
 		goto out_decl;
 	}
 
@@ -2514,18 +2521,16 @@ static void smc_listen_work(struct work_struct *work)
 					    ini->first_contact_local, ini);
 		if (rc)
 			goto out_unlock;
+		mutex_unlock(&smc_server_lgr_pending);
 	}
-	smc_conn_leave_rtoken_pending(new_smc, ini);
 	smc_conn_save_peer_info(new_smc, cclc);
 	smc_listen_out_connected(new_smc);
 	SMC_STAT_SERV_SUCC_INC(sock_net(newclcsock->sk), ini);
 	goto out_free;
 
 out_unlock:
-	if (ini->is_smcd)
-		mutex_unlock(&smc_server_lgr_pending);
+	mutex_unlock(&smc_server_lgr_pending);
 out_decl:
-	smc_conn_leave_rtoken_pending(new_smc, ini);
 	smc_listen_decline(new_smc, rc, ini ? ini->first_contact_local : 0,
 			   proposal_version);
 out_free:

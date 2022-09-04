@@ -116,6 +116,9 @@ int smc_cdc_msg_send(struct smc_connection *conn,
 	u8 saved_credits = 0;
 	int rc;
 
+	if (unlikely(!READ_ONCE(conn->sndbuf_desc)))
+		return -EINVAL;
+
 	smc_cdc_add_pending_send(conn, pend);
 
 	conn->tx_cdc_seq++;
