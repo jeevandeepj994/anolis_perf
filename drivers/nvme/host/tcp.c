@@ -1037,7 +1037,7 @@ static void nvme_tcp_io_work(struct work_struct *w)
 		if (result > 0)
 			pending = true;
 
-		if (!pending)
+		if (!pending || !queue->rd_enabled)
 			return;
 
 	} while (time_after(jiffies, start)); /* quota is exhausted */
