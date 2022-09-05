@@ -156,6 +156,18 @@ int sysctl_sched_expel_idle_balance_delay = -1;
  */
 unsigned long sysctl_sched_expel_update_interval = 10;
 #endif
+DEFINE_STATIC_KEY_FALSE(__group_identity_enabled);
+unsigned int sysctl_sched_group_indentity_enabled;
+/*
+ * We introduce a counter group_identity_count to indicate how many cgroups have
+ * enabled group identity, and introduced a function group_identity_enabled() to
+ * indicate whether there are cgroups with group identity enabled, that is, if
+ * group_identity_count is zero, group_identity_enabled() returns false, otherwise
+ * returns true.
+ *
+ * Ensure that identity_mutex is hold before modify group_identity_count.
+ */
+static atomic_t group_identity_count;
 #endif
 
 /*
@@ -609,14 +621,29 @@ static inline bool test_identity(struct sched_entity *se, int flags)
 	return se->id_flags & flags;
 }
 
-static inline bool is_underclass(struct sched_entity *se)
+static inline bool __is_underclass(struct sched_entity *se)
 {
 	return test_identity(se, ID_UNDERCLASS);
 }
 
-static inline bool is_highclass(struct sched_entity *se)
+static inline bool is_underclass(struct sched_entity *se)
+{
+	if (group_identity_disabled())
+		return false;
+	return __is_underclass(se);
+}
+
+static inline bool __is_highclass(struct sched_entity *se)
 {
 	return test_identity(se, ID_HIGHCLASS);
+}
+
+static inline bool is_highclass(struct sched_entity *se)
+{
+	if (group_identity_disabled())
+		return true;
+
+	return __is_highclass(se);
 }
 
 static inline bool is_expeller(struct sched_entity *se)
@@ -643,17 +670,6 @@ static inline bool underclass_only(int cpu)
 }
 
 #ifdef CONFIG_SCHED_SMT
-/*
- * This helper tell us if the cpu is on expel and full of expellee tasks.
- *
- * Such cpu may become idle with underclass enqueued for long time,
- * thus we need to trigger nohz load balance for it when it's possible.
- */
-static inline bool expellee_only(struct rq *rq)
-{
-	return rq->on_expel && !rq->nr_expel_immune && rq->cfs.h_nr_running;
-}
-
 static inline bool need_expel(int this_cpu)
 {
 	int cpu;
@@ -695,6 +711,9 @@ static __always_inline void __update_rq_on_expel(struct rq *rq)
  */
 static __always_inline void update_rq_on_expel(struct rq *rq)
 {
+	if (group_identity_disabled())
+		return;
+
 	if (sched_feat(ID_LOOSE_EXPEL)) {
 		if (!rq->nr_under_running
 		    || !time_after(jiffies, rq->next_expel_update))
@@ -706,9 +725,31 @@ static __always_inline void update_rq_on_expel(struct rq *rq)
 	__update_rq_on_expel(rq);
 }
 
-static inline bool rq_on_expel(struct rq *rq)
+static inline bool __rq_on_expel(struct rq *rq)
 {
 	return rq->on_expel;
+}
+
+static inline bool rq_on_expel(struct rq *rq)
+{
+	if (group_identity_disabled())
+		return false;
+
+	return __rq_on_expel(rq);
+}
+
+/*
+ * This helper tell us if the cpu is on expel and full of expellee tasks.
+ *
+ * Such cpu may become idle with underclass enqueued for long time,
+ * thus we need to trigger nohz load balance for it when it's possible.
+ */
+static inline bool expellee_only(struct rq *rq)
+{
+	if (group_identity_disabled())
+		return false;
+
+	return __rq_on_expel(rq) && !rq->nr_expel_immune && rq->cfs.h_nr_running;
 }
 
 static inline bool expel_ib_disallow(struct rq *rq)
@@ -742,7 +783,7 @@ static inline bool __is_expel_immune(struct sched_entity *se, bool wakeup)
 	/* To expel if hierarchy contain underclass identity */
 	rcu_read_lock();
 	for_each_sched_entity(se) {
-		if (is_underclass(se) ||
+		if (__is_underclass(se) ||
 		   (!wakeup && expellee_se(se))) {
 			ret = false;
 			break;
@@ -758,9 +799,17 @@ static inline bool is_expel_immune(struct sched_entity *se)
 	return __is_expel_immune(se, false);
 }
 
-static inline bool is_expellee_task(struct task_struct *p)
+static inline bool __is_expellee_task(struct task_struct *p)
 {
 	return !__is_expel_immune(&p->se, true);
+}
+
+static inline bool is_expellee_task(struct task_struct *p)
+{
+	if (group_identity_disabled())
+		return false;
+
+	return __is_expellee_task(p);
 }
 
 static inline unsigned long expel_score(struct rq *rq)
@@ -789,6 +838,11 @@ static inline void update_rq_on_expel(struct rq *rq)
 {
 }
 
+static inline bool __rq_on_expel(struct rq *rq)
+{
+	return false;
+}
+
 static inline bool rq_on_expel(struct rq *rq)
 {
 	return false;
@@ -809,6 +863,11 @@ static inline bool is_expel_immune(struct sched_entity *se)
 	return true;
 }
 
+static inline bool __is_expellee_task(struct task_struct *p)
+{
+	return false;
+}
+
 static inline bool is_expellee_task(struct task_struct *p)
 {
 	return false;
@@ -820,15 +879,23 @@ static inline unsigned long expel_score(struct rq *rq)
 }
 #endif
 
-static inline bool is_highclass_task(struct task_struct *p)
+static inline bool __is_highclass_task(struct task_struct *p)
 {
 	bool ret;
 
 	rcu_read_lock();
-	ret = p->se.parent ? is_highclass(p->se.parent) : false;
+	ret = p->se.parent ? __is_highclass(p->se.parent) : false;
 	rcu_read_unlock();
 
 	return ret;
+}
+
+static inline bool is_highclass_task(struct task_struct *p)
+{
+	if (group_identity_disabled())
+		return false;
+
+	return __is_highclass_task(p);
 }
 
 /*
@@ -837,7 +904,10 @@ static inline bool is_highclass_task(struct task_struct *p)
  */
 static inline bool should_expel_se(struct rq *rq, struct sched_entity *se)
 {
-	return rq_on_expel(rq) && !is_expel_immune(se);
+	if (group_identity_disabled())
+		return false;
+
+	return __rq_on_expel(rq) && !is_expel_immune(se);
 }
 
 static inline bool task_is_expeller(struct task_struct *p)
@@ -858,7 +928,7 @@ static inline bool is_underclass_task(struct task_struct *p)
 	bool ret;
 
 	rcu_read_lock();
-	ret = p->se.parent ? is_underclass(p->se.parent) : false;
+	ret = p->se.parent ? __is_underclass(p->se.parent) : false;
 	rcu_read_unlock();
 	return ret;
 }
@@ -878,6 +948,9 @@ static inline bool is_idle_seeker_task(struct task_struct *p)
 {
 	bool ret;
 
+	if (group_identity_disabled())
+		return false;
+
 	rcu_read_lock();
 	ret = p->se.parent ? is_idle_seeker(p->se.parent) : false;
 	rcu_read_unlock();
@@ -889,26 +962,26 @@ static noinline int
 id_can_migrate_task(struct task_struct *p, struct rq *src_rq, struct rq *dst_rq)
 {
 	/* Do not migrate the last highclass, try someone else */
-	if (sched_feat(ID_LAST_HIGHCLASS_STAY) && is_highclass_task(p)
+	if (sched_feat(ID_LAST_HIGHCLASS_STAY) && __is_highclass_task(p)
 	    && src_rq->nr_high_running < 2)
 		goto bad_dst;
 
 	if (!sched_feat(ID_EXPELLER_SHARE_CORE) &&
-	    task_is_expeller(p) && rq_on_expel(dst_rq))
+	    task_is_expeller(p) && __rq_on_expel(dst_rq))
 		goto bad_dst;
 
-	if (!is_expellee_task(p))
+	if (!__is_expellee_task(p))
 		return -1;
 
 	/* Do not migrate expellee task to CPU on expel */
-	if (rq_on_expel(dst_rq))
+	if (__rq_on_expel(dst_rq))
 		goto bad_dst;
 
 	if (sched_feat(ID_EXPELLEE_NEVER_HOT))
 		goto good_dst;
 
 	/* Pass if both are not on expel */
-	if (!rq_on_expel(src_rq))
+	if (!__rq_on_expel(src_rq))
 		return -1;
 
 	if (!sched_feat(ID_RESCUE_EXPELLEE))
@@ -927,15 +1000,20 @@ bad_dst:
 static noinline bool
 id_wake_affine(struct task_struct *p, int this_cpu, int prev_cpu)
 {
-	struct rq *this_rq = cpu_rq(this_cpu);
-	struct rq *prev_rq = cpu_rq(prev_cpu);
+	struct rq *this_rq;
+	struct rq *prev_rq;
 
+	if (group_identity_disabled())
+		return true;
+
+	this_rq = cpu_rq(this_cpu);
+	prev_rq = cpu_rq(prev_cpu);
 	/* Last highclass should stay */
-	if (is_highclass_task(p) && prev_rq->nr_high_running < 1)
+	if (__is_highclass_task(p) && prev_rq->nr_high_running < 1)
 		return false;
 
 	/* Do not pull underclass to the cpu on expel */
-	if (is_expellee_task(p) && rq_on_expel(this_rq))
+	if (__is_expellee_task(p) && __rq_on_expel(this_rq))
 		return false;
 
 	return true;
@@ -944,11 +1022,19 @@ id_wake_affine(struct task_struct *p, int this_cpu, int prev_cpu)
 static noinline bool
 id_idle_cpu(struct task_struct *p, int cpu, bool expellee, bool *idle)
 {
-	struct rq *rq = cpu_rq(cpu);
-	bool need_expel = rq_on_expel(rq) && expellee;
-	bool is_saver = is_idle_saver_task(p);
+	struct rq *rq;
+	bool need_expel;
+	bool is_saver;
 	bool is_idle = available_idle_cpu(cpu);
-	u64 avg_idle = rq->avg_idle;
+	u64 avg_idle;
+
+	if (group_identity_disabled())
+		return is_idle;
+
+	rq = cpu_rq(cpu);
+	need_expel = __rq_on_expel(rq) && expellee;
+	is_saver = is_idle_saver_task(p);
+	avg_idle = rq->avg_idle;
 
 	if (idle)
 		*idle = is_idle;
@@ -973,7 +1059,7 @@ id_idle_cpu(struct task_struct *p, int cpu, bool expellee, bool *idle)
 	 * don't really need to worry about this.
 	 */
 	if (!sched_feat(ID_EXPELLER_SHARE_CORE) &&
-	    task_is_expeller(p) && rq_on_expel(rq))
+	    task_is_expeller(p) && __rq_on_expel(rq))
 		return false;
 
 	if (need_expel)
@@ -981,7 +1067,7 @@ id_idle_cpu(struct task_struct *p, int cpu, bool expellee, bool *idle)
 
 	/* CPU full of underclass is idle for highclass */
 	if (!is_idle)
-		return is_highclass_task(p) && underclass_only(cpu);
+		return __is_highclass_task(p) && underclass_only(cpu);
 
 	if (!is_saver)
 		return true;
@@ -998,18 +1084,26 @@ static noinline void
 id_update_make_up(struct task_group *tg, struct rq *rq, struct cfs_rq *cfs_rq,
 		  int coefficient)
 {
-	struct sched_entity *se = tg->se[cpu_of(rq)];
+	struct sched_entity *se;
 
-	if (is_highclass(se))
+	if (group_identity_disabled())
+		return;
+
+	se = tg->se[cpu_of(rq)];
+
+	if (__is_highclass(se))
 		rq->nr_high_make_up += coefficient * cfs_rq->nr_tasks;
 
-	if (is_underclass(se))
+	if (__is_underclass(se))
 		rq->nr_under_make_up += coefficient * cfs_rq->nr_tasks;
 }
 
 static noinline void
 id_commit_make_up(struct rq *rq, bool commit)
 {
+	if (group_identity_disabled())
+		return;
+
 	if (commit) {
 		rq->nr_high_running += rq->nr_high_make_up;
 		rq->nr_under_running += rq->nr_under_make_up;
@@ -1025,15 +1119,18 @@ id_update_nr_running(struct task_group *tg, struct rq *rq, long delta)
 {
 	struct sched_entity *se;
 
+	if (group_identity_disabled())
+		return;
+
 	if (!tg || tg == &root_task_group)
 		return;
 
 	se = tg->se[rq->cpu];
 
-	if (is_highclass(se))
+	if (__is_highclass(se))
 		rq->nr_high_running += delta;
 
-	if (is_underclass(se))
+	if (__is_underclass(se))
 		rq->nr_under_running += delta;
 }
 
@@ -1043,24 +1140,42 @@ static inline u64 get_expel_spread(struct cfs_rq *cfs_rq)
 	return cfs_rq->expel_spread;
 }
 
-static inline unsigned int get_h_nr_expel_immune(struct sched_entity *se)
+static inline unsigned int __get_h_nr_expel_immune(struct sched_entity *se)
 {
 	return se->my_q->h_nr_expel_immune;
+}
+
+static inline unsigned int get_h_nr_expel_immune(struct sched_entity *se)
+{
+	if (group_identity_disabled())
+		return 0;
+
+	return __get_h_nr_expel_immune(se);
+}
+
+static inline void
+__update_nr_expel_immune(struct cfs_rq *cfs_rq, struct sched_entity *se,
+		       bool *immune, long delta)
+{
+	if (!(*immune))
+		return;
+
+	*immune = !__is_underclass(se);
+	if (*immune) {
+		cfs_rq->h_nr_expel_immune += delta;
+		if (!se->parent)
+			cfs_rq->rq->nr_expel_immune += delta;
+	}
 }
 
 static inline void
 update_nr_expel_immune(struct cfs_rq *cfs_rq, struct sched_entity *se,
 		       bool *immune, long delta)
 {
-	if (!(*immune))
+	if (!group_identity_enabled(cfs_rq->rq))
 		return;
 
-	*immune = !is_underclass(se);
-	if (*immune) {
-		cfs_rq->h_nr_expel_immune += delta;
-		if (!se->parent)
-			cfs_rq->rq->nr_expel_immune += delta;
-	}
+	__update_nr_expel_immune(cfs_rq, se, immune, delta);
 }
 
 static inline int cfs_rq_throttled(struct cfs_rq *cfs_rq);
@@ -1071,13 +1186,18 @@ hierarchy_update_nr_expel_immune(struct sched_entity *se, long delta)
 	bool immune = true;
 
 	for_each_sched_entity(se) {
-		update_nr_expel_immune(cfs_rq_of(se), se, &immune, delta);
+		__update_nr_expel_immune(cfs_rq_of(se), se, &immune, delta);
 		if (cfs_rq_throttled(cfs_rq_of(se)))
 			break;
 	}
 }
 #else
 static inline u64 get_expel_spread(struct cfs_rq *cfs_rq)
+{
+	return 0;
+}
+
+static inline unsigned int __get_h_nr_expel_immune(struct sched_entity *se)
 {
 	return 0;
 }
@@ -1092,6 +1212,8 @@ update_nr_expel_immune(struct cfs_rq *cfs_rq, struct sched_entity *se,
 		       bool *immune, long delta)
 {
 }
+
+static inline int cfs_rq_throttled(struct cfs_rq *cfs_rq);
 
 static inline void
 hierarchy_update_nr_expel_immune(struct sched_entity *se, long delta)
@@ -1104,15 +1226,150 @@ static void __dequeue_entity(struct cfs_rq *cfs_rq, struct sched_entity *se);
 static void update_min_vruntime(struct cfs_rq *cfs_rq);
 static void update_curr(struct cfs_rq *cfs_rq);
 static inline u64
-id_min_vruntime(struct cfs_rq *cfs_rq, struct sched_entity *se);
+__id_min_vruntime(struct cfs_rq *cfs_rq, struct sched_entity *se);
 static inline int throttled_hierarchy(struct cfs_rq *cfs_rq);
+
+static int tg_clear_counters_down(struct task_group *tg, void *data)
+{
+	struct rq *rq = data;
+	struct cfs_rq *cfs_rq = tg->cfs_rq[cpu_of(rq)];
+
+	WARN_ONCE(!RB_EMPTY_ROOT(&cfs_rq->under_timeline.rb_root), "cfs_rq->undertimeline is not empty\n");
+#ifdef CONFIG_SCHED_SMT
+	cfs_rq->h_nr_expel_immune = 0;
+#endif
+	cfs_rq->nr_tasks = 0;
+
+	return 0;
+}
+
+static int __group_identity_flip(void *data)
+{
+	struct rq *rq;
+	struct rq_flags rf;
+	struct task_struct *p;
+	struct cfs_rq *cfs_rq;
+	struct sched_entity *se;
+	bool enable = (bool *)data;
+
+	rq = this_rq();
+	rq_lock(rq, &rf);
+	rq->nr_expel_immune = 0;
+
+	walk_tg_tree_from(&root_task_group, tg_clear_counters_down, tg_nop, (void *)rq);
+
+	if (!enable)
+		goto out;
+
+	list_for_each_entry(p, &rq->cfs_tasks, se.group_node) {
+		se = &p->se;
+		for_each_sched_entity(se) {
+			if (!se->on_rq)
+				break;
+			cfs_rq = cfs_rq_of(se);
+			cfs_rq->nr_tasks++;
+
+			if (cfs_rq_throttled(cfs_rq))
+				break;
+		}
+		se = &p->se;
+		hierarchy_update_nr_expel_immune(se, 1);
+	}
+
+out:
+	rq->gi_enabled = enable;
+	rq_unlock(rq, &rf);
+
+	return 0;
+}
+
+static inline void group_identity_flip(bool enable)
+{
+	int cpu;
+
+	cpus_read_lock();
+
+	stop_machine(__group_identity_flip, &enable, cpu_online_mask);
+
+	for_each_cpu_not(cpu, cpu_online_mask)
+		cpu_rq(cpu)->gi_enabled = enable;
+
+	cpus_read_unlock();
+}
+
+static void __group_identity_enable(void)
+{
+	static_branch_enable(&__group_identity_enabled);
+
+	synchronize_rcu();
+	group_identity_flip(true);
+}
+
+static void __group_identity_disable(void)
+{
+	group_identity_flip(false);
+
+	static_branch_disable(&__group_identity_enabled);
+}
+
+/* Before we call group_identity_get() and group_identity_put(), we have hold
+ * the lock identity_mutex, so the atomicity of enable/disable group identity
+ * can be guaranteed.
+ */
+void group_identity_get(void)
+{
+	lockdep_assert_held(&identity_mutex);
+	atomic_inc(&group_identity_count);
+}
+
+void group_identity_put(void)
+{
+	lockdep_assert_held(&identity_mutex);
+	atomic_dec(&group_identity_count);
+}
+
+int sched_group_identity_enable_handler(struct ctl_table *table, int write,
+		void __user *buffer, size_t *lenp,
+		loff_t *ppos)
+{
+	int ret;
+	unsigned int old, new;
+
+	mutex_lock(&identity_mutex);
+	if (atomic_read(&group_identity_count)) {
+		mutex_unlock(&identity_mutex);
+		return -EBUSY;
+	}
+	old = sysctl_sched_group_indentity_enabled;
+	ret = proc_dointvec_minmax(table, write, buffer, lenp, ppos);
+	new = sysctl_sched_group_indentity_enabled;
+	if (!ret && write && (old != new)) {
+		if (new)
+			__group_identity_enable();
+		else
+			__group_identity_disable();
+	}
+	mutex_unlock(&identity_mutex);
+	return ret;
+}
+
+#ifdef CONFIG_SCHED_SMT
+void __notify_smt_expeller(struct rq *rq, struct task_struct *p);
+#else
+void __notify_smt_expeller(struct rq *rq, struct task_struct *p) {}
+#endif
 
 static void __update_identity(struct task_group *tg, int flags)
 {
 	int cpu;
+	int old_id_flags;
 	struct rq_flags rf;
 
+	old_id_flags = tg->id_flags;
 	tg->id_flags = flags;
+
+	if (flags && !old_id_flags)
+		group_identity_get();
 
 	for_each_online_cpu(cpu) {
 		bool on_rq, throttled;
@@ -1127,7 +1384,7 @@ static void __update_identity(struct task_group *tg, int flags)
 		se = tg->se[cpu];
 		cfs_rq = cfs_rq_of(se);
 		delta = se->my_q->nr_tasks;
-		ei_delta = get_h_nr_expel_immune(se);
+		ei_delta = __get_h_nr_expel_immune(se);
 		on_rq = se->on_rq;
 		throttled = throttled_hierarchy(cfs_rq);
 
@@ -1139,13 +1396,13 @@ static void __update_identity(struct task_group *tg, int flags)
 				id_update_nr_running(tg, rq, -delta);
 
 			update_curr(cfs_rq);
-			se->vruntime -= id_min_vruntime(cfs_rq, se);
+			se->vruntime -= __id_min_vruntime(cfs_rq, se);
 		}
 
 		se->id_flags = flags;
 
 		if (on_rq) {
-			se->vruntime += id_min_vruntime(cfs_rq, se);
+			se->vruntime += __id_min_vruntime(cfs_rq, se);
 
 			if (se != cfs_rq->curr)
 				__enqueue_entity(cfs_rq, se);
@@ -1156,15 +1413,21 @@ static void __update_identity(struct task_group *tg, int flags)
 			update_min_vruntime(cfs_rq);
 		}
 
-		notify_smt_expeller(rq, rq->curr);
+		__notify_smt_expeller(rq, rq->curr);
 
 		rq_unlock_irq(rq, &rf);
 	}
+
+	if (!flags && old_id_flags)
+		group_identity_put();
 }
 
 int update_bvt_warp_ns(struct task_group *tg, s64 val)
 {
 	int flags = 0;
+
+	if (group_identity_disabled())
+		return -EINVAL;
 
 	/*
 	 * We can't change the bvt type of the root cgroup.
@@ -1203,6 +1466,10 @@ int update_bvt_warp_ns(struct task_group *tg, s64 val)
 
 int update_identity(struct task_group *tg, s64 val)
 {
+
+	if (group_identity_disabled())
+		return -EINVAL;
+
 	/*
 	 * We can't change the flags of the root cgroup.
 	 */
@@ -1223,6 +1490,16 @@ int update_identity(struct task_group *tg, s64 val)
 	return 0;
 }
 
+int clear_identity(struct task_group *tg)
+{
+	int err = 0;
+
+	if (tg->bvt_warp_ns != 0 || tg->id_flags != 0)
+		err = update_identity(tg, 0);
+
+	return err;
+}
+
 static inline void identity_init_cfs_rq(struct cfs_rq *cfs_rq)
 {
 	cfs_rq->under_timeline = RB_ROOT_CACHED;
@@ -1235,7 +1512,10 @@ static inline void identity_init_cfs_rq(struct cfs_rq *cfs_rq)
 static inline struct rb_root_cached *
 id_rb_root(struct cfs_rq *cfs_rq, struct sched_entity *se)
 {
-	if (is_underclass(se))
+	if (group_identity_disabled())
+		return &cfs_rq->tasks_timeline;
+
+	if (__is_underclass(se))
 		return &cfs_rq->under_timeline;
 
 	return &cfs_rq->tasks_timeline;
@@ -1246,6 +1526,9 @@ static inline void
 update_expel_start(struct cfs_rq *cfs_rq, struct sched_entity *se)
 {
 	u64 min_under_vruntime;
+
+	if (group_identity_disabled())
+		return;
 
 	if (cfs_rq->expel_start)
 		return;
@@ -1289,7 +1572,7 @@ static inline void check_expellee_se(struct cfs_rq *cfs_rq)
 	struct sched_entity *se, *tmp;
 
 	list_for_each_entry_safe(se, tmp, &cfs_rq->expel_list, expel_node) {
-		if (rq_on_expel(rq_of(cfs_rq)) && expellee_se(se))
+		if (__rq_on_expel(rq_of(cfs_rq)) && expellee_se(se))
 			continue;
 
 		list_del_init(&se->expel_node);
@@ -1348,6 +1631,9 @@ id_rb_first_cached(struct cfs_rq *cfs_rq)
 		&cfs_rq->under_timeline,
 	};
 
+	if (group_identity_disabled())
+		return rb_first_cached(&cfs_rq->tasks_timeline);
+
 	/*
 	 * Usually only tasks on under tree need expel, but there
 	 * is one special case, non-underclass cgroup with the
@@ -1368,7 +1654,7 @@ id_rb_first_cached(struct cfs_rq *cfs_rq)
 	 * they are no longer hidden.
 	 */
 	check_expellee_se(cfs_rq);
-	if (rq_on_expel(rq_of(cfs_rq)))
+	if (__rq_on_expel(rq_of(cfs_rq)))
 		return skip_expellee_se(cfs_rq);
 
 	/*
@@ -1404,23 +1690,41 @@ id_rb_first_cached(struct cfs_rq *cfs_rq)
  * Consider the 'expel_spread' when checking priority according
  * to vruntime.
  */
-static inline u64 id_vruntime(struct sched_entity *se)
+static inline u64 __id_vruntime(struct sched_entity *se)
 {
-	return is_underclass(se) ?
-		se->vruntime + get_expel_spread(cfs_rq_of(se)) : se->vruntime;
+	return __is_underclass(se) ? se->vruntime + get_expel_spread(cfs_rq_of(se)) : se->vruntime;
 }
 
-static inline int
+static inline u64 id_vruntime(struct sched_entity *se)
+{
+	if (group_identity_disabled())
+		return se->vruntime;
+
+	return __id_vruntime(se);
+}
+
+static inline bool
 id_entity_before(struct sched_entity *a, struct sched_entity *b)
 {
-	return (s64)(id_vruntime(a) - id_vruntime(b)) < 0;
+	if (group_identity_disabled())
+		return entity_before(a, b);
+
+	return (s64)(__id_vruntime(a) - __id_vruntime(b)) < 0;
+}
+
+static inline u64
+__id_min_vruntime(struct cfs_rq *cfs_rq, struct sched_entity *se)
+{
+	return __is_underclass(se) ? cfs_rq->min_under_vruntime : cfs_rq->min_vruntime;
 }
 
 static inline u64
 id_min_vruntime(struct cfs_rq *cfs_rq, struct sched_entity *se)
 {
-	return is_underclass(se) ?
-		cfs_rq->min_under_vruntime : cfs_rq->min_vruntime;
+	if (group_identity_disabled())
+		return cfs_rq->min_vruntime;
+
+	return __id_min_vruntime(cfs_rq, se);
 }
 
 /*
@@ -1446,13 +1750,13 @@ id_min_vruntime(struct cfs_rq *cfs_rq, struct sched_entity *se)
 static inline int
 id_preempt_underclass(struct sched_entity *curr, struct sched_entity *se)
 {
-	bool under_curr = is_underclass(curr);
-	bool under_se = is_underclass(se);
+	bool under_curr = __is_underclass(curr);
+	bool under_se = __is_underclass(se);
 
 	if (under_curr == under_se) {
 #ifdef CONFIG_SCHED_SMT
 		/* Full of expellee is also underclass when on expel */
-		if (rq_on_expel(rq_of(cfs_rq_of(curr)))) {
+		if (__rq_on_expel(rq_of(cfs_rq_of(curr)))) {
 			bool expel_curr = expellee_se(curr);
 			bool expel_se = expellee_se(se);
 
@@ -1469,8 +1773,8 @@ id_preempt_underclass(struct sched_entity *curr, struct sched_entity *se)
 static inline int
 id_preempt_highclass(struct sched_entity *curr, struct sched_entity *se)
 {
-	bool high_curr = is_highclass(curr);
-	bool high_se = is_highclass(se);
+	bool high_curr = __is_highclass(curr);
+	bool high_se = __is_highclass(se);
 
 	if (high_curr == high_se)
 		return 0;
@@ -1481,7 +1785,12 @@ id_preempt_highclass(struct sched_entity *curr, struct sched_entity *se)
 static inline int
 id_preempt_all(struct sched_entity *curr, struct sched_entity *se)
 {
-	int ret = id_preempt_highclass(curr, se);
+	int ret;
+
+	if (group_identity_disabled())
+		return 0;
+
+	ret = id_preempt_highclass(curr, se);
 
 	return ret == 0 ? id_preempt_underclass(curr, se) : ret;
 }
@@ -1498,13 +1807,13 @@ static inline void sync_min_vruntime(struct cfs_rq *cfs_rq)
 	bool no_curr = (!cfs_rq->curr || !cfs_rq->curr->on_rq);
 
 	if (!rb_first_cached(&cfs_rq->tasks_timeline) &&
-	    (no_curr || is_underclass(cfs_rq->curr))) {
+	    (no_curr || __is_underclass(cfs_rq->curr))) {
 		cfs_rq->min_vruntime = effect_vruntime;
 		sync_up = true;
 	}
 
 	if (!rb_first_cached(&cfs_rq->under_timeline) &&
-	    (no_curr || !is_underclass(cfs_rq->curr))) {
+	    (no_curr || !__is_underclass(cfs_rq->curr))) {
 		cfs_rq->min_under_vruntime = effect_vruntime;
 		sync_up = true;
 	}
@@ -1523,13 +1832,19 @@ static inline void sync_min_vruntime(struct cfs_rq *cfs_rq)
 
 static inline void update_under_min_vruntime(struct cfs_rq *cfs_rq)
 {
-	struct sched_entity *curr = cfs_rq->curr;
-	struct rb_node *leftmost = rb_first_cached(&cfs_rq->under_timeline);
+	struct sched_entity *curr;
+	struct rb_node *leftmost;
+	u64 vruntime;
 
-	u64 vruntime = cfs_rq->min_under_vruntime;
+	if (group_identity_disabled())
+		return;
+
+	curr = cfs_rq->curr;
+	leftmost = rb_first_cached(&cfs_rq->under_timeline);
+	vruntime = cfs_rq->min_under_vruntime;
 
 	if (curr) {
-		if (curr->on_rq && is_underclass(curr))
+		if (curr->on_rq && __is_underclass(curr))
 			vruntime = curr->vruntime;
 		else
 			curr = NULL;
@@ -1565,6 +1880,9 @@ void update_id_idle_avg(struct rq *rq, u64 delta)
 	s64 diff;
 	u64 max = sysctl_sched_idle_saver_wmark;
 
+	if (group_identity_disabled())
+		return;
+
 	delta += rq->under_exec_sum - rq->under_exec_stamp;
 	diff = delta - rq->avg_id_idle;
 	rq->avg_id_idle += diff >> 3;
@@ -1577,18 +1895,24 @@ void update_id_idle_avg(struct rq *rq, u64 delta)
 
 static inline void id_update_exec(struct rq *rq, u64 delta_exec)
 {
+	if (group_identity_disabled())
+		return;
+
 	if (is_underclass_task(rq->curr))
 		rq->under_exec_sum += delta_exec;
-	else if (is_highclass_task(rq->curr))
+	else if (__is_highclass_task(rq->curr))
 		rq->high_exec_sum += delta_exec;
 }
 
 #ifdef CONFIG_SCHED_SMT
-void notify_smt_expeller(struct rq *rq, struct task_struct *p)
+void __notify_smt_expeller(struct rq *rq, struct task_struct *p)
 {
 	int cpu, this_cpu = rq->cpu;
 	bool expeller = false;
 	bool expellee = false;
+
+	if (group_identity_disabled())
+		return;
 
 	if (p->sched_class == &fair_sched_class) {
 		expeller = task_is_expeller(p);
@@ -1610,6 +1934,14 @@ void notify_smt_expeller(struct rq *rq, struct task_struct *p)
 	}
 }
 
+void notify_smt_expeller(struct rq *rq, struct task_struct *p)
+{
+	if (group_identity_disabled())
+		return;
+
+	__notify_smt_expeller(rq, p);
+}
+
 static inline bool expel_resched(struct rq *rq)
 {
 	/* Nothing to do for expeller */
@@ -1618,15 +1950,20 @@ static inline bool expel_resched(struct rq *rq)
 
 	/* Stop the expel when started */
 	if (rq->curr == rq->idle)
-		return !rq_on_expel(rq) && rq->cfs.nr_running;
+		return !__rq_on_expel(rq) && rq->cfs.nr_running;
 
 	/* Start the expel when stopped */
-	return rq_on_expel(rq) && rq->smt_expellee;
+	return __rq_on_expel(rq) && rq->smt_expellee;
 }
 
 void handle_smt_expeller(void)
 {
-	struct rq *rq = this_rq();
+	struct rq *rq;
+
+	if (group_identity_disabled())
+		return;
+
+	rq = this_rq();
 
 	__update_rq_on_expel(rq);
 
@@ -1639,7 +1976,10 @@ void handle_smt_expeller(void)
 
 unsigned int id_nr_invalid(struct rq *rq)
 {
-	if (rq_on_expel(rq))
+	if (group_identity_disabled())
+		return 0;
+
+	if (__rq_on_expel(rq))
 		return rq->cfs.h_nr_running - rq->nr_expel_immune;
 
 	return 0;
@@ -1668,7 +2008,7 @@ static inline bool is_underclass(struct sched_entity *curr)
 
 static inline bool is_highclass(struct sched_entity *se)
 {
-	return false;
+	return true;
 }
 
 static inline bool underclass_only(int cpu)
@@ -1707,6 +2047,11 @@ static inline void __update_rq_on_expel(struct rq *rq)
 
 static inline void update_rq_on_expel(struct rq *rq)
 {
+}
+
+static inline bool __rq_on_expel(struct rq *rq)
+{
+	return false;
 }
 
 static inline bool rq_on_expel(struct rq *rq)
@@ -1775,7 +2120,7 @@ static inline u64 id_vruntime(struct sched_entity *se)
 	return se->vruntime;
 }
 
-static inline int
+static inline bool
 id_entity_before(struct sched_entity *a, struct sched_entity *b)
 {
 	return entity_before(a, b);
@@ -1917,7 +2262,7 @@ static void __dequeue_entity(struct cfs_rq *cfs_rq, struct sched_entity *se)
 {
 #if defined(CONFIG_GROUP_IDENTITY) && defined(CONFIG_SCHED_SMT)
 	/* Either on list or on rb-tree */
-	if (!list_empty(&se->expel_node)) {
+	if (!group_identity_disabled() && !list_empty(&se->expel_node)) {
 		list_del_init(&se->expel_node);
 		return;
 	}
@@ -4189,7 +4534,8 @@ account_entity_enqueue(struct cfs_rq *cfs_rq, struct sched_entity *se)
 		account_numa_enqueue(rq, task_of(se));
 		list_add(&se->group_node, &rq->cfs_tasks);
 #ifdef CONFIG_GROUP_IDENTITY
-		cfs_rq->nr_tasks++;
+		if (group_identity_enabled(cfs_rq->rq))
+			cfs_rq->nr_tasks++;
 #endif
 	}
 #endif
@@ -4205,7 +4551,8 @@ account_entity_dequeue(struct cfs_rq *cfs_rq, struct sched_entity *se)
 		account_numa_dequeue(rq_of(cfs_rq), task_of(se));
 		list_del_init(&se->group_node);
 #ifdef CONFIG_GROUP_IDENTITY
-		cfs_rq->nr_tasks--;
+		if (group_identity_enabled(cfs_rq->rq))
+			cfs_rq->nr_tasks--;
 #endif
 	}
 #endif
@@ -5552,16 +5899,12 @@ check_preempt_tick(struct cfs_rq *cfs_rq, struct sched_entity *curr)
 	 * narrow margin doesn't have to wait for a full slice.
 	 * This also mitigates buddy induced latencies under load.
 	 */
-#ifdef CONFIG_GROUP_IDENTITY
 	if (is_highclass(curr) && delta_exec < sysctl_sched_min_granularity)
-#else
-	if (delta_exec < sysctl_sched_min_granularity)
-#endif
 		return;
 
 	/* Must be on expel if no next se, and curr won't be expellee */
 	se = __pick_first_entity(cfs_rq);
-	if (!se)
+	if (!group_identity_disabled() && !se)
 		return;
 
 	delta = id_vruntime(curr) - id_vruntime(se);
@@ -7548,9 +7891,12 @@ static int select_idle_cpu(struct task_struct *p, struct sched_domain *sd, int t
 		 * failed to locate a real idle one.
 		 */
 		if (id_idle_cpu(p, cpu, is_expellee, &idle)) {
-			if (idle || !is_seeker)
+			if (!group_identity_disabled()) {
+				if (idle || !is_seeker)
+					break;
+				id_backup = cpu;
+			} else
 				break;
-			id_backup = cpu;
 		}
 	}
 
@@ -7559,7 +7905,9 @@ static int select_idle_cpu(struct task_struct *p, struct sched_domain *sd, int t
 	delta = (s64)(time - cost) / 8;
 	this_sd->avg_scan_cost += delta;
 
-	return (unsigned int)cpu < nr_cpumask_bits ? cpu : id_backup;
+	if (!group_identity_disabled())
+		return (unsigned int)cpu < nr_cpumask_bits ? cpu : id_backup;
+	return cpu;
 }
 
 /*
@@ -7804,7 +8152,7 @@ select_task_rq_fair(struct task_struct *p, int prev_cpu, int sd_flag, int wake_f
 	int sync = (wake_flags & WF_SYNC) && !(current->flags & PF_EXITING);
 
 	/* Endow LS task the ability to balance at fork */
-	if ((sd_flag & SD_BALANCE_FORK) && is_highclass_task(p))
+	if (is_highclass_task(p) && (sd_flag & SD_BALANCE_FORK))
 		sd_flag |= SD_BALANCE_WAKE;
 
 	if (sd_flag & SD_BALANCE_WAKE) {
@@ -7968,16 +8316,20 @@ wakeup_preempt_entity(struct sched_entity *curr, struct sched_entity *se)
 	 * Others always preempt underclass on wakeup, no
 	 * respect to vruntime.
 	 */
-	ret = id_preempt_underclass(curr, se);
-	if (ret)
-		return ret;
+	if (!group_identity_disabled()) {
+		ret = id_preempt_underclass(curr, se);
+		if (ret)
+			return ret;
+	}
 
 	if (vdiff <= 0)
 		return -1;
 
-	ret = id_preempt_highclass(curr, se);
-	if (ret)
-		return ret;
+	if (!group_identity_disabled()) {
+		ret = id_preempt_highclass(curr, se);
+		if (ret)
+			return ret;
+	}
 
 	gran = wakeup_gran(se);
 	if (vdiff > gran)
@@ -8634,9 +8986,11 @@ int can_migrate_task(struct task_struct *p, struct lb_env *env)
 		return 0;
 	}
 
-	ret = id_can_migrate_task(p, env->src_rq, env->dst_rq);
-	if (ret != -1)
-		return ret;
+	if (!group_identity_disabled()) {
+		ret = id_can_migrate_task(p, env->src_rq, env->dst_rq);
+		if (ret != -1)
+			return ret;
+	}
 
 	/*
 	 * Aggressive migration if:
@@ -10022,11 +10376,13 @@ static struct rq *find_busiest_queue(struct lb_env *env,
 		 * in case if we can't find candidate by compare
 		 * load, find the backup by compare expel score.
 		 */
-		backup_score = expel_score(rq);
-		if (backup_score > max_backup_score &&
-		    rq_on_expel(rq) && !rq_on_expel(env->dst_rq)) {
-			backup = rq;
-			max_backup_score = backup_score;
+		if (!group_identity_disabled()) {
+			backup_score = expel_score(rq);
+			if (backup_score > max_backup_score &&
+			rq_on_expel(rq) && !rq_on_expel(env->dst_rq)) {
+				backup = rq;
+				max_backup_score = backup_score;
+			}
 		}
 
 		/*
