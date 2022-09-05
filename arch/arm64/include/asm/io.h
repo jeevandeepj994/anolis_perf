@@ -166,9 +166,12 @@ extern void __memset_io(volatile void __iomem *, int, size_t);
 extern void __iomem *__ioremap(phys_addr_t phys_addr, size_t size, pgprot_t prot);
 extern void iounmap(volatile void __iomem *addr);
 extern void __iomem *ioremap_cache(phys_addr_t phys_addr, size_t size);
+extern void __iomem *__ioremap_nohuge(phys_addr_t phys_addr, size_t size, pgprot_t prot);
 
 #define ioremap(addr, size)		__ioremap((addr), (size), __pgprot(PROT_DEVICE_nGnRE))
 #define ioremap_wc(addr, size)		__ioremap((addr), (size), __pgprot(PROT_NORMAL_NC))
+#define ioremap_nohuge(addr, size)		\
+	__ioremap_nohuge((addr), (size), __pgprot(PROT_DEVICE_nGnRE))
 
 /*
  * PCI configuration space mapping function.

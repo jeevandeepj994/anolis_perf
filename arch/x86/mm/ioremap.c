@@ -175,8 +175,9 @@ static void __ioremap_check_mem(resource_size_t addr, unsigned long size,
  * caller shouldn't need to know that small detail.
  */
 static void __iomem *
-__ioremap_caller(resource_size_t phys_addr, unsigned long size,
-		 enum page_cache_mode pcm, void *caller, bool encrypted)
+__do_ioremap_caller(resource_size_t phys_addr, unsigned long size,
+		    enum page_cache_mode pcm, void *caller,
+		    bool encrypted, bool hugevmap_enabled)
 {
 	unsigned long offset, vaddr;
 	resource_size_t last_addr;
@@ -281,8 +282,13 @@ __ioremap_caller(resource_size_t phys_addr, unsigned long size,
 	if (memtype_kernel_map_sync(phys_addr, size, pcm))
 		goto err_free_area;
 
-	if (ioremap_page_range(vaddr, vaddr + size, phys_addr, prot))
-		goto err_free_area;
+	if (hugevmap_enabled) {
+		if (ioremap_page_range(vaddr, vaddr + size, phys_addr, prot))
+			goto err_free_area;
+	} else {
+		if (ioremap_nohuge_page_range(vaddr, vaddr + size, phys_addr, prot))
+			goto err_free_area;
+	}
 
 	ret_addr = (void __iomem *) (vaddr + offset);
 	mmiotrace_ioremap(unaligned_phys_addr, unaligned_size, ret_addr);
@@ -300,6 +306,22 @@ err_free_area:
 err_free_memtype:
 	memtype_free(phys_addr, phys_addr + size);
 	return NULL;
+}
+
+static void __iomem *
+__ioremap_caller(resource_size_t phys_addr, unsigned long size,
+		 enum page_cache_mode pcm, void *caller, bool encrypted)
+{
+	return __do_ioremap_caller(phys_addr, size, pcm, caller,
+				   encrypted, true);
+}
+
+static void __iomem *
+__ioremap_nohuge_caller(resource_size_t phys_addr, unsigned long size,
+			enum page_cache_mode pcm, void *caller, bool encrypted)
+{
+	return __do_ioremap_caller(phys_addr, size, pcm, caller,
+				   encrypted, false);
 }
 
 /**
@@ -339,6 +361,23 @@ void __iomem *ioremap(resource_size_t phys_addr, unsigned long size)
 				__builtin_return_address(0), false);
 }
 EXPORT_SYMBOL(ioremap);
+
+void __iomem *ioremap_nohuge(resource_size_t phys_addr, unsigned long size)
+{
+	/*
+	 * Ideally, this should be:
+	 *	pat_enabled() ? _PAGE_CACHE_MODE_UC : _PAGE_CACHE_MODE_UC_MINUS;
+	 *
+	 * Till we fix all X drivers to use ioremap_wc(), we will use
+	 * UC MINUS. Drivers that are certain they need or can already
+	 * be converted over to strong UC can use ioremap_uc().
+	 */
+	enum page_cache_mode pcm = _PAGE_CACHE_MODE_UC_MINUS;
+
+	return __ioremap_nohuge_caller(phys_addr, size, pcm,
+				       __builtin_return_address(0), false);
+}
+EXPORT_SYMBOL(ioremap_nohuge);
 
 /**
  * ioremap_uc     -   map bus memory into CPU space as strongly uncachable

@@ -34,6 +34,12 @@ int ioremap_page_range(unsigned long addr,
 	return vmap_range(addr, end, phys_addr, prot, iomap_max_page_shift);
 }
 
+int ioremap_nohuge_page_range(unsigned long addr, unsigned long end,
+			      phys_addr_t phys_addr, pgprot_t prot)
+{
+	return vmap_range(addr, end, phys_addr, prot, PAGE_SHIFT);
+}
+
 #ifdef CONFIG_GENERIC_IOREMAP
 void __iomem *ioremap_prot(phys_addr_t addr, size_t size, unsigned long prot)
 {
