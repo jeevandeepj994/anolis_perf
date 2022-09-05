@@ -121,35 +121,12 @@ struct ycc_sm2_verify_cmd {
 	u64 keyptr:48;
 } __packed;
 
-struct ycc_mac_cmd  {
-	u8 cmd_id;
-	u8 mode;
-	u64 sptr:48;
-	u64 dptr:48;
-	u32 dlen;
-	u16 key_idx;
-	u16 kek_idx;
-	u64 keyptr:48;
-	u16 keylen;
-	u8 digestlen;
-} __packed;
-
-struct ycc_hash_cmd  {
-	u8 cmd_id;
-	u8 mode;
-	u64 sptr:48;
-	u64 dptr:48;
-	u32 dlen;
-} __packed;
-
 union ycc_real_cmd {
 	struct ycc_skcipher_cmd ske_cmd;
 	struct ycc_aead_cmd aead_cmd;
 	struct ycc_rsa_enc_cmd rsa_enc_cmd;
 	struct ycc_rsa_dec_cmd rsa_dec_cmd;
 	struct ycc_sm2_verify_cmd sm2_verify_cmd;
-	struct ycc_mac_cmd mac_cmd;
-	struct ycc_hash_cmd hash_cmd;
 	u8 padding[32];
 };
 
