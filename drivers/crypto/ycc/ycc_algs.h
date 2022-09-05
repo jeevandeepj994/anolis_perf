@@ -68,57 +68,7 @@ enum ycc_ske_alg_mode {
 	YCC_SM4_XTS, /* 67 */
 };
 
-#define MAX_DIGEST_SIZE		64
-
-enum ycc_hash_alg_mode {
-	YCC_HASH_SM3 = 0,
-	YCC_HASH_MD5,
-	YCC_HASH_SHA_256,
-	YCC_HASH_SHA_384,
-	YCC_HASH_SHA_512,
-	YCC_HASH_SHA_1,
-	YCC_HASH_SHA_224,
-	YCC_HASH_SHA_512_224,
-	YCC_HASH_SHA_512_256,
-	YCC_HASH_SHA_3_224,
-	YCC_HASH_SHA_3_256,
-	YCC_HASH_SHA_3_384,
-	YCC_HASH_SHA_3_512,
-};
-
-enum ycc_hmac_alg_mode {
-	YCC_HMAC_SM3 = 0,
-	YCC_HMAC_MD5,
-	YCC_HMAC_SHA_256,
-	YCC_HMAC_SHA_384,
-	YCC_HMAC_SHA_512,
-	YCC_HMAC_SHA_1,
-	YCC_HMAC_SHA_224,
-	YCC_HMAC_SHA_512_224,
-	YCC_HMAC_SHA_512_256,
-};
-
-enum ycc_cmac_alg_mode {
-	YCC_CBC_MAC_AES_128 = 18,
-	YCC_CBC_MAC_AES_192,
-	YCC_CBC_MAC_AES_256,
-	YCC_CBC_MAC_SM4,
-
-	YCC_CMAC_AES_128,
-	YCC_CMAC_AES_192,
-	YCC_CMAC_AES_256,
-	YCC_CMAC_SM4,
-};
-
 enum ycc_cmd_id {
-	YCC_CMD_GEN_HMAC_LEN0 = 0x17,
-	YCC_CMD_VERIFY_HMAC_LEN0,
-	YCC_CMD_GEN_CMAC_LEN0,
-	YCC_CMD_VERIFY_CMAC_LEN0, /* 0x1a */
-
-	YCC_CMD_GEN_CMAC = 0x21,
-	YCC_CMD_VERIFY_CMAC,
-
 	YCC_CMD_SKE_ENC = 0x23,
 	YCC_CMD_SKE_DEC,
 
@@ -135,10 +85,6 @@ enum ycc_cmd_id {
 	YCC_CMD_RSA_CRT_SIGN,
 	YCC_CMD_RSA_SIGN,
 	YCC_CMD_RSA_VERIFY, /* 0x88 */
-
-	YCC_CMD_HASH = 0xa1,
-	YCC_CMD_GEN_HMAC,
-	YCC_CMD_VERIFY_HMAC, /* 0xa3 */
 };
 
 struct ycc_crypto_ctx {
@@ -219,37 +165,6 @@ struct ycc_pke_req {
 	struct akcipher_request *req;
 };
 
-struct ycc_ahash_ctx {
-	u8 mode;
-	u8 *auth_key;
-	dma_addr_t auth_key_paddr;
-	u32 authsize;
-	u8 key_type; /* reserved for kek */
-	struct filling_data *filling_data;
-	bool is_mac;
-	struct shash_desc *shash;
-	struct ycc_ring *ring;
-};
-
-struct filling_data {
-	struct scatterlist *src_sg;
-	struct page *sp; /* page for holding formatted plaintext */
-	int snents;
-	int sorder;
-};
-
-struct ycc_ahash_req {
-	int mapped_src_nents;
-	int mapped_dst_nents;
-	void *source_vaddr;
-	dma_addr_t source_paddr;
-	void *result_vaddr; /* store digest */
-	dma_addr_t result_paddr;
-	struct ycc_cmd_desc desc;
-	struct ahash_request *ahash_req;
-	struct ycc_ahash_ctx *ctx;
-};
-
 #define YCC_DEV(ctx)		(&(ctx)->ring->ydev->pdev->dev)
 
 int ycc_sym_register(void);
@@ -258,6 +173,4 @@ int ycc_aead_register(void);
 void ycc_aead_unregister(void);
 int ycc_pke_register(void);
 void ycc_pke_unregister(void);
-int ycc_hash_register(void);
-void ycc_hash_unregister(void);
 #endif

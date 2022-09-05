@@ -72,14 +72,8 @@ int ycc_algorithm_register(void)
 	if (ret)
 		goto unregister_aead;
 
-	ret = ycc_hash_register();
-	if (ret)
-		goto unregister_pke;
-
 	return 0;
 
-unregister_pke:
-	ycc_pke_unregister();
 unregister_aead:
 	ycc_aead_unregister();
 unregister_sym:
@@ -97,7 +91,6 @@ void ycc_algorithm_unregister(void)
 	if (atomic_dec_return(&ycc_algs_refcnt))
 		return;
 
-	ycc_hash_unregister();
 	ycc_pke_unregister();
 	ycc_aead_unregister();
 	ycc_sym_unregister();
