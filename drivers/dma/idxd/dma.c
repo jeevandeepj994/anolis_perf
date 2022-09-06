@@ -272,6 +272,47 @@ idxd_dma_prep_memcpy_sg(struct dma_chan *chan,
 	return &desc->txd;
 }
 
+static struct dma_async_tx_descriptor *
+idxd_dma_prep_memset(struct dma_chan *c, dma_addr_t dma_dest, int value,
+		     size_t len, unsigned long flags)
+{
+	struct idxd_wq *wq = to_idxd_wq(c);
+	u32 desc_flags;
+	struct idxd_desc *desc;
+	u64 pattern = 0;
+
+	if (wq->state != IDXD_WQ_ENABLED)
+		return NULL;
+
+	if (len > wq->max_xfer_bytes)
+		return NULL;
+
+	op_flag_setup(flags, &desc_flags);
+	desc = idxd_alloc_desc(wq, IDXD_OP_BLOCK);
+	if (IS_ERR(desc))
+		return NULL;
+
+	/*
+	 * The dmaengine API provides an int 'value', but it is really an 8bit
+	 * pattern. DSA supports a 64bit pattern, and therefore the 8bit pattern
+	 * will be replicated to 64bits.
+	 */
+	if (value) {
+		pattern = value & 0xff;
+		pattern |= pattern << 8;
+		pattern |= pattern << 16;
+		pattern |= pattern << 32;
+	}
+
+	idxd_prep_desc_common(wq, desc->hw, DSA_OPCODE_MEMFILL,
+			      pattern, dma_dest, len, desc->compl_dma,
+			      desc_flags);
+
+	desc->txd.flags = flags;
+
+	return &desc->txd;
+}
+
 static int idxd_dma_alloc_chan_resources(struct dma_chan *chan)
 {
 	struct idxd_wq *wq = to_idxd_wq(chan);
@@ -433,6 +474,11 @@ int idxd_register_dma_device(struct idxd_device *idxd)
 	if (idxd->hw.opcap.bits[0] & IDXD_OPCAP_BATCH) {
 		dma_cap_set(DMA_MEMCPY_SG, dma->cap_mask);
 		dma->device_prep_dma_memcpy_sg = idxd_dma_prep_memcpy_sg;
+	}
+
+	if (idxd->hw.opcap.bits[0] & IDXD_OPCAP_MEMFILL) {
+		dma_cap_set(DMA_MEMSET, dma->cap_mask);
+		dma->device_prep_dma_memset = idxd_dma_prep_memset;
 	}
 
 	dma->device_tx_status = idxd_dma_tx_status;
