@@ -7,6 +7,8 @@
 #include <linux/mm_inline.h>
 #include <linux/freezer.h>
 #include <linux/kthread.h>
+#include <linux/dmaengine.h>
+#include <linux/dma-mapping.h>
 
 #include <linux/prezero.h>
 #include "internal.h"
@@ -21,9 +23,25 @@ static struct task_struct *prezero_kthread[MAX_NUMNODES];
 static wait_queue_head_t kprezerod_wait[MAX_NUMNODES];
 static unsigned long kprezerod_sleep_expire[MAX_NUMNODES];
 
-static void my_clear_page(struct page *page, unsigned int order)
+static DEFINE_STATIC_KEY_FALSE(prezero_hw_enabled_key);
+static bool prezero_hw_flag_cc;
+static bool prezero_hw_polling;
+static inline bool prezero_hw_enabled(void)
+{
+	return static_branch_unlikely(&prezero_hw_enabled_key);
+}
+static int clear_page_hw(struct page *page, int order, int node);
+
+static void my_clear_page(struct page *page, unsigned int order, int node)
 {
 	int i, numpages = 1 << order;
+
+	if (prezero_hw_enabled() &&
+	    !clear_page_hw(page, order, node)) {
+		count_vm_event(PREZERO_HW_CLEAR);
+		__count_vm_events(PREZERO_HW_CLEAR_PAGES, numpages);
+		return;
+	}
 
 	for (i = 0; i < numpages; i++)
 		clear_highpage(page + i);
@@ -71,7 +89,7 @@ static int prezero_one_page(struct zone *zone, unsigned int order, int mtype)
 		return err;
 
 	/* Clear the page */
-	my_clear_page(page, order);
+	my_clear_page(page, order, zone_to_nid(zone));
 
 	/* Putback the pre-zeroed page */
 	spin_lock_irq(&zone->lock);
@@ -177,6 +195,211 @@ static void start_stop_kprezerod(void)
 
 	for_each_node_state(nid, N_MEMORY)
 		__start_stop_kprezerod(nid);
+}
+
+/*
+ * Page clear engine support - hardware offloading for page clear.
+ *
+ * Page clear engine allows to use a DMA device through the dmaengine API
+ * to clear (zero) page asynchronously.
+ *
+ * User may configure the DMA device on each NUMA node before enabling this
+ * feature.
+ */
+#define DMA_TIMEOUT	5000
+static DEFINE_MUTEX(nodedata_mutex);
+static struct nodedata {
+	struct dma_chan *dma_chan;
+} *nodedata;
+
+static void dma_completion_callback(void *arg)
+{
+	struct completion *done = arg;
+
+	complete(done);
+}
+
+/*
+ * DMA engine APIs are called to prepare and submit DMA descriptors, and to
+ * check completion status. The dest_addr of descriptor is filled with the DMA
+ * mapped address of the page to be cleared.
+ */
+static int clear_page_hw(struct page *page, int order, int node)
+{
+	struct dma_chan *dma_chan = NULL;
+	struct device *dev;
+	struct dma_async_tx_descriptor *tx = NULL;
+	dma_addr_t dst_dma;
+	dma_cookie_t cookie;
+	enum dma_status status;
+	unsigned long dma_flags = 0;
+	bool hw_flag_cc = prezero_hw_flag_cc;
+	bool hw_polling = prezero_hw_polling;
+	int ret = 0;
+	DECLARE_COMPLETION_ONSTACK(done);
+
+	mutex_lock(&nodedata_mutex);
+	/* Page clear engine is already disabled */
+	if (!nodedata) {
+		ret = -ENODEV;
+		goto err_nodedata;
+	}
+
+	dma_chan = nodedata[node].dma_chan;
+	dev = dma_chan->device->dev;
+
+	/* DMA map page */
+	dst_dma = dma_map_page(dev, page, 0, PAGE_SIZE << order,
+			       DMA_FROM_DEVICE);
+	ret = dma_mapping_error(dev, dst_dma);
+	if (ret)
+		goto err_nodedata;
+
+	if (!hw_flag_cc)
+		dma_flags |= DMA_PREP_NONTEMPORAL;
+
+	if (!hw_polling)
+		dma_flags |= DMA_PREP_INTERRUPT;
+
+	/* Prep DMA memset */
+	tx = dmaengine_prep_dma_memset(dma_chan, dst_dma, 0,
+				       PAGE_SIZE << order, dma_flags);
+	if (!tx) {
+		pr_info("Failed to prep DMA memset on node %d\n", node);
+		ret = -EIO;
+		goto err_prep;
+	}
+
+	if (!hw_polling) {
+		tx->callback = dma_completion_callback;
+		tx->callback_param = &done;
+	}
+
+	/* Submit DMA descriptor */
+	cookie = dmaengine_submit(tx);
+	if (dma_submit_error(cookie)) {
+		pr_info("Failed to submit DMA descriptor on node %d\n", node);
+		ret = -EIO;
+		goto err_prep;
+	}
+
+	if (hw_polling) {
+		/* Check DMA completion status with polling */
+		status = dma_sync_wait(dma_chan, cookie);
+		if (status != DMA_COMPLETE) {
+			pr_info("Failed to poll DMA completion status on node %d\n", node);
+			ret = -EIO;
+		}
+	} else {
+		dma_async_issue_pending(dma_chan);
+		if (!wait_for_completion_timeout(&done,
+					msecs_to_jiffies(DMA_TIMEOUT))) {
+			ret = -EIO;
+			goto err_prep;
+		}
+		status = dma_async_is_tx_complete(dma_chan, cookie);
+		if (status != DMA_COMPLETE) {
+			pr_info("Failed to check DMA completion status on node %d\n", node);
+			ret = -EIO;
+		}
+	}
+
+err_prep:
+	dma_unmap_page(dev, dst_dma, PAGE_SIZE << order, DMA_FROM_DEVICE);
+err_nodedata:
+	mutex_unlock(&nodedata_mutex);
+	return ret;
+}
+
+static bool engine_filter_fn(struct dma_chan *chan, void *node)
+{
+	return dev_to_node(&chan->dev->device) == (int)(unsigned long)node;
+}
+
+/*
+ * It initially requests a DMA channel with DMA_MEMSET capability on each NUMA
+ * node and uses the DMA device to clear high order pages.
+ *
+ * The preference is to request the DMA channel from local NUMA node. If it is
+ * not available, try again to request the DMA channel from any NUMA node.
+ */
+static int get_dma_chan(int node)
+{
+	dma_cap_mask_t mask;
+
+	/* Request DMA channel by mask */
+	dma_cap_zero(mask);
+	dma_cap_set(DMA_MEMSET, mask);
+
+	/* Prefer to request DMA channel from local NUMA node if available */
+	nodedata[node].dma_chan = dma_request_channel(mask, engine_filter_fn,
+						(void *)(unsigned long)node);
+	if (!nodedata[node].dma_chan) {
+		/* Try again to request the DMA channel from any NUMA node */
+		nodedata[node].dma_chan = dma_request_chan_by_mask(&mask);
+		if (IS_ERR(nodedata[node].dma_chan)) {
+			pr_info("Failed to request DMA channel on node %d\n", node);
+			nodedata[node].dma_chan = NULL;
+			return -ENODEV;
+		}
+	}
+
+	return 0;
+}
+
+static int init_page_clear_engine(void)
+{
+	int node, num_nodes;
+	int ret;
+
+	/* Page clear engine is already enabled */
+	if (nodedata)
+		return 0;
+
+	num_nodes = num_online_nodes();
+	nodedata = kcalloc(num_nodes, sizeof(*nodedata), GFP_KERNEL);
+	if (!nodedata)
+		return -ENOMEM;
+
+	for_each_online_node(node) {
+		ret = get_dma_chan(node);
+		if (ret)
+			goto fail;
+	}
+
+	pr_info("Hardware page clear engine is enabled\n");
+	return 0;
+
+fail:
+	for (node = 0; node < num_nodes; node++) {
+		if (nodedata[node].dma_chan)
+			dma_release_channel(nodedata[node].dma_chan);
+	}
+
+	kfree(nodedata);
+	nodedata = NULL;
+
+	return ret;
+}
+
+static void exit_page_clear_engine(void)
+{
+	int node;
+
+	/* Page clear engine is already disabled */
+	if (!nodedata)
+		return;
+
+	mutex_lock(&nodedata_mutex);
+	for_each_online_node(node) {
+		dma_release_channel(nodedata[node].dma_chan);
+	}
+
+	kfree(nodedata);
+	nodedata = NULL;
+	mutex_unlock(&nodedata_mutex);
+
+	pr_info("Hardware page clear engine is disabled\n");
 }
 
 static int __init setup_prezero(char *str)
@@ -293,17 +516,103 @@ static struct attribute *prezero_attrs[] = {
 
 static struct attribute_group prezero_attr_group = {
 	.attrs = prezero_attrs,
-	.name = "prezero",
+};
+
+static ssize_t prezero_show_hw_enabled(struct kobject *kobj,
+		struct kobj_attribute *attr, char *buf)
+{
+	return sprintf(buf, "%d\n", prezero_hw_enabled());
+}
+static ssize_t prezero_store_hw_enabled(struct kobject *kobj,
+		struct kobj_attribute *attr, const char *buf, size_t count)
+{
+	static DEFINE_MUTEX(mutex);
+	unsigned long val;
+	int err;
+	ssize_t ret = count;
+
+	mutex_lock(&mutex);
+
+	err = kstrtoul(buf, 0, &val);
+	if (err < 0 || val > 1) {
+		ret = -EINVAL;
+		goto out;
+	}
+
+	if (val) {
+		if (!prezero_hw_enabled()) {
+			err = init_page_clear_engine();
+			if (!err)
+				static_branch_enable(&prezero_hw_enabled_key);
+			else
+				ret = err;
+		}
+	} else {
+		if (prezero_hw_enabled()) {
+			static_branch_disable(&prezero_hw_enabled_key);
+			exit_page_clear_engine();
+		}
+	}
+
+out:
+	mutex_unlock(&mutex);
+	return ret;
+}
+static struct kobj_attribute prezero_attr_hw_enabled =
+	__ATTR(hw_enabled, 0644, prezero_show_hw_enabled,
+	       prezero_store_hw_enabled);
+
+PREZERO_SYSFS_ATTR(hw_flag_cc, prezero_hw_flag_cc, 0, 1, dummy_store_cb);
+PREZERO_SYSFS_ATTR(hw_polling, prezero_hw_polling, 0, 1, dummy_store_cb);
+
+static struct attribute *page_clear_engine_attrs[] = {
+	&prezero_attr_hw_enabled.attr,
+	&prezero_attr_hw_flag_cc.attr,
+	&prezero_attr_hw_polling.attr,
+	NULL,
+};
+
+static struct attribute_group page_clear_engine_attr_group = {
+	.attrs = page_clear_engine_attrs,
+	.name = "page_clear_engine",
 };
 
 static int __init prezero_sysfs_init(void)
 {
+	struct kobject *prezero_kobj;
 	int err;
 
-	err = sysfs_create_group(mm_kobj, &prezero_attr_group);
-	if (err)
-		pr_err("failed to register prezero group\n");
+	/*
+	 * err = sysfs_create_group(mm_kobj, &prezero_attr_group);
+	 * if (err)
+	 *         pr_err("failed to register prezero group\n");
+	 */
 
+
+	prezero_kobj = kobject_create_and_add("prezero", mm_kobj);
+	if (unlikely(!prezero_kobj)) {
+		pr_err("failed to create prezero kobject\n");
+		return -ENOMEM;
+	}
+
+	err = sysfs_create_group(prezero_kobj, &prezero_attr_group);
+	if (err) {
+		pr_err("failed to register prezero group\n");
+		goto delete_obj;
+	}
+
+	err = sysfs_create_group(prezero_kobj, &page_clear_engine_attr_group);
+	if (err) {
+		pr_err("failed to register page_clear_engine group\n");
+		goto remove_prezero_group;
+	}
+
+	return 0;
+
+remove_prezero_group:
+	sysfs_remove_group(prezero_kobj, &prezero_attr_group);
+delete_obj:
+	kobject_put(prezero_kobj);
 	return err;
 }
 #else

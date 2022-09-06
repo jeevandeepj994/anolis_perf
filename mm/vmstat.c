@@ -1359,6 +1359,8 @@ const char * const vmstat_text[] = {
 #ifdef CONFIG_PAGE_PREZERO
 	"prezero_alloc",
 	"prezero_alloc_pages",
+	"prezero_hw_clear",
+	"prezero_hw_clear_pages",
 #endif
 #endif /* CONFIG_VM_EVENT_COUNTERS || CONFIG_MEMCG */
 };
