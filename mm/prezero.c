@@ -72,12 +72,23 @@ static int prezero_one_page(struct zone *zone, unsigned int order, int mtype)
 
 	/* Clear the page */
 	my_clear_page(page, order);
-	__SetPageZeroed(page);
 
 	/* Putback the pre-zeroed page */
 	spin_lock_irq(&zone->lock);
 	mtype = get_pageblock_migratetype(page);
 	__putback_isolated_page(page, order, mtype);
+
+	/*
+	 * If page was not comingled with another page we can consider
+	 * the page to be zeroed since the page hasn't been modified,
+	 * otherwise we will need to discard the zeroed state of this page.
+	 */
+	if (PageBuddy(page) && buddy_order(page) == order) {
+		__SetPageZeroed(page);
+		zone->free_area[order].nr_zeroed++;
+		__mod_zone_page_state(zone, NR_ZEROED_PAGES, 1 << order);
+	}
+
 	spin_unlock_irq(&zone->lock);
 
 	return err;

@@ -1096,13 +1096,6 @@ continue_merging:
 done_merging:
 	set_buddy_order(page, order);
 
-#ifdef CONFIG_PAGE_PREZERO
-	if (PageZeroed(page)) {
-		zone->free_area[order].nr_zeroed++;
-		__mod_zone_page_state(zone, NR_ZEROED_PAGES, 1 << order);
-	}
-#endif
-
 	if (fpi_flags & FPI_TO_TAIL)
 		to_tail = true;
 	else if (is_shuffle_order(order))
