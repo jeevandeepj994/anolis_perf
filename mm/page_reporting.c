@@ -16,6 +16,7 @@
 int reporting_min_order = pageblock_order;
 static int reporting_factor = 100;
 static atomic64_t reclaim_pages;
+static int reclaim_level;
 
 #define PAGE_REPORTING_DELAY	(2 * HZ)
 static struct page_reporting_dev_info __rcu *pr_dev_info __read_mostly;
@@ -498,6 +499,27 @@ static ssize_t reclaim_memory_store(struct kobject *kobj,
 }
 REPORTING_ATTR(reclaim_memory);
 
+static ssize_t reclaim_level_show(struct kobject *kobj,
+		struct kobj_attribute *attr, char *buf)
+{
+	return sprintf(buf, "%d\n", reclaim_level);
+}
+
+static ssize_t reclaim_level_store(struct kobject *kobj,
+		struct kobj_attribute *attr,
+		const char *buf, size_t count)
+{
+	int new, err;
+
+	err = kstrtoint(buf, 10, &new);
+	if (err)
+		return -EINVAL;
+	reclaim_level = new;
+
+	return count;
+}
+REPORTING_ATTR(reclaim_level);
+
 static ssize_t reporting_min_order_show(struct kobject *kobj,
 		struct kobj_attribute *attr, char *buf)
 {
@@ -525,6 +547,7 @@ static struct attribute *reporting_attrs[] = {
 	&reporting_factor_attr.attr,
 	&reporting_min_order_attr.attr,
 	&reclaim_memory_attr.attr,
+	&reclaim_level_attr.attr,
 	NULL,
 };
 
