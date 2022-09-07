@@ -18,8 +18,9 @@
 #include <asm/fixmap.h>
 #include <asm/tlbflush.h>
 
-static void __iomem *__ioremap_caller(phys_addr_t phys_addr, size_t size,
-				      pgprot_t prot, void *caller)
+static void __iomem *__do_ioremap_caller(phys_addr_t phys_addr, size_t size,
+					 pgprot_t prot, void *caller,
+					 bool hugevmap_enabled)
 {
 	unsigned long last_addr;
 	unsigned long offset = phys_addr & ~PAGE_MASK;
@@ -53,7 +54,11 @@ static void __iomem *__ioremap_caller(phys_addr_t phys_addr, size_t size,
 	addr = (unsigned long)area->addr;
 	area->phys_addr = phys_addr;
 
-	err = ioremap_page_range(addr, addr + size, phys_addr, prot);
+	if (hugevmap_enabled)
+		err = ioremap_page_range(addr, addr + size, phys_addr, prot);
+	else
+		err = ioremap_nohuge_page_range(addr, addr + size, phys_addr, prot);
+
 	if (err) {
 		vunmap((void *)addr);
 		return NULL;
@@ -62,12 +67,32 @@ static void __iomem *__ioremap_caller(phys_addr_t phys_addr, size_t size,
 	return (void __iomem *)(offset + addr);
 }
 
+static void __iomem *__ioremap_caller(phys_addr_t phys_addr, size_t size,
+				      pgprot_t prot, void *caller)
+{
+	return __do_ioremap_caller(phys_addr, size, prot, caller, true);
+}
+
+static void __iomem *__ioremap_nohuge_caller(phys_addr_t phys_addr, size_t size,
+					     pgprot_t prot, void *caller)
+{
+	return __do_ioremap_caller(phys_addr, size, prot, caller, false);
+}
+
 void __iomem *__ioremap(phys_addr_t phys_addr, size_t size, pgprot_t prot)
 {
 	return __ioremap_caller(phys_addr, size, prot,
 				__builtin_return_address(0));
 }
 EXPORT_SYMBOL(__ioremap);
+
+void __iomem *__ioremap_nohuge(phys_addr_t phys_addr, size_t size,
+			       pgprot_t prot)
+{
+	return __ioremap_nohuge_caller(phys_addr, size, prot,
+				       __builtin_return_address(0));
+}
+EXPORT_SYMBOL(__ioremap_nohuge);
 
 void iounmap(volatile void __iomem *io_addr)
 {
