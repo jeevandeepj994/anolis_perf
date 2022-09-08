@@ -221,7 +221,7 @@ struct perf_session *perf_session__new(struct perf_data *data,
 				perf_session__set_comm_exec(session);
 			}
 
-			perf_evlist__init_trace_event_sample_raw(session->evlist);
+			evlist__init_trace_event_sample_raw(session->evlist);
 
 			/* Open the directory data. */
 			if (data->is_dir) {
@@ -1381,7 +1381,7 @@ static int deliver_sample_value(struct evlist *evlist,
 				struct sample_read_value *v,
 				struct machine *machine)
 {
-	struct perf_sample_id *sid = perf_evlist__id2sid(evlist, v->id);
+	struct perf_sample_id *sid = evlist__id2sid(evlist, v->id);
 	struct evsel *evsel;
 
 	if (sid) {
@@ -1462,7 +1462,7 @@ static int machines__deliver_event(struct machines *machines,
 
 	dump_event(evlist, event, file_offset, sample);
 
-	evsel = perf_evlist__id2evsel(evlist, sample->id);
+	evsel = evlist__id2evsel(evlist, sample->id);
 
 	machine = machines__find_for_cpumode(machines, event, sample);
 
@@ -1540,9 +1540,8 @@ static int perf_session__deliver_event(struct perf_session *session,
 				       u64 file_offset)
 {
 	struct perf_sample sample;
-	int ret;
+	int ret = evlist__parse_sample(session->evlist, event, &sample);
 
-	ret = perf_evlist__parse_sample(session->evlist, event, &sample);
 	if (ret) {
 		pr_err("Can't parse sample, err = %d\n", ret);
 		return ret;
@@ -1715,7 +1714,7 @@ int perf_session__peek_event(struct perf_session *session, off_t file_offset,
 out_parse_sample:
 
 	if (sample && event->header.type < PERF_RECORD_USER_TYPE_START &&
-	    perf_evlist__parse_sample(session->evlist, event, sample))
+	    evlist__parse_sample(session->evlist, event, sample))
 		return -1;
 
 	*event_ptr = event;
@@ -1772,7 +1771,7 @@ static s64 perf_session__process_event(struct perf_session *session,
 	if (tool->ordered_events) {
 		u64 timestamp = -1ULL;
 
-		ret = perf_evlist__parse_sample_timestamp(evlist, event, &timestamp);
+		ret = evlist__parse_sample_timestamp(evlist, event, &timestamp);
 		if (ret && ret != -1)
 			return ret;
 
@@ -2503,7 +2502,7 @@ int perf_event__process_id_index(struct perf_session *session,
 			fprintf(stdout,	"  tid: %"PRI_ld64"\n", e->tid);
 		}
 
-		sid = perf_evlist__id2sid(evlist, e->id);
+		sid = evlist__id2sid(evlist, e->id);
 		if (!sid)
 			return -ENOENT;
 		sid->idx = e->idx;

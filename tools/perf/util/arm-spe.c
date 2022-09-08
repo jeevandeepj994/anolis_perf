@@ -1241,7 +1241,7 @@ static int arm_spe_process_switch(struct arm_spe *spe,
 	pid_t tid;
 	int cpu;
 
-	evsel = perf_evlist__id2evsel(spe->session->evlist, sample->id);
+	evsel = evlist__id2evsel(spe->session->evlist, sample->id);
 	if (evsel != spe->switch_evsel)
 		return 0;
 
