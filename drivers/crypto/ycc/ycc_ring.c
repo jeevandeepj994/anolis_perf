@@ -197,6 +197,8 @@ static int ycc_init_ring(struct ycc_ring *ring, u32 max_desc)
 {
 	struct ycc_dev *ydev = ring->ydev;
 	u32 cmd_ring_size, resp_ring_size;
+	int order = 0;
+	u32 val = 0;
 
 	/* KERN_RING won't exposed to uio */
 	ring->type = KERN_RING;
@@ -229,6 +231,22 @@ static int ycc_init_ring(struct ycc_ring *ring, u32 max_desc)
 	}
 	memset(ring->resp_base_vaddr, CMD_INVALID_CONTENT_U8, resp_ring_size);
 
+	while (max_desc >>= 1)
+		order++;
+
+	/* Minimum order should be 8 */
+	if (order < 8) {
+		ring->max_desc = 256;
+		order = 8;
+	}
+
+	/* Ring size */
+	val |= ((order - 8) & 0x7);
+
+	/* Ring interrupt threshold */
+	val |= (ydev->is_polling ? 1 : 0xFFFF) << 16;
+
+	YCC_CSR_WR(ring->csr_vaddr, REG_RING_CFG, val);
 	YCC_CSR_WR(ring->csr_vaddr, REG_RING_RSP_AFULL_TH, 0);
 	YCC_CSR_WR(ring->csr_vaddr, REG_RING_CMD_BASE_ADDR_LO,
 					(u32)ring->cmd_base_paddr & 0xffffffff);
