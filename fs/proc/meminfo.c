@@ -173,6 +173,10 @@ static int meminfo_proc_show(struct seq_file *m, void *v)
 	show_val_kb(m, "DupText:        ",
 		    global_node_page_state(NR_DUPTEXT));
 #endif
+#ifdef CONFIG_PAGE_PREZERO
+	show_val_kb(m, "MemZeroed:      ",
+		    global_zone_page_state(NR_ZEROED_PAGES));
+#endif
 
 	hugetlb_report_meminfo(m);
 

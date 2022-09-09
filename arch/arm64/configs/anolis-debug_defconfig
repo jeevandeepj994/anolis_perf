@@ -1051,6 +1051,7 @@ CONFIG_DAMON_DBGFS=y
 # end of Data Access Monitoring
 
 CONFIG_FAST_COPY_MM=y
+# CONFIG_PAGE_PREZERO is not set
 # end of Memory Management options
 
 CONFIG_NET=y

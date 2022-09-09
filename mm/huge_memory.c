@@ -35,6 +35,7 @@
 #include <linux/page_owner.h>
 #include <linux/page_dup.h>
 #include <linux/damon.h>
+#include <linux/prezero.h>
 
 #include <asm/tlb.h>
 #include <asm/pgalloc.h>
@@ -719,7 +720,7 @@ unsigned long hugetext_get_unmapped_area(struct file *filp, unsigned long addr,
 #endif /* CONFIG_HUGETEXT */
 
 static vm_fault_t __do_huge_pmd_anonymous_page(struct vm_fault *vmf,
-			struct page *page, gfp_t gfp)
+			struct page *page, gfp_t gfp, bool zeroed)
 {
 	struct vm_area_struct *vma = vmf->vma;
 	pgtable_t pgtable;
@@ -742,7 +743,9 @@ static vm_fault_t __do_huge_pmd_anonymous_page(struct vm_fault *vmf,
 		goto release;
 	}
 
-	clear_huge_page(page, vmf->address, HPAGE_PMD_NR);
+	if (!zeroed)
+		clear_huge_page(page, vmf->address, HPAGE_PMD_NR);
+
 	/*
 	 * The memory barrier inside __SetPageUptodate makes sure that
 	 * clear_huge_page writes become visible before the set_pmd_at()
@@ -854,6 +857,7 @@ vm_fault_t do_huge_pmd_anonymous_page(struct vm_fault *vmf)
 	gfp_t gfp;
 	struct page *page;
 	unsigned long haddr = vmf->address & HPAGE_PMD_MASK;
+	bool zeroed = false;
 
 	if (!transhuge_vma_suitable(vma, haddr))
 		return VM_FAULT_FALLBACK;
@@ -900,13 +904,19 @@ vm_fault_t do_huge_pmd_anonymous_page(struct vm_fault *vmf)
 		return ret;
 	}
 	gfp = alloc_hugepage_direct_gfpmask(vma);
+
+	if (prezero_enabled()) {
+		gfp |= __GFP_ZERO;
+		zeroed = true;
+	}
+
 	page = alloc_hugepage_vma(gfp, vma, haddr, HPAGE_PMD_ORDER);
 	if (unlikely(!page)) {
 		count_vm_event(THP_FAULT_FALLBACK);
 		return VM_FAULT_FALLBACK;
 	}
 	prep_transhuge_page(page);
-	return __do_huge_pmd_anonymous_page(vmf, page, gfp);
+	return __do_huge_pmd_anonymous_page(vmf, page, gfp, zeroed);
 }
 
 static void insert_pfn_pmd(struct vm_area_struct *vma, unsigned long addr,

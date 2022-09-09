@@ -74,6 +74,7 @@
 #include <linux/kfence.h>
 #include <linux/buffer_head.h>
 #include <linux/vmalloc.h>
+#include <linux/prezero.h>
 
 #include <asm/sections.h>
 #include <asm/tlbflush.h>
@@ -943,6 +944,15 @@ static inline void del_page_from_free_list(struct page *page, struct zone *zone,
 	if (page_reported(page))
 		__ClearPageReported(page);
 
+#ifdef CONFIG_PAGE_PREZERO
+	/* clear pre-zeroed state */
+	if (PageZeroed(page)) {
+		__ClearPageZeroed(page);
+		zone->free_area[order].nr_zeroed--;
+		__mod_zone_page_state(zone, NR_ZEROED_PAGES, -(1 << order));
+	}
+#endif
+
 	list_del(&page->lru);
 	__ClearPageBuddy(page);
 	set_page_private(page, 0);
@@ -1041,6 +1051,10 @@ continue_merging:
 			goto done_merging;
 		if (!page_is_buddy(page, buddy, order))
 			goto done_merging;
+
+		/* Clear PG_zeroed when merging. */
+		__ClearPageZeroed(page);
+
 		/*
 		 * Our buddy is free or it is CONFIG_DEBUG_PAGEALLOC guard page,
 		 * merge with it and move up one order.
@@ -1218,6 +1232,18 @@ static void kernel_init_free_pages(struct page *page, int numpages)
 {
 	int i;
 
+#ifdef CONFIG_PAGE_PREZERO
+	/*
+	 * Skip clear if page is pre-zeroed.
+	 * But force clear if !prezero_enabled().
+	 */
+	if (prezero_enabled() && page_zeroed(page)) {
+		count_vm_event(PREZERO_ALLOC);
+		__count_vm_events(PREZERO_ALLOC_PAGES, numpages);
+		return;
+	}
+#endif
+
 	/* s390's use of memset() could override KASAN redzones. */
 	kasan_disable_current();
 	for (i = 0; i < numpages; i++)
@@ -1284,6 +1310,7 @@ static __always_inline bool free_pages_prepare(struct page *page,
 	}
 	if (PageMappingFlags(page))
 		page->mapping = NULL;
+	set_page_private(page, 0);
 	if (memcg_kmem_enabled() && PageKmemcg(page))
 		__memcg_kmem_uncharge_page(page, order);
 	if (check_free)
@@ -1425,6 +1452,13 @@ static void free_pcppages_bulk(struct zone *zone, int count,
 			/* must delete to avoid corrupting pcp list */
 			list_del(&page->lru);
 			pcp->count--;
+
+			/*
+			 * PAGE_ZEROED bit may be set for pcp pages, see
+			 * comments in __rmqueue_smallest(). Clear this bit
+			 * if any.
+			 */
+			clear_page_zeroed(page);
 
 			if (bulkfree_pcp_prepare(page))
 				continue;
@@ -2208,7 +2242,7 @@ void __init init_cma_reserved_pageblock(struct page *page)
  * -- nyc
  */
 static inline void expand(struct zone *zone, struct page *page,
-	int low, int high, int migratetype)
+	int low, int high, int migratetype, bool zeroed)
 {
 	unsigned long size = 1 << high;
 
@@ -2226,8 +2260,20 @@ static inline void expand(struct zone *zone, struct page *page,
 		if (set_page_guard(zone, &page[size], high, migratetype))
 			continue;
 
-		add_to_free_list(&page[size], zone, high, migratetype);
 		set_buddy_order(&page[size], high);
+#ifdef CONFIG_PAGE_PREZERO
+		if (zeroed) {
+			add_to_free_list_tail(&page[size], zone, high,
+					      migratetype);
+			__SetPageZeroed(&page[size]);
+			zone->free_area[high].nr_zeroed++;
+			__mod_zone_page_state(zone, NR_ZEROED_PAGES, 1 << high);
+		} else {
+			add_to_free_list(&page[size], zone, high, migratetype);
+		}
+#else
+		add_to_free_list(&page[size], zone, high, migratetype);
+#endif
 	}
 }
 
@@ -2315,7 +2361,7 @@ static bool check_new_pages(struct page *page, unsigned int order)
 inline void post_alloc_hook(struct page *page, unsigned int order,
 				gfp_t gfp_flags)
 {
-	set_page_private(page, 0);
+	WARN_ON_ONCE(page_private(page) & ~PAGE_ZEROED);
 	set_page_refcounted(page);
 
 	arch_alloc_page(page, order);
@@ -2333,6 +2379,9 @@ static void prep_new_page(struct page *page, unsigned int order, gfp_t gfp_flags
 
 	if (!free_pages_prezeroed() && want_init_on_alloc(gfp_flags))
 		kernel_init_free_pages(page, 1 << order);
+
+	/* Clear pre-zeroed state (PAGE_ZEROED bit) if any. */
+	clear_page_zeroed(page);
 
 	if (order && (gfp_flags & __GFP_COMP))
 		prep_compound_page(page, order);
@@ -2360,16 +2409,41 @@ struct page *__rmqueue_smallest(struct zone *zone, unsigned int order,
 	unsigned int current_order;
 	struct free_area *area;
 	struct page *page;
+	struct list_head __maybe_unused *list;
 
 	/* Find a page of the appropriate size in the preferred list */
 	for (current_order = order; current_order < MAX_ORDER; ++current_order) {
+		bool zeroed;
 		area = &(zone->free_area[current_order]);
+#ifdef CONFIG_PAGE_PREZERO
+		list = &area->free_list[migratetype];
+
+		if (unlikely(list_empty(list)))
+			page = NULL;
+		else if (zone->alloc_zero)
+			page = list_last_entry(list, struct page, lru);
+		else
+			page = list_first_entry(list, struct page, lru);
+#else
 		page = get_page_from_free_area(area, migratetype);
+#endif
+
 		if (!page)
 			continue;
+
+		/* Stash this away before del_page_from_free_list() zaps it */
+		zeroed = PageZeroed(page);
+
 		del_page_from_free_list(page, zone, current_order);
-		expand(zone, page, order, current_order, migratetype);
+		expand(zone, page, order, current_order, migratetype, zeroed);
 		set_pcppage_migratetype(page, migratetype);
+		/*
+		 * NOTE This is a hack.  The pre-zeroed state was zapped
+		 * above and restored here, and should finally be cleared
+		 * in prep_new_page() or free_pcppages_bulk().
+		 */
+		if (zeroed)
+			set_page_zeroed(page);
 		return page;
 	}
 
@@ -2930,11 +3004,15 @@ out:
  */
 static int rmqueue_bulk(struct zone *zone, unsigned int order,
 			unsigned long count, struct list_head *list,
-			int migratetype, unsigned int alloc_flags)
+			gfp_t gfp_flags, int migratetype,
+			unsigned int alloc_flags)
 {
 	int i, alloced = 0;
 
 	spin_lock(&zone->lock);
+#ifdef CONFIG_PAGE_PREZERO
+	zone->alloc_zero = prezero_pcp_enabled() && (gfp_flags & __GFP_ZERO);
+#endif
 	for (i = 0; i < count; ++i) {
 		struct page *page = __rmqueue(zone, order, migratetype,
 								alloc_flags);
@@ -2968,6 +3046,9 @@ static int rmqueue_bulk(struct zone *zone, unsigned int order,
 	 * pages added to the pcp list.
 	 */
 	__mod_zone_page_state(zone, NR_FREE_PAGES, -(i << order));
+#ifdef CONFIG_PAGE_PREZERO
+	zone->alloc_zero = false;
+#endif
 	spin_unlock(&zone->lock);
 	return alloced;
 }
@@ -3423,17 +3504,16 @@ static inline void zone_statistics(struct zone *preferred_zone, struct zone *z)
 }
 
 /* Remove page from the per-cpu list, caller must protect the list */
-static struct page *__rmqueue_pcplist(struct zone *zone, int migratetype,
-			unsigned int alloc_flags,
-			struct per_cpu_pages *pcp,
-			struct list_head *list)
+static struct page *__rmqueue_pcplist(struct zone *zone, gfp_t gfp_flags,
+			int migratetype, unsigned int alloc_flags,
+			struct per_cpu_pages *pcp, struct list_head *list)
 {
 	struct page *page;
 
 	do {
 		if (list_empty(list)) {
 			pcp->count += rmqueue_bulk(zone, 0,
-					pcp->batch, list,
+					pcp->batch, list, gfp_flags,
 					migratetype, alloc_flags);
 			if (unlikely(list_empty(list)))
 				return NULL;
@@ -3460,7 +3540,8 @@ static struct page *rmqueue_pcplist(struct zone *preferred_zone,
 	local_irq_save(flags);
 	pcp = &this_cpu_ptr(zone->pageset)->pcp;
 	list = &pcp->lists[migratetype];
-	page = __rmqueue_pcplist(zone,  migratetype, alloc_flags, pcp, list);
+	page = __rmqueue_pcplist(zone, gfp_flags, migratetype, alloc_flags,
+				 pcp, list);
 	if (page) {
 		__count_zid_vm_events(PGALLOC, page_zonenum(page), 1);
 		zone_statistics(preferred_zone, zone);
@@ -3501,6 +3582,10 @@ struct page *rmqueue(struct zone *preferred_zone,
 	WARN_ON_ONCE((gfp_flags & __GFP_NOFAIL) && (order > 1));
 	spin_lock_irqsave(&zone->lock, flags);
 
+#ifdef CONFIG_PAGE_PREZERO
+	zone->alloc_zero = prezero_buddy_enabled() && (gfp_flags & __GFP_ZERO);
+#endif
+
 	do {
 		page = NULL;
 		/*
@@ -3517,6 +3602,11 @@ struct page *rmqueue(struct zone *preferred_zone,
 		if (!page)
 			page = __rmqueue(zone, order, migratetype, alloc_flags);
 	} while (page && check_new_pages(page, order));
+
+#ifdef CONFIG_PAGE_PREZERO
+	zone->alloc_zero = false;
+#endif
+
 	spin_unlock(&zone->lock);
 	if (!page)
 		goto failed;
@@ -4196,8 +4286,10 @@ __alloc_pages_direct_compact(gfp_t gfp_mask, unsigned int order,
 	count_vm_event(COMPACTSTALL);
 
 	/* Prep a captured page if available */
-	if (page)
+	if (page) {
+		set_page_private(page, 0);
 		prep_new_page(page, order, gfp_mask, alloc_flags);
+	}
 
 	/* Try get a page from the freelist if available */
 	if (!page)
@@ -5021,6 +5113,7 @@ __alloc_pages_nodemask(gfp_t gfp_mask, unsigned int order, int preferred_nid,
 
 	page = kfence_alloc_page(order, preferred_nid, gfp_mask);
 	if (unlikely(page)) {
+		set_page_private(page, 0);
 		prep_new_page(page, 0, gfp_mask, alloc_mask);
 		goto out;
 	}
@@ -6278,6 +6371,9 @@ static void __meminit zone_init_free_lists(struct zone *zone)
 	for_each_migratetype_order(order, t) {
 		INIT_LIST_HEAD(&zone->free_area[order].free_list[t]);
 		zone->free_area[order].nr_free = 0;
+#ifdef CONFIG_PAGE_PREZERO
+		zone->free_area[order].nr_zeroed = 0;
+#endif
 	}
 }
 
