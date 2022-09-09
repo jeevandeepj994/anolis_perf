@@ -104,12 +104,14 @@ static int hash_alg_get_tsgl(struct sock *sk, struct hash_ctx *ctx,
 	return 0;
 }
 
-static void hash_alg_put_tsgl(struct sock *sk, struct hash_ctx *ctx)
+static void hash_alg_put_tsgl(struct sock *sk, struct hash_ctx *ctx, int sg_err)
 {
 	struct hash_alg_sgl *tsgl, *tmp;
 
 	list_for_each_entry_safe(tsgl, tmp, &ctx->tsgl_list, list) {
-		af_alg_free_sg(&tsgl->sgl);
+		if (!sg_err)
+			af_alg_free_sg(&tsgl->sgl);
+
 		list_del(&tsgl->list);
 		if (tsgl != &ctx->first_sgl)
 			sock_kfree_s(sk, tsgl, sizeof(*tsgl));
@@ -197,7 +199,7 @@ static int hash_sendmsg_ex(struct socket *sock, struct msghdr *msg)
 		err = hash_alg_get_tsgl(sk, ctx, msg, len);
 		if (err < 0) {
 			err = copied ? 0 : err;
-			hash_alg_put_tsgl(sk, ctx);
+			hash_alg_put_tsgl(sk, ctx, 1);
 			goto unlock;
 		}
 
@@ -206,11 +208,11 @@ static int hash_sendmsg_ex(struct socket *sock, struct msghdr *msg)
 		err = crypto_wait_req(crypto_ahash_update(&ctx->req),
 				      &ctx->wait);
 		if (err) {
-			hash_alg_put_tsgl(sk, ctx);
+			hash_alg_put_tsgl(sk, ctx, 0);
 			goto unlock;
 		}
 
-		hash_alg_put_tsgl(sk, ctx);
+		hash_alg_put_tsgl(sk, ctx, 0);
 		copied += len;
 	}
 
