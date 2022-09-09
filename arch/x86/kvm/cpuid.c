@@ -478,7 +478,7 @@ void kvm_set_cpu_caps(void)
 		F(AVX512_VPOPCNTDQ) | F(UMIP) | F(AVX512_VBMI2) | F(GFNI) |
 		F(VAES) | F(VPCLMULQDQ) | F(AVX512_VNNI) | F(AVX512_BITALG) |
 		F(CLDEMOTE) | F(MOVDIRI) | F(MOVDIR64B) | F(ENQCMD) | 0 /*WAITPKG*/ |
-		F(SGX_LC)
+		F(SGX_LC) | F(BUS_LOCK_DETECT)
 	);
 	/* Set LA57 based on hardware capability. */
 	if (cpuid_ecx(7) & F(LA57))
@@ -495,7 +495,7 @@ void kvm_set_cpu_caps(void)
 		F(AVX512_4VNNIW) | F(AVX512_4FMAPS) | F(SPEC_CTRL) |
 		F(SPEC_CTRL_SSBD) | F(ARCH_CAPABILITIES) | F(INTEL_STIBP) |
 		F(MD_CLEAR) | F(AVX512_VP2INTERSECT) | F(FSRM) |
-		F(SERIALIZE) | F(TSXLDTRK) |
+		F(SERIALIZE) | F(TSXLDTRK) | F(AVX512_FP16) |
 		F(AMX_TILE) | F(AMX_INT8) | F(AMX_BF16)
 	);
 
@@ -511,7 +511,7 @@ void kvm_set_cpu_caps(void)
 		kvm_cpu_cap_set(X86_FEATURE_SPEC_CTRL_SSBD);
 
 	kvm_cpu_cap_mask(CPUID_7_1_EAX,
-		F(AVX512_BF16)
+		F(AVX512_BF16) | F(AVX_VNNI)
 	);
 
 	kvm_cpu_cap_mask(CPUID_D_1_EAX,
@@ -663,6 +663,7 @@ static int __do_cpuid_func_emulated(struct kvm_cpuid_array *array, u32 func)
 		if (kvm_cpu_cap_has(X86_FEATURE_RDTSCP))
 			entry->ecx = F(RDPID);
 		++array->nent;
+		break;
 	default:
 		break;
 	}

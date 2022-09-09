@@ -302,6 +302,8 @@ extern int pi_inject_timer;
 
 extern struct static_key kvm_no_apic_vcpu;
 
+extern bool report_ignored_msrs;
+
 static inline u64 nsec_to_cycles(struct kvm_vcpu *vcpu, u64 nsec)
 {
 	return pvclock_scale_delta(nsec, vcpu->arch.virtual_tsc_mult,
@@ -343,6 +345,11 @@ static inline bool kvm_cstate_in_guest(struct kvm *kvm)
 }
 
 DECLARE_PER_CPU(struct kvm_vcpu *, current_vcpu);
+
+static inline bool kvm_notify_vmexit_enabled(struct kvm *kvm)
+{
+	return kvm->arch.notify_vmexit_flags & KVM_X86_NOTIFY_VMEXIT_ENABLED;
+}
 
 static inline void kvm_before_interrupt(struct kvm_vcpu *vcpu)
 {
