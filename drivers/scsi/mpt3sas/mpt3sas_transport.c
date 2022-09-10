@@ -328,7 +328,7 @@ _transport_expander_report_manufacture(struct MPT3SAS_ADAPTER *ioc,
 	wait_state_count = 0;
 	ioc_state = mpt3sas_base_get_iocstate(ioc, 1);
 	while (ioc_state != MPI2_IOC_STATE_OPERATIONAL) {
-		if (wait_state_count++ == 10) {
+		if (wait_state_count++ == IOC_OPERATIONAL_WAIT_COUNT) {
 			pr_err(MPT3SAS_FMT
 			    "%s: failed due to ioc not operational\n",
 			    ioc->name, __func__);
@@ -1119,7 +1119,7 @@ _transport_get_expander_phy_error_log(struct MPT3SAS_ADAPTER *ioc,
 	wait_state_count = 0;
 	ioc_state = mpt3sas_base_get_iocstate(ioc, 1);
 	while (ioc_state != MPI2_IOC_STATE_OPERATIONAL) {
-		if (wait_state_count++ == 10) {
+		if (wait_state_count++ == IOC_OPERATIONAL_WAIT_COUNT) {
 			pr_err(MPT3SAS_FMT
 			    "%s: failed due to ioc not operational\n",
 			    ioc->name, __func__);
@@ -1432,7 +1432,7 @@ _transport_expander_phy_control(struct MPT3SAS_ADAPTER *ioc,
 	wait_state_count = 0;
 	ioc_state = mpt3sas_base_get_iocstate(ioc, 1);
 	while (ioc_state != MPI2_IOC_STATE_OPERATIONAL) {
-		if (wait_state_count++ == 10) {
+		if (wait_state_count++ == IOC_OPERATIONAL_WAIT_COUNT) {
 			pr_err(MPT3SAS_FMT
 			    "%s: failed due to ioc not operational\n",
 			    ioc->name, __func__);
@@ -1961,7 +1961,7 @@ _transport_smp_handler(struct bsg_job *job, struct Scsi_Host *shost,
 	wait_state_count = 0;
 	ioc_state = mpt3sas_base_get_iocstate(ioc, 1);
 	while (ioc_state != MPI2_IOC_STATE_OPERATIONAL) {
-		if (wait_state_count++ == 10) {
+		if (wait_state_count++ == IOC_OPERATIONAL_WAIT_COUNT) {
 			pr_err(MPT3SAS_FMT
 			    "%s: failed due to ioc not operational\n",
 			    ioc->name, __func__);
