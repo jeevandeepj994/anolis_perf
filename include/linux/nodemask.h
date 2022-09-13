@@ -399,6 +399,7 @@ enum node_states {
 #endif
 	N_MEMORY,		/* The node has memory(regular, high, movable) */
 	N_CPU,		/* The node has one or more cpus */
+	N_POSSIBLE_CPU,	/* possible nodes that have cpu attached, only used in early boot phase */
 	NR_NODE_STATES
 };
 
