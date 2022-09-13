@@ -11,6 +11,7 @@
 #include <linux/parser.h>
 #include <linux/seq_file.h>
 #include <linux/crc32c.h>
+#include <linux/backing-dev-defs.h>
 #include "xattr.h"
 
 #define CREATE_TRACE_POINTS
@@ -631,6 +632,11 @@ static int erofs_fill_super(struct super_block *sb, void *data, int silent)
 						    sbi->fsid, true);
 		if (err)
 			return err;
+
+		err = super_setup_bdi(sb);
+		if (err)
+			return err;
+		sb->s_bdi->ra_pages = VM_MAX_READAHEAD * 1024 / PAGE_SIZE;
 	}
 
 	err = rafs_v6_fill_super(sb, data);

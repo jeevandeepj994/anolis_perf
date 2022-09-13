@@ -11,6 +11,7 @@
 
 #include <linux/slab.h>
 #include <linux/mount.h>
+#include <linux/file.h>
 #include "internal.h"
 
 struct cachefiles_lookup_data {
@@ -312,6 +313,12 @@ static void cachefiles_drop_object(struct fscache_object *_object)
 		object->backer = NULL;
 	}
 
+	/* clean up file descriptor for non-index object */
+	if (object->file) {
+		fput(object->file);
+		object->file = NULL;
+	}
+
 	/* note that the object is now inactive */
 	if (test_bit(CACHEFILES_OBJECT_ACTIVE, &object->flags))
 		cachefiles_mark_object_inactive(cache, object, i_blocks);
@@ -571,6 +578,7 @@ const struct fscache_cache_ops cachefiles_cache_ops = {
 	.attr_changed		= cachefiles_attr_changed,
 	.read_or_alloc_page	= cachefiles_read_or_alloc_page,
 	.read_or_alloc_pages	= cachefiles_read_or_alloc_pages,
+	.prepare_read		= cachefiles_prepare_read,
 	.allocate_page		= cachefiles_allocate_page,
 	.allocate_pages		= cachefiles_allocate_pages,
 	.write_page		= cachefiles_write_page,

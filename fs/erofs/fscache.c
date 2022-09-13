@@ -38,6 +38,13 @@ static void erofs_readpage_from_fscache_complete(struct page *page, void *ctx,
 	unlock_page(page);
 }
 
+static void erofs_readahead_from_fscache_complete(struct page *page, void *ctx,
+						  int error)
+{
+	erofs_readpage_from_fscache_complete(page, ctx, error);
+	put_page(page);
+}
+
 static int erofs_fscache_meta_readpage(struct file *data, struct page *page)
 {
 	int ret;
@@ -175,6 +182,102 @@ out_unlock:
 	return ret;
 }
 
+static int erofs_fscache_readpages(struct file *filp, struct address_space *mapping,
+			struct list_head *pages, unsigned int nr_pages)
+{
+	struct inode *inode = mapping->host;
+	struct super_block *sb = inode->i_sb;
+	struct page *page;
+	size_t len, count, done = 0;
+	loff_t start, start_pos;
+	erofs_off_t pos;
+	int ret;
+
+	if (nr_pages == 0)
+		return 0;
+
+	page = lru_to_page(pages);
+	start = page_offset(page);
+	len = nr_pages << PAGE_SHIFT;
+
+	do {
+		struct erofs_map_blocks map;
+		struct erofs_map_dev mdev;
+		LIST_HEAD(pagepool);
+		unsigned int i, batch;
+
+		pos = start + done;
+
+		map.m_la = pos;
+		ret = erofs_map_blocks(inode, &map, EROFS_GET_BLOCKS_RAW);
+		if (ret)
+			return ret;
+
+		if (!(map.m_flags & EROFS_MAP_MAPPED)) {
+			list_del(&page->lru);
+			ret = add_to_page_cache_lru(page, mapping, page->index,
+					readahead_gfp_mask(mapping));
+			if (ret) {
+				put_page(page);
+				return ret;
+			}
+			zero_user_segment(page, 0, PAGE_SIZE);
+			SetPageUptodate(page);
+			unlock_page(page);
+			put_page(page);
+			done += PAGE_SIZE;
+			continue;
+		}
+
+		if (map.m_flags & EROFS_MAP_META) {
+			list_del(&page->lru);
+			ret = add_to_page_cache_lru(page, mapping, page->index,
+					readahead_gfp_mask(mapping));
+			if (ret) {
+				put_page(page);
+				return ret;
+			}
+			ret = erofs_fscache_readpage_inline(page, &map);
+			unlock_page(page);
+			put_page(page);
+			done += PAGE_SIZE;
+			continue;
+		}
+
+		mdev = (struct erofs_map_dev) {
+			.m_deviceid = map.m_deviceid,
+			.m_pa = map.m_pa,
+		};
+
+		ret = erofs_map_dev(sb, &mdev);
+		if (ret)
+			return ret;
+
+		start_pos = mdev.m_pa + (pos - map.m_la);
+		count = min_t(size_t, map.m_llen - (pos - map.m_la), len - done);
+		if (WARN_ON(count % PAGE_SIZE))
+			return 0;
+		batch = count >> PAGE_SHIFT;
+
+		for (i = 0; i < batch; i++) {
+			page = lru_to_page(pages);
+			if (WARN_ON(page_offset(page) != (pos + PAGE_SIZE * i))) {
+				put_pages_list(&pagepool);
+				return 0;
+			}
+			list_move_tail(&page->lru, &pagepool);
+		}
+
+		ret = fscache_prepare_read(mdev.m_fscache->cookie, mapping,
+				&pagepool, batch, start_pos,
+				erofs_readahead_from_fscache_complete, NULL);
+		put_pages_list(&pagepool);
+		done += count;
+	} while (done < len);
+
+	return 0;
+}
+
 static const struct address_space_operations erofs_fscache_meta_aops = {
 	.readpage = erofs_fscache_meta_readpage,
 	.releasepage = erofs_fscache_release_page,
@@ -183,6 +286,7 @@ static const struct address_space_operations erofs_fscache_meta_aops = {
 
 const struct address_space_operations erofs_fscache_access_aops = {
 	.readpage = erofs_fscache_readpage,
+	.readpages = erofs_fscache_readpages,
 	.releasepage = erofs_fscache_release_page,
 	.invalidatepage = erofs_fscache_invalidate_page,
 };

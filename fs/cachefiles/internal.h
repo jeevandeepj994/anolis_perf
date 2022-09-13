@@ -43,6 +43,7 @@ struct cachefiles_object {
 	struct cachefiles_lookup_data	*lookup_data;	/* cached lookup data */
 	struct dentry			*dentry;	/* the file/dir representing this object */
 	struct dentry			*backer;	/* backing file */
+	struct file			*file;		/* backing file in on-demand mode */
 	loff_t				i_size;		/* object size */
 	unsigned long			flags;
 #define CACHEFILES_OBJECT_ACTIVE	0		/* T if marked active */
@@ -243,6 +244,7 @@ extern int cachefiles_read_or_alloc_page(struct fscache_retrieval *,
 extern int cachefiles_read_or_alloc_pages(struct fscache_retrieval *,
 					  struct list_head *, unsigned *,
 					  gfp_t);
+extern int cachefiles_prepare_read(struct fscache_retrieval *op, struct list_head *pages);
 extern int cachefiles_allocate_page(struct fscache_retrieval *, struct page *,
 				    gfp_t);
 extern int cachefiles_allocate_pages(struct fscache_retrieval *,
