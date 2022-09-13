@@ -60,6 +60,9 @@ acpi_numa_x2apic_affinity_init(struct acpi_srat_x2apic_cpu_affinity *pa)
 	node_set(node, numa_nodes_parsed);
 	printk(KERN_INFO "SRAT: PXM %u -> APIC 0x%04x -> Node %u\n",
 	       pxm, apic_id, node);
+
+	if (!node_state(node, N_POSSIBLE_CPU))
+		node_set_state(node, N_POSSIBLE_CPU);
 }
 
 /* Callback for Proximity Domain -> LAPIC mapping */
@@ -101,6 +104,8 @@ acpi_numa_processor_affinity_init(struct acpi_srat_cpu_affinity *pa)
 	node_set(node, numa_nodes_parsed);
 	printk(KERN_INFO "SRAT: PXM %u -> APIC 0x%02x -> Node %u\n",
 	       pxm, apic_id, node);
+	if (!node_state(node, N_POSSIBLE_CPU))
+		node_set_state(node, N_POSSIBLE_CPU);
 }
 
 int __init x86_acpi_numa_init(void)
