@@ -2789,6 +2789,9 @@ _base_free_irq(struct MPT3SAS_ADAPTER *ioc)
 
 	list_for_each_entry_safe(reply_q, next, &ioc->reply_queue_list, list) {
 		list_del(&reply_q->list);
+		if (smp_affinity_enable)
+			irq_set_affinity_hint(pci_irq_vector(ioc->pdev,
+			    reply_q->msix_index), NULL);
 		free_irq(pci_irq_vector(ioc->pdev, reply_q->msix_index),
 			 reply_q);
 		kfree(reply_q);
@@ -2853,6 +2856,7 @@ _base_assign_reply_queues(struct MPT3SAS_ADAPTER *ioc)
 {
 	unsigned int cpu, nr_cpus, nr_msix, index = 0;
 	struct adapter_reply_queue *reply_q;
+	int local_numa_node;
 
 	if (!_base_is_controller_msix_enabled(ioc))
 		return;
@@ -2871,13 +2875,32 @@ _base_assign_reply_queues(struct MPT3SAS_ADAPTER *ioc)
 		return;
 
 	if (smp_affinity_enable) {
+
+		/*
+		 * set irq affinity to local numa node for those irqs
+		 * corresponding to high iops queues.
+		 */
+		if (ioc->high_iops_queues) {
+			local_numa_node = dev_to_node(&ioc->pdev->dev);
+			for (index = 0; index < ioc->high_iops_queues;
+			    index++) {
+				irq_set_affinity_hint(pci_irq_vector(ioc->pdev,
+				    index), cpumask_of_node(local_numa_node));
+			}
+		}
+
 		list_for_each_entry(reply_q, &ioc->reply_queue_list, list) {
-			const cpumask_t *mask = pci_irq_get_affinity(ioc->pdev,
-							reply_q->msix_index);
+			const cpumask_t *mask;
+
+			if (reply_q->msix_index < ioc->high_iops_queues)
+				continue;
+
+			mask = pci_irq_get_affinity(ioc->pdev,
+			    reply_q->msix_index);
 			if (!mask) {
 				pr_warn(MPT3SAS_FMT "no affinity for msi %x\n",
 					ioc->name, reply_q->msix_index);
-				continue;
+				goto fall_back;
 			}
 
 			for_each_cpu_and(cpu, mask, cpu_online_mask) {
@@ -2888,11 +2911,16 @@ _base_assign_reply_queues(struct MPT3SAS_ADAPTER *ioc)
 		}
 		return;
 	}
+
+fall_back:
 	cpu = cpumask_first(cpu_online_mask);
-
+	nr_msix -= ioc->high_iops_queues;
+	index = 0;
 	list_for_each_entry(reply_q, &ioc->reply_queue_list, list) {
-
 		unsigned int i, group = nr_cpus / nr_msix;
+
+		if (reply_q->msix_index < ioc->high_iops_queues)
+			continue;
 
 		if (cpu >= nr_cpus)
 			break;
@@ -2946,8 +2974,35 @@ _base_disable_msix(struct MPT3SAS_ADAPTER *ioc)
 {
 	if (!ioc->msix_enable)
 		return;
-	pci_disable_msix(ioc->pdev);
+	pci_free_irq_vectors(ioc->pdev);
 	ioc->msix_enable = 0;
+}
+
+/**
+ * _base_alloc_irq_vectors - allocate msix vectors
+ * @ioc: per adapter object
+ *
+ */
+static int
+_base_alloc_irq_vectors(struct MPT3SAS_ADAPTER *ioc)
+{
+	int i, irq_flags = PCI_IRQ_MSIX;
+	struct irq_affinity desc = { .pre_vectors = ioc->high_iops_queues };
+	struct irq_affinity *descp = &desc;
+
+	if (smp_affinity_enable)
+		irq_flags |= PCI_IRQ_AFFINITY;
+	else
+		descp = NULL;
+
+	ioc_info(ioc, " %d %d\n", ioc->high_iops_queues,
+	    ioc->msix_vector_count);
+
+	i = pci_alloc_irq_vectors_affinity(ioc->pdev,
+	    ioc->high_iops_queues,
+	    ioc->msix_vector_count, irq_flags, descp);
+
+	return i;
 }
 
 /**
@@ -2961,7 +3016,6 @@ _base_enable_msix(struct MPT3SAS_ADAPTER *ioc)
 	int r;
 	int i, local_max_msix_vectors;
 	u8 try_msix = 0;
-	unsigned int irq_flags = PCI_IRQ_MSIX;
 
 	if (msix_disable == -1 || msix_disable == 0)
 		try_msix = 1;
@@ -2995,11 +3049,7 @@ _base_enable_msix(struct MPT3SAS_ADAPTER *ioc)
 	if (ioc->msix_vector_count < ioc->cpu_count)
 		smp_affinity_enable = 0;
 
-	if (smp_affinity_enable)
-		irq_flags |= PCI_IRQ_AFFINITY;
-
-	r = pci_alloc_irq_vectors(ioc->pdev, 1, ioc->reply_queue_count,
-				  irq_flags);
+	r = _base_alloc_irq_vectors(ioc);
 	if (r < 0) {
 		dfailprintk(ioc, pr_info(MPT3SAS_FMT
 			"pci_alloc_irq_vectors failed (r=%d) !!!\n",
