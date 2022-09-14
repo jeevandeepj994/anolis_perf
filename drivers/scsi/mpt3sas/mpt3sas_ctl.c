@@ -3363,9 +3363,8 @@ _ctl_diag_trigger_scsi_store(struct device *cdev,
 	ssize_t sz;
 
 	spin_lock_irqsave(&ioc->diag_trigger_lock, flags);
-	sz = min(sizeof(struct SL_WH_SCSI_TRIGGERS_T), count);
-	memset(&ioc->diag_trigger_scsi, 0,
-	    sizeof(struct SL_WH_EVENT_TRIGGERS_T));
+	sz = min(sizeof(ioc->diag_trigger_scsi), count);
+	memset(&ioc->diag_trigger_scsi, 0, sizeof(ioc->diag_trigger_scsi));
 	memcpy(&ioc->diag_trigger_scsi, buf, sz);
 	if (ioc->diag_trigger_scsi.ValidEntries > NUM_VALID_ENTRIES)
 		ioc->diag_trigger_scsi.ValidEntries = NUM_VALID_ENTRIES;
