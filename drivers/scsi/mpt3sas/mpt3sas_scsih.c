@@ -10410,6 +10410,7 @@ static struct scsi_host_template mpt3sas_driver_template = {
 	.this_id			= -1,
 	.sg_tablesize			= MPT3SAS_SG_DEPTH,
 	.max_sectors			= 32767,
+	.max_segment_size		= 0xffffffff,
 	.cmd_per_lun			= 7,
 	.use_clustering			= ENABLE_CLUSTERING,
 	.shost_attrs			= mpt3sas_host_attrs,
