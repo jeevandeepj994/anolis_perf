@@ -423,8 +423,6 @@ struct irq_stack {
 
 DECLARE_PER_CPU(struct irq_stack *, hardirq_stack_ptr);
 
-DECLARE_PER_CPU(unsigned long, cpu_current_top_of_stack);
-
 #ifdef CONFIG_X86_64
 struct fixed_percpu_data {
 	/*
@@ -569,7 +567,7 @@ static inline unsigned long current_top_of_stack(void)
 	 *  and around vm86 mode and sp0 on x86_64 is special because of the
 	 *  entry trampoline.
 	 */
-	return this_cpu_read_stable(cpu_current_top_of_stack);
+	return this_cpu_read_stable(pcpu_hot.top_of_stack);
 }
 
 static inline bool on_thread_stack(void)

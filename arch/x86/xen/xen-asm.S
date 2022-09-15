@@ -229,7 +229,7 @@ SYM_CODE_START(xen_sysret64)
 	 * tss.sp2 is scratch space.
 	 */
 	movq %rsp, PER_CPU_VAR(cpu_tss_rw + TSS_sp2)
-	movq PER_CPU_VAR(cpu_current_top_of_stack), %rsp
+	movq PER_CPU_VAR(pcpu_hot + X86_top_of_stack), %rsp
 
 	pushq $__USER_DS
 	pushq PER_CPU_VAR(cpu_tss_rw + TSS_sp2)
