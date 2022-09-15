@@ -18,6 +18,12 @@ struct pcpu_hot {
 			int			preempt_count;
 			int			cpu_number;
 			unsigned long		top_of_stack;
+			struct irq_stack	*hardirq_stack_ptr;
+#ifdef CONFIG_X86_64
+			bool			hardirq_stack_inuse;
+#else
+			struct irq_stack	*softirq_stack_ptr;
+#endif
 		};
 		u8	pad[64];
 	};
