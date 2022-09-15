@@ -5342,7 +5342,6 @@ _base_allocate_memory_pools(struct MPT3SAS_ADAPTER *ioc)
 			if (!ct->chain_buffer) {
 				pr_err(MPT3SAS_FMT "chain_lookup: "
 				" pci_pool_alloc failed\n", ioc->name);
-				_base_release_memory_pools(ioc);
 				goto out;
 			}
 		}
