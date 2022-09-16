@@ -294,7 +294,11 @@ static unsigned long required_kernelcore_percent __initdata;
 static unsigned long required_movablecore __initdata;
 static unsigned long required_movablecore_percent __initdata;
 static unsigned long zone_movable_pfn[MAX_NUMNODES] __meminitdata;
+#ifdef CONFIG_CPULESS_MOVABLE
 static bool enable_cpuless_memnode_normal_node __initdata;
+#else
+static bool enable_cpuless_memnode_normal_node __initdata = true;
+#endif
 static bool mirrored_kernelcore __meminitdata;
 
 /* movable_zone is the "real" zone pages in ZONE_MOVABLE are taken from */
