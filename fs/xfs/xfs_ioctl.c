@@ -2382,6 +2382,9 @@ xfs_file_ioctl(
 		bool set = false;
 		static const int enable = 1;
 
+		/* make sure caller has proper permission */
+		if (!inode_owner_or_capable(inode))
+			return -EPERM;
 		if (!S_ISREG(inode->i_mode))
 			return -EINVAL;
 		if (!xfs_sb_version_hasreflink(&mp->m_sb))
