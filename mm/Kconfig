@@ -817,4 +817,15 @@ config MEMSLI
 	  groups into the corresponding latency histogram in every memory
 	  cgroup, respectively.
 
+config CPULESS_MOVABLE
+	bool "Make cpuless memory to be movable"
+	depends on X86 && NUMA
+	default n
+	help
+	  This detect the cpuless memory in acpi table to make it to be an movable
+	  rather than normal node. It can add cpuless_node_normal in the cmdline if
+	  the cpuless memory should be in normal node state.
+
+	  please disable the feature if you're not sure about the case.
+
 endmenu
