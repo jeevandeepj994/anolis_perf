@@ -332,6 +332,8 @@ struct idxd_device {
 	struct kref mdev_kref;
 	struct mutex kref_lock;
 	bool mdev_host_init;
+
+	unsigned long *opcap_bmap;
 };
 
 /**
