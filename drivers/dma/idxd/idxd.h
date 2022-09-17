@@ -142,6 +142,7 @@ enum idxd_wq_state {
 enum idxd_wq_flag {
 	WQ_FLAG_DEDICATED = 0,
 	WQ_FLAG_BLOCK_ON_FAULT,
+	WQ_FLAG_ATS_DISABLE,
 	WQ_FLAG_MODE_1,
 };
 
@@ -220,7 +221,6 @@ struct idxd_wq {
 	char name[WQ_NAME_SIZE + 1];
 	u64 max_xfer_bytes;
 	u32 max_batch_size;
-	bool ats_dis;
 	char driver_name[WQ_NAME_SIZE + 1];
 
 	struct list_head vdcm_list;
