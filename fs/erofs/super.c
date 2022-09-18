@@ -773,6 +773,10 @@ static bool erofs_mount_is_nodev(char *options)
 static struct dentry *erofs_mount(struct file_system_type *fs_type, int flags,
 				  const char *dev_name, void *data)
 {
+	/* pseudo mount for anon inodes */
+	if (flags & SB_KERNMOUNT)
+		return mount_pseudo(fs_type, "erofs:", NULL, NULL, EROFS_SUPER_MAGIC);
+
 	if (erofs_mount_is_nodev(data))
 		return mount_nodev(fs_type, flags, data, erofs_fill_super);
 	return mount_bdev(fs_type, flags, dev_name, data, erofs_fill_super);
@@ -787,6 +791,12 @@ static void erofs_kill_sb(struct super_block *sb)
 	struct erofs_sb_info *sbi;
 
 	WARN_ON(sb->s_magic != EROFS_SUPER_MAGIC);
+
+	/* pseudo mount for anon inodes */
+	if (sb->s_flags & SB_KERNMOUNT) {
+		kill_anon_super(sb);
+		return;
+	}
 
 	if (sb->s_bdev)
 		kill_block_super(sb);
@@ -825,7 +835,7 @@ static void erofs_put_super(struct super_block *sb)
 	sbi->s_fscache = NULL;
 }
 
-static struct file_system_type erofs_fs_type = {
+struct file_system_type erofs_fs_type = {
 	.owner          = THIS_MODULE,
 	.name           = "erofs",
 	.mount          = erofs_mount,
