@@ -371,6 +371,7 @@ enum {
 	Opt_cache_strategy,
 	Opt_device,
 	Opt_fsid,
+	Opt_domain_id,
 	Opt_bootstrap_path,
 	Opt_blob_dir_path,
 	Opt_opt_creds_on,
@@ -386,6 +387,7 @@ static match_table_t erofs_tokens = {
 	{Opt_cache_strategy, "cache_strategy=%s"},
 	{Opt_device, "device=%s"},
 	{Opt_fsid, "fsid=%s"},
+	{Opt_domain_id, "domain_id=%s"},
 	{Opt_bootstrap_path, "bootstrap_path=%s"},
 	{Opt_blob_dir_path, "blob_dir_path=%s"},
 	{Opt_opt_creds_on, "opt_creds=on"},
@@ -476,6 +478,17 @@ static int erofs_parse_options(struct super_block *sb, char *options)
 				return -ENOMEM;
 #else
 			erofs_err(sb, "fsid option not supported");
+			return -EINVAL;
+#endif
+			break;
+		case Opt_domain_id:
+#ifdef CONFIG_EROFS_FS_ONDEMAND
+			kfree(sbi->domain_id);
+			sbi->domain_id = match_strdup(&args[0]);
+			if (!sbi->domain_id)
+				return -ENOMEM;
+#else
+			erofs_err(sb, "domain_id option not supported");
 			return -EINVAL;
 #endif
 			break;
@@ -815,6 +828,7 @@ static void erofs_kill_sb(struct super_block *sb)
 	kfree(sbi->blob_dir_path);
 	erofs_fscache_unregister_fs(sb);
 	kfree(sbi->fsid);
+	kfree(sbi->domain_id);
 	kfree(sbi);
 	sb->s_fs_info = NULL;
 }
@@ -956,6 +970,8 @@ static int erofs_show_options(struct seq_file *seq, struct dentry *root)
 #ifdef CONFIG_EROFS_FS_ONDEMAND
 	if (sbi->fsid)
 		seq_printf(seq, ",fsid=%s", sbi->fsid);
+	if (sbi->domain_id)
+		seq_printf(seq, ",domain_id=%s", sbi->domain_id);
 #endif
 	if (test_opt(sbi, OPT_CREDS))
 		seq_puts(seq, ",opt_creds=on");
