@@ -779,7 +779,7 @@ static void erofs_kill_sb(struct super_block *sb)
 	if (sb->s_bdev)
 		kill_block_super(sb);
 	else
-		generic_shutdown_super(sb);
+		kill_anon_super(sb);
 
 	sbi = EROFS_SB(sb);
 	if (!sbi)
