@@ -500,6 +500,11 @@ struct mem_cgroup {
 	unsigned long async_fork;
 #endif
 
+#ifdef CONFIG_LRU_GEN
+	/* per-memcg mm_struct list */
+	struct lru_gen_mm_list mm_list;
+#endif
+
 	CK_KABI_RESERVE(1)
 	CK_KABI_RESERVE(2)
 	CK_KABI_RESERVE(3)
