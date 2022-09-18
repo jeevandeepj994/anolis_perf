@@ -65,6 +65,13 @@ struct erofs_dev_context {
 	unsigned int extra_devices;
 };
 
+struct erofs_domain {
+	refcount_t ref;
+	struct list_head list;
+	struct fscache_cookie *volume;
+	char *domain_id;
+};
+
 struct erofs_fscache {
 	struct fscache_cookie *cookie;
 	struct inode *inode;
@@ -122,10 +129,12 @@ struct erofs_sb_info {
 
 	unsigned int mount_opt;
 	char *fsid;
+	char *domain_id;
 
 	/* fscache support */
 	struct fscache_cookie *volume;
 	struct erofs_fscache *s_fscache;
+	struct erofs_domain *domain;
 };
 
 #define EROFS_SB(sb) ((struct erofs_sb_info *)(sb)->s_fs_info)
