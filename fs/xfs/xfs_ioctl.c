@@ -2396,18 +2396,18 @@ xfs_file_ioctl(
 			return -EINVAL;
 
 		xfs_ilock(ip, XFS_IOLOCK_EXCL | XFS_MMAPLOCK_EXCL);
+		/* just return if previously already set */
+		if (ip->i_d.di_flags2 & XFS_DIFLAG2_DIO_ATOMIC_WRITE) {
+			error = 0;
+			goto out;
+		}
+
 		if (!i_size_read(inode) || !inode->i_blocks) {
 			/* set atomic write only after file is newly created */
 			xfs_info(mp, "set atomic write for inode %lld", ip->i_ino);
 			error = xfs_ioc_set_atomic_write(ip);
 			if (!error)
 				set = true;
-			goto out;
-		}
-
-		/* just return if previously already set */
-		if (ip->i_d.di_flags2 & XFS_DIFLAG2_DIO_ATOMIC_WRITE) {
-			error = 0;
 			goto out;
 		}
 
