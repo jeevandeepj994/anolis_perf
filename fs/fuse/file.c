@@ -3048,6 +3048,16 @@ fuse_direct_IO(struct kiocb *iocb, struct iov_iter *iter)
 	return ret;
 }
 
+static int fuse_writeback_range(struct inode *inode, loff_t start, loff_t end)
+{
+	int err = filemap_write_and_wait_range(inode->i_mapping, start, end);
+
+	if (!err)
+		fuse_sync_writes(inode);
+
+	return err;
+}
+
 static long fuse_file_fallocate(struct file *file, int mode, loff_t offset,
 				loff_t length)
 {
@@ -3085,12 +3095,10 @@ static long fuse_file_fallocate(struct file *file, int mode, loff_t offset,
 
 		if (mode & FALLOC_FL_PUNCH_HOLE) {
 			loff_t endbyte = offset + length - 1;
-			err = filemap_write_and_wait_range(inode->i_mapping,
-							   offset, endbyte);
+
+			err = fuse_writeback_range(inode, offset, endbyte);
 			if (err)
 				goto out;
-
-			fuse_sync_writes(inode);
 		}
 	}
 
@@ -3143,6 +3151,106 @@ out:
 	return err;
 }
 
+static ssize_t fuse_copy_file_range(struct file *file_in, loff_t pos_in,
+				    struct file *file_out, loff_t pos_out,
+				    size_t len, unsigned int flags)
+{
+	struct fuse_file *ff_in = file_in->private_data;
+	struct fuse_file *ff_out = file_out->private_data;
+	struct inode *inode_in = file_inode(file_in);
+	struct inode *inode_out = file_inode(file_out);
+	struct fuse_inode *fi_out = get_fuse_inode(inode_out);
+	struct fuse_conn *fc = ff_in->fc;
+	FUSE_ARGS(args);
+	struct fuse_copy_file_range_in inarg = {
+		.fh_in = ff_in->fh,
+		.off_in = pos_in,
+		.nodeid_out = ff_out->nodeid,
+		.fh_out = ff_out->fh,
+		.off_out = pos_out,
+		.len = len,
+		.flags = flags
+	};
+	struct fuse_write_out outarg;
+	ssize_t err;
+	/* mark unstable when write-back is not used, and file_out gets
+	 * extended */
+	bool is_unstable = (!fc->writeback_cache) &&
+			   ((pos_out + len) > inode_out->i_size);
+
+	if (fc->no_copy_file_range)
+		return -EOPNOTSUPP;
+
+	inode_lock(inode_in);
+	err = fuse_writeback_range(inode_in, pos_in, pos_in + len - 1);
+	inode_unlock(inode_in);
+	if (err)
+		return err;
+
+	inode_lock(inode_out);
+
+	/*
+	 * Write out dirty pages in the destination file before sending the COPY
+	 * request to userspace.  After the request is completed, truncate off
+	 * pages (including partial ones) from the cache that have been copied,
+	 * since these contain stale data at that point.
+	 *
+	 * This should be mostly correct, but if the COPY writes to partial
+	 * pages (at the start or end) and the parts not covered by the COPY are
+	 * written through a memory map after calling fuse_writeback_range(),
+	 * then these partial page modifications will be lost on truncation.
+	 *
+	 * It is unlikely that someone would rely on such mixed style
+	 * modifications.  Yet this does give less guarantees than if the
+	 * copying was performed with write(2).
+	 *
+	 * To fix this a i_mmap_sem style lock could be used to prevent new
+	 * faults while the copy is ongoing.
+	 */
+	err = fuse_writeback_range(inode_out, pos_out, pos_out + len - 1);
+	if (err)
+		goto out;
+
+	if (is_unstable)
+		set_bit(FUSE_I_SIZE_UNSTABLE, &fi_out->state);
+
+	args.in.h.opcode = FUSE_COPY_FILE_RANGE;
+	args.in.h.nodeid = ff_in->nodeid;
+	args.in.numargs = 1;
+	args.in.args[0].size = sizeof(inarg);
+	args.in.args[0].value = &inarg;
+	args.out.numargs = 1;
+	args.out.args[0].size = sizeof(outarg);
+	args.out.args[0].value = &outarg;
+	err = fuse_simple_request(fc, &args);
+	if (err == -ENOSYS) {
+		fc->no_copy_file_range = 1;
+		err = -EOPNOTSUPP;
+	}
+	if (err)
+		goto out;
+
+	truncate_inode_pages_range(inode_out->i_mapping,
+				   ALIGN_DOWN(pos_out, PAGE_SIZE),
+				   ALIGN(pos_out + outarg.size, PAGE_SIZE) - 1);
+
+	if (fc->writeback_cache) {
+		fuse_write_update_size(inode_out, pos_out + outarg.size);
+		file_update_time(file_out);
+	}
+
+	fuse_invalidate_attr(inode_out);
+
+	err = outarg.size;
+out:
+	if (is_unstable)
+		clear_bit(FUSE_I_SIZE_UNSTABLE, &fi_out->state);
+
+	inode_unlock(inode_out);
+
+	return err;
+}
+
 static const struct file_operations fuse_file_operations = {
 	.llseek		= fuse_file_llseek,
 	.read_iter	= fuse_file_read_iter,
@@ -3160,6 +3268,7 @@ static const struct file_operations fuse_file_operations = {
 	.compat_ioctl	= fuse_file_compat_ioctl,
 	.poll		= fuse_file_poll,
 	.fallocate	= fuse_file_fallocate,
+	.copy_file_range = fuse_copy_file_range,
 };
 
 static const struct address_space_operations fuse_file_aops  = {
