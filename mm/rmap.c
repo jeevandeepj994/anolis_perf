@@ -1363,6 +1363,13 @@ static bool try_to_unmap_one(struct page *page, struct vm_area_struct *vma,
 	unsigned long start = address, end;
 	enum ttu_flags flags = (enum ttu_flags)arg;
 
+	/*
+	 * If the same mapping offset of a file is alreadly mapped with
+	 * zeropage, the zeropage mapping needs to be unmapped.
+	 */
+	if (flags & TTU_ZEROPAGE)
+		pvmw.flags = PVMW_ZEROPAGE;
+
 	/* munlock has nothing to gain from examining un-locked vmas */
 	if ((flags & TTU_MUNLOCK) && !(vma->vm_flags & VM_LOCKED))
 		return true;
@@ -1404,6 +1411,18 @@ static bool try_to_unmap_one(struct page *page, struct vm_area_struct *vma,
 			continue;
 		}
 #endif
+
+		/*
+		 * If the page is zeropage, we just unmap it and return.
+		 * Because currently compound page is not supported.
+		 */
+		if (flags & TTU_ZEROPAGE) {
+			ptep_clear_flush(vma, pvmw.address, pvmw.pte);
+			mmu_notifier_invalidate_range(mm, pvmw.address,
+						      pvmw.address + PAGE_SIZE);
+			page_vma_mapped_walk_done(&pvmw);
+			break;
+		}
 
 		/*
 		 * If the page is mlock()d, we cannot swap it out.
@@ -1739,6 +1758,32 @@ bool try_to_unmap(struct page *page, enum ttu_flags flags)
 		rmap_walk(page, &rwc);
 
 	return !page_mapcount(page) ? true : false;
+}
+
+/**
+ * try_to_unmap_zeropage - try to remove all page table mappings to a zero page
+ * with the same offset. If the flag doesn't contain TTU_ZEROPAGE, this function
+ * does no thing.
+ * @page: the page to get unmapped
+ * @flags: action and flags
+ *
+ * Tries to remove all the page table entries which are mapping zero
+ * page with the same offset, used in the pageout path.  Caller must hold the page
+ * lock of the newly allocated page.
+ *
+ * During rmap_walk, it holds the i_mmap_sem to avoid modify VMA which not expected.
+ */
+void try_to_unmap_zeropage(struct page *page, enum ttu_flags flags)
+{
+	struct rmap_walk_control rwc = {
+		.rmap_one = try_to_unmap_one,
+		.arg = (void *)flags,
+	};
+
+	if (!(flags & TTU_ZEROPAGE))
+		return;
+
+	rmap_walk(page, &rwc);
 }
 
 static int page_not_mapped(struct page *page)
