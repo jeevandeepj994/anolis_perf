@@ -140,7 +140,8 @@ struct throtl_grp {
 	unsigned int flags;
 
 	/* are there any throtl rules between this group and td? */
-	bool has_rules[2];
+	bool has_rules_bps[2];
+	bool has_rules_iops[2];
 
 	/* internally used bytes per second rate limits */
 	uint64_t bps[2][LIMIT_CNT];
@@ -605,11 +606,16 @@ static void tg_update_has_rules(struct throtl_grp *tg)
 	struct throtl_data *td = tg->td;
 	int rw;
 
-	for (rw = READ; rw <= WRITE; rw++)
-		tg->has_rules[rw] = (parent_tg && parent_tg->has_rules[rw]) ||
+	for (rw = READ; rw <= WRITE; rw++) {
+		tg->has_rules_iops[rw] =
+			(parent_tg && parent_tg->has_rules_iops[rw]) ||
 			(td->limit_valid[td->limit_index] &&
-			 (tg_bps_limit(tg, rw) != U64_MAX ||
-			  tg_iops_limit(tg, rw) != UINT_MAX));
+			  tg_iops_limit(tg, rw) != UINT_MAX);
+		tg->has_rules_bps[rw] =
+			(parent_tg && parent_tg->has_rules_bps[rw]) ||
+			(td->limit_valid[td->limit_index] &&
+			 (tg_bps_limit(tg, rw) != U64_MAX));
+	}
 }
 
 static void throtl_pd_online(struct blkg_policy_data *pd)
@@ -2385,6 +2391,21 @@ static inline void throtl_update_latency_buckets(struct throtl_data *td)
 }
 #endif
 
+static inline bool blk_should_throtl(struct bio *bio)
+{
+	struct throtl_grp *tg = blkg_to_tg(bio->bi_blkg);
+	int rw = bio_data_dir(bio);
+
+	/* iops limit is always counted */
+	if (tg->has_rules_iops[rw])
+		return true;
+
+	if (tg->has_rules_bps[rw] && !bio_flagged(bio, BIO_BPS_THROTTLED))
+		return true;
+
+	return false;
+}
+
 bool blk_throtl_bio(struct bio *bio, wait_queue_head_t **waitq,
 		    struct wait_queue_entry *wait)
 {
@@ -2395,7 +2416,7 @@ bool blk_throtl_bio(struct bio *bio, wait_queue_head_t **waitq,
 	struct throtl_service_queue *sq;
 	bool rw = bio_data_dir(bio);
 	bool throttled = false;
-	bool has_rules = tg->has_rules[rw];
+	bool has_rules;
 	struct throtl_data *td = tg->td;
 
 	rcu_read_lock();
@@ -2406,6 +2427,7 @@ bool blk_throtl_bio(struct bio *bio, wait_queue_head_t **waitq,
 		blkg_rwstat_add(&tg->stat_ios, bio->bi_opf, 1);
 	}
 
+	has_rules = blk_should_throtl(bio);
 	if (!has_rules)
 		goto out;
 
