@@ -1994,6 +1994,15 @@ static struct ctl_table kern_table[] = {
 		.mode		= 0644,
 		.proc_handler	= proc_dointvec,
 	},
+	{
+		.procname	= "sched_group_identity_enabled",
+		.data		= &sysctl_sched_group_indentity_enabled,
+		.maxlen		= sizeof(unsigned int),
+		.mode		= 0644,
+		.proc_handler	= sched_group_identity_enable_handler,
+		.extra1		= SYSCTL_ZERO,
+		.extra2		= SYSCTL_ONE,
+	},
 #ifdef CONFIG_SCHED_SMT
 	{
 		.procname	= "sched_expel_idle_balance_delay",

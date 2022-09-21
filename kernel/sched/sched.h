@@ -582,10 +582,12 @@ struct cfs_bandwidth { };
 #ifdef CONFIG_GROUP_IDENTITY
 extern int update_identity(struct task_group *tg, s64 val);
 extern int update_bvt_warp_ns(struct task_group *tg, s64 val);
+extern int clear_identity(struct task_group *tg);
 extern void notify_smt_expeller(struct rq *rq, struct task_struct *p);
 extern unsigned int id_nr_invalid(struct rq *rq);
 extern void update_id_idle_avg(struct rq *rq, u64 delta);
 #else
+static inline int clear_identity(struct task_group *tg) { return 0; }
 static inline void notify_smt_expeller(struct rq *rq, struct task_struct *p) {}
 static inline unsigned int id_nr_invalid(struct rq *rq) { return 0; }
 static inline void update_id_idle_avg(struct rq *rq, u64 delta) {}
@@ -1075,6 +1077,7 @@ struct rq {
 	bool			smt_expeller;
 	bool			smt_expellee;
 	bool			on_expel;
+	bool			gi_enabled;
 	u64			high_exec_sum;
 	u64			under_exec_sum;
 	u64			under_exec_stamp;
@@ -1242,6 +1245,22 @@ static inline int cpu_of(struct rq *rq)
 #endif
 }
 
+#ifdef CONFIG_GROUP_IDENTITY
+DECLARE_STATIC_KEY_FALSE(__group_identity_enabled);
+
+static inline bool group_identity_enabled(struct rq *rq)
+{
+	return static_branch_unlikely(&__group_identity_enabled) && rq->gi_enabled;
+}
+
+static inline bool group_identity_disabled(void)
+{
+	return !static_branch_unlikely(&__group_identity_enabled);
+}
+#else
+static inline bool group_identity_enabled(struct rq *rq) { return false; }
+static inline bool group_identity_disabled(void) { return true; }
+#endif
 
 #ifdef CONFIG_SCHED_SMT
 extern void __update_idle_core(struct rq *rq);
