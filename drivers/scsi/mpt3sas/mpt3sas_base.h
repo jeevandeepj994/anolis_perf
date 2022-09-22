@@ -1187,7 +1187,16 @@ struct MPT3SAS_ADAPTER {
 	u32		ioc_reset_count;
 	MPT3SAS_FLUSH_RUNNING_CMDS schedule_dead_ioc_flush_running_cmds;
 	u32             non_operational_loop;
-	bool	use_32bit_dma;
+	u8              ioc_coredump_loop;
+	atomic64_t      total_io_cnt;
+	atomic64_t	high_iops_outstanding;
+	bool            msix_load_balance;
+	u16		thresh_hold;
+	u8		high_iops_queues;
+	u32		drv_support_bitmap;
+	u32		dma_mask;
+	bool		enable_sdev_max_qd;
+	bool		use_32bit_dma;
 
 	/* internal commands, callback index */
 	u8		scsi_io_cb_idx;
