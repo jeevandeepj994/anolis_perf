@@ -418,6 +418,13 @@ config IRQ_TIME_ACCOUNTING
 
 	  If in doubt, say N here.
 
+config IRQ_LOAD_ACCOUNTING
+       bool "Let irq time will be considered by load balanced scheduler."
+       depends on IRQ_TIME_ACCOUNTING || PARAVIRT_TIME_ACCOUNTING
+	   help
+	    Select this option to let irq time will be considered by load balanced
+		scheduler.
+
 config HAVE_SCHED_AVG_IRQ
 	def_bool y
 	depends on IRQ_TIME_ACCOUNTING || PARAVIRT_TIME_ACCOUNTING
