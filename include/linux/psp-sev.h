@@ -92,6 +92,15 @@ enum sev_cmd {
 };
 
 /**
+ * SEV platform commands on HYGON
+ */
+enum csv_cmd {
+	/* General Secure Certs command */
+	CSV_CMD_HGSC_CERT_IMPORT	= 0x300,
+	CSV_CMD_MAX,
+};
+
+/**
  * struct sev_data_init - INIT command parameters
  *
  * @flags: processing flags
@@ -500,6 +509,22 @@ struct sev_data_attestation_report {
 	u64 address;				/* In */
 	u8 mnonce[16];				/* In */
 	u32 len;				/* In/Out */
+} __packed;
+
+/**
+ * struct csv_data_hgsc_cert_import - HGSC_CERT_IMPORT command parameters
+ *
+ * @pek_address: HGSCSK certificate chain
+ * @pek_len: len of HGSCSK certificate
+ * @oca_address: HGSC certificate chain
+ * @oca_len: len of HGSC certificate
+ */
+struct csv_data_hgsc_cert_import {
+	u64 hgscsk_cert_address;	/* In */
+	u32 hgscsk_cert_len;		/* In */
+	u32 reserved;			/* In */
+	u64 hgsc_cert_address;		/* In */
+	u32 hgsc_cert_len;		/* In */
 } __packed;
 
 #ifdef CONFIG_CRYPTO_DEV_SP_PSP
