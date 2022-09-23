@@ -36,6 +36,7 @@
 #include <linux/uio.h>
 #include <linux/khugepaged.h>
 #include <linux/hugetlb.h>
+#include <linux/file_zeropage.h>
 
 #include <asm/tlbflush.h> /* for arch/microblaze update_mmu_cache() */
 
@@ -1809,7 +1810,12 @@ alloc_huge:
 		huge_gfp = limit_gfp_mask(huge_gfp, gfp);
 		page = shmem_alloc_and_acct_page(huge_gfp, inode, index, true);
 		if (IS_ERR(page)) {
-alloc_nohuge:		page = shmem_alloc_and_acct_page(gfp, inode,
+alloc_nohuge:
+			page = alloc_zeropage(vma, vmf);
+			if (is_zeropage(page))
+				goto out;
+
+			page = shmem_alloc_and_acct_page(gfp, inode,
 					index, false);
 		}
 		if (IS_ERR(page)) {
@@ -1916,6 +1922,13 @@ clear:
 		error = -EINVAL;
 		goto unlock;
 	}
+	/*
+	 * If the VMA that fault page belongs to is VM_SHARED, we should unmap all
+	 * zero page mappings to make the MMAP_PRIVATE VMA do page fault again
+	 * to catch page cache.
+	 */
+	unmap_zeropage(page, vma, mapping, vmf);
+out:
 	*pagep = page + index - hindex;
 	return 0;
 
@@ -2040,6 +2053,10 @@ static vm_fault_t shmem_fault(struct vm_fault *vmf)
 				  gfp, vma, vmf, &ret);
 	if (err)
 		return vmf_error(err);
+
+	if (is_zeropage(vmf->page))
+		mapping_set_zeropage(inode->i_mapping);
+
 	return ret;
 }
 

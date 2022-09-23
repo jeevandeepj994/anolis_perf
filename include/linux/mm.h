@@ -356,6 +356,7 @@ extern pgprot_t protection_map[16];
 #define FAULT_FLAG_USER		0x40	/* The fault originated in userspace */
 #define FAULT_FLAG_REMOTE	0x80	/* faulting for non current tsk/mm */
 #define FAULT_FLAG_INSTRUCTION  0x100	/* The fault was during an instruction fetch */
+#define FAULT_FLAG_NONZEROPAGE  0x400   /* The fault can not be filled with zero page*/
 
 #define FAULT_FLAG_TRACE \
 	{ FAULT_FLAG_WRITE,		"WRITE" }, \
@@ -1471,6 +1472,11 @@ extern int mlock_fixup(struct vm_area_struct *vma,
 		struct vm_area_struct **prev,
 		unsigned long start, unsigned long end,
 		vm_flags_t newflags);
+/*
+ * Zap flag definitions
+ * @ZAP_ZEROPAGE: Only unmap the zeropages in the indicated range.
+ */
+#define ZAP_ZEROPAGE			0x01
 
 /*
  * Parameter block passed down to zap_pte_range in exceptional cases.
@@ -1479,6 +1485,8 @@ struct zap_details {
 	struct address_space *check_mapping;	/* Check page->mapping if set */
 	pgoff_t	first_index;			/* Lowest page->index to unmap */
 	pgoff_t last_index;			/* Highest page->index to unmap */
+	unsigned int flags;			/* Flags to indicate pages to unmap */
+
 };
 
 struct page *_vm_normal_page(struct vm_area_struct *vma, unsigned long addr,
@@ -1571,6 +1579,7 @@ extern int fixup_user_fault(struct task_struct *tsk, struct mm_struct *mm,
 			    bool *unlocked);
 void unmap_mapping_pages(struct address_space *mapping,
 		pgoff_t start, pgoff_t nr, bool even_cows);
+void unmap_mapping_zeropages(struct address_space *mapping);
 void unmap_mapping_range(struct address_space *mapping,
 		loff_t const holebegin, loff_t const holelen, int even_cows);
 #else
@@ -1591,6 +1600,7 @@ static inline int fixup_user_fault(struct task_struct *tsk,
 }
 static inline void unmap_mapping_pages(struct address_space *mapping,
 		pgoff_t start, pgoff_t nr, bool even_cows) { }
+static inline void unmap_mapping_zeropages(struct address_space *mapping) { }
 static inline void unmap_mapping_range(struct address_space *mapping,
 		loff_t const holebegin, loff_t const holelen, int even_cows) { }
 #endif

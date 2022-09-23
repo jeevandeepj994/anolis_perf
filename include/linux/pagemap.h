@@ -29,6 +29,8 @@ enum mapping_flags {
 	AS_EXITING	= 4, 	/* final truncate in progress */
 	/* writeback related tags are not used */
 	AS_NO_WRITEBACK_TAGS = 5,
+	AS_ZEROPAGE = 7,   /* Filled file hole with zero page */
+
 };
 
 /**
@@ -116,6 +118,21 @@ static inline gfp_t mapping_gfp_constraint(struct address_space *mapping,
 static inline void mapping_set_gfp_mask(struct address_space *m, gfp_t mask)
 {
 	m->gfp_mask = mask;
+}
+
+static inline void mapping_set_zeropage(struct address_space *mapping)
+{
+	test_and_set_bit(AS_ZEROPAGE, &mapping->flags);
+}
+
+static inline void mapping_clear_zeropage(struct address_space *mapping)
+{
+	clear_bit(AS_ZEROPAGE, &mapping->flags);
+}
+
+static inline bool mapping_zeropage(struct address_space *mapping)
+{
+	return test_bit(AS_ZEROPAGE, &mapping->flags);
 }
 
 void release_pages(struct page **pages, int nr);
