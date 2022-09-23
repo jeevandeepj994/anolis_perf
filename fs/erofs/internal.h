@@ -382,6 +382,7 @@ int erofs_map_blocks(struct inode *inode, struct erofs_map_blocks *map);
 
 enum {
 	Z_EROFS_COMPRESSION_SHIFTED = Z_EROFS_COMPRESSION_MAX,
+	Z_EROFS_COMPRESSION_INTERLACED,
 	Z_EROFS_COMPRESSION_RUNTIME_MAX
 };
 
