@@ -1186,6 +1186,14 @@ const char * const vmstat_text[] = {
 	"nr_dirtied",
 	"nr_written",
 	"", /* nr_indirectly_reclaimable */
+#ifdef CONFIG_NUMA_BALANCING
+	"pgpromote_success",
+	"pgpromote_candidate",
+	"promote_threshold",
+	"pgpromote_file",
+	"pgpromote_try",
+	"pgpromote_demoted",
+#endif
 
 	/* enum writeback_stat_item counters */
 	"nr_dirty_threshold",
@@ -1214,6 +1222,9 @@ const char * const vmstat_text[] = {
 	"pgrefill",
 	"pgsteal_kswapd",
 	"pgsteal_direct",
+	"pgdemote_kswapd",
+	"pgdemote_direct",
+	"pgdemote_file",
 	"pgscan_kswapd",
 	"pgscan_direct",
 	"pgscan_direct_throttle",
@@ -1248,6 +1259,13 @@ const char * const vmstat_text[] = {
 #ifdef CONFIG_MIGRATION
 	"pgmigrate_success",
 	"pgmigrate_fail",
+	"thp_migration_success",
+	"thp_migration_fail",
+	"thp_migration_split",
+	"pgmigrate_fail_dst_node_fail",
+	"pgmigrate_fail_numa_isolate_fail",
+	"pgmigrate_fail_nomem_fail",
+	"pgmigrate_fail_refcount_fail",
 #endif
 #ifdef CONFIG_COMPACTION
 	"compact_migrate_scanned",

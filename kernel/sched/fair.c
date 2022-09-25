@@ -2804,6 +2804,21 @@ unsigned int sysctl_numa_balancing_scan_size = 256;
 /* Scan @scan_size MB every @scan_period after an initial @scan_delay in ms */
 unsigned int sysctl_numa_balancing_scan_delay = 1000;
 
+/* The page with hint page fault latency < threshold in ms is considered hot */
+unsigned int sysctl_numa_balancing_hot_threshold = 1000;
+/*
+ * Restrict the NUMA migration per second in MB for each target node
+ * if no enough free space in target node
+ */
+unsigned int sysctl_numa_balancing_rate_limit = 65536;
+/*
+ * Make just demoted pages work like just scanned by NUMA balancing
+ * page table scanner.
+ */
+unsigned int sysctl_numa_balancing_scan_demoted;
+
+unsigned int sysctl_numa_balancing_demoted_threshold;
+
 struct numa_group {
 	atomic_t refcount;
 
@@ -3195,15 +3210,184 @@ static inline unsigned long group_weight(struct task_struct *p, int nid,
 	return 1000 * faults / total_faults;
 }
 
+static bool pgdat_free_space_enough(struct pglist_data *pgdat)
+{
+	int z;
+	unsigned long enough_mark;
+
+	enough_mark = max(1UL * 1024 * 1024 * 1024 >> PAGE_SHIFT,
+			  pgdat->node_present_pages >> 4);
+	for (z = pgdat->nr_zones - 1; z >= 0; z--) {
+		struct zone *zone = pgdat->node_zones + z;
+
+		if (!populated_zone(zone))
+			continue;
+
+		if (zone_watermark_ok(zone, 0,
+				      high_wmark_pages(zone) + enough_mark,
+				      ZONE_MOVABLE, 0))
+			return true;
+	}
+	return false;
+}
+
+static int numa_hint_fault_latency(struct page *page)
+{
+	unsigned int last_time, time;
+
+	time = jiffies_to_msecs(jiffies);
+	last_time = xchg_page_access_time(page, time);
+
+	/* First access */
+	if (last_time == PAGE_ACCESS_TIME_MASK)
+		return PAGE_ACCESS_TIME_MASK;
+
+	return (time - last_time) & PAGE_ACCESS_TIME_MASK;
+}
+
+static bool numa_migration_check_rate_limit(struct pglist_data *pgdat,
+					    unsigned long rate_limit, int nr)
+{
+	unsigned long nr_candidate, try;
+	unsigned long now = jiffies, last_ts, dms;
+
+	mod_node_page_state(pgdat, PGPROMOTE_CANDIDATE, nr);
+	nr_candidate = node_page_state(pgdat, PGPROMOTE_CANDIDATE);
+	last_ts = pgdat->numa_ts;
+	if (now > last_ts + HZ &&
+	    cmpxchg(&pgdat->numa_ts, last_ts, now) == last_ts)
+		pgdat->numa_nr_candidate = nr_candidate;
+	if (nr_candidate - pgdat->numa_nr_candidate > 5 * rate_limit)
+		return false;
+	try = node_page_state(pgdat, PGPROMOTE_TRY);
+	dms = jiffies_to_msecs(now - pgdat->numa_threshold_ts);
+	if (try - pgdat->numa_threshold_try > rate_limit * dms / 1000)
+		return false;
+	mod_node_page_state(pgdat, PGPROMOTE_TRY, nr);
+	return true;
+}
+
+int sysctl_numa_balancing_threshold(struct ctl_table *table, int write, void *buffer,
+		size_t *lenp, loff_t *ppos)
+{
+	int err;
+	struct pglist_data *pgdat;
+
+	if (write && !capable(CAP_SYS_ADMIN))
+		return -EPERM;
+
+	err = proc_dointvec_minmax(table, write, buffer, lenp, ppos);
+	if (err < 0 || !write)
+		return err;
+
+	for_each_online_pgdat(pgdat)
+		pgdat->numa_threshold = 0;
+
+	return err;
+}
+
+static void numa_migration_adjust_threshold(struct pglist_data *pgdat,
+					    unsigned long rate_limit,
+					    unsigned long ref_th)
+{
+	unsigned long now = jiffies, last_th_ts, th_period;
+	unsigned long th, oth, nr_demoted, nr_hot_demoted;
+	unsigned long last_nr_cand, nr_cand, ref_cand, diff_cand;
+
+	th_period = msecs_to_jiffies(sysctl_numa_balancing_scan_period_max);
+	last_th_ts = pgdat->numa_threshold_ts;
+	ref_cand = rate_limit * sysctl_numa_balancing_scan_period_max / 1000;
+	nr_cand = node_page_state(pgdat, PGPROMOTE_CANDIDATE);
+	last_nr_cand = pgdat->numa_threshold_nr_candidate;
+	diff_cand = nr_cand - last_nr_cand;
+	if ((now > last_th_ts + th_period || diff_cand > ref_cand * 11 / 10)) {
+		spin_lock(&pgdat->numa_lock);
+		if (pgdat->numa_threshold_ts != last_th_ts ||
+		    pgdat->numa_threshold_nr_candidate != last_nr_cand) {
+			spin_unlock(&pgdat->numa_lock);
+			return;
+		}
+		pgdat->numa_threshold_ts = now;
+		pgdat->numa_threshold_nr_candidate = nr_cand;
+		oth = pgdat->numa_threshold;
+		th = oth ? : ref_th;
+		nr_demoted = node_page_state(pgdat, PGDEMOTE_KSWAPD) +
+			node_page_state(pgdat, PGDEMOTE_DIRECT);
+		nr_hot_demoted = node_page_state(pgdat, PGDEMOTED_HOT);
+
+		if ((diff_cand > ref_cand * 11 / 10) ||
+		    (sysctl_numa_balancing_demoted_threshold *
+		     (nr_hot_demoted - pgdat->numa_threshold_hot_demoted) >
+		     nr_demoted - pgdat->numa_threshold_demoted)) {
+			th = min(th * 9 / 10, th - 1);
+			th = max(th, 1UL);
+		} else if (diff_cand < ref_cand * 9 / 10) {
+			th = max(th * 11 / 10, th + 1);
+			th = min(th, ref_th * 2);
+		}
+
+		pgdat->numa_threshold = th;
+		pgdat->numa_threshold_try =
+			node_page_state(pgdat, PGPROMOTE_TRY);
+		pgdat->numa_threshold_demoted = nr_demoted;
+		pgdat->numa_threshold_hot_demoted = nr_hot_demoted;
+		spin_unlock(&pgdat->numa_lock);
+		trace_autonuma_threshold(pgdat->node_id, diff_cand, th);
+		mod_node_page_state(pgdat, PROMOTE_THRESHOLD, th - oth);
+	}
+}
+
 bool should_numa_migrate_memory(struct task_struct *p, struct page * page,
-				int src_nid, int dst_cpu)
+				int src_nid, int dst_cpu, int flags)
 {
 	struct numa_group *ng = deref_curr_numa_group(p);
 	int dst_nid = cpu_to_node(dst_cpu);
 	int last_cpupid, this_cpupid;
 
+	/*
+	 * The pages in slow memory node should be migrated according
+	 * to hot/cold instead of accessing CPU node.
+	 */
+	if (sysctl_numa_balancing_mode & NUMA_BALANCING_MEMORY_TIERING &&
+	    !node_is_toptier(src_nid)) {
+		struct pglist_data *pgdat;
+		unsigned long rate_limit, latency, th, def_th;
+
+		pgdat = NODE_DATA(dst_nid);
+		if (pgdat_free_space_enough(pgdat)) {
+			/* workload changed, reset hot threshold */
+			pgdat->numa_threshold = 0;
+			return true;
+		}
+
+		def_th = sysctl_numa_balancing_hot_threshold;
+		rate_limit = sysctl_numa_balancing_rate_limit << (20 - PAGE_SHIFT);
+		numa_migration_adjust_threshold(pgdat, rate_limit, def_th);
+
+		th = pgdat->numa_threshold ? : def_th;
+		if (flags & TNF_WRITE)
+			th *= 2;
+		latency = numa_hint_fault_latency(page);
+		if (latency > th)
+			return false;
+
+		if (flags & TNF_DEMOTED)
+			mod_node_page_state(pgdat, PGDEMOTED_HOT,
+					    hpage_nr_pages(page));
+		return numa_migration_check_rate_limit(pgdat, rate_limit,
+						       1UL << compound_order(page));
+	}
+
 	this_cpupid = cpu_pid_to_cpupid(dst_cpu, current->pid);
 	last_cpupid = page_cpupid_xchg_last(page, this_cpupid);
+
+	/*
+	 * The cpupid may be invalid when NUMA_BALANCING_MEMORY_TIERING
+	 * is disabled dynamically.
+	 */
+	if (!(sysctl_numa_balancing_mode & NUMA_BALANCING_MEMORY_TIERING) &&
+	    !node_is_toptier(src_nid) && !check_cpupid(last_cpupid))
+		return false;
 
 	/*
 	 * Allow first faults or private faults to migrate immediately early in
@@ -4220,6 +4404,17 @@ void task_numa_fault(int last_cpupid, int mem_node, int pages, int flags)
 	if (!p->mm)
 		return;
 
+	/*
+	 * NUMA faults statistics are unnecessary for the slow memory node.
+	 *
+	 * And, the cpupid may be invalid when NUMA_BALANCING_MEMORY_TIERING
+	 * is disabled dynamically.
+	 */
+	if (!node_is_toptier(mem_node) &&
+	    (sysctl_numa_balancing_mode & NUMA_BALANCING_MEMORY_TIERING ||
+	     !check_cpupid(last_cpupid)))
+		return;
+
 	/* Allocate buffer to track faults on a per-node basis */
 	if (unlikely(!p->numa_faults)) {
 		int size = sizeof(*p->numa_faults) *
@@ -4239,6 +4434,13 @@ void task_numa_fault(int last_cpupid, int mem_node, int pages, int flags)
 	 */
 	if (unlikely(last_cpupid == (-1 & LAST_CPUPID_MASK))) {
 		priv = 1;
+	} else if (unlikely(!cpu_online(cpupid_to_cpu(last_cpupid)))) {
+		/*
+		 * In memory tiering mode, cpupid of slow memory page is
+		 * used to record page access time, so its value may be
+		 * invalid during numa balancing mode transition.
+		 */
+		return;
 	} else {
 		priv = cpupid_match_pid(p, last_cpupid);
 		if (!priv && !(flags & TNF_NO_GROUP))

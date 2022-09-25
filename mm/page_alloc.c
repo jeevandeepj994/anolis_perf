@@ -294,6 +294,11 @@ static unsigned long required_kernelcore_percent __initdata;
 static unsigned long required_movablecore __initdata;
 static unsigned long required_movablecore_percent __initdata;
 static unsigned long zone_movable_pfn[MAX_NUMNODES] __meminitdata;
+#ifdef CONFIG_CPULESS_MOVABLE
+static bool enable_cpuless_memnode_normal_node __initdata;
+#else
+static bool enable_cpuless_memnode_normal_node __initdata = true;
+#endif
 static bool mirrored_kernelcore __meminitdata;
 
 /* movable_zone is the "real" zone pages in ZONE_MOVABLE are taken from */
@@ -5570,7 +5575,7 @@ static int node_load[MAX_NUMNODES];
  * on them otherwise.
  * It returns -1 if no node is found.
  */
-static int find_next_best_node(int node, nodemask_t *used_node_mask)
+int find_next_best_node(int node, nodemask_t *used_node_mask)
 {
 	int n, val;
 	int min_val = INT_MAX;
@@ -6677,6 +6682,9 @@ static void __meminit pgdat_init_internals(struct pglist_data *pgdat)
 	pgdat_page_ext_init(pgdat);
 	spin_lock_init(&pgdat->lru_lock);
 	lruvec_init(&pgdat->__lruvec);
+#ifdef CONFIG_NUMA_BALANCING
+	spin_lock_init(&pgdat->numa_lock);
+#endif
 }
 
 static void __meminit zone_init_internals(struct zone *zone, enum zone_type idx, int nid,
@@ -7137,6 +7145,26 @@ static void __init find_zone_movable_pfns_for_nodes(void)
 		required_movablecore = (totalpages * 100 * required_movablecore_percent) /
 					10000UL;
 
+	if (!required_kernelcore && !required_movablecore &&
+		!nodes_empty(node_states[N_POSSIBLE_CPU]) &&
+		!enable_cpuless_memnode_normal_node) {
+
+		/* Put meory from cpu-less nodes into movable zones */
+		for_each_memblock(memory, r) {
+			nid = memblock_get_region_node(r);
+
+			if (node_isset(nid, node_states[N_POSSIBLE_CPU]))
+				continue;
+
+			usable_startpfn = PFN_DOWN(r->base);
+			zone_movable_pfn[nid] = zone_movable_pfn[nid] ?
+				min(usable_startpfn, zone_movable_pfn[nid]) :
+				usable_startpfn;
+		}
+
+		goto out2;
+	}
+
 	/*
 	 * If movablecore= was specified, calculate what size of
 	 * kernelcore that corresponds so that memory usable for
@@ -7431,8 +7459,19 @@ static int __init cmdline_parse_movablecore(char *p)
 				  &required_movablecore_percent);
 }
 
+/*
+ * cpuless memory nodes will be enabled to movable node by default,
+ * add this cmdline to make it be enabled as a normal node
+ */
+static int __init cmdline_parse_cpuless_memnode(char *str)
+{
+	enable_cpuless_memnode_normal_node = true;
+	return 0;
+}
+
 early_param("kernelcore", cmdline_parse_kernelcore);
 early_param("movablecore", cmdline_parse_movablecore);
+early_param("cpuless_node_normal", cmdline_parse_cpuless_memnode);
 
 #endif /* CONFIG_HAVE_MEMBLOCK_NODE_MAP */
 
@@ -8353,7 +8392,7 @@ static int __alloc_contig_migrate_range(struct compact_control *cc,
 		cc->nr_migratepages -= nr_reclaimed;
 
 		ret = migrate_pages(&cc->migratepages, alloc_migrate_target,
-				    NULL, 0, cc->mode, MR_CONTIG_RANGE);
+				    NULL, 0, cc->mode, MR_CONTIG_RANGE, NULL);
 	}
 	if (ret < 0) {
 		putback_movable_pages(&cc->migratepages);
