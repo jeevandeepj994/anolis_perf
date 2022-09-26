@@ -601,7 +601,7 @@ int intel_pasid_setup_first_level(struct intel_iommu *iommu,
 	}
 
 	if (flags & PASID_FLAG_FL5LP) {
-		if (cap_5lp_support(iommu->cap)) {
+		if (cap_fl5lp_support(iommu->cap)) {
 			pasid_set_flpm(pte, 1);
 		} else {
 			pr_err("No 5-level paging support for first-level\n");
@@ -864,7 +864,7 @@ int intel_pasid_setup_nested(struct intel_iommu *iommu, struct device *dev,
 #ifdef CONFIG_X86
 	case ADDR_WIDTH_5LEVEL:
 		if (!cpu_feature_enabled(X86_FEATURE_LA57) ||
-		    !cap_5lp_support(iommu->cap)) {
+		    !cap_fl5lp_support(iommu->cap)) {
 			dev_err_ratelimited(dev,
 					    "5-level paging not supported\n");
 			return -EINVAL;
