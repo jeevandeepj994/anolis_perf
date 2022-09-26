@@ -55,6 +55,7 @@
 #include "mpi/mpi2_tool.h"
 #include "mpi/mpi2_sas.h"
 #include "mpi/mpi2_pci.h"
+#include "mpi/mpi2_image.h"
 
 #include <scsi/scsi.h>
 #include <scsi/scsi_cmnd.h>
@@ -910,6 +911,7 @@ typedef void (*NVME_BUILD_PRP)(struct MPT3SAS_ADAPTER *ioc, u16 smid,
 typedef void (*PUT_SMID_IO_FP_HIP) (struct MPT3SAS_ADAPTER *ioc, u16 smid,
 	u16 funcdep);
 typedef void (*PUT_SMID_DEFAULT) (struct MPT3SAS_ADAPTER *ioc, u16 smid);
+typedef u32 (*BASE_READ_REG) (const volatile void __iomem *addr);
 
 /* IOC Facts and Port Facts converted from little endian to cpu */
 union mpi3_version_union {
@@ -1185,7 +1187,16 @@ struct MPT3SAS_ADAPTER {
 	u32		ioc_reset_count;
 	MPT3SAS_FLUSH_RUNNING_CMDS schedule_dead_ioc_flush_running_cmds;
 	u32             non_operational_loop;
-	bool	use_32bit_dma;
+	u8              ioc_coredump_loop;
+	atomic64_t      total_io_cnt;
+	atomic64_t	high_iops_outstanding;
+	bool            msix_load_balance;
+	u16		thresh_hold;
+	u8		high_iops_queues;
+	u32		drv_support_bitmap;
+	u32		dma_mask;
+	bool		enable_sdev_max_qd;
+	bool		use_32bit_dma;
 
 	/* internal commands, callback index */
 	u8		scsi_io_cb_idx;
@@ -1390,6 +1401,7 @@ struct MPT3SAS_ADAPTER {
 	u8		hide_drives;
 	spinlock_t	diag_trigger_lock;
 	u8		diag_trigger_active;
+	BASE_READ_REG	base_readl;
 	struct SL_WH_MASTER_TRIGGER_T diag_trigger_master;
 	struct SL_WH_EVENT_TRIGGERS_T diag_trigger_event;
 	struct SL_WH_SCSI_TRIGGERS_T diag_trigger_scsi;
@@ -1397,6 +1409,7 @@ struct MPT3SAS_ADAPTER {
 	void		*device_remove_in_progress;
 	u16		device_remove_in_progress_sz;
 	u8		is_gen35_ioc;
+	u8		is_aero_ioc;
 	PUT_SMID_IO_FP_HIP put_smid_scsi_io;
 
 };

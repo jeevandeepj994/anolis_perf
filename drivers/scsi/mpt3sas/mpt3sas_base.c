@@ -157,6 +157,32 @@ module_param_call(mpt3sas_fwfault_debug, _scsih_set_fwfault_debug,
 	param_get_int, &mpt3sas_fwfault_debug, 0644);
 
 /**
+ * _base_readl_aero - retry readl for max three times.
+ * @addr - MPT Fusion system interface register address
+ *
+ * Retry the readl() for max three times if it gets zero value
+ * while reading the system interface register.
+ */
+static inline u32
+_base_readl_aero(const volatile void __iomem *addr)
+{
+	u32 i = 0, ret_val;
+
+	do {
+		ret_val = readl(addr);
+		i++;
+	} while (ret_val == 0 && i < 3);
+
+	return ret_val;
+}
+
+static inline u32
+_base_readl(const volatile void __iomem *addr)
+{
+	return readl(addr);
+}
+
+/**
  * _base_clone_reply_to_sys_mem - copies reply to reply free iomem
  *				  in BAR0 space.
  *
@@ -723,7 +749,7 @@ mpt3sas_halt_firmware(struct MPT3SAS_ADAPTER *ioc)
 
 	dump_stack();
 
-	doorbell = readl(&ioc->chip->Doorbell);
+	doorbell = ioc->base_readl(&ioc->chip->Doorbell);
 	if ((doorbell & MPI2_IOC_STATE_MASK) == MPI2_IOC_STATE_FAULT)
 		mpt3sas_base_fault_info(ioc , doorbell);
 	else {
@@ -1336,10 +1362,10 @@ _base_mask_interrupts(struct MPT3SAS_ADAPTER *ioc)
 	u32 him_register;
 
 	ioc->mask_interrupts = 1;
-	him_register = readl(&ioc->chip->HostInterruptMask);
+	him_register = ioc->base_readl(&ioc->chip->HostInterruptMask);
 	him_register |= MPI2_HIM_DIM + MPI2_HIM_RIM + MPI2_HIM_RESET_IRQ_MASK;
 	writel(him_register, &ioc->chip->HostInterruptMask);
-	readl(&ioc->chip->HostInterruptMask);
+	ioc->base_readl(&ioc->chip->HostInterruptMask);
 }
 
 /**
@@ -1353,7 +1379,7 @@ _base_unmask_interrupts(struct MPT3SAS_ADAPTER *ioc)
 {
 	u32 him_register;
 
-	him_register = readl(&ioc->chip->HostInterruptMask);
+	him_register = ioc->base_readl(&ioc->chip->HostInterruptMask);
 	him_register &= ~MPI2_HIM_RIM;
 	writel(him_register, &ioc->chip->HostInterruptMask);
 	ioc->mask_interrupts = 0;
@@ -2564,23 +2590,22 @@ static int
 _base_config_dma_addressing(struct MPT3SAS_ADAPTER *ioc, struct pci_dev *pdev)
 {
 	struct sysinfo s;
-	int dma_mask;
 
 	if (ioc->is_mcpu_endpoint ||
 	    sizeof(dma_addr_t) == 4 || ioc->use_32bit_dma ||
 	    dma_get_required_mask(&pdev->dev) <= 32)
-		dma_mask = 32;
+		ioc->dma_mask = 32;
 	/* Set 63 bit DMA mask for all SAS3 and SAS35 controllers */
 	else if (ioc->hba_mpi_version_belonged > MPI2_VERSION)
-		dma_mask = 63;
+		ioc->dma_mask = 63;
 	else
-		dma_mask = 64;
+		ioc->dma_mask = 64;
 
-	if (dma_set_mask(&pdev->dev, DMA_BIT_MASK(dma_mask)) ||
-	    dma_set_coherent_mask(&pdev->dev, DMA_BIT_MASK(dma_mask)))
+	if (dma_set_mask(&pdev->dev, DMA_BIT_MASK(ioc->dma_mask)) ||
+	    dma_set_coherent_mask(&pdev->dev, DMA_BIT_MASK(ioc->dma_mask)))
 		return -ENODEV;
 
-	if (dma_mask > 32) {
+	if (ioc->dma_mask > 32) {
 		ioc->base_add_sg_single = &_base_add_sg_single_64;
 		ioc->sge_size = sizeof(Mpi2SGESimple64_t);
 	} else {
@@ -2589,9 +2614,8 @@ _base_config_dma_addressing(struct MPT3SAS_ADAPTER *ioc, struct pci_dev *pdev)
 	}
 
 	si_meminfo(&s);
-	pr_info(MPT3SAS_FMT
-		"%d BIT PCI BUS DMA ADDRESSING SUPPORTED, total mem (%ld kB)\n",
-		ioc->name, dma_mask, convert_to_kb(s.totalram));
+	ioc_info(ioc, "%d BIT PCI BUS DMA ADDRESSING SUPPORTED, total mem (%ld kB)\n",
+		ioc->dma_mask, convert_to_kb(s.totalram));
 
 	return 0;
 }
@@ -4254,6 +4278,7 @@ _base_release_memory_pools(struct MPT3SAS_ADAPTER *ioc)
 			dma_pool_free(ioc->pcie_sgl_dma_pool,
 					ioc->pcie_sg_lookup[i].pcie_sgl,
 					ioc->pcie_sg_lookup[i].pcie_sgl_dma);
+			ioc->pcie_sg_lookup[i].pcie_sgl = NULL;
 		}
 		if (ioc->pcie_sgl_dma_pool)
 			dma_pool_destroy(ioc->pcie_sgl_dma_pool);
@@ -4298,17 +4323,282 @@ _base_release_memory_pools(struct MPT3SAS_ADAPTER *ioc)
  */
 
 static int
-mpt3sas_check_same_4gb_region(long reply_pool_start_address, u32 pool_sz)
+mpt3sas_check_same_4gb_region(dma_addr_t start_address, u32 pool_sz)
 {
-	long reply_pool_end_address;
+	dma_addr_t end_address;
 
-	reply_pool_end_address = reply_pool_start_address + pool_sz;
+	end_address = start_address + pool_sz - 1;
 
-	if (upper_32_bits(reply_pool_start_address) ==
-		upper_32_bits(reply_pool_end_address))
+	if (upper_32_bits(start_address) == upper_32_bits(end_address))
 		return 1;
 	else
 		return 0;
+}
+
+/**
+ * _base_reduce_hba_queue_depth- Retry with reduced queue depth
+ * @ioc: Adapter object
+ *
+ * Return: 0 for success, non-zero for failure.
+ **/
+static inline int
+_base_reduce_hba_queue_depth(struct MPT3SAS_ADAPTER *ioc)
+{
+	int reduce_sz = 64;
+
+	if ((ioc->hba_queue_depth - reduce_sz) >
+	    (ioc->internal_depth + INTERNAL_SCSIIO_CMDS_COUNT)) {
+		ioc->hba_queue_depth -= reduce_sz;
+		return 0;
+	} else
+		return -ENOMEM;
+}
+
+/**
+ * _base_allocate_pcie_sgl_pool - Allocating DMA'able memory
+ *			for pcie sgl pools.
+ * @ioc: Adapter object
+ * @sz: DMA Pool size
+ *
+ * Return: 0 for success, non-zero for failure.
+ */
+
+static int
+_base_allocate_pcie_sgl_pool(struct MPT3SAS_ADAPTER *ioc, u32 sz)
+{
+	int i = 0, j = 0;
+	struct chain_tracker *ct;
+
+	ioc->pcie_sgl_dma_pool =
+	    dma_pool_create("PCIe SGL pool", &ioc->pdev->dev, sz,
+	    ioc->page_size, 0);
+	if (!ioc->pcie_sgl_dma_pool) {
+		ioc_err(ioc, "PCIe SGL pool: dma_pool_create failed\n");
+		return -ENOMEM;
+	}
+
+	ioc->chains_per_prp_buffer = sz/ioc->chain_segment_sz;
+	ioc->chains_per_prp_buffer =
+	    min(ioc->chains_per_prp_buffer, ioc->chains_needed_per_io);
+	for (i = 0; i < ioc->scsiio_depth; i++) {
+		ioc->pcie_sg_lookup[i].pcie_sgl =
+		    dma_pool_alloc(ioc->pcie_sgl_dma_pool, GFP_KERNEL,
+		    &ioc->pcie_sg_lookup[i].pcie_sgl_dma);
+		if (!ioc->pcie_sg_lookup[i].pcie_sgl) {
+			ioc_err(ioc, "PCIe SGL pool: dma_pool_alloc failed\n");
+			return -EAGAIN;
+		}
+
+		if (!mpt3sas_check_same_4gb_region(
+		    ioc->pcie_sg_lookup[i].pcie_sgl_dma, sz)) {
+			ioc_err(ioc, "PCIE SGLs are not in same 4G !! pcie sgl (0x%p) dma = (0x%llx)\n",
+			    ioc->pcie_sg_lookup[i].pcie_sgl,
+			    (unsigned long long)
+			    ioc->pcie_sg_lookup[i].pcie_sgl_dma);
+			ioc->use_32bit_dma = true;
+			return -EAGAIN;
+		}
+
+		for (j = 0; j < ioc->chains_per_prp_buffer; j++) {
+			ct = &ioc->chain_lookup[i].chains_per_smid[j];
+			ct->chain_buffer =
+			    ioc->pcie_sg_lookup[i].pcie_sgl +
+			    (j * ioc->chain_segment_sz);
+			ct->chain_buffer_dma =
+			    ioc->pcie_sg_lookup[i].pcie_sgl_dma +
+			    (j * ioc->chain_segment_sz);
+		}
+	}
+	dinitprintk(ioc, ioc_info(ioc,
+	    "PCIe sgl pool depth(%d), element_size(%d), pool_size(%d kB)\n",
+	    ioc->scsiio_depth, sz, (sz * ioc->scsiio_depth)/1024));
+	dinitprintk(ioc, ioc_info(ioc,
+	    "Number of chains can fit in a PRP page(%d)\n",
+	    ioc->chains_per_prp_buffer));
+	return 0;
+}
+
+/**
+ * _base_allocate_chain_dma_pool - Allocating DMA'able memory
+ *			for chain dma pool.
+ * @ioc: Adapter object
+ * @sz: DMA Pool size
+ *
+ * Return: 0 for success, non-zero for failure.
+ */
+static int
+_base_allocate_chain_dma_pool(struct MPT3SAS_ADAPTER *ioc, u32 sz)
+{
+	int i = 0, j = 0;
+	struct chain_tracker *ctr;
+
+	ioc->chain_dma_pool = dma_pool_create("chain pool", &ioc->pdev->dev,
+	    ioc->chain_segment_sz, 16, 0);
+	if (!ioc->chain_dma_pool)
+		return -ENOMEM;
+
+	for (i = 0; i < ioc->scsiio_depth; i++) {
+		for (j = ioc->chains_per_prp_buffer;
+		    j < ioc->chains_needed_per_io; j++) {
+			ctr = &ioc->chain_lookup[i].chains_per_smid[j];
+			ctr->chain_buffer = dma_pool_alloc(ioc->chain_dma_pool,
+			    GFP_KERNEL, &ctr->chain_buffer_dma);
+			if (!ctr->chain_buffer)
+				return -EAGAIN;
+			if (!mpt3sas_check_same_4gb_region(
+			    ctr->chain_buffer_dma, ioc->chain_segment_sz)) {
+				ioc_err(ioc,
+				    "Chain buffers are not in same 4G !!! Chain buff (0x%p) dma = (0x%llx)\n",
+				    ctr->chain_buffer,
+				    (unsigned long long)ctr->chain_buffer_dma);
+				ioc->use_32bit_dma = true;
+				return -EAGAIN;
+			}
+		}
+	}
+	dinitprintk(ioc, ioc_info(ioc,
+	    "chain_lookup depth (%d), frame_size(%d), pool_size(%d kB)\n",
+	    ioc->scsiio_depth, ioc->chain_segment_sz, ((ioc->scsiio_depth *
+	    (ioc->chains_needed_per_io - ioc->chains_per_prp_buffer) *
+	    ioc->chain_segment_sz))/1024));
+	return 0;
+}
+
+/**
+ * _base_allocate_sense_dma_pool - Allocating DMA'able memory
+ *			for sense dma pool.
+ * @ioc: Adapter object
+ * @sz: DMA Pool size
+ * Return: 0 for success, non-zero for failure.
+ */
+static int
+_base_allocate_sense_dma_pool(struct MPT3SAS_ADAPTER *ioc, u32 sz)
+{
+	ioc->sense_dma_pool =
+	    dma_pool_create("sense pool", &ioc->pdev->dev, sz, 4, 0);
+	if (!ioc->sense_dma_pool)
+		return -ENOMEM;
+	ioc->sense = dma_pool_alloc(ioc->sense_dma_pool,
+	    GFP_KERNEL, &ioc->sense_dma);
+	if (!ioc->sense)
+		return -EAGAIN;
+	if (!mpt3sas_check_same_4gb_region(ioc->sense_dma, sz)) {
+		dinitprintk(ioc, pr_err(
+		    "Bad Sense Pool! sense (0x%p) sense_dma = (0x%llx)\n",
+		    ioc->sense, (unsigned long long) ioc->sense_dma));
+		ioc->use_32bit_dma = true;
+		return -EAGAIN;
+	}
+	ioc_info(ioc,
+	    "sense pool(0x%p) - dma(0x%llx): depth(%d), element_size(%d), pool_size (%d kB)\n",
+	    ioc->sense, (unsigned long long)ioc->sense_dma,
+	    ioc->scsiio_depth, SCSI_SENSE_BUFFERSIZE, sz/1024);
+	return 0;
+}
+
+/**
+ * _base_allocate_reply_pool - Allocating DMA'able memory
+ *			for reply pool.
+ * @ioc: Adapter object
+ * @sz: DMA Pool size
+ * Return: 0 for success, non-zero for failure.
+ */
+static int
+_base_allocate_reply_pool(struct MPT3SAS_ADAPTER *ioc, u32 sz)
+{
+	/* reply pool, 4 byte align */
+	ioc->reply_dma_pool = dma_pool_create("reply pool",
+	    &ioc->pdev->dev, sz, 4, 0);
+	if (!ioc->reply_dma_pool)
+		return -ENOMEM;
+	ioc->reply = dma_pool_alloc(ioc->reply_dma_pool, GFP_KERNEL,
+	    &ioc->reply_dma);
+	if (!ioc->reply)
+		return -EAGAIN;
+	if (!mpt3sas_check_same_4gb_region(ioc->reply_dma, sz)) {
+		dinitprintk(ioc, pr_err(
+		    "Bad Reply Pool! Reply (0x%p) Reply dma = (0x%llx)\n",
+		    ioc->reply, (unsigned long long) ioc->reply_dma));
+		ioc->use_32bit_dma = true;
+		return -EAGAIN;
+	}
+	ioc->reply_dma_min_address = (u32)(ioc->reply_dma);
+	ioc->reply_dma_max_address = (u32)(ioc->reply_dma) + sz;
+	ioc_info(ioc,
+	    "reply pool(0x%p) - dma(0x%llx): depth(%d), frame_size(%d), pool_size(%d kB)\n",
+	    ioc->reply, (unsigned long long)ioc->reply_dma,
+	    ioc->reply_free_queue_depth, ioc->reply_sz, sz/1024);
+	return 0;
+}
+
+/**
+ * _base_allocate_reply_free_dma_pool - Allocating DMA'able memory
+ *			for reply free dma pool.
+ * @ioc: Adapter object
+ * @sz: DMA Pool size
+ * Return: 0 for success, non-zero for failure.
+ */
+static int
+_base_allocate_reply_free_dma_pool(struct MPT3SAS_ADAPTER *ioc, u32 sz)
+{
+	/* reply free queue, 16 byte align */
+	ioc->reply_free_dma_pool = dma_pool_create(
+	    "reply_free pool", &ioc->pdev->dev, sz, 16, 0);
+	if (!ioc->reply_free_dma_pool)
+		return -ENOMEM;
+	ioc->reply_free = dma_pool_alloc(ioc->reply_free_dma_pool,
+	    GFP_KERNEL, &ioc->reply_free_dma);
+	if (!ioc->reply_free)
+		return -EAGAIN;
+	if (!mpt3sas_check_same_4gb_region(ioc->reply_free_dma, sz)) {
+		dinitprintk(ioc,
+		    pr_err("Bad Reply Free Pool! Reply Free (0x%p) Reply Free dma = (0x%llx)\n",
+		    ioc->reply_free, (unsigned long long) ioc->reply_free_dma));
+		ioc->use_32bit_dma = true;
+		return -EAGAIN;
+	}
+	memset(ioc->reply_free, 0, sz);
+	dinitprintk(ioc, ioc_info(ioc,
+	    "reply_free pool(0x%p): depth(%d), element_size(%d), pool_size(%d kB)\n",
+	    ioc->reply_free, ioc->reply_free_queue_depth, 4, sz/1024));
+	dinitprintk(ioc, ioc_info(ioc,
+	    "reply_free_dma (0x%llx)\n",
+	    (unsigned long long)ioc->reply_free_dma));
+	return 0;
+}
+
+/**
+ * _base_allocate_reply_post_free_array - Allocating DMA'able memory
+ *			for reply post free array.
+ * @ioc: Adapter object
+ * @reply_post_free_array_sz: DMA Pool size
+ * Return: 0 for success, non-zero for failure.
+ */
+
+static int
+_base_allocate_reply_post_free_array(struct MPT3SAS_ADAPTER *ioc,
+	u32 reply_post_free_array_sz)
+{
+	ioc->reply_post_free_array_dma_pool =
+	    dma_pool_create("reply_post_free_array pool",
+	    &ioc->pdev->dev, reply_post_free_array_sz, 16, 0);
+	if (!ioc->reply_post_free_array_dma_pool)
+		return -ENOMEM;
+	ioc->reply_post_free_array =
+	    dma_pool_alloc(ioc->reply_post_free_array_dma_pool,
+	    GFP_KERNEL, &ioc->reply_post_free_array_dma);
+	if (!ioc->reply_post_free_array)
+		return -EAGAIN;
+	if (!mpt3sas_check_same_4gb_region(ioc->reply_post_free_array_dma,
+	    reply_post_free_array_sz)) {
+		dinitprintk(ioc, pr_err(
+		    "Bad Reply Free Pool! Reply Free (0x%p) Reply Free dma = (0x%llx)\n",
+		    ioc->reply_free,
+		    (unsigned long long) ioc->reply_free_dma));
+		ioc->use_32bit_dma = true;
+		return -EAGAIN;
+	}
+	return 0;
 }
 
 /**
@@ -4365,7 +4655,7 @@ base_alloc_rdpq_dma_pool(struct MPT3SAS_ADAPTER *ioc, int sz)
 			 * resources and set DMA mask to 32 and allocate.
 			 */
 			if (!mpt3sas_check_same_4gb_region(
-				(long)ioc->reply_post[i].reply_post_free, sz)) {
+				ioc->reply_post[i].reply_post_free_dma, sz)) {
 				dinitprintk(ioc,
 				    ioc_err(ioc, "bad Replypost free pool(0x%p) reply_post_free_dma = (0x%llx)\n",
 				    ioc->reply_post[i].reply_post_free,
@@ -4403,13 +4693,12 @@ _base_allocate_memory_pools(struct MPT3SAS_ADAPTER *ioc)
 	u16 chains_needed_per_io;
 	u32 sz, total_sz, reply_post_free_sz, reply_post_free_array_sz;
 	u32 retry_sz;
-	u32 rdpq_sz = 0;
+	u32 rdpq_sz = 0, sense_sz = 0;
 	u16 max_request_credit, nvme_blocks_needed;
 	unsigned short sg_tablesize;
 	u16 sge_size;
-	int i, j;
-	int ret = 0;
-	struct chain_tracker *ct;
+	int i;
+	int ret = 0, rc = 0;
 
 	dinitprintk(ioc, pr_info(MPT3SAS_FMT "%s\n", ioc->name,
 	    __func__));
@@ -4729,205 +5018,69 @@ _base_allocate_memory_pools(struct MPT3SAS_ADAPTER *ioc)
 			goto out;
 		}
 		sz = nvme_blocks_needed * ioc->page_size;
-		ioc->pcie_sgl_dma_pool =
-			dma_pool_create("PCIe SGL pool", &ioc->pdev->dev, sz, 16, 0);
-		if (!ioc->pcie_sgl_dma_pool) {
-			pr_info(MPT3SAS_FMT
-			    "PCIe SGL pool: dma_pool_create failed\n",
-			    ioc->name);
-			goto out;
-		}
-
-		ioc->chains_per_prp_buffer = sz/ioc->chain_segment_sz;
-		ioc->chains_per_prp_buffer = min(ioc->chains_per_prp_buffer,
-						ioc->chains_needed_per_io);
-
-		for (i = 0; i < ioc->scsiio_depth; i++) {
-			ioc->pcie_sg_lookup[i].pcie_sgl = dma_pool_alloc(
-				ioc->pcie_sgl_dma_pool, GFP_KERNEL,
-				&ioc->pcie_sg_lookup[i].pcie_sgl_dma);
-			if (!ioc->pcie_sg_lookup[i].pcie_sgl) {
-				pr_info(MPT3SAS_FMT
-				    "PCIe SGL pool: dma_pool_alloc failed\n",
-				    ioc->name);
-				goto out;
-			}
-			for (j = 0; j < ioc->chains_per_prp_buffer; j++) {
-				ct = &ioc->chain_lookup[i].chains_per_smid[j];
-				ct->chain_buffer =
-				    ioc->pcie_sg_lookup[i].pcie_sgl +
-				    (j * ioc->chain_segment_sz);
-				ct->chain_buffer_dma =
-				    ioc->pcie_sg_lookup[i].pcie_sgl_dma +
-				    (j * ioc->chain_segment_sz);
-			}
-		}
-
-		dinitprintk(ioc, pr_info(MPT3SAS_FMT "PCIe sgl pool depth(%d), "
-			"element_size(%d), pool_size(%d kB)\n", ioc->name,
-			ioc->scsiio_depth, sz, (sz * ioc->scsiio_depth)/1024));
-		dinitprintk(ioc, pr_info(MPT3SAS_FMT "Number of chains can "
-		    "fit in a PRP page(%d)\n", ioc->name,
-		    ioc->chains_per_prp_buffer));
+		rc = _base_allocate_pcie_sgl_pool(ioc, sz);
+		if (rc == -ENOMEM)
+			return -ENOMEM;
+		else if (rc == -EAGAIN)
+			goto try_32bit_dma;
 		total_sz += sz * ioc->scsiio_depth;
 	}
 
-	ioc->chain_dma_pool = dma_pool_create("chain pool", &ioc->pdev->dev,
-	    ioc->chain_segment_sz, 16, 0);
-	if (!ioc->chain_dma_pool) {
-		pr_err(MPT3SAS_FMT "chain_dma_pool: dma_pool_create failed\n",
-			ioc->name);
-		goto out;
-	}
-	for (i = 0; i < ioc->scsiio_depth; i++) {
-		for (j = ioc->chains_per_prp_buffer;
-				j < ioc->chains_needed_per_io; j++) {
-			ct = &ioc->chain_lookup[i].chains_per_smid[j];
-			ct->chain_buffer = dma_pool_alloc(
-					ioc->chain_dma_pool, GFP_KERNEL,
-					&ct->chain_buffer_dma);
-			if (!ct->chain_buffer) {
-				pr_err(MPT3SAS_FMT "chain_lookup: "
-				" pci_pool_alloc failed\n", ioc->name);
-				_base_release_memory_pools(ioc);
-				goto out;
-			}
-		}
-		total_sz += ioc->chain_segment_sz;
-	}
-
-	dinitprintk(ioc, pr_info(MPT3SAS_FMT
-		"chain pool depth(%d), frame_size(%d), pool_size(%d kB)\n",
-		ioc->name, ioc->chain_depth, ioc->chain_segment_sz,
-		((ioc->chain_depth *  ioc->chain_segment_sz))/1024));
+	rc = _base_allocate_chain_dma_pool(ioc, ioc->chain_segment_sz);
+	if (rc == -ENOMEM)
+		return -ENOMEM;
+	else if (rc == -EAGAIN)
+		goto try_32bit_dma;
+	total_sz += ioc->chain_segment_sz * ((ioc->chains_needed_per_io -
+		ioc->chains_per_prp_buffer) * ioc->scsiio_depth);
+	dinitprintk(ioc,
+	    ioc_info(ioc, "chain pool depth(%d), frame_size(%d), pool_size(%d kB)\n",
+	    ioc->chain_depth, ioc->chain_segment_sz,
+	    (ioc->chain_depth * ioc->chain_segment_sz) / 1024));
 
 	/* sense buffers, 4 byte align */
-	sz = ioc->scsiio_depth * SCSI_SENSE_BUFFERSIZE;
-	ioc->sense_dma_pool = dma_pool_create("sense pool", &ioc->pdev->dev, sz,
-					      4, 0);
-	if (!ioc->sense_dma_pool) {
-		pr_err(MPT3SAS_FMT "sense pool: dma_pool_create failed\n",
-		    ioc->name);
-		goto out;
-	}
-	ioc->sense = dma_pool_alloc(ioc->sense_dma_pool, GFP_KERNEL,
-	    &ioc->sense_dma);
-	if (!ioc->sense) {
-		pr_err(MPT3SAS_FMT "sense pool: dma_pool_alloc failed\n",
-		    ioc->name);
-		goto out;
-	}
-	/* sense buffer requires to be in same 4 gb region.
-	 * Below function will check the same.
-	 * In case of failure, new pci pool will be created with updated
-	 * alignment. Older allocation and pool will be destroyed.
-	 * Alignment will be used such a way that next allocation if
-	 * success, will always meet same 4gb region requirement.
-	 * Actual requirement is not alignment, but we need start and end of
-	 * DMA address must have same upper 32 bit address.
-	 */
-	if (!mpt3sas_check_same_4gb_region((long)ioc->sense, sz)) {
-		//Release Sense pool & Reallocate
-		dma_pool_free(ioc->sense_dma_pool, ioc->sense, ioc->sense_dma);
-		dma_pool_destroy(ioc->sense_dma_pool);
-		ioc->sense = NULL;
-
-		ioc->sense_dma_pool =
-			dma_pool_create("sense pool", &ioc->pdev->dev, sz,
-						roundup_pow_of_two(sz), 0);
-		if (!ioc->sense_dma_pool) {
-			pr_err(MPT3SAS_FMT "sense pool: pci_pool_create failed\n",
-					ioc->name);
-			goto out;
-		}
-		ioc->sense = dma_pool_alloc(ioc->sense_dma_pool, GFP_KERNEL,
-				&ioc->sense_dma);
-		if (!ioc->sense) {
-			pr_err(MPT3SAS_FMT "sense pool: pci_pool_alloc failed\n",
-					ioc->name);
-			goto out;
-		}
-	}
-	dinitprintk(ioc, pr_info(MPT3SAS_FMT
-	    "sense pool(0x%p): depth(%d), element_size(%d), pool_size"
-	    "(%d kB)\n", ioc->name, ioc->sense, ioc->scsiio_depth,
-	    SCSI_SENSE_BUFFERSIZE, sz/1024));
-	dinitprintk(ioc, pr_info(MPT3SAS_FMT "sense_dma(0x%llx)\n",
-	    ioc->name, (unsigned long long)ioc->sense_dma));
-	total_sz += sz;
+	sense_sz = ioc->scsiio_depth * SCSI_SENSE_BUFFERSIZE;
+	rc = _base_allocate_sense_dma_pool(ioc, sense_sz);
+	if (rc  == -ENOMEM)
+		return -ENOMEM;
+	else if (rc == -EAGAIN)
+		goto try_32bit_dma;
+	total_sz += sense_sz;
+	ioc_info(ioc,
+	    "sense pool(0x%p)- dma(0x%llx): depth(%d),"
+	    "element_size(%d), pool_size(%d kB)\n",
+	    ioc->sense, (unsigned long long)ioc->sense_dma, ioc->scsiio_depth,
+	    SCSI_SENSE_BUFFERSIZE, sz / 1024);
 
 	/* reply pool, 4 byte align */
 	sz = ioc->reply_free_queue_depth * ioc->reply_sz;
-	ioc->reply_dma_pool = dma_pool_create("reply pool", &ioc->pdev->dev, sz,
-					      4, 0);
-	if (!ioc->reply_dma_pool) {
-		pr_err(MPT3SAS_FMT "reply pool: dma_pool_create failed\n",
-		    ioc->name);
-		goto out;
-	}
-	ioc->reply = dma_pool_alloc(ioc->reply_dma_pool, GFP_KERNEL,
-	    &ioc->reply_dma);
-	if (!ioc->reply) {
-		pr_err(MPT3SAS_FMT "reply pool: dma_pool_alloc failed\n",
-		    ioc->name);
-		goto out;
-	}
-	ioc->reply_dma_min_address = (u32)(ioc->reply_dma);
-	ioc->reply_dma_max_address = (u32)(ioc->reply_dma) + sz;
-	dinitprintk(ioc, pr_info(MPT3SAS_FMT
-		"reply pool(0x%p): depth(%d), frame_size(%d), pool_size(%d kB)\n",
-		ioc->name, ioc->reply,
-	    ioc->reply_free_queue_depth, ioc->reply_sz, sz/1024));
-	dinitprintk(ioc, pr_info(MPT3SAS_FMT "reply_dma(0x%llx)\n",
-	    ioc->name, (unsigned long long)ioc->reply_dma));
+	rc = _base_allocate_reply_pool(ioc, sz);
+	if (rc == -ENOMEM)
+		return -ENOMEM;
+	else if (rc == -EAGAIN)
+		goto try_32bit_dma;
 	total_sz += sz;
 
 	/* reply free queue, 16 byte align */
 	sz = ioc->reply_free_queue_depth * 4;
-	ioc->reply_free_dma_pool = dma_pool_create("reply_free pool",
-	    &ioc->pdev->dev, sz, 16, 0);
-	if (!ioc->reply_free_dma_pool) {
-		pr_err(MPT3SAS_FMT "reply_free pool: dma_pool_create failed\n",
-			ioc->name);
-		goto out;
-	}
-	ioc->reply_free = dma_pool_alloc(ioc->reply_free_dma_pool, GFP_KERNEL,
-	    &ioc->reply_free_dma);
-	if (!ioc->reply_free) {
-		pr_err(MPT3SAS_FMT "reply_free pool: dma_pool_alloc failed\n",
-			ioc->name);
-		goto out;
-	}
-	memset(ioc->reply_free, 0, sz);
-	dinitprintk(ioc, pr_info(MPT3SAS_FMT "reply_free pool(0x%p): " \
-	    "depth(%d), element_size(%d), pool_size(%d kB)\n", ioc->name,
-	    ioc->reply_free, ioc->reply_free_queue_depth, 4, sz/1024));
-	dinitprintk(ioc, pr_info(MPT3SAS_FMT
-		"reply_free_dma (0x%llx)\n",
-		ioc->name, (unsigned long long)ioc->reply_free_dma));
+	rc = _base_allocate_reply_free_dma_pool(ioc, sz);
+	if (rc  == -ENOMEM)
+		return -ENOMEM;
+	else if (rc == -EAGAIN)
+		goto try_32bit_dma;
+	dinitprintk(ioc,
+		    ioc_info(ioc, "reply_free_dma (0x%llx)\n",
+			     (unsigned long long)ioc->reply_free_dma));
 	total_sz += sz;
-
 	if (ioc->rdpq_array_enable) {
 		reply_post_free_array_sz = ioc->reply_queue_count *
 		    sizeof(Mpi2IOCInitRDPQArrayEntry);
-		ioc->reply_post_free_array_dma_pool =
-		    dma_pool_create("reply_post_free_array pool",
-		    &ioc->pdev->dev, reply_post_free_array_sz, 16, 0);
-		if (!ioc->reply_post_free_array_dma_pool) {
-			dinitprintk(ioc,
-			    pr_info(MPT3SAS_FMT "reply_post_free_array pool: "
-			    "dma_pool_create failed\n", ioc->name));
-			goto out;
-		}
-		ioc->reply_post_free_array =
-		    dma_pool_alloc(ioc->reply_post_free_array_dma_pool,
-		    GFP_KERNEL, &ioc->reply_post_free_array_dma);
-		if (!ioc->reply_post_free_array) {
-			dinitprintk(ioc,
-			    pr_info(MPT3SAS_FMT "reply_post_free_array pool: "
-			    "dma_pool_alloc failed\n", ioc->name));
-			goto out;
-		}
+		rc = _base_allocate_reply_post_free_array(ioc,
+		    reply_post_free_array_sz);
+		if (rc == -ENOMEM)
+			return -ENOMEM;
+		else if (rc == -EAGAIN)
+			goto try_32bit_dma;
 	}
 	ioc->config_page_sz = 512;
 	ioc->config_page = pci_alloc_consistent(ioc->pdev,
@@ -4954,6 +5107,19 @@ _base_allocate_memory_pools(struct MPT3SAS_ADAPTER *ioc)
 	    ioc->name, ioc->shost->sg_tablesize);
 	return 0;
 
+try_32bit_dma:
+	_base_release_memory_pools(ioc);
+	if (ioc->use_32bit_dma && (ioc->dma_mask > 32)) {
+		/* Change dma coherent mask to 32 bit and reallocate */
+		if (_base_config_dma_addressing(ioc, ioc->pdev) != 0) {
+			pr_err("Setting 32 bit coherent DMA mask Failed %s\n",
+			    pci_name(ioc->pdev));
+			return -ENODEV;
+		}
+	} else if (_base_reduce_hba_queue_depth(ioc) != 0)
+		return -ENOMEM;
+	goto retry_allocation;
+
  out:
 	return -ENOMEM;
 }
@@ -4971,7 +5137,7 @@ mpt3sas_base_get_iocstate(struct MPT3SAS_ADAPTER *ioc, int cooked)
 {
 	u32 s, sc;
 
-	s = readl(&ioc->chip->Doorbell);
+	s = ioc->base_readl(&ioc->chip->Doorbell);
 	sc = s & MPI2_IOC_STATE_MASK;
 	return cooked ? sc : s;
 }
@@ -5027,7 +5193,7 @@ _base_wait_for_doorbell_int(struct MPT3SAS_ADAPTER *ioc, int timeout)
 	count = 0;
 	cntdn = 1000 * timeout;
 	do {
-		int_status = readl(&ioc->chip->HostInterruptStatus);
+		int_status = ioc->base_readl(&ioc->chip->HostInterruptStatus);
 		if (int_status & MPI2_HIS_IOC2SYS_DB_STATUS) {
 			dhsprintk(ioc, pr_info(MPT3SAS_FMT
 				"%s: successful count(%d), timeout(%d)\n",
@@ -5054,7 +5220,7 @@ _base_spin_on_doorbell_int(struct MPT3SAS_ADAPTER *ioc, int timeout)
 	count = 0;
 	cntdn = 2000 * timeout;
 	do {
-		int_status = readl(&ioc->chip->HostInterruptStatus);
+		int_status = ioc->base_readl(&ioc->chip->HostInterruptStatus);
 		if (int_status & MPI2_HIS_IOC2SYS_DB_STATUS) {
 			dhsprintk(ioc, pr_info(MPT3SAS_FMT
 				"%s: successful count(%d), timeout(%d)\n",
@@ -5093,14 +5259,14 @@ _base_wait_for_doorbell_ack(struct MPT3SAS_ADAPTER *ioc, int timeout)
 	count = 0;
 	cntdn = 1000 * timeout;
 	do {
-		int_status = readl(&ioc->chip->HostInterruptStatus);
+		int_status = ioc->base_readl(&ioc->chip->HostInterruptStatus);
 		if (!(int_status & MPI2_HIS_SYS2IOC_DB_STATUS)) {
 			dhsprintk(ioc, pr_info(MPT3SAS_FMT
 				"%s: successful count(%d), timeout(%d)\n",
 				ioc->name, __func__, count, timeout));
 			return 0;
 		} else if (int_status & MPI2_HIS_IOC2SYS_DB_STATUS) {
-			doorbell = readl(&ioc->chip->Doorbell);
+			doorbell = ioc->base_readl(&ioc->chip->Doorbell);
 			if ((doorbell & MPI2_IOC_STATE_MASK) ==
 			    MPI2_IOC_STATE_FAULT) {
 				mpt3sas_base_fault_info(ioc , doorbell);
@@ -5136,7 +5302,7 @@ _base_wait_for_doorbell_not_used(struct MPT3SAS_ADAPTER *ioc, int timeout)
 	count = 0;
 	cntdn = 1000 * timeout;
 	do {
-		doorbell_reg = readl(&ioc->chip->Doorbell);
+		doorbell_reg = ioc->base_readl(&ioc->chip->Doorbell);
 		if (!(doorbell_reg & MPI2_DOORBELL_USED)) {
 			dhsprintk(ioc, pr_info(MPT3SAS_FMT
 				"%s: successful count(%d), timeout(%d)\n",
@@ -5221,15 +5387,13 @@ _base_handshake_req_reply_wait(struct MPT3SAS_ADAPTER *ioc, int request_bytes,
 	__le32 *mfp;
 
 	/* make sure doorbell is not in use */
-	if ((readl(&ioc->chip->Doorbell) & MPI2_DOORBELL_USED)) {
-		pr_err(MPT3SAS_FMT
-			"doorbell is in use (line=%d)\n",
-			ioc->name, __LINE__);
+	if ((ioc->base_readl(&ioc->chip->Doorbell) & MPI2_DOORBELL_USED)) {
+		ioc_err(ioc, "doorbell is in use (line=%d)\n", __LINE__);
 		return -EFAULT;
 	}
 
 	/* clear pending doorbell interrupts from previous state changes */
-	if (readl(&ioc->chip->HostInterruptStatus) &
+	if (ioc->base_readl(&ioc->chip->HostInterruptStatus) &
 	    MPI2_HIS_IOC2SYS_DB_STATUS)
 		writel(0, &ioc->chip->HostInterruptStatus);
 
@@ -5276,7 +5440,7 @@ _base_handshake_req_reply_wait(struct MPT3SAS_ADAPTER *ioc, int request_bytes,
 	}
 
 	/* read the first two 16-bits, it gives the total length of the reply */
-	reply[0] = le16_to_cpu(readl(&ioc->chip->Doorbell)
+	reply[0] = le16_to_cpu(ioc->base_readl(&ioc->chip->Doorbell)
 	    & MPI2_DOORBELL_DATA_MASK);
 	writel(0, &ioc->chip->HostInterruptStatus);
 	if ((_base_wait_for_doorbell_int(ioc, 5))) {
@@ -5285,7 +5449,7 @@ _base_handshake_req_reply_wait(struct MPT3SAS_ADAPTER *ioc, int request_bytes,
 			ioc->name, __LINE__);
 		return -EFAULT;
 	}
-	reply[1] = le16_to_cpu(readl(&ioc->chip->Doorbell)
+	reply[1] = le16_to_cpu(ioc->base_readl(&ioc->chip->Doorbell)
 	    & MPI2_DOORBELL_DATA_MASK);
 	writel(0, &ioc->chip->HostInterruptStatus);
 
@@ -5297,9 +5461,10 @@ _base_handshake_req_reply_wait(struct MPT3SAS_ADAPTER *ioc, int request_bytes,
 			return -EFAULT;
 		}
 		if (i >=  reply_bytes/2) /* overflow case */
-			readl(&ioc->chip->Doorbell);
+			ioc->base_readl(&ioc->chip->Doorbell);
 		else
-			reply[i] = le16_to_cpu(readl(&ioc->chip->Doorbell)
+			reply[i] = le16_to_cpu(
+			    ioc->base_readl(&ioc->chip->Doorbell)
 			    & MPI2_DOORBELL_DATA_MASK);
 		writel(0, &ioc->chip->HostInterruptStatus);
 	}
@@ -6180,14 +6345,14 @@ _base_diag_reset(struct MPT3SAS_ADAPTER *ioc)
 		if (count++ > 20)
 			goto out;
 
-		host_diagnostic = readl(&ioc->chip->HostDiagnostic);
-		drsprintk(ioc, pr_info(MPT3SAS_FMT
-			"wrote magic sequence: count(%d), host_diagnostic(0x%08x)\n",
-		    ioc->name, count, host_diagnostic));
+		host_diagnostic = ioc->base_readl(&ioc->chip->HostDiagnostic);
+		drsprintk(ioc,
+			  ioc_info(ioc, "wrote magic sequence: count(%d), host_diagnostic(0x%08x)\n",
+				   count, host_diagnostic));
 
 	} while ((host_diagnostic & MPI2_DIAG_DIAG_WRITE_ENABLE) == 0);
 
-	hcb_size = readl(&ioc->chip->HCBSize);
+	hcb_size = ioc->base_readl(&ioc->chip->HCBSize);
 
 	drsprintk(ioc, pr_info(MPT3SAS_FMT "diag reset: issued\n",
 	    ioc->name));
@@ -6201,7 +6366,7 @@ _base_diag_reset(struct MPT3SAS_ADAPTER *ioc)
 	for (count = 0; count < (300000000 /
 		MPI2_HARD_RESET_PCIE_SECOND_READ_DELAY_MICRO_SEC); count++) {
 
-		host_diagnostic = readl(&ioc->chip->HostDiagnostic);
+		host_diagnostic = ioc->base_readl(&ioc->chip->HostDiagnostic);
 
 		if (host_diagnostic == 0xFFFFFFFF)
 			goto out;
@@ -6564,7 +6729,12 @@ mpt3sas_base_attach(struct MPT3SAS_ADAPTER *ioc)
 	}
 
 	ioc->rdpq_array_enable_assigned = 0;
-	ioc->use_32bit_dma = 0;
+	ioc->use_32bit_dma = false;
+	ioc->dma_mask = 64;
+	if (ioc->is_aero_ioc)
+		ioc->base_readl = &_base_readl_aero;
+	else
+		ioc->base_readl = &_base_readl;
 	r = mpt3sas_base_map_resources(ioc);
 	if (r)
 		goto out_free_resources;
