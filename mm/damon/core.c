@@ -873,6 +873,7 @@ static int kdamond_fn(void *data)
 	return 0;
 }
 
+#if defined(CONFIG_DAMON_DBGFS) && defined(CONFIG_DAMON_VADDR)
 static struct damon_target *get_damon_target(struct task_struct *task)
 {
 	int i;
@@ -939,5 +940,6 @@ void damon_numa_fault(int page_nid, int node_id, struct vm_fault *vmf)
 		}
 	}
 }
+#endif
 
 #include "core-test.h"
