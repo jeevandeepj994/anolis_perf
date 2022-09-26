@@ -140,7 +140,7 @@ int ngbe_check_flash_load(struct ngbe_hw *hw, u32 check_bit)
 			if (!(reg & check_bit))
 				break;
 
-			msleep(200);
+			mdelay(200);
 		}
 		if (i == NGBE_MAX_FLASH_LOAD_POLL_TIME) {
 			err = NGBE_ERR_FLASH_LOADING_FAILED;
@@ -309,7 +309,7 @@ s32 ngbe_reset_hw(struct ngbe_hw *hw)
 				if (!(reset_status &
 				    NGBE_MIS_RST_ST_DEV_RST_ST_MASK))
 					break;
-				msleep(100);
+				mdelay(100);
 			}
 
 			if (reset_status & NGBE_MIS_RST_ST_DEV_RST_ST_MASK) {
@@ -325,7 +325,7 @@ s32 ngbe_reset_hw(struct ngbe_hw *hw)
 
 		} else if (hw->reset_type == NGBE_GLOBAL_RESET) {
 			adapter = (struct ngbe_adapter *)hw->back;
-			msleep(100 * rst_delay + 2000);
+			mdelay(100 * rst_delay + 2000);
 			pci_restore_state(adapter->pdev);
 			pci_save_state(adapter->pdev);
 			pci_wake_from_d3(adapter->pdev, false);
@@ -669,6 +669,7 @@ static void ngbe_release_eeprom_semaphore(struct ngbe_hw *hw)
 		      NGBE_MIS_SWSM_SMBI, 0);
 		NGBE_WRITE_FLUSH(hw);
 	}
+
 }
 
 /**
@@ -752,19 +753,17 @@ s32 ngbe_acquire_swfw_sync(struct ngbe_hw *hw, u32 mask)
 
 		if (ngbe_check_mng_access(hw)) {
 			gssr = rd32(hw, NGBE_MNG_SWFW_SYNC);
-			if (!(gssr & (fwmask | swmask))) {
+			if (gssr & (fwmask | swmask)) {
+				/* Resource is currently in use by FW or SW */
+				ngbe_release_eeprom_semaphore(hw);
+				mdelay(5);
+			} else {
 				gssr |= swmask;
 				wr32(hw, NGBE_MNG_SWFW_SYNC, gssr);
 
 				ngbe_release_eeprom_semaphore(hw);
-			} else {
-				/* Resource is currently in use by FW or SW */
-				ngbe_release_eeprom_semaphore(hw);
-				mdelay(5);
-			}
-
-			if (!(gssr & (fwmask | swmask)))
 				return 0;
+			}
 		}
 	}
 
@@ -1895,9 +1894,724 @@ void ngbe_set_rxpba(struct ngbe_hw *hw, int num_pb, u32 headroom,
 	wr32(hw, NGBE_TDM_PB_THRE, txpbthresh);
 }
 
+/**
+ * ngbe_host_if_command - Issue command to manageability block
+ * @hw: pointer to the HW structure
+ * @buffer: contains the command to write and where the return status will
+ * be placed
+ * @length: length of buffer, must be multiple of 4 bytes
+ * @timeout: time in ms to wait for command completion
+ * @return_data: read and return data from the buffer (true) or not (false)
+ * Needed because FW structures are big endian and decoding of
+ * these fields can be 8 bit or 16 bit based on command. Decoding
+ * is not easily understood without making a table of commands.
+ * So we will leave this up to the caller to read back the data
+ * in these cases.
+ *
+ * Communicates with the manageability block.  On success return 0
+ * else return NGBE_ERR_HOST_INTERFACE_COMMAND.
+ **/
+s32 ngbe_host_if_command(struct ngbe_hw *hw, u32 *buffer,
+			 u32 length, u32 timeout, bool return_data)
+{
+	u32 hicr, i, bi;
+	u32 hdr_size = sizeof(struct ngbe_hic_hdr);
+	u16 buf_len;
+	u32 dword_len;
+	s32 status = 0;
+	u32 buf[64] = {};
+
+	if (length == 0 || length > NGBE_HI_MAX_BLOCK_BYTE_LENGTH)
+		return NGBE_ERR_HOST_INTERFACE_COMMAND;
+
+	if (TCALL(hw, mac.ops.acquire_swfw_sync, NGBE_MNG_SWFW_SYNC_SW_MB) != 0)
+		return NGBE_ERR_SWFW_SYNC;
+
+	/* Calculate length in DWORDs. We must be DWORD aligned */
+	if ((length % (sizeof(u32))) != 0) {
+		status = NGBE_ERR_INVALID_ARGUMENT;
+		goto rel_out;
+	}
+
+	/*read to clean all status*/
+	if (ngbe_check_mng_access(hw)) {
+		hicr = rd32(hw, NGBE_MNG_MBOX_CTL);
+		if ((hicr & NGBE_MNG_MBOX_CTL_FWRDY))
+			ERROR_REPORT1(hw, NGBE_ERROR_CAUTION,
+				      "fwrdy is set before command.\n");
+	}
+
+	dword_len = length >> 2;
+
+	/* The device driver writes the relevant command block
+	 * into the ram area.
+	 */
+	for (i = 0; i < dword_len; i++) {
+		if (ngbe_check_mng_access(hw)) {
+			wr32a(hw, NGBE_MNG_MBOX, i, NGBE_CPU_TO_LE32(buffer[i]));
+		} else {
+			status = NGBE_ERR_MNG_ACCESS_FAILED;
+			goto rel_out;
+		}
+	}
+	/* Setting this bit tells the ARC that a new command is pending. */
+	if (ngbe_check_mng_access(hw)) {
+		wr32m(hw, NGBE_MNG_MBOX_CTL,
+		      NGBE_MNG_MBOX_CTL_SWRDY, NGBE_MNG_MBOX_CTL_SWRDY);
+	} else {
+		status = NGBE_ERR_MNG_ACCESS_FAILED;
+		goto rel_out;
+	}
+
+	for (i = 0; i < timeout; i++) {
+		if (ngbe_check_mng_access(hw)) {
+			hicr = rd32(hw, NGBE_MNG_MBOX_CTL);
+			if ((hicr & NGBE_MNG_MBOX_CTL_FWRDY))
+				break;
+		}
+		mdelay(1);
+	}
+
+	buf[0] = rd32(hw, NGBE_MNG_MBOX);
+	/* Check command completion */
+	if (timeout != 0 && i == timeout) {
+		ERROR_REPORT1(hw, NGBE_ERROR_CAUTION,
+			      "Command has failed with no status valid.\n");
+
+		if ((buffer[0] & 0xff) != (~buf[0] >> 24)) {
+			status = NGBE_ERR_HOST_INTERFACE_COMMAND;
+			goto rel_out;
+		}
+	}
+
+	if (!return_data)
+		goto rel_out;
+
+	/* Calculate length in DWORDs */
+	dword_len = hdr_size >> 2;
+
+	/* first pull in the header so we know the buffer length */
+	for (bi = 0; bi < dword_len; bi++) {
+		if (ngbe_check_mng_access(hw)) {
+			buffer[bi] = rd32a(hw, NGBE_MNG_MBOX, bi);
+			NGBE_LE32_TO_CPUS(&buffer[bi]);
+		} else {
+			status = NGBE_ERR_MNG_ACCESS_FAILED;
+			goto rel_out;
+		}
+	}
+
+	/* If there is any thing in data position pull it in */
+	buf_len = ((struct ngbe_hic_hdr *)buffer)->buf_len;
+	if (buf_len == 0)
+		goto rel_out;
+
+	if (length < buf_len + hdr_size) {
+		status = NGBE_ERR_HOST_INTERFACE_COMMAND;
+		goto rel_out;
+	}
+
+	/* Calculate length in DWORDs, add 3 for odd lengths */
+	dword_len = (buf_len + 3) >> 2;
+
+	/* Pull in the rest of the buffer (bi is where we left off) */
+	for (; bi <= dword_len; bi++) {
+		if (ngbe_check_mng_access(hw)) {
+			buffer[bi] = rd32a(hw, NGBE_MNG_MBOX, bi);
+			NGBE_LE32_TO_CPUS(&buffer[bi]);
+		} else {
+			status = NGBE_ERR_MNG_ACCESS_FAILED;
+			goto rel_out;
+		}
+	}
+
+rel_out:
+	TCALL(hw, mac.ops.release_swfw_sync, NGBE_MNG_SWFW_SYNC_SW_MB);
+	return status;
+}
+
+/**
+ * ngbe_read_ee_hostif_buffer- Read EEPROM word(s) using hostif
+ * @hw: pointer to hardware structure
+ * @offset: offset of  word in the EEPROM to read
+ * @words: number of words
+ * @data: word(s) read from the EEPROM
+ *
+ * Reads a 16 bit word(s) from the EEPROM using the hostif.
+ **/
+s32 ngbe_read_ee_hostif_buffer(struct ngbe_hw *hw,
+			       u16 offset, u16 words, u16 *data)
+{
+	struct ngbe_hic_read_shadow_ram buffer;
+	u32 current_word = 0;
+	u16 words_to_read;
+	s32 status;
+	u32 i;
+	u32 value = 0;
+
+	/* Take semaphore for the entire operation. */
+	status = TCALL(hw, mac.ops.acquire_swfw_sync, NGBE_MNG_SWFW_SYNC_SW_FLASH);
+	if (status)
+		goto out;
+
+	while (words) {
+		if (words > FW_MAX_READ_BUFFER_SIZE / 2)
+			words_to_read = FW_MAX_READ_BUFFER_SIZE / 2;
+		else
+			words_to_read = words;
+
+		buffer.hdr.req.cmd = FW_READ_SHADOW_RAM_CMD;
+		buffer.hdr.req.buf_lenh = 0;
+		buffer.hdr.req.buf_lenl = FW_READ_SHADOW_RAM_LEN;
+		buffer.hdr.req.checksum = FW_DEFAULT_CHECKSUM;
+
+		/* convert offset from words to bytes */
+		buffer.address = NGBE_CPU_TO_BE32((offset + current_word) * 2);
+		buffer.length = NGBE_CPU_TO_BE16(words_to_read * 2);
+
+		status = ngbe_host_if_command(hw, (u32 *)&buffer, sizeof(buffer),
+					      NGBE_HI_CMD_TIMEOUT,
+							   false);
+
+		if (status)
+			goto out;
+
+		for (i = 0; i < words_to_read; i++) {
+			u32 reg = NGBE_MNG_MBOX + (FW_NVM_DATA_OFFSET << 2) + 2 * i;
+
+			if (ngbe_check_mng_access(hw)) {
+				value = rd32(hw, reg);
+			} else {
+				status = NGBE_ERR_MNG_ACCESS_FAILED;
+				goto out;
+			}
+			data[current_word] = (u16)(value & 0xffff);
+			current_word++;
+			i++;
+			if (i < words_to_read) {
+				value >>= 16;
+				data[current_word] = (u16)(value & 0xffff);
+				current_word++;
+			}
+		}
+		words -= words_to_read;
+	}
+
+out:
+	TCALL(hw, mac.ops.release_swfw_sync, NGBE_MNG_SWFW_SYNC_SW_FLASH);
+
+	return status;
+}
+
+/**
+ * ngbe_read_ee_hostif - Read EEPROM word using a host interface cmd
+ * assuming that the semaphore is already obtained.
+ * @hw: pointer to hardware structure
+ * @offset: offset of  word in the EEPROM to read
+ * @data: word read from the EEPROM
+ *
+ * Reads a 32 bit word from the EEPROM using the hostif.
+ **/
+s32 ngbe_read_ee_hostif_data32(struct ngbe_hw *hw, u16 offset,
+			       u32 *data)
+{
+	s32 status;
+	struct ngbe_hic_read_shadow_ram buffer;
+
+	buffer.hdr.req.cmd = FW_READ_SHADOW_RAM_CMD;
+	buffer.hdr.req.buf_lenh = 0;
+	buffer.hdr.req.buf_lenl = FW_READ_SHADOW_RAM_LEN;
+	buffer.hdr.req.checksum = FW_DEFAULT_CHECKSUM;
+
+	/* convert offset from words to bytes */
+	buffer.address = NGBE_CPU_TO_BE32(offset * 2);
+	/* one word */
+	buffer.length = NGBE_CPU_TO_BE16(sizeof(u32));
+
+	status = ngbe_host_if_command(hw, (u32 *)&buffer,
+				      sizeof(buffer),
+							  NGBE_HI_CMD_TIMEOUT, false);
+
+	if (status)
+		return status;
+	if (ngbe_check_mng_access(hw)) {
+		*data = (u32)rd32a(hw, NGBE_MNG_MBOX, FW_NVM_DATA_OFFSET);
+	} else {
+		status = NGBE_ERR_MNG_ACCESS_FAILED;
+		return status;
+	}
+
+	return 0;
+}
+
+/**
+ * ngbe_read_ee_hostif - Read EEPROM word using a host interface cmd
+ * @hw: pointer to hardware structure
+ * @offset: offset of  word in the EEPROM to read
+ * @data: word read from the EEPROM
+ **/
+s32 ngbe_read_ee_hostif32(struct ngbe_hw *hw, u16 offset,
+			  u32 *data)
+{
+	s32 status = 0;
+
+	if (TCALL(hw, mac.ops.acquire_swfw_sync, NGBE_MNG_SWFW_SYNC_SW_FLASH) == 0) {
+		status = ngbe_read_ee_hostif_data32(hw, offset, data);
+		TCALL(hw, mac.ops.release_swfw_sync,
+		      NGBE_MNG_SWFW_SYNC_SW_FLASH);
+	} else {
+		status = NGBE_ERR_SWFW_SYNC;
+	}
+
+	return status;
+}
+
+/**
+ * ngbe_init_eeprom_params - Initialize EEPROM params
+ * @hw: pointer to hardware structure
+ *
+ * Initializes the EEPROM parameters ngbe_eeprom_info within the
+ * ngbe_hw struct in order to set up EEPROM access.
+ **/
+s32 ngbe_init_eeprom_params(struct ngbe_hw *hw)
+{
+	struct ngbe_eeprom_info *eeprom = &hw->eeprom;
+	u16 eeprom_size;
+	s32 status = 0;
+
+	if (eeprom->type == ngbe_eeprom_uninitialized) {
+		eeprom->semaphore_delay = 10;
+		eeprom->type = ngbe_eeprom_none;
+
+		if (!(rd32(hw, NGBE_SPI_STATUS) &
+			NGBE_SPI_STATUS_FLASH_BYPASS)) {
+			eeprom->type = ngbe_flash;
+			eeprom_size = 4096;
+			eeprom->word_size = eeprom_size >> 1;
+		}
+	}
+	eeprom->sw_region_offset = 0x80;
+
+	return status;
+}
+
+/**
+ *  ngbe_calc_eeprom_checksum - Calculates and returns the checksum
+ *  @hw: pointer to hardware structure
+ *
+ *  Returns a negative error code on error, or the 16-bit checksum
+ **/
+s32 ngbe_calc_eeprom_checksum(struct ngbe_hw *hw)
+{
+	u16 *buffer = NULL;
+	u32 buffer_size = 0;
+
+	u16 *eeprom_ptrs = NULL;
+	u16 *local_buffer;
+	s32 status;
+	u16 checksum = 0;
+	u16 i;
+
+	TCALL(hw, eeprom.ops.init_params);
+
+	if (!buffer) {
+		eeprom_ptrs = vmalloc(NGBE_EEPROM_LAST_WORD * sizeof(u16));
+		if (!eeprom_ptrs)
+			return NGBE_ERR_NO_SPACE;
+		/* Read pointer area */
+		status = ngbe_read_ee_hostif_buffer(hw, 0,
+						    NGBE_EEPROM_LAST_WORD,
+						     eeprom_ptrs);
+		if (status)
+			return status;
+
+		local_buffer = eeprom_ptrs;
+	} else {
+		if (buffer_size < NGBE_EEPROM_LAST_WORD)
+			return NGBE_ERR_PARAM;
+		local_buffer = buffer;
+	}
+
+	for (i = 0; i < NGBE_EEPROM_LAST_WORD; i++)
+		if (i != hw->eeprom.sw_region_offset + NGBE_EEPROM_CHECKSUM)
+			checksum += local_buffer[i];
+
+	checksum = (u16)NGBE_EEPROM_SUM - checksum;
+	if (eeprom_ptrs)
+		vfree(eeprom_ptrs);
+
+	return (s32)checksum;
+}
+
+/**
+ * ngbe_read_ee_hostif - Read EEPROM word using a host interface cmd
+ * assuming that the semaphore is already obtained.
+ * @hw: pointer to hardware structure
+ * @offset: offset of  word in the EEPROM to read
+ * @data: word read from the EEPROM
+ **/
+s32 ngbe_read_ee_hostif_data(struct ngbe_hw *hw, u16 offset, u16 *data)
+{
+	s32 status;
+	struct ngbe_hic_read_shadow_ram buffer;
+
+	buffer.hdr.req.cmd = FW_READ_SHADOW_RAM_CMD;
+	buffer.hdr.req.buf_lenh = 0;
+	buffer.hdr.req.buf_lenl = FW_READ_SHADOW_RAM_LEN;
+	buffer.hdr.req.checksum = FW_DEFAULT_CHECKSUM;
+
+	/* convert offset from words to bytes */
+	buffer.address = NGBE_CPU_TO_BE32(offset * 2);
+	/* one word */
+	buffer.length = NGBE_CPU_TO_BE16(sizeof(u16));
+
+	status = ngbe_host_if_command(hw, (u32 *)&buffer,
+				      sizeof(buffer),
+					      NGBE_HI_CMD_TIMEOUT, false);
+
+	if (status)
+		return status;
+	if (ngbe_check_mng_access(hw)) {
+		*data = (u16)rd32a(hw, NGBE_MNG_MBOX, FW_NVM_DATA_OFFSET);
+	} else {
+		status = NGBE_ERR_MNG_ACCESS_FAILED;
+		return status;
+	}
+
+	return 0;
+}
+
+/**
+ * ngbe_read_ee_hostif - Read EEPROM word using a host interface cmd
+ * @hw: pointer to hardware structure
+ * @offset: offset of  word in the EEPROM to read
+ * @data: word read from the EEPROM
+ **/
+s32 ngbe_read_ee_hostif(struct ngbe_hw *hw, u16 offset, u16 *data)
+{
+	s32 status = 0;
+
+	if (TCALL(hw, mac.ops.acquire_swfw_sync,
+		  NGBE_MNG_SWFW_SYNC_SW_FLASH) == 0) {
+		status = ngbe_read_ee_hostif_data(hw, offset, data);
+		TCALL(hw, mac.ops.release_swfw_sync,
+		      NGBE_MNG_SWFW_SYNC_SW_FLASH);
+	} else {
+		status = NGBE_ERR_SWFW_SYNC;
+	}
+
+	return status;
+}
+
+/**
+ * ngbe_write_ee_hostif - Write EEPROM word using hostif
+ * @hw: pointer to hardware structure
+ * @offset: offset of  word in the EEPROM to write
+ * @data: word write to the EEPROM
+ *
+ * Write a 16 bit word to the EEPROM using the hostif.
+ **/
+s32 ngbe_write_ee_hostif_data(struct ngbe_hw *hw, u16 offset,
+			      u16 data)
+{
+	s32 status;
+	struct ngbe_hic_write_shadow_ram buffer;
+
+	buffer.hdr.req.cmd = FW_WRITE_SHADOW_RAM_CMD;
+	buffer.hdr.req.buf_lenh = 0;
+	buffer.hdr.req.buf_lenl = FW_WRITE_SHADOW_RAM_LEN;
+	buffer.hdr.req.checksum = FW_DEFAULT_CHECKSUM;
+
+	/* one word */
+	buffer.length = NGBE_CPU_TO_BE16(sizeof(u16));
+	buffer.data = data;
+	buffer.address = NGBE_CPU_TO_BE32(offset * 2);
+
+	status = ngbe_host_if_command(hw, (u32 *)&buffer,
+				      sizeof(buffer),
+					      NGBE_HI_CMD_TIMEOUT, false);
+
+	return status;
+}
+
+/**
+ * ngbe_write_ee_hostif - Write EEPROM word using hostif
+ * @hw: pointer to hardware structure
+ * @offset: offset of  word in the EEPROM to write
+ * @data: word write to the EEPROM
+ **/
+s32 ngbe_write_ee_hostif(struct ngbe_hw *hw, u16 offset,
+			 u16 data)
+{
+	s32 status = 0;
+
+	if (TCALL(hw, mac.ops.acquire_swfw_sync,
+		  NGBE_MNG_SWFW_SYNC_SW_FLASH) == 0) {
+		status = ngbe_write_ee_hostif_data(hw, offset, data);
+		TCALL(hw, mac.ops.release_swfw_sync,
+		      NGBE_MNG_SWFW_SYNC_SW_FLASH);
+	} else {
+		status = NGBE_ERR_SWFW_SYNC;
+	}
+
+	return status;
+}
+
+/**
+ * ngbe_write_ee_hostif_buffer - Write EEPROM word(s) using hostif
+ * @hw: pointer to hardware structure
+ * @offset: offset of  word in the EEPROM to write
+ * @words: number of words
+ * @data: word(s) write to the EEPROM
+ **/
+s32 ngbe_write_ee_hostif_buffer(struct ngbe_hw *hw,
+				u16 offset, u16 words, u16 *data)
+{
+	s32 status = 0;
+	u16 i = 0;
+
+	/* Take semaphore for the entire operation. */
+	status = TCALL(hw, mac.ops.acquire_swfw_sync,
+		       NGBE_MNG_SWFW_SYNC_SW_FLASH);
+	if (status != 0)
+		return status;
+
+	for (i = 0; i < words; i++) {
+		status = ngbe_write_ee_hostif_data(hw, offset + i, data[i]);
+
+		if (status != 0)
+			break;
+	}
+
+	TCALL(hw, mac.ops.release_swfw_sync, NGBE_MNG_SWFW_SYNC_SW_FLASH);
+
+	return status;
+}
+
+/**
+ * ngbe_update_eeprom_checksum - Updates the EEPROM checksum and flash
+ * @hw: pointer to hardware structure
+ **/
+s32 ngbe_update_eeprom_checksum(struct ngbe_hw *hw)
+{
+	s32 status;
+	u16 checksum = 0;
+
+	/* Read the first word from the EEPROM. If this times out or fails, do
+	 * not continue or we could be in for a very long wait while every
+	 * EEPROM read fails
+	 */
+	status = ngbe_read_ee_hostif(hw, 0, &checksum);
+	if (status)
+		return status;
+
+	status = ngbe_calc_eeprom_checksum(hw);
+	if (status < 0)
+		return status;
+
+	checksum = (u16)(status & 0xffff);
+
+	status = ngbe_write_ee_hostif(hw, NGBE_EEPROM_CHECKSUM, checksum);
+	if (status)
+		return status;
+
+	return status;
+}
+
+/**
+ * ngbe_validate_eeprom_checksum - Validate EEPROM checksum
+ * @hw: pointer to hardware structure
+ * @checksum_val: calculated checksum
+ **/
+s32 ngbe_validate_eeprom_checksum(struct ngbe_hw *hw,
+				  u16 *checksum_val)
+{
+	s32 status;
+	u16 checksum;
+	u16 read_checksum = 0;
+
+	/* Read the first word from the EEPROM. If this times out or fails, do
+	 * not continue or we could be in for a very long wait while every
+	 * EEPROM read fails
+	 */
+	status = TCALL(hw, eeprom.ops.read, 0, &checksum);
+	if (status)
+		return status;
+
+	status = TCALL(hw, eeprom.ops.calc_checksum);
+	if (status < 0)
+		return status;
+
+	checksum = (u16)(status & 0xffff);
+
+	status = ngbe_read_ee_hostif(hw, hw->eeprom.sw_region_offset +
+					NGBE_EEPROM_CHECKSUM,
+					&read_checksum);
+	if (status)
+		return status;
+
+	/* Verify read checksum from EEPROM is the same as
+	 * calculated checksum
+	 */
+	if (read_checksum != checksum) {
+		status = NGBE_ERR_EEPROM_CHECKSUM;
+		ERROR_REPORT1(hw, NGBE_ERROR_INVALID_STATE,
+			      "Invalid EEPROM checksum\n");
+	}
+
+	/* If the user cares, return the calculated checksum */
+	if (checksum_val)
+		*checksum_val = checksum;
+
+	return status;
+}
+
+s32 ngbe_eepromcheck_cap(struct ngbe_hw *hw, u16 offset,
+			 u32 *data)
+{
+	int tmp;
+	s32 status;
+	struct ngbe_hic_read_shadow_ram buffer;
+
+	buffer.hdr.req.cmd = FW_EEPROM_CHECK_STATUS;
+	buffer.hdr.req.buf_lenh = 0;
+	buffer.hdr.req.buf_lenl = 0;
+	buffer.hdr.req.checksum = FW_DEFAULT_CHECKSUM;
+
+	/* convert offset from words to bytes */
+	buffer.address = 0;
+	/* one word */
+	buffer.length = 0;
+
+	status = ngbe_host_if_command(hw, (u32 *)&buffer,
+				      sizeof(buffer),
+					      NGBE_HI_CMD_TIMEOUT, false);
+
+	if (status)
+		return status;
+	if (ngbe_check_mng_access(hw)) {
+		tmp = (u32)rd32a(hw, NGBE_MNG_MBOX, 1);
+		if (tmp == NGBE_CHECKSUM_CAP_ST_PASS)
+			status = 0;
+		else
+			status = NGBE_ERR_EEPROM_CHECKSUM;
+	} else {
+		status = NGBE_ERR_MNG_ACCESS_FAILED;
+		return status;
+	}
+
+	return status;
+}
+
+/**
+ * ngbe_calculate_checksum - Calculate checksum for buffer
+ * @buffer: pointer to EEPROM
+ * @length: size of EEPROM to calculate a checksum for
+ * Calculates the checksum for some buffer on a specified length.	The
+ * checksum calculated is returned.
+ **/
+u8 ngbe_calculate_checksum(u8 *buffer, u32 length)
+{
+	u32 i;
+	u8 sum = 0;
+
+	if (!buffer)
+		return 0;
+
+	for (i = 0; i < length; i++)
+		sum += buffer[i];
+
+	return (u8)(0 - sum);
+}
+
+/**
+ * ngbe_set_fw_drv_ver - Sends driver version to firmware
+ * @hw: pointer to the HW structure
+ * @maj: driver version major number
+ * @min: driver version minor number
+ * @build: driver version build number
+ * @sub: driver version sub build number
+ **/
+s32 ngbe_set_fw_drv_ver(struct ngbe_hw *hw, u8 maj, u8 min,
+			u8 build, u8 sub)
+{
+	struct ngbe_hic_drv_info fw_cmd;
+	int i;
+	s32 ret_val = 0;
+
+	fw_cmd.hdr.cmd = FW_CEM_CMD_DRIVER_INFO;
+	fw_cmd.hdr.buf_len = FW_CEM_CMD_DRIVER_INFO_LEN;
+	fw_cmd.hdr.cmd_or_resp.cmd_resv = FW_CEM_CMD_RESERVED;
+	fw_cmd.port_num = (u8)hw->bus.func;
+	fw_cmd.ver_maj = maj;
+	fw_cmd.ver_min = min;
+	fw_cmd.ver_build = build;
+	fw_cmd.ver_sub = sub;
+	fw_cmd.hdr.checksum = 0;
+	fw_cmd.hdr.checksum = ngbe_calculate_checksum((u8 *)&fw_cmd,
+						      (FW_CEM_HDR_LEN + fw_cmd.hdr.buf_len));
+	fw_cmd.pad = 0;
+	fw_cmd.pad2 = 0;
+
+	mdelay(5);
+
+	for (i = 0; i <= FW_CEM_MAX_RETRIES; i++) {
+		ret_val = ngbe_host_if_command(hw, (u32 *)&fw_cmd,
+					       sizeof(fw_cmd),
+						       NGBE_HI_CMD_TIMEOUT,
+						       true);
+		if (ret_val != 0)
+			continue;
+
+		if (fw_cmd.hdr.cmd_or_resp.ret_status ==
+		    FW_CEM_RESP_STATUS_SUCCESS)
+			ret_val = 0;
+		else
+			ret_val = NGBE_ERR_HOST_INTERFACE_COMMAND;
+
+		break;
+	}
+
+	return ret_val;
+}
+
+/**
+ * ngbe_get_pcie_msix_count - Gets MSI-X vector count
+ * @hw: pointer to hardware structure
+ * Read PCIe configuration space, and get the MSI-X vector count from
+ * the capabilities table.
+ **/
+u16 ngbe_get_pcie_msix_count(struct ngbe_hw *hw)
+{
+	u16 msix_count = 1;
+	u16 max_msix_count;
+	u32 pos;
+
+	max_msix_count = NGBE_MAX_MSIX_VECTORS_EMERALD;
+	pos = pci_find_capability(((struct ngbe_adapter *)hw->back)->pdev,
+				  PCI_CAP_ID_MSIX);
+	if (!pos)
+		return msix_count;
+	pci_read_config_word(((struct ngbe_adapter *)hw->back)->pdev,
+			     pos + PCI_MSIX_FLAGS, &msix_count);
+
+	if (NGBE_REMOVED(hw->hw_addr))
+		msix_count = 0;
+	msix_count &= NGBE_PCIE_MSIX_TBL_SZ_MASK;
+
+	/* MSI-X count is zero-based in HW */
+	msix_count++;
+
+	if (msix_count > max_msix_count)
+		msix_count = max_msix_count;
+
+	return msix_count;
+}
+
 s32 ngbe_init_ops_common(struct ngbe_hw *hw)
 {
 	struct ngbe_mac_info *mac = &hw->mac;
+	struct ngbe_eeprom_info *eeprom = &hw->eeprom;
 
 	/* MAC */
 	mac->ops.init_hw = ngbe_init_hw;
@@ -1940,6 +2654,23 @@ s32 ngbe_init_ops_common(struct ngbe_hw *hw)
 	mac->ops.get_link_capabilities = ngbe_get_link_capabilities;
 	mac->ops.check_link = ngbe_check_mac_link;
 	mac->ops.setup_rxpba = ngbe_set_rxpba;
+
+	/* EEPROM */
+	eeprom->ops.init_params = ngbe_init_eeprom_params;
+	eeprom->ops.calc_checksum = ngbe_calc_eeprom_checksum;
+	eeprom->ops.read = ngbe_read_ee_hostif;
+	eeprom->ops.read_buffer = ngbe_read_ee_hostif_buffer;
+	eeprom->ops.read32 = ngbe_read_ee_hostif32;
+	eeprom->ops.write = ngbe_write_ee_hostif;
+	eeprom->ops.write_buffer = ngbe_write_ee_hostif_buffer;
+	eeprom->ops.update_checksum = ngbe_update_eeprom_checksum;
+	eeprom->ops.validate_checksum = ngbe_validate_eeprom_checksum;
+	eeprom->ops.eeprom_chksum_cap_st = ngbe_eepromcheck_cap;
+
+	/* Manageability interface */
+	mac->ops.set_fw_drv_ver = ngbe_set_fw_drv_ver;
+
+	mac->max_msix_vectors   = ngbe_get_pcie_msix_count(hw);
 
 	if (hw->phy.type == ngbe_phy_m88e1512 ||
 	    hw->phy.type == ngbe_phy_m88e1512_sfi ||

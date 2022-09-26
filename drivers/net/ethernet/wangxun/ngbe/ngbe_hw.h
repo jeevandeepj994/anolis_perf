@@ -15,7 +15,16 @@
 #define SPI_H_DAT_REG_ADDR          0x10108  // SPI Data register address
 
 u32 ngbe_flash_read_dword(struct ngbe_hw *hw, u32 addr);
+int ngbe_check_flash_load(struct ngbe_hw *hw, u32 check_bit);
 s32 ngbe_init_hw(struct ngbe_hw *hw);
+s32 ngbe_host_if_command(struct ngbe_hw *hw, u32 *buffer,
+			 u32 length, u32 timeout, bool return_data);
+u8 ngbe_calculate_checksum(u8 *buffer, u32 length);
+bool ngbe_check_mng_access(struct ngbe_hw *hw);
+bool ngbe_mng_present(struct ngbe_hw *hw);
+s32 ngbe_write_ee_hostif(struct ngbe_hw *hw, u16 offset,
+			 u16 data);
+s32 ngbe_disable_pcie_master(struct ngbe_hw *hw);
 s32 ngbe_init_ops_common(struct ngbe_hw *hw);
 
 #endif
