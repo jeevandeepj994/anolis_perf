@@ -27,6 +27,8 @@
 static DEFINE_MUTEX(damon_lock);
 static int nr_running_ctxs;
 
+DEFINE_STATIC_KEY_FALSE(numa_stat_enabled_key);
+
 /*
  * Construct a damon_region struct
  *
