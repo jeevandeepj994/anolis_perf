@@ -41,8 +41,12 @@ module_param(dprint_mask, uint, 0644);
 MODULE_PARM_DESC(dprint_mask, "debug information print level");
 
 bool compat_mode;
-module_param(compat_mode, bool, 0644);
+module_param(compat_mode, bool, 0444);
 MODULE_PARM_DESC(compat_mode, "compat mode support");
+
+static unsigned int vector_num = ERDMA_NUM_MSIX_VEC;
+module_param(vector_num, uint, 0444);
+MODULE_PARM_DESC(vector_num, "number of compeletion vectors");
 
 static int erdma_device_register(struct erdma_dev *dev)
 {
@@ -225,36 +229,14 @@ static void erdma_dwqe_resource_init(struct erdma_dev *dev)
 
 static int erdma_request_vectors(struct erdma_dev *dev)
 {
-	int expect_irq_num = min(num_possible_cpus() + 1, ERDMA_NUM_MSIX_VEC);
-#ifdef TO_FIX_ME
-	int i;
-	struct msix_entry *msix_entry = kmalloc_array(expect_irq_num,
-						sizeof(*msix_entry), GFP_KERNEL);
-	if (!msix_entry)
-		return -ENOMEM;
-
-	for (i = 0; i < expect_irq_num; ++i)
-		msix_entry[i].entry = i;
-	dev->attrs.irq_num = pci_enable_msix_range(dev->pdev, msix_entry, 1, expect_irq_num);
-#else
+	int expect_irq_num = min(num_possible_cpus() + 1, vector_num);
 	dev->attrs.irq_num = pci_alloc_irq_vectors(dev->pdev, 1, expect_irq_num,
 						   PCI_IRQ_MSIX);
-#endif
 	if (dev->attrs.irq_num <= 0) {
 		dev_err(&dev->pdev->dev, "request irq vectors failed(%d)\n",
 			dev->attrs.irq_num);
-#ifdef TO_FIX_ME
-		kfree(msix_entry);
-#endif
 		return -ENOSPC;
 	}
-
-#ifdef TO_FIX_ME
-	dev->comm_irq.msix_vector = msix_entry[0].vector;
-	for (i = 1; i < dev->attrs.irq_num; i++)
-		dev->ceqs[i - 1].irq.msix_vector = msix_entry[i].vector;
-	kfree(msix_entry);
-#endif
 
 	return 0;
 }
@@ -401,11 +383,7 @@ err_uninit_comm_irq:
 	erdma_comm_irq_uninit(dev);
 
 err_free_vectors:
-#ifdef TO_FIX_ME
-	pci_disable_msix(dev->pdev);
-#else
 	pci_free_irq_vectors(dev->pdev);
-#endif
 
 err_iounmap_func_bar:
 	devm_iounmap(&pdev->dev, dev->func_bar);
@@ -433,11 +411,7 @@ static void erdma_remove_dev(struct pci_dev *pdev)
 	erdma_cmdq_destroy(dev);
 	erdma_aeq_destroy(dev);
 	erdma_comm_irq_uninit(dev);
-#ifdef TO_FIX_ME
-	pci_disable_msix(dev->pdev);
-#else
 	pci_free_irq_vectors(dev->pdev);
-#endif
 
 	devm_iounmap(&pdev->dev, dev->func_bar);
 	pci_release_selected_regions(pdev, ERDMA_BAR_MASK);

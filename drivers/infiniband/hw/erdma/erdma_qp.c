@@ -669,8 +669,9 @@ static void ib_drain_qp_done(struct ib_cq *cq, struct ib_wc *wc)
 
 static void erdma_drain_qp(struct ib_qp *qp)
 {
-	struct ib_drain_cqe sdrain;
-	struct ib_drain_cqe rdrain;
+	struct ib_drain_cqe sdrain, rdrain;
+	const struct ib_send_wr *bad_swr;
+	const struct ib_recv_wr *bad_rwr;
 	struct ib_recv_wr rwr = {};
 	struct ib_qp_attr attr = { .qp_state = IB_QPS_ERR };
 	struct ib_rdma_wr swr = {
@@ -681,14 +682,13 @@ static void erdma_drain_qp(struct ib_qp *qp)
 			.send_flags = IB_SEND_SIGNALED,
 		},
 	};
-	int ret;
-	int cnt;
+	int ret, cnt;
 
 	rwr.wr_cqe = &rdrain.cqe;
 	rdrain.cqe.done = ib_drain_qp_done;
 	init_completion(&rdrain.done);
 
-	ret = erdma_post_recv_internal(qp, &rwr, NULL, true);
+	ret = erdma_post_recv_internal(qp, &rwr, &bad_rwr, true);
 	if (ret) {
 		WARN_ONCE(ret, "failed to drain recv queue: %d", ret);
 		return;
@@ -697,7 +697,7 @@ static void erdma_drain_qp(struct ib_qp *qp)
 	sdrain.cqe.done = ib_drain_qp_done;
 	init_completion(&sdrain.done);
 
-	ret = erdma_post_send_internal(qp, &swr.wr, NULL, true);
+	ret = erdma_post_send_internal(qp, &swr.wr, &bad_swr, true);
 	if (ret) {
 		WARN_ONCE(ret, "failed to drain send queue: %d", ret);
 		return;
