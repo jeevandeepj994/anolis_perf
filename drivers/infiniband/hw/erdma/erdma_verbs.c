@@ -550,8 +550,8 @@ static int init_kernel_qp(struct erdma_dev *dev, struct erdma_qp *qp,
 		qp->attrs.connect_without_cm = true;
 		qp->attrs.sip = ntohl(param->sk_addr.saddr_v4);
 		qp->attrs.dip = ntohl(param->sk_addr.daddr_v4);
-		qp->attrs.sport = ntohs(param->sk_addr.dport);
-		qp->attrs.dport = param->sk_addr.sport;
+		qp->attrs.dport = ntohs(param->sk_addr.dport);
+		qp->attrs.sport = param->sk_addr.sport;
 	}
 	spin_lock_init(&kqp->sq_lock);
 	spin_lock_init(&kqp->rq_lock);
