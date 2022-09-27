@@ -1419,6 +1419,8 @@ static int snbep_pci2phy_map_init(int devid, int nodeid_loc, int idmap_loc, bool
 						die_id = i;
 					else
 						die_id = topology_phys_to_logical_pkg(i);
+					if (die_id < 0)
+						die_id = -ENODEV;
 					map->pbus_to_dieid[bus] = die_id;
 					break;
 				}
@@ -1465,14 +1467,14 @@ static int snbep_pci2phy_map_init(int devid, int nodeid_loc, int idmap_loc, bool
 			i = -1;
 			if (reverse) {
 				for (bus = 255; bus >= 0; bus--) {
-					if (map->pbus_to_dieid[bus] >= 0)
+					if (map->pbus_to_dieid[bus] != -1)
 						i = map->pbus_to_dieid[bus];
 					else
 						map->pbus_to_dieid[bus] = i;
 				}
 			} else {
 				for (bus = 0; bus <= 255; bus++) {
-					if (map->pbus_to_dieid[bus] >= 0)
+					if (map->pbus_to_dieid[bus] != -1)
 						i = map->pbus_to_dieid[bus];
 					else
 						map->pbus_to_dieid[bus] = i;
@@ -5488,6 +5490,7 @@ static struct intel_uncore_type spr_uncore_chabox = {
 	.event_mask		= SPR_CHA_PMON_EVENT_MASK,
 	.event_mask_ext		= SPR_RAW_EVENT_MASK_EXT,
 	.num_shared_regs	= 1,
+	.constraints		= skx_uncore_chabox_constraints,
 	.ops			= &spr_uncore_chabox_ops,
 	.format_group		= &spr_uncore_chabox_format_group,
 	.attr_update		= uncore_alias_groups,
@@ -5499,6 +5502,7 @@ static struct intel_uncore_type spr_uncore_iio = {
 	.event_mask_ext		= SNR_IIO_PMON_RAW_EVENT_MASK_EXT,
 	.format_group		= &snr_uncore_iio_format_group,
 	.attr_update		= uncore_alias_groups,
+	.constraints		= icx_uncore_iio_constraints,
 };
 
 static struct attribute *spr_uncore_raw_formats_attr[] = {
@@ -5527,9 +5531,16 @@ static struct intel_uncore_type spr_uncore_irp = {
 
 };
 
+static struct event_constraint spr_uncore_m2pcie_constraints[] = {
+	UNCORE_EVENT_CONSTRAINT(0x14, 0x3),
+	UNCORE_EVENT_CONSTRAINT(0x2d, 0x3),
+	EVENT_CONSTRAINT_END
+};
+
 static struct intel_uncore_type spr_uncore_m2pcie = {
 	SPR_UNCORE_COMMON_FORMAT(),
 	.name			= "m2pcie",
+	.constraints		= spr_uncore_m2pcie_constraints,
 };
 
 static struct intel_uncore_type spr_uncore_pcu = {
@@ -5606,6 +5617,7 @@ static struct intel_uncore_type spr_uncore_upi = {
 static struct intel_uncore_type spr_uncore_m3upi = {
 	SPR_UNCORE_PCI_COMMON_FORMAT(),
 	.name			= "m3upi",
+	.constraints		= icx_uncore_m3upi_constraints,
 };
 
 static struct intel_uncore_type spr_uncore_mdf = {
