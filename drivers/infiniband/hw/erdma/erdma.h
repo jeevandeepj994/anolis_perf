@@ -7,7 +7,6 @@
 #ifndef __ERDMA_H__
 #define __ERDMA_H__
 
-//#include "kcompat.h"
 #include <linux/bitfield.h>
 #include <linux/netdevice.h>
 #include <linux/xarray.h>
@@ -145,7 +144,7 @@ struct erdma_devattr {
 	int numa_node;
 	enum erdma_cc_alg cc;
 	u32 grp_num;
-	u32 irq_num;
+	int irq_num;
 
 	bool disable_dwqe;
 	u16 dwqe_pages;

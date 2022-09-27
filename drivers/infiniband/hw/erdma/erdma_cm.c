@@ -620,10 +620,10 @@ static int erdma_proc_mpareply(struct erdma_cep *cep)
 	int ret;
 
 	ret = erdma_recv_mpa_rr(cep);
-	if (ret != -EAGAIN)
-		erdma_cancel_mpatimer(cep);
 	if (ret)
 		goto out_err;
+
+	erdma_cancel_mpatimer(cep);
 
 	rep = &cep->mpa.hdr;
 
@@ -676,7 +676,9 @@ static int erdma_proc_mpareply(struct erdma_cep *cep)
 	}
 
 out_err:
-	erdma_cm_upcall(cep, IW_CM_EVENT_CONNECT_REPLY, -EINVAL);
+	if (ret != -EAGAIN)
+		erdma_cm_upcall(cep, IW_CM_EVENT_CONNECT_REPLY, -EINVAL);
+
 	return ret;
 }
 
