@@ -691,6 +691,26 @@ EXPORT_SYMBOL(migrate_page_copy);
  *                    Migration functions
  ***********************************************************/
 
+int migrate_page_extra(struct address_space *mapping, struct page *newpage,
+		       struct page *page, enum migrate_mode mode,
+		       int extra_count)
+{
+	int rc;
+
+	BUG_ON(PageWriteback(page));	/* Writeback must be complete */
+
+	rc = migrate_page_move_mapping(mapping, newpage, page, extra_count);
+
+	if (rc != MIGRATEPAGE_SUCCESS)
+		return rc;
+
+	if (mode != MIGRATE_SYNC_NO_COPY)
+		migrate_page_copy(newpage, page);
+	else
+		migrate_page_states(newpage, page);
+	return MIGRATEPAGE_SUCCESS;
+}
+
 /*
  * Common logic to directly migrate a single LRU page suitable for
  * pages that do not use PagePrivate/PagePrivate2.
