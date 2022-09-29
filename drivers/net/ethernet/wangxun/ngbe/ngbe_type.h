@@ -517,6 +517,13 @@ typedef u32 ngbe_physical_layer;
 /***************************** RDB registers *********************************/
 #define NGBE_RDB_PB_CTL                0x19000
 
+/* Flow Control Registers */
+#define NGBE_RDB_RFCV                  0x19200
+#define NGBE_RDB_RFCL                  0x19220
+#define NGBE_RDB_RFCH                  0x19260
+#define NGBE_RDB_RFCRT                 0x192A0
+#define NGBE_RDB_RFCC                  0x192A4
+
 /* receive packet buffer */
 #define NGBE_RDB_PB_WRAP               0x19004
 #define NGBE_RDB_PB_SZ                 0x19020
@@ -566,6 +573,13 @@ typedef u32 ngbe_physical_layer;
 #define NGBE_RDB_RA_CTL_RSS_IPV6_TCP   0x00200000U
 #define NGBE_RDB_RA_CTL_RSS_IPV4_UDP   0x00400000U
 #define NGBE_RDB_RA_CTL_RSS_IPV6_UDP   0x00800000U
+
+/* FCRTL Bit Masks */
+#define NGBE_RDB_RFCL_XONE             0x80000000U /* XON enable */
+#define NGBE_RDB_RFCH_XOFFE            0x80000000U /* Packet buffer fc enable */
+
+/* FCCFG Bit Masks */
+#define NGBE_RDB_RFCC_RFCE_802_3X      0x00000008U /* Tx link FC enable */
 
 /****************************** TDB ******************************************/
 #define NGBE_TDB_PB_SZ                 0x1CC00
@@ -1027,6 +1041,27 @@ enum ngbe_l2_ptypes {
 #define FW_PHY_LED_CONF                 0xF1
 #define FW_PHY_SIGNAL                   0xF0
 
+/* ETH PHY Registers */
+#define NGBE_SR_XS_PCS_MMD_STATUS1             0x30001
+#define NGBE_SR_PCS_CTL2                       0x30007
+#define NGBE_SR_PMA_MMD_CTL1                   0x10000
+#define NGBE_SR_MII_MMD_CTL                    0x1F0000
+#define NGBE_SR_MII_MMD_DIGI_CTL               0x1F8000
+#define NGBE_SR_MII_MMD_AN_CTL                 0x1F8001
+#define NGBE_SR_MII_MMD_AN_ADV                 0x1F0004
+#define NGBE_SR_MII_MMD_AN_ADV_PAUSE(_v)       ((0x3 & (_v)) << 7)
+#define NGBE_SR_MII_MMD_LP_BABL                0x1F0005
+#define NGBE_SR_AN_MMD_CTL                     0x70000
+#define NGBE_SR_AN_MMD_ADV_REG1                0x70010
+#define NGBE_SR_AN_MMD_ADV_REG1_PAUSE(_v)      ((0x3 & (_v)) << 10)
+#define NGBE_SR_AN_MMD_ADV_REG1_PAUSE_SYM      0x400
+#define NGBE_SR_AN_MMD_ADV_REG1_PAUSE_ASM      0x800
+#define NGBE_SR_AN_MMD_ADV_REG2                0x70011
+#define NGBE_SR_AN_MMD_LP_ABL1                 0x70013
+#define NGBE_VR_AN_KR_MODE_CL                  0x78003
+#define NGBE_VR_XS_OR_PCS_MMD_DIGI_CTL1        0x38000
+#define NGBE_VR_XS_OR_PCS_MMD_DIGI_STATUS      0x38010
+
 /* BitTimes (BT) conversion */
 #define NGBE_BT2KB(BT)         (((BT) + (8 * 1024 - 1)) / (8 * 1024))
 #define NGBE_B2BT(BT)          ((BT) * 8)
@@ -1246,6 +1281,10 @@ struct ngbe_mac_operations {
 	void (*disable_rx)(struct ngbe_hw *hw);
 	void (*enable_rx)(struct ngbe_hw *hw);
 	void (*set_ethertype_anti_spoofing)(struct ngbe_hw *hw, bool enable, int vf);
+
+	/* Flow Control */
+	s32 (*fc_enable)(struct ngbe_hw *hw);
+	s32 (*setup_fc)(struct ngbe_hw *hw);
 };
 
 /* Function pointer table */
