@@ -119,6 +119,7 @@
 #define NGBE_RXBUFFER_256                      256  /* Used for skb receive header */
 
 #define NGBE_RX_HDR_SIZE                       NGBE_RXBUFFER_256
+#define NGBE_RX_BUFFER_WRITE                   16      /* Must be power of 2 */
 
 #define NGBE_MAX_VF_FUNCTIONS                  8
 #define MAX_RX_QUEUES                          8
@@ -149,11 +150,23 @@
 #define NGBE_INTR_MISC_VMDQ(A) BIT(((A)->num_q_vectors + (A)->ring_feature[RING_F_VMDQ].offset))
 #define NGBE_MAX_MACVLANS      8
 
+/* VLAN info */
+#define NGBE_TX_FLAGS_VLAN_SHIFT       16
+#define NGBE_TX_FLAGS_VLAN_MASK        0xffff0000
+#define NGBE_MAX_PF_MACVLANS           15
+
+/* Ether Types */
+#define NGBE_ETH_P_LLDP                        0x88CC
+#define NGBE_ETH_P_CNM                         0x22E7
+
 /* iterator for handling rings in ring container */
 #define ngbe_for_each_ring(pos, head) \
 	for (pos = (head).ring; pos; pos = pos->next)
 
 #define NGBE_RING_SIZE(R) ((R)->count < NGBE_MAX_TXD ? (R)->count / 128 : 0)
+
+#define ring_uses_build_skb(ring) \
+	test_bit(__NGBE_RX_BUILD_SKB_ENABLED, &(ring)->state)
 
 #define set_ring_hs_enabled(ring) \
 	set_bit(__NGBE_RX_HS_ENABLED, &(ring)->state)
@@ -175,10 +188,38 @@
 #define NGBE_TX_CTXTDESC(R, i) \
 	(&(((struct ngbe_tx_context_desc *)((R)->desc))[i]))
 
+#define NGBE_SET_FLAG(_input, _flag, _result) \
+	(((_flag) <= (_result)) ? \
+	 ((u32)((_input) & (_flag)) * ((_result) / (_flag))) : \
+	 ((u32)((_input) & (_flag)) / ((_flag) / (_result))))
+
 #define TCP_TIMER_VECTOR       0
 #define OTHER_VECTOR           1
 #define NON_Q_VECTORS          (OTHER_VECTOR + TCP_TIMER_VECTOR)
 #define NGBE_7K_ITR            595
+
+#define NGBE_RX_DMA_ATTR \
+	(DMA_ATTR_SKIP_CPU_SYNC | DMA_ATTR_WEAK_ORDERING)
+
+#define NGBE_FAILED_READ_CFG_WORD  0xffffU
+
+#define DESC_NEEDED     (MAX_SKB_FRAGS + 4)
+
+#define NGBE_INTR_Q(i) (1ULL << (i))
+
+/* macro to make the table lines short */
+#define NGBE_PTT(ptype, mac, ip, etype, eip, proto, layer)\
+	{       ptype, \
+		1, \
+		/* mac     */ NGBE_DEC_PTYPE_MAC_##mac, \
+		/* ip      */ NGBE_DEC_PTYPE_IP_##ip, \
+		/* etype   */ NGBE_DEC_PTYPE_ETYPE_##etype, \
+		/* eip     */ NGBE_DEC_PTYPE_IP_##eip, \
+		/* proto   */ NGBE_DEC_PTYPE_PROT_##proto, \
+		/* layer   */ NGBE_DEC_PTYPE_LAYER_##layer }
+
+#define NGBE_UKN(ptype) \
+		{ ptype, 0, 0, 0, 0, 0, 0, 0 }
 
 enum ngbe_state_t {
 	__NGBE_TESTING,
@@ -207,6 +248,25 @@ enum ngbe_ring_f_enum {
 	RING_F_ARRAY_SIZE  /* must be last in enum set */
 };
 
+enum ngbe_tx_flags {
+	/* cmd_type flags */
+	NGBE_TX_FLAGS_HW_VLAN  = 0x01,
+	NGBE_TX_FLAGS_TSO      = 0x02,
+	NGBE_TX_FLAGS_TSTAMP   = 0x04,
+
+	/* olinfo flags */
+	NGBE_TX_FLAGS_CC       = 0x08,
+	NGBE_TX_FLAGS_IPV4     = 0x10,
+	NGBE_TX_FLAGS_CSUM     = 0x20,
+	NGBE_TX_FLAGS_OUTER_IPV4 = 0x100,
+	NGBE_TX_FLAGS_LINKSEC	= 0x200,
+	NGBE_TX_FLAGS_IPSEC    = 0x400,
+
+	/* software defined flags */
+	NGBE_TX_FLAGS_SW_VLAN  = 0x40,
+	NGBE_TX_FLAGS_FCOE     = 0x80,
+};
+
 struct ngbe_mac_addr {
 	u8 addr[ETH_ALEN];
 	u16 state; /* bitmask */
@@ -228,6 +288,64 @@ enum ngbe_ring_state_t {
 	__NGBE_TX_DETECT_HANG,
 	__NGBE_HANG_CHECK_ARMED,
 	__NGBE_RX_HS_ENABLED,
+};
+
+/* ngbe_dec_ptype.mac: outer mac */
+enum ngbe_dec_ptype_mac {
+	NGBE_DEC_PTYPE_MAC_IP = 0,
+	NGBE_DEC_PTYPE_MAC_L2 = 2,
+	NGBE_DEC_PTYPE_MAC_FCOE = 3,
+};
+
+/* ngbe_dec_ptype.[e]ip: outer&encaped ip */
+#define NGBE_DEC_PTYPE_IP_FRAG (0x4)
+
+enum ngbe_dec_ptype_ip {
+	NGBE_DEC_PTYPE_IP_NONE = 0,
+	NGBE_DEC_PTYPE_IP_IPV4 = 1,
+	NGBE_DEC_PTYPE_IP_IPV6 = 2,
+	NGBE_DEC_PTYPE_IP_FGV4 =
+		(NGBE_DEC_PTYPE_IP_FRAG | NGBE_DEC_PTYPE_IP_IPV4),
+	NGBE_DEC_PTYPE_IP_FGV6 =
+		(NGBE_DEC_PTYPE_IP_FRAG | NGBE_DEC_PTYPE_IP_IPV6),
+};
+
+/* ngbe_dec_ptype.layer: payload layer */
+enum ngbe_dec_ptype_layer {
+	NGBE_DEC_PTYPE_LAYER_NONE = 0,
+	NGBE_DEC_PTYPE_LAYER_PAY2 = 1,
+	NGBE_DEC_PTYPE_LAYER_PAY3 = 2,
+	NGBE_DEC_PTYPE_LAYER_PAY4 = 3,
+};
+
+struct ngbe_dec_ptype {
+	u32 ptype:8;
+	u32 known:1;
+	u32 mac:2; /* outer mac */
+	u32 ip:3; /* outer ip*/
+	u32 etype:3; /* encaped type */
+	u32 eip:3; /* encaped ip */
+	u32 prot:4; /* payload proto */
+	u32 layer:3; /* payload layer */
+};
+
+/* ngbe_dec_ptype.proto: payload proto */
+enum ngbe_dec_ptype_prot {
+	NGBE_DEC_PTYPE_PROT_NONE = 0,
+	NGBE_DEC_PTYPE_PROT_UDP = 1,
+	NGBE_DEC_PTYPE_PROT_TCP = 2,
+	NGBE_DEC_PTYPE_PROT_SCTP = 3,
+	NGBE_DEC_PTYPE_PROT_ICMP = 4,
+	NGBE_DEC_PTYPE_PROT_TS = 5, /* time sync */
+};
+
+/* ngbe_dec_ptype.etype: encaped type */
+enum ngbe_dec_ptype_etype {
+	NGBE_DEC_PTYPE_ETYPE_NONE = 0,
+	NGBE_DEC_PTYPE_ETYPE_IPIP = 1, /* IP+IP */
+	NGBE_DEC_PTYPE_ETYPE_IG = 2, /* IP+GRE */
+	NGBE_DEC_PTYPE_ETYPE_IGM = 3, /* IP+GRE+MAC */
+	NGBE_DEC_PTYPE_ETYPE_IGMV = 4, /* IP+GRE+MAC+VLAN */
 };
 
 struct ngbe_fwd_adapter {
@@ -457,6 +575,9 @@ struct ngbe_adapter {
 	u32 isb_tag[NGBE_ISB_MAX];
 	unsigned long active_vlans[BITS_TO_LONGS(VLAN_N_VID)];
 	unsigned long fwd_bitmask; /* bitmask indicating in use pools */
+
+	u32 hang_cnt;
+	u32 gphy_efuse[2];
 };
 
 struct ngbe_cb {
@@ -492,9 +613,8 @@ static inline void ngbe_intr_enable(struct ngbe_hw *hw, u64 qmask)
 	u32 mask;
 
 	mask = (qmask & 0xFFFFFFFF);
-	if (mask) {
+	if (mask)
 		wr32(hw, NGBE_PX_IMC, mask);
-	}
 }
 
 static inline void ngbe_intr_disable(struct ngbe_hw *hw, u64 qmask)
@@ -538,6 +658,13 @@ static inline u16 ngbe_desc_unused(struct ngbe_ring *ring)
 	u16 ntu = ring->next_to_use;
 
 	return ((ntc > ntu) ? 0 : ring->count) + ntc - ntu - 1;
+}
+
+/* ngbe_test_staterr - tests bits in Rx descriptor status and error fields */
+static inline __le32 ngbe_test_staterr(union ngbe_rx_desc *rx_desc,
+				       const u32 stat_err_bits)
+{
+	return rx_desc->wb.upper.status_error & cpu_to_le32(stat_err_bits);
 }
 
 enum {
@@ -605,5 +732,11 @@ void ngbe_reset_interrupt_capability(struct ngbe_adapter *adapter);
 int ngbe_init_interrupt_scheme(struct ngbe_adapter *adapter);
 void ngbe_clear_interrupt_scheme(struct ngbe_adapter *adapter);
 int ngbe_poll(struct napi_struct *napi, int budget);
+void ngbe_alloc_rx_buffers(struct ngbe_ring *rx_ring, u16 cleaned_count);
+int ngbe_del_mac_filter(struct ngbe_adapter *adapter, u8 *addr, u16 pool);
+void ngbe_vlan_strip_disable(struct ngbe_adapter *adapter);
+void ngbe_set_rx_mode(struct net_device *netdev);
+void ngbe_reinit_locked(struct ngbe_adapter *adapter);
+void ngbe_vlan_strip_enable(struct ngbe_adapter *adapter);
 
 #endif /* _NGBE_H_ */
