@@ -652,7 +652,7 @@ static void vidxd_mmio_init_wqcfg(struct vdcm_idxd *vidxd)
 
 	wqcfg->priority = wq->priority;
 	wqcfg->max_xfer_shift = ilog2(wq->max_xfer_bytes);
-	wqcfg->max_batch_shift = ilog2(wq->max_batch_size);
+	idxd_wqcfg_set_max_batch_shift(idxd->data->type, wqcfg, ilog2(wq->max_batch_size));
 	wqcfg->mode_support = 1;
 }
 
