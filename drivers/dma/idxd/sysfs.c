@@ -1109,8 +1109,30 @@ static struct attribute *idxd_wq_attributes[] = {
 	NULL,
 };
 
+static bool idxd_wq_attr_max_batch_size_invisible(struct attribute *attr,
+						  struct idxd_device *idxd)
+{
+	/* Intel IAA does not support batch processing, make it invisible */
+	return attr == &dev_attr_wq_max_batch_size.attr &&
+	       idxd->data->type == IDXD_TYPE_IAX;
+}
+
+static umode_t idxd_wq_attr_visible(struct kobject *kobj,
+				    struct attribute *attr, int n)
+{
+	struct device *dev = container_of(kobj, struct device, kobj);
+	struct idxd_wq *wq = confdev_to_wq(dev);
+	struct idxd_device *idxd = wq->idxd;
+
+	if (idxd_wq_attr_max_batch_size_invisible(attr, idxd))
+		return 0;
+
+	return attr->mode;
+}
+
 static const struct attribute_group idxd_wq_attribute_group = {
 	.attrs = idxd_wq_attributes,
+	.is_visible = idxd_wq_attr_visible,
 };
 
 static const struct attribute_group *idxd_wq_attribute_groups[] = {
@@ -1400,6 +1422,26 @@ static ssize_t cmd_status_store(struct device *dev, struct device_attribute *att
 }
 static DEVICE_ATTR_RW(cmd_status);
 
+static bool idxd_device_attr_max_batch_size_invisible(struct attribute *attr,
+						      struct idxd_device *idxd)
+{
+	/* Intel IAA does not support batch processing, make it invisible */
+	return attr == &dev_attr_max_batch_size.attr &&
+	       idxd->data->type == IDXD_TYPE_IAX;
+}
+
+static umode_t idxd_device_attr_visible(struct kobject *kobj,
+					struct attribute *attr, int n)
+{
+	struct device *dev = container_of(kobj, struct device, kobj);
+	struct idxd_device *idxd = confdev_to_idxd(dev);
+
+	if (idxd_device_attr_max_batch_size_invisible(attr, idxd))
+		return 0;
+
+	return attr->mode;
+}
+
 static struct attribute *idxd_device_attributes[] = {
 	&dev_attr_version.attr,
 	&dev_attr_max_groups.attr,
@@ -1427,6 +1469,7 @@ static struct attribute *idxd_device_attributes[] = {
 
 static const struct attribute_group idxd_device_attribute_group = {
 	.attrs = idxd_device_attributes,
+	.is_visible = idxd_device_attr_visible,
 };
 
 static const struct attribute_group *idxd_attribute_groups[] = {
