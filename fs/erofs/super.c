@@ -318,6 +318,7 @@ enum {
 	Opt_cache_strategy,
 	Opt_device,
 	Opt_fsid,
+	Opt_opt_creds,
 	Opt_err
 };
 
@@ -335,6 +336,7 @@ static const struct fs_parameter_spec erofs_fs_parameters[] = {
 		     erofs_param_cache_strategy),
 	fsparam_string("device",	Opt_device),
 	fsparam_string("fsid",		Opt_fsid),
+	fsparam_string("opt_creds",	Opt_opt_creds),
 	{}
 };
 
@@ -407,6 +409,16 @@ static int erofs_fc_parse_param(struct fs_context *fc,
 		errorfc(fc, "fsid option not supported");
 		return -EINVAL;
 #endif
+		break;
+	case Opt_opt_creds:
+		if (!strcmp(param->string, "on")) {
+			set_opt(&ctx->opt, OPT_CREDS);
+		} else if (!strcmp(param->string, "off")) {
+			clear_opt(&ctx->opt, OPT_CREDS);
+		} else {
+			errorfc(fc, "invalid mount option, using 'opt_creds=[on|off]'");
+			return -EINVAL;
+		}
 		break;
 	default:
 		return -ENOPARAM;
@@ -530,6 +542,11 @@ static int erofs_fc_fill_super(struct super_block *sb, struct fs_context *fc)
 	else
 		sb->s_flags &= ~SB_POSIXACL;
 
+	if (test_opt(&sbi->opt, OPT_CREDS))
+		sb->s_iflags |= SB_I_OVL_OPT_CREDS;
+	else
+		sb->s_iflags &= ~SB_I_OVL_OPT_CREDS;
+
 #ifdef CONFIG_EROFS_FS_ZIP
 	xa_init(&sbi->managed_pslots);
 #endif
@@ -582,6 +599,11 @@ static int erofs_fc_reconfigure(struct fs_context *fc)
 		fc->sb_flags |= SB_POSIXACL;
 	else
 		fc->sb_flags &= ~SB_POSIXACL;
+
+	if (test_opt(&ctx->opt, OPT_CREDS))
+		sb->s_iflags |= SB_I_OVL_OPT_CREDS;
+	else
+		sb->s_iflags &= ~SB_I_OVL_OPT_CREDS;
 
 	sbi->opt = ctx->opt;
 
@@ -806,6 +828,11 @@ static int erofs_show_options(struct seq_file *seq, struct dentry *root)
 	if (sbi->opt.fsid)
 		seq_printf(seq, ",fsid=%s", sbi->opt.fsid);
 #endif
+	if (test_opt(opt, OPT_CREDS))
+		seq_puts(seq, ",opt_creds=on");
+	else
+		seq_puts(seq, ",opt_creds=off");
+
 	return 0;
 }
 

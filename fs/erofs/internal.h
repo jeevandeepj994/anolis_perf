@@ -137,6 +137,11 @@ struct erofs_sb_info {
 /* Mount flags set via mount options or defaults */
 #define EROFS_MOUNT_XATTR_USER		0x00000010
 #define EROFS_MOUNT_POSIX_ACL		0x00000020
+/*
+ * Bypass [override_creds|revert_creds] for overlayfs
+ * when erofs is mounted as lowerfs.
+ */
+#define EROFS_MOUNT_OPT_CREDS		0x80000000
 
 #define clear_opt(opt, option)	((opt)->mount_opt &= ~EROFS_MOUNT_##option)
 #define set_opt(opt, option)	((opt)->mount_opt |= EROFS_MOUNT_##option)
