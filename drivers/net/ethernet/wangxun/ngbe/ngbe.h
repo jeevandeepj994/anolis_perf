@@ -10,6 +10,10 @@
 #include <linux/vmalloc.h>
 #include <linux/if_vlan.h>
 #include "ngbe_type.h"
+#include <linux/timecounter.h>
+#include <linux/clocksource.h>
+#include <linux/net_tstamp.h>
+#include <linux/ptp_clock_kernel.h>
 
 #define NGBE_MAX_FDIR_INDICES		        7
 #define NGBE_MAX_MSIX_Q_VECTORS_EMERALD     9
@@ -231,6 +235,8 @@ enum ngbe_state_t {
 	__NGBE_SERVICE_SCHED,
 	__NGBE_SERVICE_INITED,
 	__NGBE_IN_SFP_INIT,
+	__NGBE_PTP_RUNNING,
+	__NGBE_PTP_TX_IN_PROGRESS,
 };
 
 enum ngbe_isb_idx {
@@ -578,6 +584,23 @@ struct ngbe_adapter {
 
 	u32 hang_cnt;
 	u32 gphy_efuse[2];
+
+	/* ptp block */
+	struct ptp_clock *ptp_clock;
+	struct ptp_clock_info ptp_caps;
+	struct work_struct ptp_tx_work;
+	struct sk_buff *ptp_tx_skb;
+	struct hwtstamp_config tstamp_config;
+	unsigned long ptp_tx_start;
+	unsigned long last_overflow_check;
+	unsigned long last_rx_ptp_check;
+	spinlock_t tmreg_lock;			/* Used to protect timestamp registers. */
+	struct cyclecounter hw_cc;
+	struct timecounter hw_tc;
+	u32 base_incval;
+	u32 tx_hwtstamp_timeouts;
+	u32 tx_hwtstamp_skipped;
+	u32 rx_hwtstamp_cleared;
 };
 
 struct ngbe_cb {
@@ -738,5 +761,15 @@ void ngbe_vlan_strip_disable(struct ngbe_adapter *adapter);
 void ngbe_set_rx_mode(struct net_device *netdev);
 void ngbe_reinit_locked(struct ngbe_adapter *adapter);
 void ngbe_vlan_strip_enable(struct ngbe_adapter *adapter);
+void ngbe_ptp_overflow_check(struct ngbe_adapter *adapter);
+void ngbe_ptp_rx_hang(struct ngbe_adapter *adapter);
+int ngbe_ptp_get_ts_config(struct ngbe_adapter *adapter, struct ifreq *ifr);
+int ngbe_ptp_set_ts_config(struct ngbe_adapter *adapter, struct ifreq *ifr);
+void ngbe_ptp_init(struct ngbe_adapter *adapter);
+void ngbe_ptp_reset(struct ngbe_adapter *adapter);
+void ngbe_ptp_stop(struct ngbe_adapter *adapter);
+void ngbe_ptp_check_pps_event(struct ngbe_adapter *adapter);
+void ngbe_ptp_rx_hwtstamp(struct ngbe_adapter *adapter, struct sk_buff *skb);
+void ngbe_ptp_start_cyclecounter(struct ngbe_adapter *adapter);
 
 #endif /* _NGBE_H_ */
