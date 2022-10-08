@@ -291,18 +291,6 @@ typedef u32 ngbe_physical_layer;
 #define NGBE_MMC_CONTROL_RSTONRD       0x4 /* reset on read */
 #define NGBE_MMC_CONTROL_UP            0x700
 
-/* Manangement */
-#define NGBE_PSR_MNG_FLEX_SEL          0x1582C
-#define NGBE_PSR_MNG_FLEX_DW_L(_i)     (0x15A00 + ((_i) * 16)) /* [0,15] */
-#define NGBE_PSR_MNG_FLEX_DW_H(_i)     (0x15A04 + ((_i) * 16))
-#define NGBE_PSR_MNG_FLEX_MSK(_i)      (0x15A08 + ((_i) * 16))
-
-/* Wake up registers */
-#define NGBE_PSR_LAN_FLEX_SEL          0x15B8C
-#define NGBE_PSR_LAN_FLEX_DW_L(_i)     (0x15C00 + ((_i) * 16)) /* [0,15] */
-#define NGBE_PSR_LAN_FLEX_DW_H(_i)     (0x15C04 + ((_i) * 16))
-#define NGBE_PSR_LAN_FLEX_MSK(_i)      (0x15C08 + ((_i) * 16))
-
 /* GPIO Registers */
 #define NGBE_GPIO_DR                   0x14800
 #define NGBE_GPIO_DDR                  0x14804
@@ -314,18 +302,6 @@ typedef u32 ngbe_physical_layer;
 
 /*GPIO bit */
 #define NGBE_GPIO_DR_0                 0x00000001U /* SDP0 Data Value */
-
-/* mac switcher */
-#define NGBE_PSR_MAC_SWC_AD_L          0x16200
-#define NGBE_PSR_MAC_SWC_AD_H          0x16204
-#define NGBE_PSR_MAC_SWC_VM            0x16208
-#define NGBE_PSR_MAC_SWC_IDX           0x16210
-
-/* RAH */
-#define NGBE_PSR_MAC_SWC_AD_H_AD(v)       (((v) & 0xFFFF))
-#define NGBE_PSR_MAC_SWC_AD_H_ADTYPE(v)   (((v) & 0x1) << 30)
-#define NGBE_PSR_MAC_SWC_AD_H_AV          0x80000000U
-#define NGBE_CLEAR_VMDQ_ALL               0xFFFFFFFFU
 
 /********************************* BAR registers ***************************/
 /* Interrupt Registers */
@@ -362,6 +338,11 @@ typedef u32 ngbe_physical_layer;
 #define NGBE_PX_MISC_IC_DEV_RST        0x00000400U
 #define NGBE_PX_MISC_IC_STALL          0x00001000U
 #define NGBE_PX_MISC_IC_ETH_EVENT      0x00020000U
+
+/* Interrupt register bitmasks */
+/* Extended Interrupt Cause Read */
+#define NGBE_PX_MISC_IC_DEV_RST        0x00000400U /* device reset event */
+#define NGBE_PX_MISC_IC_TIMESYNC       0x00000800U /* time sync */
 
 /* Extended Interrupt Enable Set */
 #define NGBE_PX_MISC_IEN_ETH_LKDN      0x00000100U
@@ -594,6 +575,34 @@ typedef u32 ngbe_physical_layer;
 #define NGBE_TSEC_BUF_AF               0x1D008
 #define NGBE_TSEC_BUF_AE               0x1D00C
 
+/* 1588 */
+#define NGBE_TSEC_1588_CTL              0x11F00 /* Tx Time Sync Control reg */
+#define NGBE_TSEC_1588_STMPL            0x11F04 /* Tx timestamp value Low */
+#define NGBE_TSEC_1588_STMPH            0x11F08 /* Tx timestamp value High */
+#define NGBE_TSEC_1588_SYSTIML          0x11F0C /* System time register Low */
+#define NGBE_TSEC_1588_SYSTIMH          0x11F10 /* System time register High */
+#define NGBE_TSEC_1588_INC              0x11F14 /* Increment attributes reg */
+#define NGBE_TSEC_1588_INC_IV(v)        ((v) & 0x7FFFFFF)
+
+#define NGBE_TSEC_1588_ADJL             0x11F18 /* Time Adjustment Offset reg Low */
+#define NGBE_TSEC_1588_ADJH             0x11F1C /* Time Adjustment Offset reg High*/
+
+#define NGBE_TSEC_1588_INT_ST           0x11F20
+#define NGBE_TSEC_1588_INT_EN           0x11F24
+
+/* 1588 fields */
+#define NGBE_TSEC_1588_CTL_VALID    0x00000001U /* Tx timestamp valid */
+#define NGBE_TSEC_1588_CTL_ENABLED  0x00000010U /* Tx timestamping enabled */
+
+#define NGBE_TSEC_1588_AUX_CTL          0x11F28
+#define NGBE_TSEC_1588_TRGT_L(i)        (0x11F2C + ((i) * 8)) /* [0,1] */
+#define NGBE_TSEC_1588_TRGT_H(i)        (0x11F30 + ((i) * 8)) /* [0,1] */
+#define NGBE_TSEC_1588_FREQ_CLK_L(i)    (0x11F3C + ((i) * 8)) /* [0,1] */
+#define NGBE_TSEC_1588_FREQ_CLK_H(i)    (0x11F40 + ((i) * 8)) /* [0,1] */
+#define NGBE_TSEC_1588_AUX_STMP_L(i)    (0x11F4C + ((i) * 8)) /* [0,1] */
+#define NGBE_TSEC_1588_AUX_STMP_H(i)    (0x11F50 + ((i) * 8)) /* [0,1] */
+#define NGBE_TSEC_1588_SDP(n)           (0x11F5C + ((n) * 4)) /* [0,3] */
+
 /******************************* PSR Registers *******************************/
 /* psr control */
 #define NGBE_PSR_CTL                   0x15000
@@ -614,6 +623,36 @@ typedef u32 ngbe_physical_layer;
 #define NGBE_PSR_VLAN_SWC              0x16220
 #define NGBE_PSR_VLAN_SWC_VM_L         0x16224
 #define NGBE_PSR_VLAN_SWC_IDX          0x16230         /* 32 vlan entries */
+
+/* Manangement */
+#define NGBE_PSR_MNG_FLEX_SEL          0x1582C
+#define NGBE_PSR_MNG_FLEX_DW_L(_i)     (0x15A00 + ((_i) * 16)) /* [0,15] */
+#define NGBE_PSR_MNG_FLEX_DW_H(_i)     (0x15A04 + ((_i) * 16))
+#define NGBE_PSR_MNG_FLEX_MSK(_i)      (0x15A08 + ((_i) * 16))
+
+/* Wake up registers */
+#define NGBE_PSR_LAN_FLEX_SEL          0x15B8C
+#define NGBE_PSR_LAN_FLEX_DW_L(_i)     (0x15C00 + ((_i) * 16)) /* [0,15] */
+#define NGBE_PSR_LAN_FLEX_DW_H(_i)     (0x15C04 + ((_i) * 16))
+#define NGBE_PSR_LAN_FLEX_MSK(_i)      (0x15C08 + ((_i) * 16))
+
+/* mac switcher */
+#define NGBE_PSR_MAC_SWC_AD_L          0x16200
+#define NGBE_PSR_MAC_SWC_AD_H          0x16204
+#define NGBE_PSR_MAC_SWC_VM            0x16208
+#define NGBE_PSR_MAC_SWC_IDX           0x16210
+
+/* mac switcher */
+#define NGBE_PSR_MAC_SWC_AD_L          0x16200
+#define NGBE_PSR_MAC_SWC_AD_H          0x16204
+#define NGBE_PSR_MAC_SWC_VM            0x16208
+#define NGBE_PSR_MAC_SWC_IDX           0x16210
+
+/* RAH */
+#define NGBE_PSR_MAC_SWC_AD_H_AD(v)       (((v) & 0xFFFF))
+#define NGBE_PSR_MAC_SWC_AD_H_ADTYPE(v)   (((v) & 0x1) << 30)
+#define NGBE_PSR_MAC_SWC_AD_H_AV          0x80000000U
+#define NGBE_CLEAR_VMDQ_ALL               0xFFFFFFFFU
 
 /* VLAN pool filtering masks */
 #define NGBE_PSR_VLAN_SWC_ENTRIES      32
@@ -672,6 +711,64 @@ typedef u32 ngbe_physical_layer;
 #define NGBE_PSR_WKUP_CTL_FLX_FILTERS_8 0x00FF0000U /* Mask for 8 flex filters*/
 #define NGBE_PSR_WKUP_CTL_FW_RST_WK    0x80000000U /* Ena wake on FW reset assertion */
 #define NGBE_PSR_MAX_SZ                0x15020
+
+/* 1588 fields */
+#define NGBE_TSEC_1588_CTL_VALID    0x00000001U /* Tx timestamp valid */
+#define NGBE_TSEC_1588_CTL_ENABLED  0x00000010U /* Tx timestamping enabled */
+
+/* 1588 */
+#define NGBE_PSR_1588_CTL      0x15188 /* Rx Time Sync Control register - RW */
+#define NGBE_PSR_1588_STMPL    0x151E8 /* Rx timestamp Low - RO */
+#define NGBE_PSR_1588_STMPH    0x151A4 /* Rx timestamp High - RO */
+#define NGBE_PSR_1588_ATTRL    0x151A0 /* Rx timestamp attribute low - RO */
+#define NGBE_PSR_1588_ATTRH    0x151A8 /* Rx timestamp attribute high - RO */
+#define NGBE_PSR_1588_MSGTYPE  0x15120 /* RX message type register low - RW */
+/* 1588 CTL Bit */
+#define NGBE_PSR_1588_CTL_VALID            0x00000001U /* Rx timestamp valid */
+#define NGBE_PSR_1588_CTL_TYPE_MASK        0x0000000EU /* Rx type mask */
+#define NGBE_PSR_1588_CTL_TYPE_L2_V2       0x00
+#define NGBE_PSR_1588_CTL_TYPE_L4_V1       0x02
+#define NGBE_PSR_1588_CTL_TYPE_L2_L4_V2    0x04
+#define NGBE_PSR_1588_CTL_TYPE_EVENT_V2    0x0A
+#define NGBE_PSR_1588_CTL_ENABLED          0x00000010U /* Rx Timestamp enabled*/
+/* 1588 msg type bit */
+#define NGBE_PSR_1588_MSGTYPE_V1_CTRLT_MASK            0x000000FFU
+#define NGBE_PSR_1588_MSGTYPE_V1_SYNC_MSG              0x00
+#define NGBE_PSR_1588_MSGTYPE_V1_DELAY_REQ_MSG         0x01
+#define NGBE_PSR_1588_MSGTYPE_V1_FOLLOWUP_MSG          0x02
+#define NGBE_PSR_1588_MSGTYPE_V1_DELAY_RESP_MSG        0x03
+#define NGBE_PSR_1588_MSGTYPE_V1_MGMT_MSG              0x04
+#define NGBE_PSR_1588_MSGTYPE_V2_MSGID_MASK            0x0000FF00U
+#define NGBE_PSR_1588_MSGTYPE_V2_SYNC_MSG              0x0000
+#define NGBE_PSR_1588_MSGTYPE_V2_DELAY_REQ_MSG         0x0100
+#define NGBE_PSR_1588_MSGTYPE_V2_PDELAY_REQ_MSG        0x0200
+#define NGBE_PSR_1588_MSGTYPE_V2_PDELAY_RESP_MSG       0x0300
+#define NGBE_PSR_1588_MSGTYPE_V2_FOLLOWUP_MSG          0x0800
+#define NGBE_PSR_1588_MSGTYPE_V2_DELAY_RESP_MSG        0x0900
+#define NGBE_PSR_1588_MSGTYPE_V2_PDELAY_FOLLOWUP_MSG   0x0A00
+#define NGBE_PSR_1588_MSGTYPE_V2_ANNOUNCE_MSG          0x0B00
+#define NGBE_PSR_1588_MSGTYPE_V2_SIGNALLING_MSG        0x0C00
+#define NGBE_PSR_1588_MSGTYPE_V2_MGMT_MSG              0x0D00
+
+/* etype switcher 1st stage */
+#define NGBE_PSR_ETYPE_SWC(_i) (0x15128 + ((_i) * 4)) /* EType Queue Filter */
+/* ETYPE Queue Filter/Select Bit Masks */
+#define NGBE_MAX_PSR_ETYPE_SWC_FILTERS         8
+#define NGBE_PSR_ETYPE_SWC_FCOE                0x08000000U /* bit 27 */
+#define NGBE_PSR_ETYPE_SWC_TX_ANTISPOOF        0x20000000U /* bit 29 */
+#define NGBE_PSR_ETYPE_SWC_1588                0x40000000U /* bit 30 */
+#define NGBE_PSR_ETYPE_SWC_FILTER_EN           0x80000000U /* bit 31 */
+#define NGBE_PSR_ETYPE_SWC_POOL_ENABLE         BIT(26)     /* bit 26 */
+#define NGBE_PSR_ETYPE_SWC_POOL_SHIFT          20
+
+/* ETQF filter list */
+#define NGBE_PSR_ETYPE_SWC_FILTER_EAPOL        0
+#define NGBE_PSR_ETYPE_SWC_FILTER_FCOE         2
+#define NGBE_PSR_ETYPE_SWC_FILTER_1588         3
+#define NGBE_PSR_ETYPE_SWC_FILTER_FIP          4
+#define NGBE_PSR_ETYPE_SWC_FILTER_LLDP         5
+#define NGBE_PSR_ETYPE_SWC_FILTER_LACP         6
+#define NGBE_PSR_ETYPE_SWC_FILTER_FC           7
 
 /*********************** Transmit DMA registers **************************/
 /* transmit global control */
