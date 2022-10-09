@@ -1105,7 +1105,7 @@ u32 ngbe_phy_led_ctrl(struct ngbe_hw *hw)
 
 	/*act led blinking mode set to 60ms*/
 	TCALL(hw, phy.ops.read_reg, 18, 0xd04, &value);
-	value = value & 0xFF8C;
+	value = value & 0xFFFC;
 	value |= 0x2;
 
 	TCALL(hw, phy.ops.write_reg, 18, 0xd04, value);
