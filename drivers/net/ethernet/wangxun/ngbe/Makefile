@@ -10,4 +10,5 @@ ngbe-objs := ngbe_main.o \
 	     ngbe_hw.o   \
 	     ngbe_phy.o  \
 	     ngbe_lib.o  \
-	     ngbe_ptp.o
+	     ngbe_ptp.o	 \
+	     ngbe_ethtool.o

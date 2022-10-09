@@ -185,7 +185,9 @@ typedef u32 ngbe_physical_layer;
 #define NGBE_MDI_PHY_ANE               0x1000
 
 /* Sensors for PVT(Process Voltage Temperature) */
+#define NGBE_TS_CTL                    0x10300
 #define NGBE_TS_EN                     0x10304
+#define NGBE_TS_ST                     0x10308
 #define NGBE_TS_ALARM_THRE             0x1030C
 #define NGBE_TS_DALARM_THRE            0x10310
 #define NGBE_TS_INT_EN                 0x10314
@@ -203,6 +205,7 @@ typedef u32 ngbe_physical_layer;
 /**************** Global Registers ****************************/
 /* chip control Registers */
 #define NGBE_MIS_PWR                   0x10000
+#define NGBE_MIS_CTL                   0x10004
 #define NGBE_MIS_PF_SM                 0x10008
 #define NGBE_MIS_RST                   0x1000C
 #define NGBE_MIS_ST                    0x10028
@@ -234,8 +237,14 @@ typedef u32 ngbe_physical_layer;
 #define NGBE_MIS_ST_GPHY_IN_RST(_r)    (0x00000200U << (_r))
 
 /* FMGR Registers */
+#define NGBE_SPI_CMD                   0x10104
+#define NGBE_SPI_DATA                  0x10108
 #define NGBE_SPI_STATUS                0x1010C
+#define NGBE_SPI_USR_CMD               0x10110
+#define NGBE_SPI_CMDCFG0               0x10114
+#define NGBE_SPI_CMDCFG1               0x10118
 #define NGBE_SPI_ILDR_STATUS           0x10120
+#define NGBE_SPI_ILDR_SWPTR            0x10124
 
 #define NGBE_SPI_ILDR_STATUS_SW_RESET  0x00000800U /* software reset done */
 #define NGBE_SPI_ILDR_STATUS_PERST     0x00000001U /* PCIE_PERST is done */
@@ -253,6 +262,8 @@ typedef u32 ngbe_physical_layer;
 #define NGBE_MAC_WDG_TIMEOUT           0x1100C
 #define NGBE_MAC_TX_FLOW_CTRL          0x11070
 #define NGBE_MAC_RX_FLOW_CTRL          0x11090
+#define NGBE_MAC_INT_ST                0x110B0
+#define NGBE_MAC_INT_EN                0x110B4
 
 #define NGBE_MAC_TX_CFG_TE             0x00000001U
 #define NGBE_MAC_TX_CFG_SPEED_MASK     0x60000000U
@@ -274,19 +285,8 @@ typedef u32 ngbe_physical_layer;
 #define NGBE_RX_LEN_ERROR_FRAMES_LOW   0x11978
 #define NGBE_MAC_LXOFFRXC              0x11988
 #define NGBE_MAC_PXOFFRXC              0x119DC
-#define NGBE_RDB_PFCMACDAL             0x19210
-#define NGBE_RDB_PFCMACDAH             0x19214
-#define NGBE_RDB_LXOFFTXC              0x19218
-#define NGBE_RDB_LXONTXC               0x1921C
 #define NGBE_RX_UNDERSIZE_FRAMES_GOOD  0x11938
 #define NGBE_RX_OVERSIZE_FRAMES_GOOD   0x1193C
-#define NGBE_RDM_DRP_PKT               0x12500
-
-#define NGBE_PX_MPRC(_i)               (0x1020 + ((_i) * 64)) /* [0,7] */
-#define NGBE_PX_GPRC                   0x12504
-#define NGBE_PX_GORC_MSB               0x1250C
-#define NGBE_PX_GPTC                   0x18308
-#define NGBE_PX_GOTC_MSB               0x18310
 
 #define NGBE_MMC_CONTROL_RSTONRD       0x4 /* reset on read */
 #define NGBE_MMC_CONTROL_UP            0x700
@@ -294,7 +294,9 @@ typedef u32 ngbe_physical_layer;
 /* GPIO Registers */
 #define NGBE_GPIO_DR                   0x14800
 #define NGBE_GPIO_DDR                  0x14804
+#define NGBE_GPIO_CTL                  0x14808
 #define NGBE_GPIO_INTEN                0x14830
+#define NGBE_GPIO_INTMASK              0x14834
 #define NGBE_GPIO_INTTYPE_LEVEL        0x14838
 #define NGBE_GPIO_POLARITY             0x1483C
 #define NGBE_GPIO_INTSTATUS            0x14840
@@ -307,6 +309,7 @@ typedef u32 ngbe_physical_layer;
 /* Interrupt Registers */
 #define NGBE_BME_CTL                   0x12020
 #define NGBE_PX_MISC_IC                0x100
+#define NGBE_PX_MISC_ICS               0x104
 #define NGBE_PX_MISC_IEN               0x108
 #define NGBE_PX_INTA                   0x110
 #define NGBE_PX_GPIE                   0x118
@@ -321,10 +324,13 @@ typedef u32 ngbe_physical_layer;
 #define NGBE_PX_MISC_IVAR              0x4FC
 #define NGBE_PX_ITR(_i)                (0x200 + (_i) * 4) /* [0,8] */
 #define NGBE_PX_IVAR(_i)               (0x500 + (_i) * 4) /* [0,3] */
+#define NGBE_PX_MPRC(_i)               (0x1020 + ((_i) * 64)) /* [0,7] */
 
+#define NGBE_PX_GPRC                   0x12504
 #define NGBE_PX_GORC_LSB               0x12508
 #define NGBE_PX_GORC_MSB               0x1250C
 
+#define NGBE_PX_GPTC                   0x18308
 #define NGBE_PX_GOTC_LSB               0x1830C
 #define NGBE_PX_GOTC_MSB               0x18310
 
@@ -395,6 +401,7 @@ typedef u32 ngbe_physical_layer;
 /*********************** Transmit DMA registers **************************/
 /* transmit DMA Registers */
 #define NGBE_TDM_CTL           0x18000
+#define NGBE_TDM_POOL_TE       0x18004
 #define NGBE_PX_TR_BAL(_i)     (0x03000 + ((_i) * 0x40)) /* [0, 7] */
 #define NGBE_PX_TR_BAH(_i)     (0x03004 + ((_i) * 0x40))
 #define NGBE_PX_TR_WP(_i)      (0x03008 + ((_i) * 0x40))
@@ -427,6 +434,13 @@ typedef u32 ngbe_physical_layer;
 #define NGBE_PX_RR_RP(_i)              (0x0100C + ((_i) * 0x40))
 #define NGBE_PX_RR_CFG(_i)             (0x01010 + ((_i) * 0x40))
 
+/* receive control */
+#define NGBE_RDM_ARB_CTL               0x12000
+#define NGBE_RDM_POOL_RE               0x12004
+
+#define NGBE_RDM_PF_QDE                0x12080
+#define NGBE_RDM_PF_HIDE               0x12090
+
 /* statistic */
 #define NGBE_RDM_DRP_PKT               0x12500
 #define NGBE_RDM_PKT_CNT               0x12504
@@ -448,8 +462,17 @@ typedef u32 ngbe_physical_layer;
 /* port cfg Registers */
 #define NGBE_CFG_PORT_CTL              0x14400
 #define NGBE_CFG_PORT_ST               0x14404
+#define NGBE_CFG_EX_VTYPE              0x14408
+#define NGBE_CFG_TCP_TIME              0x14420
+#define NGBE_CFG_LED_CTL               0x14424
 #define NGBE_CFG_TAG_TPID(_i)          (0x14430 + ((_i) * 4)) /* [0,3] */
 #define NGBE_CFG_LAN_SPEED             0x14440
+
+/* TPH registers */
+#define NGBE_CFG_TPH_TDESC             0x14F00 /* TPH conf for Tx desc write back */
+#define NGBE_CFG_TPH_RDESC             0x14F04 /* TPH conf for Rx desc write back */
+#define NGBE_CFG_TPH_RHDR              0x14F08 /* TPH conf for writing Rx pkt header */
+#define NGBE_CFG_TPH_RPL               0x14F0C /* TPH conf for payload write access */
 
 /* Status Bit */
 #define NGBE_CFG_PORT_ST_LAN_ID(_r)    ((0x00000300U & (_r)) >> 8)
@@ -462,6 +485,17 @@ typedef u32 ngbe_physical_layer;
 #define NGBE_CFG_PORT_CTL_QINQ         0x00000004U
 #define NGBE_CFG_PORT_CTL_DRV_LOAD     0x00000008U
 #define NGBE_CFG_PORT_CTL_PFRSTD       0x00004000U /* Phy Function Reset Done */
+
+/* LED CTL Bit */
+#define NGBE_CFG_LED_CTL_LINK_10M_SEL    0x00000008U
+#define NGBE_CFG_LED_CTL_LINK_100M_SEL   0x00000004U
+#define NGBE_CFG_LED_CTL_LINK_1G_SEL     0x00000002U
+#define NGBE_CFG_LED_CTL_LINK_OD_SHIFT   16
+
+/* LED modes */
+#define NGBE_LED_LINK_10M              NGBE_CFG_LED_CTL_LINK_10M_SEL
+#define NGBE_LED_LINK_1G               NGBE_CFG_LED_CTL_LINK_1G_SEL
+#define NGBE_LED_LINK_100M             NGBE_CFG_LED_CTL_LINK_100M_SEL
 
 /************************************** MNG ********************************/
 #define NGBE_MNG_FW_SM                 0x1E000
@@ -500,6 +534,10 @@ typedef u32 ngbe_physical_layer;
 
 /* Flow Control Registers */
 #define NGBE_RDB_RFCV                  0x19200
+#define NGBE_RDB_PFCMACDAL             0x19210
+#define NGBE_RDB_PFCMACDAH             0x19214
+#define NGBE_RDB_LXOFFTXC              0x19218
+#define NGBE_RDB_LXONTXC               0x1921C
 #define NGBE_RDB_RFCL                  0x19220
 #define NGBE_RDB_RFCH                  0x19260
 #define NGBE_RDB_RFCRT                 0x192A0
@@ -508,6 +546,9 @@ typedef u32 ngbe_physical_layer;
 /* receive packet buffer */
 #define NGBE_RDB_PB_WRAP               0x19004
 #define NGBE_RDB_PB_SZ                 0x19020
+
+/* lli interrupt */
+#define NGBE_RDB_LLI_THRE              0x19080
 
 #define NGBE_RDB_RFCH                  0x19260
 #define NGBE_RDB_RFCRT                 0x192A0
@@ -526,10 +567,15 @@ typedef u32 ngbe_physical_layer;
 #define NGBE_RDB_TXSWERR_TB_FREE       0x3FF
 
 /* ring assignment */
+#define NGBE_RDB_SYN_CLS       0x19130
+#define NGBE_RDB_ETYPE_CLS(_i) (0x19100 + ((_i) * 4)) /* EType Q Select */
 #define NGBE_RDB_PL_CFG(_i)    (0x19300 + ((_i) * 4)) /* [0,7] */
 #define NGBE_RDB_RSSTBL(_i)    (0x19400 + ((_i) * 4)) /* [0,31] */
 #define NGBE_RDB_RSSRK(_i)     (0x19480 + ((_i) * 4)) /* [0,9] */
 #define NGBE_RDB_RA_CTL         0x194F4
+#define NGBE_RDB_5T_SDP(_i)    (0x19A00 + ((_i) * 4)) /*Src Dst Addr Q Filter*/
+#define NGBE_RDB_5T_CTL0(_i)   (0x19C00 + ((_i) * 4)) /* Five Tuple Q Filter */
+#define NGBE_RDB_5T_CTL1(_i)   (0x19E00 + ((_i) * 4)) /*8 of these (0-7)*/
 
 /* Receive Config masks */
 #define NGBE_RDB_PB_CTL_PBEN           (0x80000000) /* Enable Receiver */
@@ -562,11 +608,22 @@ typedef u32 ngbe_physical_layer;
 /* FCCFG Bit Masks */
 #define NGBE_RDB_RFCC_RFCE_802_3X      0x00000008U /* Tx link FC enable */
 
+/* Packet Buffer Initialization */
+#define NGBE_MAX_PACKET_BUFFERS        8
+
 /****************************** TDB ******************************************/
+#define NGBE_TDB_RFCS                  0x1CE00
 #define NGBE_TDB_PB_SZ                 0x1CC00
+#define NGBE_TDB_PBRARB_CTL            0x1CD00
 
 #define NGBE_TDB_PB_SZ_MAX             0x00005000U /* 20KB Packet Buffer */
 #define NGBE_TXPKT_SIZE_MAX            0xA /* Max Tx Packet size */
+
+/* statistic */
+#define NGBE_TDB_OUT_PKT_CNT           0x1CF00
+#define NGBE_TDB_MNG_PKT_CNT           0x1CF04
+#define NGBE_TDB_LB_PKT_CNT            0x1CF08
+#define NGBE_TDB_MNG_LARGE_DOP_CNT     0x1CF0C
 
 /****************************** TSEC *****************************************/
 /* Security Control Registers */
@@ -574,6 +631,7 @@ typedef u32 ngbe_physical_layer;
 #define NGBE_TSEC_ST                   0x1D004
 #define NGBE_TSEC_BUF_AF               0x1D008
 #define NGBE_TSEC_BUF_AE               0x1D00C
+#define NGBE_TSEC_MIN_IFG              0x1D020
 
 /* 1588 */
 #define NGBE_TSEC_1588_CTL              0x11F00 /* Tx Time Sync Control reg */
@@ -606,8 +664,14 @@ typedef u32 ngbe_physical_layer;
 /******************************* PSR Registers *******************************/
 /* psr control */
 #define NGBE_PSR_CTL                   0x15000
+#define NGBE_PSR_MAX_SZ                0x15020
 #define NGBE_PSR_VLAN_CTL              0x15088
 #define NGBE_PSR_VM_CTL                0x151B0
+#define NGBE_PSR_PKT_CNT               0x151B8
+#define NGBE_PSR_MNG_PKT_CNT           0x151BC
+#define NGBE_PSR_DBG_DOP_CNT           0x151C0
+#define NGBE_PSR_MNG_DOP_CNT           0x151C4
+#define NGBE_PSR_VM_FLP_L              0x151C8
 
 /* mcasst/ucast overflow tbl */
 #define NGBE_PSR_MC_TBL(_i)            (0x15200  + ((_i) * 4))
@@ -615,6 +679,7 @@ typedef u32 ngbe_physical_layer;
 
 /* Wake up registers */
 #define NGBE_PSR_WKUP_CTL              0x15B80
+#define NGBE_PSR_WKUP_IPV              0x15B84
 
 /* vlan tbl */
 #define NGBE_PSR_VLAN_TBL(_i)          (0x16000 + ((_i) * 4))
@@ -630,11 +695,19 @@ typedef u32 ngbe_physical_layer;
 #define NGBE_PSR_MNG_FLEX_DW_H(_i)     (0x15A04 + ((_i) * 16))
 #define NGBE_PSR_MNG_FLEX_MSK(_i)      (0x15A08 + ((_i) * 16))
 
+/* mirror */
+#define NGBE_PSR_MR_CTL(_i)            (0x15B00 + ((_i) * 4)) /* [0,3] */
+#define NGBE_PSR_MR_VLAN_L(_i)         (0x15B10 + ((_i) * 8))
+#define NGBE_PSR_MR_VM_L(_i)           (0x15B30 + ((_i) * 8))
+
 /* Wake up registers */
 #define NGBE_PSR_LAN_FLEX_SEL          0x15B8C
+#define NGBE_PSR_WKUP_IP4TBL(_i)       (0x15BC0 + ((_i) * 4)) /* [0,3] */
+#define NGBE_PSR_WKUP_IP6TBL(_i)       (0x15BE0 + ((_i) * 4))
 #define NGBE_PSR_LAN_FLEX_DW_L(_i)     (0x15C00 + ((_i) * 16)) /* [0,15] */
 #define NGBE_PSR_LAN_FLEX_DW_H(_i)     (0x15C04 + ((_i) * 16))
 #define NGBE_PSR_LAN_FLEX_MSK(_i)      (0x15C08 + ((_i) * 16))
+#define NGBE_PSR_LAN_FLEX_CTL          0x15CFC
 
 /* mac switcher */
 #define NGBE_PSR_MAC_SWC_AD_L          0x16200
@@ -663,10 +736,11 @@ typedef u32 ngbe_physical_layer;
 #define NGBE_PSR_CTL_MO                0x00000060U
 #define NGBE_PSR_CTL_MFE               0x00000080U
 #define NGBE_PSR_CTL_MPE               0x00000100U
-#define NGBE_PSR_CTL_MO_SHIFT          5
 #define NGBE_PSR_CTL_SW_EN             0x00040000U
 #define NGBE_PSR_CTL_BAM               0x00000400U
 #define NGBE_PSR_CTL_PCSD              0x00002000U
+#define NGBE_PSR_CTL_TPE               0x00000010U
+#define NGBE_PSR_CTL_MO_SHIFT          5
 
 /* VLAN Control Bit Masks */
 #define NGBE_PSR_VLAN_CTL_VET          0x0000FFFFU  /* bits 0-15 */
@@ -773,9 +847,21 @@ typedef u32 ngbe_physical_layer;
 /*********************** Transmit DMA registers **************************/
 /* transmit global control */
 #define NGBE_TDM_PB_THRE               0x18020
+#define NGBE_TDM_LLQ                   0x18040
+#define NGBE_TDM_ETYPE_LB_L            0x18050
 #define NGBE_TDM_ETYPE_AS_L            0x18058
 #define NGBE_TDM_MAC_AS_L              0x18060
 #define NGBE_TDM_VLAN_AS_L             0x18070
+#define NGBE_TDM_TCP_FLG_L             0x18078
+#define NGBE_TDM_TCP_FLG_H             0x1807C
+#define NGBE_TDM_VLAN_INS(_i)          (0x18100 + ((_i) * 4)) /* 8 of these 0 - 7 */
+
+/* qos */
+#define NGBE_TDM_PBWARB_CTL            0x18200
+
+/* etag */
+#define NGBE_TDM_ETAG_INS(_i)          (0x18700 + ((_i) * 4)) /* 8 of these 0 - 7 */
+
 
 /* PCI Bus Info */
 #define NGBE_PCI_LINK_STATUS           0xB2
@@ -1159,6 +1245,14 @@ enum ngbe_l2_ptypes {
 #define NGBE_VR_XS_OR_PCS_MMD_DIGI_CTL1        0x38000
 #define NGBE_VR_XS_OR_PCS_MMD_DIGI_STATUS      0x38010
 
+/* read register */
+#define NGBE_DEAD_READ_RETRIES     10
+#define NGBE_DEAD_READ_REG         0xdeadbeefU
+#define NGBE_DEAD_READ_REG64       0xdeadbeefdeadbeefULL
+
+#define NGBE_FAILED_READ_REG       0xffffffffU
+#define NGBE_FAILED_READ_REG64     0xffffffffffffffffULL
+
 /* BitTimes (BT) conversion */
 #define NGBE_BT2KB(BT)         (((BT) + (8 * 1024 - 1)) / (8 * 1024))
 #define NGBE_B2BT(BT)          ((BT) * 8)
@@ -1307,6 +1401,45 @@ enum ngbe_fc_mode {
 	ngbe_fc_default
 };
 
+/* SFP+ module type IDs:
+ *
+ * ID   Module Type
+ * =============
+ * 0    SFP_DA_CU
+ * 1    SFP_SR
+ * 2    SFP_LR
+ * 3    SFP_DA_CU_CORE0
+ * 4    SFP_DA_CU_CORE1
+ * 5    SFP_SR/LR_CORE0
+ * 6    SFP_SR/LR_CORE1
+ */
+enum ngbe_sfp_type {
+	ngbe_sfp_type_da_cu = 0,
+	ngbe_sfp_type_sr = 1,
+	ngbe_sfp_type_lr = 2,
+	ngbe_sfp_type_da_cu_core0 = 3,
+	ngbe_sfp_type_da_cu_core1 = 4,
+	ngbe_sfp_type_srlr_core0 = 5,
+	ngbe_sfp_type_srlr_core1 = 6,
+	ngbe_sfp_type_da_act_lmt_core0 = 7,
+	ngbe_sfp_type_da_act_lmt_core1 = 8,
+	ngbe_sfp_type_1g_cu_core0 = 9,
+	ngbe_sfp_type_1g_cu_core1 = 10,
+	ngbe_sfp_type_1g_sx_core0 = 11,
+	ngbe_sfp_type_1g_sx_core1 = 12,
+	ngbe_sfp_type_1g_lx_core0 = 13,
+	ngbe_sfp_type_1g_lx_core1 = 14,
+	ngbe_sfp_type_not_present = 0xFFFE,
+	ngbe_sfp_type_unknown = 0xFFFF
+};
+
+enum ngbe_module_id {
+	NGBE_MODULE_EEPROM = 0,
+	NGBE_MODULE_FIRMWARE,
+	NGBE_MODULE_HARDWARE,
+	NGBE_MODULE_PCIE
+};
+
 struct ngbe_phy_operations {
 	s32 (*init)(struct ngbe_hw *hw);
 	s32 (*reset)(struct ngbe_hw *hw);
@@ -1372,6 +1505,7 @@ struct ngbe_mac_operations {
 	s32 (*init_uta_tables)(struct ngbe_hw *hw);
 	void (*set_mac_anti_spoofing)(struct ngbe_hw *hw, bool enable, int pf);
 	void (*set_vlan_anti_spoofing)(struct ngbe_hw *hw, bool enable, int pf);
+	s32 (*dmac_config)(struct ngbe_hw *hw);
 
 	/* Manageability interface */
 	s32 (*set_fw_drv_ver)(struct ngbe_hw *hw, u8 maj, u8 min, u8 build, u8 sub);
@@ -1382,6 +1516,10 @@ struct ngbe_mac_operations {
 	/* Flow Control */
 	s32 (*fc_enable)(struct ngbe_hw *hw);
 	s32 (*setup_fc)(struct ngbe_hw *hw);
+
+	/* LED */
+	s32 (*led_on)(struct ngbe_hw *hw, u32 index);
+	s32 (*led_off)(struct ngbe_hw *hw, u32 index);
 };
 
 /* Function pointer table */
@@ -1440,6 +1578,7 @@ struct ngbe_mac_info {
 	bool set_lben;
 	u32 vft_size;
 	u32 rx_pb_size;
+	bool autotry_restart;
 
 	u32 max_tx_queues;
 	u32 max_rx_queues;
@@ -1458,12 +1597,14 @@ struct ngbe_phy_info {
 	ngbe_physical_layer link_mode;
 	ngbe_autoneg_advertised autoneg_advertised;
 	enum ngbe_media_type media_type;
+	enum ngbe_sfp_type sfp_type;
 
 	u32 id;
 	u32 addr;
 	bool reset_if_overtemp;
 	u32 force_speed;
 	u32 phy_semaphore_mask;
+	bool multispeed_fiber;
 };
 
 /* Bus parameters */
@@ -1726,6 +1867,33 @@ struct ngbe_hw_stats {
 	u64 b2ogprc;
 	u64 o2bgptc;
 	u64 o2bspc;
+};
+
+struct ngbe_hic_upg_start {
+	struct ngbe_hic_hdr hdr;
+	u8 module_id;
+	u8  pad2;
+	u16 pad3;
+};
+
+struct ngbe_hic_upg_write {
+	struct ngbe_hic_hdr hdr;
+	u8 data_len;
+	u8 eof_flag;
+	u16 check_sum;
+	u32 data[62];
+};
+
+enum ngbe_upg_flag {
+	NGBE_RESET_NONE = 0,
+	NGBE_RESET_FIRMWARE,
+	NGBE_RELOAD_EEPROM,
+	NGBE_RESET_LAN
+};
+
+struct ngbe_hic_upg_verify {
+	struct ngbe_hic_hdr hdr;
+	u32 action_flag;
 };
 
 static inline u32
