@@ -798,20 +798,6 @@ static int ngbe_setup_isb_resources(struct ngbe_adapter *adapter)
 	return 0;
 }
 
-static inline u32 ngbe_misc_isb(struct ngbe_adapter *adapter,
-				enum ngbe_isb_idx idx)
-{
-	u32 cur_tag = 0;
-	u32 cur_diff = 0;
-
-	cur_tag = adapter->isb_mem[NGBE_ISB_HEADER];
-	cur_diff = cur_tag - adapter->isb_tag[idx];
-
-	adapter->isb_tag[idx] = cur_tag;
-
-	return cpu_to_le32(adapter->isb_mem[idx]);
-}
-
 void ngbe_service_event_schedule(struct ngbe_adapter *adapter)
 {
 	if (!test_bit(__NGBE_DOWN, &adapter->state) &&
@@ -3527,6 +3513,79 @@ static int ngbe_ioctl(struct net_device *netdev, struct ifreq *ifr, int cmd)
 	}
 }
 
+static void ngbe_remove_adapter(struct ngbe_hw *hw)
+{
+	struct ngbe_adapter *adapter = hw->back;
+
+	if (!hw->hw_addr)
+		return;
+	hw->hw_addr = NULL;
+	e_dev_err("Adapter removed\n");
+	if (test_bit(__NGBE_SERVICE_INITED, &adapter->state))
+		ngbe_service_event_schedule(adapter);
+}
+
+static u32 ngbe_validate_register_read(struct ngbe_hw *hw, u32 reg, bool quiet)
+{
+	int i;
+	u32 value;
+	u8 __iomem *reg_addr;
+	struct ngbe_adapter *adapter = hw->back;
+
+	reg_addr = READ_ONCE(hw->hw_addr);
+	if (NGBE_REMOVED(reg_addr))
+		return NGBE_FAILED_READ_REG;
+	for (i = 0; i < NGBE_DEAD_READ_RETRIES; ++i) {
+		value = ngbe_rd32(reg_addr + reg);
+		if (value != NGBE_DEAD_READ_REG)
+			break;
+	}
+	if (quiet)
+		return value;
+	if (value == NGBE_DEAD_READ_REG)
+		e_err(drv, "%s: register %x read unchanged\n", __func__, reg);
+	else
+		e_warn(hw, "%s: register %x read recovered after %d retries\n",
+		       __func__, reg, i + 1);
+
+	return value;
+}
+
+static void ngbe_check_remove(struct ngbe_hw *hw, u32 reg)
+{
+	u32 value;
+
+	/* The following check not only optimizes a bit by not
+	 * performing a read on the status register when the
+	 * register just read was a status register read that
+	 * returned NGBE_FAILED_READ_REG. It also blocks any
+	 * potential recursion.
+	 */
+	if (reg == NGBE_CFG_PORT_ST) {
+		ngbe_remove_adapter(hw);
+		return;
+	}
+	value = rd32(hw, NGBE_CFG_PORT_ST);
+	if (value == NGBE_FAILED_READ_REG)
+		ngbe_remove_adapter(hw);
+}
+
+u32 ngbe_read_reg(struct ngbe_hw *hw, u32 reg, bool quiet)
+{
+	u32 value;
+	u8 __iomem *reg_addr;
+
+	reg_addr = READ_ONCE(hw->hw_addr);
+	if (NGBE_REMOVED(reg_addr))
+		return NGBE_FAILED_READ_REG;
+	value = ngbe_rd32(reg_addr + reg);
+	if (unlikely(value == NGBE_FAILED_READ_REG))
+		ngbe_check_remove(hw, reg);
+	if (unlikely(value == NGBE_DEAD_READ_REG))
+		value = ngbe_validate_register_read(hw, reg, quiet);
+	return value;
+}
+
 /**
  * ngbe_get_stats64 - Get System Network Statistics
  * @netdev: network interface device structure
@@ -3722,6 +3781,8 @@ static const struct net_device_ops ngbe_netdev_ops = {
 void ngbe_assign_netdev_ops(struct net_device *dev)
 {
 	dev->netdev_ops = &ngbe_netdev_ops;
+	ngbe_set_ethtool_ops(dev);
+	dev->watchdog_timeo = 5 * HZ;
 }
 
 /* disable the specified rx ring/queue */
@@ -4463,6 +4524,40 @@ void ngbe_store_reta(struct ngbe_adapter *adapter)
 	}
 }
 
+/**
+ * ngbe_setup_tc - routine to configure net_device for multiple traffic
+ * classes.
+ *
+ * @netdev: net device to configure
+ * @tc: number of traffic classes to enable
+ */
+int ngbe_setup_tc(struct net_device *dev, u8 tc)
+{
+	struct ngbe_adapter *adapter = netdev_priv(dev);
+
+	/* Hardware has to reinitialize queues and interrupts to
+	 * match packet buffer alignment. Unfortunately, the
+	 * hardware is not flexible enough to do this dynamically.
+	 */
+	if (netif_running(dev))
+		ngbe_close(dev);
+	else
+		ngbe_reset(adapter);
+
+	ngbe_clear_interrupt_scheme(adapter);
+
+	if (tc)
+		netdev_set_num_tc(dev, tc);
+	else
+		netdev_reset_tc(dev);
+
+	ngbe_init_interrupt_scheme(adapter);
+	if (netif_running(dev))
+		ngbe_open(dev);
+
+	return 0;
+}
+
 static void ngbe_setup_reta(struct ngbe_adapter *adapter)
 {
 	struct ngbe_hw *hw = &adapter->hw;
@@ -4776,6 +4871,28 @@ void ngbe_configure_rx_ring(struct ngbe_adapter *adapter,
 
 	ngbe_rx_desc_queue_enable(adapter, ring);
 	ngbe_alloc_rx_buffers(ring, ngbe_desc_unused(ring));
+}
+
+void ngbe_unmap_and_free_tx_resource(struct ngbe_ring *ring,
+				     struct ngbe_tx_buffer *tx_buffer)
+{
+	if (tx_buffer->skb) {
+		dev_kfree_skb_any(tx_buffer->skb);
+		if (dma_unmap_len(tx_buffer, len))
+			dma_unmap_single(ring->dev,
+					 dma_unmap_addr(tx_buffer, dma),
+					 dma_unmap_len(tx_buffer, len),
+					 DMA_TO_DEVICE);
+	} else if (dma_unmap_len(tx_buffer, len)) {
+		dma_unmap_page(ring->dev,
+			       dma_unmap_addr(tx_buffer, dma),
+						dma_unmap_len(tx_buffer, len),
+						DMA_TO_DEVICE);
+	}
+	tx_buffer->next_to_watch = NULL;
+	tx_buffer->skb = NULL;
+	dma_unmap_len_set(tx_buffer, len, 0);
+	/* tx_buffer must be completely set up in the transmit path */
 }
 
 void ngbe_configure_isb(struct ngbe_adapter *adapter)
@@ -5654,6 +5771,7 @@ static int ngbe_probe(struct pci_dev *pdev,
 	static int cards_found;
 	u32 devcap = 0;
 	netdev_features_t hw_features;
+	struct ngbe_ring_feature *feature;
 
 	err = pci_enable_device_mem(pdev);
 	if (err)
@@ -5724,6 +5842,9 @@ static int ngbe_probe(struct pci_dev *pdev,
 		goto err_sw_init;
 
 	TCALL(hw, mac.ops.set_lan_id);
+
+	feature = adapter->ring_feature;
+	feature[RING_F_RSS].limit = min_t(int, NGBE_MAX_RSS_INDICES, num_online_cpus());
 
 	/* check if flash load is done after hw power up */
 	err = ngbe_check_flash_load(hw, NGBE_SPI_ILDR_STATUS_PERST);
