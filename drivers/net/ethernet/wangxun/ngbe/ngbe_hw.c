@@ -14,7 +14,7 @@
 #define NGBE_SP_VFT_TBL_SIZE   128
 #define NGBE_SP_RX_PB_SIZE     42
 
-u8 fmgr_cmd_op(struct ngbe_hw *hw, u32 cmd, u32 cmd_addr)
+u8 ngbe_fmgr_cmd_op(struct ngbe_hw *hw, u32 cmd, u32 cmd_addr)
 {
 	u32 cmd_val = 0;
 	u32 time_out = 0;
@@ -41,7 +41,7 @@ u32 ngbe_flash_read_dword(struct ngbe_hw *hw, u32 addr)
 {
 	u8 status;
 
-	status = fmgr_cmd_op(hw, SPI_CMD_READ_DWORD, addr);
+	status = ngbe_fmgr_cmd_op(hw, SPI_CMD_READ_DWORD, addr);
 	if (status)
 		return (u32)status;
 
@@ -3013,20 +3013,20 @@ u8 fmgr_usr_cmd_op(struct ngbe_hw *hw, u32 usr_cmd)
 	u8 status = 0;
 
 	wr32(hw, SPI_H_USR_CMD_REG_ADDR, usr_cmd);
-	status = fmgr_cmd_op(hw, SPI_CMD_USER_CMD, 0);
+	status = ngbe_fmgr_cmd_op(hw, SPI_CMD_USER_CMD, 0);
 
 	return status;
 }
 
 u8 flash_erase_sector(struct ngbe_hw *hw, u32 sec_addr)
 {
-	u8 status = fmgr_cmd_op(hw, SPI_CMD_ERASE_SECTOR, sec_addr);
+	u8 status = ngbe_fmgr_cmd_op(hw, SPI_CMD_ERASE_SECTOR, sec_addr);
 	return status;
 }
 
 u8 flash_erase_chip(struct ngbe_hw *hw)
 {
-	u8 status = fmgr_cmd_op(hw, SPI_CMD_ERASE_CHIP, 0);
+	u8 status = ngbe_fmgr_cmd_op(hw, SPI_CMD_ERASE_CHIP, 0);
 	return status;
 }
 
@@ -3035,7 +3035,7 @@ u8 flash_write_dword(struct ngbe_hw *hw, u32 addr, u32 dword)
 	u8 status = 0;
 
 	wr32(hw, SPI_H_DAT_REG_ADDR, dword);
-	status = fmgr_cmd_op(hw, SPI_CMD_WRITE_DWORD, addr);
+	status = ngbe_fmgr_cmd_op(hw, SPI_CMD_WRITE_DWORD, addr);
 
 	if (status)
 		return status;
