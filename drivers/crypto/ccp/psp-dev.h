@@ -28,7 +28,7 @@
 #define P2C_NOTIFIERS_MAX		16
 #endif
 
-#define PSP_MUTEX_TIMEOUT 10000
+#define PSP_MUTEX_TIMEOUT 600000
 struct psp_mutex {
 	uint64_t locked;
 };
