@@ -40,6 +40,7 @@ static const char KEY_USER_PREFIX[] = "user:";
 static const char hash_alg[] = "sha256";
 static const char hmac_alg[] = "hmac(sha256)";
 static const char blkcipher_alg[] = "cbc(aes)";
+static const char key_cmd_new[] = "new";
 static const char key_format_default[] = "default";
 static const char key_format_ecryptfs[] = "ecryptfs";
 static const char key_format_enc32[] = "enc32";
@@ -168,7 +169,7 @@ static int valid_master_desc(const char *new_desc, const char *orig_desc)
  *
  * On success returns 0, otherwise -EINVAL.
  */
-static int datablob_parse(char *datablob, const char **format,
+static int datablob_parse(char *datablob, const char **cmd, const char **format,
 			  char **master_desc, char **decrypted_datalen,
 			  char **hex_encoded_iv)
 {
@@ -183,6 +184,8 @@ static int datablob_parse(char *datablob, const char **format,
 		pr_info("encrypted_key: insufficient parameters specified\n");
 		return ret;
 	}
+	if (cmd)
+		*cmd = keyword;
 	key_cmd = match_token(keyword, key_tokens, args);
 
 	/* Get optional format: default | ecryptfs */
@@ -745,7 +748,7 @@ static void __ekey_init(struct encrypted_key_payload *epayload,
  * itself.  For an old key, decrypt the hex encoded data.
  */
 static int encrypted_init(struct encrypted_key_payload *epayload,
-			  const char *key_desc, const char *format,
+			  const char *key_desc, const char *cmd, const char *format,
 			  const char *master_desc, const char *datalen,
 			  const char *hex_encoded_iv)
 {
@@ -766,7 +769,7 @@ static int encrypted_init(struct encrypted_key_payload *epayload,
 
 		get_random_bytes(epayload->decrypted_data,
 				 epayload->decrypted_datalen);
-	} else  if (!format || !strcmp(format, key_format_default)) {
+	} else  if (!strcmp(cmd, key_cmd_new)) {
 		if (strlen(hex_encoded_iv) != epayload->decrypted_datalen * 2)
 			return -EINVAL;
 		ret = hex2bin(epayload->decrypted_data, hex_encoded_iv,
@@ -792,6 +795,7 @@ static int encrypted_instantiate(struct key *key,
 {
 	struct encrypted_key_payload *epayload = NULL;
 	char *datablob = NULL;
+	const char *cmd = NULL;
 	const char *format = NULL;
 	char *master_desc = NULL;
 	char *decrypted_datalen = NULL;
@@ -807,7 +811,7 @@ static int encrypted_instantiate(struct key *key,
 		return -ENOMEM;
 	datablob[datalen] = 0;
 	memcpy(datablob, prep->data, datalen);
-	ret = datablob_parse(datablob, &format, &master_desc,
+	ret = datablob_parse(datablob, &cmd, &format, &master_desc,
 			     &decrypted_datalen, &hex_encoded_iv);
 	if (ret < 0)
 		goto out;
@@ -818,7 +822,7 @@ static int encrypted_instantiate(struct key *key,
 		ret = PTR_ERR(epayload);
 		goto out;
 	}
-	ret = encrypted_init(epayload, key->description, format, master_desc,
+	ret = encrypted_init(epayload, key->description, cmd, format, master_desc,
 			     decrypted_datalen, hex_encoded_iv);
 	if (ret < 0) {
 		kfree_sensitive(epayload);
@@ -869,7 +873,7 @@ static int encrypted_update(struct key *key, struct key_preparsed_payload *prep)
 
 	buf[datalen] = 0;
 	memcpy(buf, prep->data, datalen);
-	ret = datablob_parse(buf, &format, &new_master_desc, NULL, NULL);
+	ret = datablob_parse(buf, NULL, &format, &new_master_desc, NULL, NULL);
 	if (ret < 0)
 		goto out;
 
