@@ -613,6 +613,9 @@ struct ngbe_adapter {
 	u32 tx_hwtstamp_timeouts;
 	u32 tx_hwtstamp_skipped;
 	u32 rx_hwtstamp_cleared;
+#ifdef CONFIG_DEBUG_FS
+	struct dentry *ngbe_dbg_adapter;
+#endif
 };
 
 struct ngbe_cb {
