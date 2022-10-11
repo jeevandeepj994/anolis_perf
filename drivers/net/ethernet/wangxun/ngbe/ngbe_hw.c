@@ -3466,6 +3466,42 @@ s32 ngbe_write_flash_buffer(struct ngbe_hw *hw, u32 offset,
 	return status;
 }
 
+/**
+ *	ngbe_get_thermal_sensor_data - Gathers thermal sensor data
+ *	@hw: pointer to hardware structure
+ *	@data: pointer to the thermal sensor data structure
+ *
+ * algorithm:
+ * T = (-4.8380E+01)N^0 + (3.1020E-01)N^1 + (-1.8201E-04)N^2 +
+			   (8.1542E-08)N^3 + (-1.6743E-11)N^4
+ * algorithm with 5% more deviation, easy for implementation
+ * T = (-50)N^0 + (0.31)N^1 + (-0.0002)N^2 + (0.0000001)N^3
+ *
+ *	Returns the thermal sensor data structure
+ **/
+s32 ngbe_get_thermal_sensor_data(struct ngbe_hw *hw)
+{
+	s64 tsv;
+	struct ngbe_thermal_sensor_data *data = &hw->mac.thermal_sensor_data;
+
+	/* Only support thermal sensors attached to physical port 0 */
+	if (hw->bus.lan_id)
+		return NGBE_NOT_IMPLEMENTED;
+
+	tsv = (s64)(rd32(hw, NGBE_TS_ST) &
+		NGBE_TS_ST_DATA_OUT_MASK);
+
+	/* 216 < tsv < 876 */
+	tsv = tsv < 876 ? tsv : 876;
+	tsv = tsv - 216;
+	tsv = tsv / 4;
+	tsv = tsv - 40;
+
+	data->sensor.temp = (s16)tsv;
+
+	return 0;
+}
+
 s32 ngbe_init_ops_common(struct ngbe_hw *hw)
 {
 	struct ngbe_mac_info *mac = &hw->mac;
@@ -3528,6 +3564,10 @@ s32 ngbe_init_ops_common(struct ngbe_hw *hw)
 
 	/* Manageability interface */
 	mac->ops.set_fw_drv_ver = ngbe_set_fw_drv_ver;
+	mac->ops.get_thermal_sensor_data =
+					ngbe_get_thermal_sensor_data;
+	mac->ops.init_thermal_sensor_thresh =
+					ngbe_init_thermal_sensor_thresh;
 
 	/* Flow Control */
 	mac->ops.fc_enable = ngbe_fc_enable;

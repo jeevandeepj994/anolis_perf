@@ -506,6 +506,25 @@ struct ngbe_ring_feature {
 	u16 offset;     /* offset to start of feature */
 };
 
+#ifdef CONFIG_HWMON
+#define NGBE_HWMON_TYPE_TEMP           0
+#define NGBE_HWMON_TYPE_ALARMTHRESH    1
+#define NGBE_HWMON_TYPE_DALARMTHRESH   2
+
+struct hwmon_attr {
+	struct device_attribute dev_attr;
+	struct ngbe_hw *hw;
+	struct ngbe_thermal_diode_data *sensor;
+	char name[19];
+};
+
+struct hwmon_buff {
+	struct device *device;
+	struct hwmon_attr *hwmon_list;
+	unsigned int n_hwmon;
+};
+#endif /* CONFIG_HWMON */
+
 /* board specific private data structure */
 struct ngbe_adapter {
 	u8 __iomem *io_addr;    /* Mainly for iounmap use */
@@ -616,6 +635,9 @@ struct ngbe_adapter {
 #ifdef CONFIG_DEBUG_FS
 	struct dentry *ngbe_dbg_adapter;
 #endif
+#ifdef CONFIG_HWMON
+	struct hwmon_buff ngbe_hwmon_buff;
+#endif /* CONFIG_HWMON */
 };
 
 struct ngbe_cb {
@@ -634,12 +656,12 @@ struct ngbe_msg {
 
 extern char ngbe_driver_name[];
 
-static struct net_device *ngbe_hw_to_netdev(const struct ngbe_hw *hw)
+static inline struct net_device *ngbe_hw_to_netdev(const struct ngbe_hw *hw)
 {
 	return ((struct ngbe_adapter *)hw->back)->netdev;
 }
 
-static struct ngbe_msg *ngbe_hw_to_msg(const struct ngbe_hw *hw)
+static inline struct ngbe_msg *ngbe_hw_to_msg(const struct ngbe_hw *hw)
 {
 	struct ngbe_adapter *adapter =
 		container_of(hw, struct ngbe_adapter, hw);
