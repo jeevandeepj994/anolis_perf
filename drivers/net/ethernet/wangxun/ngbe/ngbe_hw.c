@@ -3361,10 +3361,116 @@ s32 ngbe_led_off(struct ngbe_hw *hw, u32 index)
 	return 0;
 }
 
+/**
+ *  ngbe_init_flash_params - Initialize flash params
+ *  @hw: pointer to hardware structure
+ *
+ *  Initializes the EEPROM parameters ngbe_eeprom_info within the
+ *  ngbe_hw struct in order to set up EEPROM access.
+ **/
+s32 ngbe_init_flash_params(struct ngbe_hw *hw)
+{
+	struct ngbe_flash_info *flash = &hw->flash;
+	u32 eec;
+
+	eec = 0x1000000;
+	flash->semaphore_delay = 10;
+	flash->dword_size = (eec >> 2);
+	flash->address_bits = 24;
+
+	return 0;
+}
+
+/**
+ * ngbe_read_flash_buffer - Read FLASH dword(s) using
+ * fastest available method
+ *
+ * @hw: pointer to hardware structure
+ * @offset: offset of  dword in EEPROM to read
+ * @dwords: number of dwords
+ * @data: dword(s) read from the EEPROM
+ *
+ * Retrieves 32 bit dword(s) read from EEPROM
+ **/
+s32 ngbe_read_flash_buffer(struct ngbe_hw *hw, u32 offset,
+			   u32 dwords, u32 *data)
+{
+	s32 status = 0;
+	u32 i;
+
+	TCALL(hw, eeprom.ops.init_params);
+
+	if (!dwords || offset + dwords >= hw->flash.dword_size) {
+		status = NGBE_ERR_INVALID_ARGUMENT;
+		ERROR_REPORT1(hw, NGBE_ERROR_ARGUMENT, "Invalid FLASH arguments");
+		return status;
+	}
+
+	for (i = 0; i < dwords; i++) {
+		wr32(hw, NGBE_SPI_DATA, data[i]);
+		wr32(hw, NGBE_SPI_CMD,
+		     NGBE_SPI_CMD_ADDR(offset + i) |
+			NGBE_SPI_CMD_CMD(0x0));
+
+		status = po32m(hw, NGBE_SPI_STATUS,
+			       NGBE_SPI_STATUS_OPDONE, NGBE_SPI_STATUS_OPDONE,
+			NGBE_SPI_TIMEOUT, 0);
+		if (status) {
+			ERROR_REPORT1(hw, NGBE_ERROR_INVALID_STATE, "FLASH read timeout");
+			break;
+		}
+	}
+
+	return status;
+}
+
+/**
+ * ngbe_write_flash_buffer - Write FLASH dword(s) using
+ * fastest available method
+ *
+ * @hw: pointer to hardware structure
+ * @offset: offset of  dword in EEPROM to write
+ * @dwords: number of dwords
+ * @data: dword(s) write from to EEPROM
+ *
+ **/
+s32 ngbe_write_flash_buffer(struct ngbe_hw *hw, u32 offset,
+			    u32 dwords, u32 *data)
+{
+	s32 status = 0;
+	u32 i;
+
+	TCALL(hw, eeprom.ops.init_params);
+
+	if (!dwords || offset + dwords >= hw->flash.dword_size) {
+		status = NGBE_ERR_INVALID_ARGUMENT;
+		ERROR_REPORT1(hw, NGBE_ERROR_ARGUMENT, "Invalid FLASH arguments");
+		return status;
+	}
+
+	for (i = 0; i < dwords; i++) {
+		wr32(hw, NGBE_SPI_CMD,
+		     NGBE_SPI_CMD_ADDR(offset + i) |
+			NGBE_SPI_CMD_CMD(0x1));
+
+		status = po32m(hw, NGBE_SPI_STATUS,
+			       NGBE_SPI_STATUS_OPDONE, NGBE_SPI_STATUS_OPDONE,
+			NGBE_SPI_TIMEOUT, 0);
+		if (status != 0) {
+			ERROR_REPORT1(hw, NGBE_ERROR_INVALID_STATE, "FLASH write timeout");
+			break;
+		}
+		data[i] = rd32(hw, NGBE_SPI_DATA);
+	}
+
+	return status;
+}
+
 s32 ngbe_init_ops_common(struct ngbe_hw *hw)
 {
 	struct ngbe_mac_info *mac = &hw->mac;
 	struct ngbe_eeprom_info *eeprom = &hw->eeprom;
+	struct ngbe_flash_info *flash = &hw->flash;
 
 	/* MAC */
 	mac->ops.init_hw = ngbe_init_hw;
@@ -3403,7 +3509,7 @@ s32 ngbe_init_ops_common(struct ngbe_hw *hw)
 	mac->ops.set_ethertype_anti_spoofing =
 				ngbe_set_ethertype_anti_spoofing;
 
-		/* Link */
+	/* Link */
 	mac->ops.get_link_capabilities = ngbe_get_link_capabilities;
 	mac->ops.check_link = ngbe_check_mac_link;
 	mac->ops.setup_rxpba = ngbe_set_rxpba;
@@ -3430,6 +3536,11 @@ s32 ngbe_init_ops_common(struct ngbe_hw *hw)
 	/* LEDs */
 	mac->ops.led_on = ngbe_led_on;
 	mac->ops.led_off = ngbe_led_off;
+
+	/* FLASH */
+	flash->ops.init_params = ngbe_init_flash_params;
+	flash->ops.read_buffer = ngbe_read_flash_buffer;
+	flash->ops.write_buffer = ngbe_write_flash_buffer;
 
 	mac->mcft_size          = NGBE_SP_MC_TBL_SIZE;
 	mac->vft_size           = NGBE_SP_VFT_TBL_SIZE;
