@@ -1699,6 +1699,8 @@ struct ngbe_hw {
 	ngbe_physical_layer link_mode;
 	enum ngbe_reset_type reset_type;
 	u16 tpid[8];
+
+	spinlock_t phy_lock;	/* Used to protect phy registers. */
 };
 
 /* Host Interface Command Structures */
