@@ -198,6 +198,7 @@ typedef u32 ngbe_physical_layer;
 #define NGBE_TS_INT_EN_DALARM_INT_EN   0x00000002U
 #define NGBE_TS_INT_EN_ALARM_INT_EN    0x00000001U
 #define NGBE_TS_EN_ENA                 0x00000001U
+#define NGBE_TS_ST_DATA_OUT_MASK       0x000003FFU
 
 /* read register */
 #define NGBE_FAILED_READ_REG       0xffffffffU
@@ -1516,6 +1517,9 @@ struct ngbe_mac_operations {
 
 	/* Manageability interface */
 	s32 (*set_fw_drv_ver)(struct ngbe_hw *hw, u8 maj, u8 min, u8 build, u8 sub);
+	s32 (*get_thermal_sensor_data)(struct ngbe_hw *hw);
+	s32 (*init_thermal_sensor_thresh)(struct ngbe_hw *hw);
+
 	void (*disable_rx)(struct ngbe_hw *hw);
 	void (*enable_rx)(struct ngbe_hw *hw);
 	void (*set_ethertype_anti_spoofing)(struct ngbe_hw *hw, bool enable, int vf);
