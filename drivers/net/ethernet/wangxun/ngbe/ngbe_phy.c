@@ -327,10 +327,13 @@ bool ngbe_validate_phy_addr(struct ngbe_hw *hw, u32 phy_addr)
 {
 	u16 phy_id = 0;
 	bool valid = false;
+	unsigned long flags;
 
 	hw->phy.addr = phy_addr;
 
+	spin_lock_irqsave(&hw->phy_lock, flags);
 	ngbe_phy_read_reg_sds_mii_yt(hw, 0x3, 0, &phy_id);
+	spin_unlock_irqrestore(&hw->phy_lock, flags);
 
 	if (phy_id != 0xFFFF && phy_id != 0x0)
 		valid = true;
@@ -343,6 +346,7 @@ s32 ngbe_check_yt_phy_id(struct ngbe_hw *hw)
 	u16 phy_id = 0;
 	bool valid = false;
 	u32 phy_addr;
+	unsigned long flags;
 
 	for (phy_addr = 0; phy_addr < 32; phy_addr++) {
 		valid = ngbe_validate_phy_addr(hw, phy_addr);
@@ -358,7 +362,9 @@ s32 ngbe_check_yt_phy_id(struct ngbe_hw *hw)
 		return NGBE_ERR_DEVICE_NOT_SUPPORTED;
 	}
 
+	spin_lock_irqsave(&hw->phy_lock, flags);
 	ngbe_phy_read_reg_sds_mii_yt(hw, 0x3, 0, &phy_id);
+	spin_unlock_irqrestore(&hw->phy_lock, flags);
 
 	if (phy_id == NGBE_YT8521S_PHY_ID || phy_id == NGBE_YT8531S_PHY_ID) {
 		hw->phy.id = phy_id;
@@ -411,6 +417,7 @@ s32 ngbe_phy_init(struct ngbe_hw *hw)
 	int i;
 	u8 lan_id = hw->bus.lan_id;
 	struct ngbe_adapter *adapter = hw->back;
+	unsigned long flags;
 
 	/* init phy.addr according to HW design */
 	hw->phy.addr = 0;
@@ -484,6 +491,7 @@ s32 ngbe_phy_init(struct ngbe_hw *hw)
 		TCALL(hw, phy.ops.write_reg_mdi, 0, 0, value);
 	} else if (hw->phy.type == ngbe_phy_yt8521s_sfi) {
 		/* power down in Fiber mode */
+		spin_lock_irqsave(&hw->phy_lock, flags);
 		ngbe_phy_read_reg_sds_mii_yt(hw, 0x0, 0, &value);
 		value |= NGBE_YT_PHY_POWER;
 		ngbe_phy_write_reg_sds_mii_yt(hw, 0x0, 0, value);
@@ -492,6 +500,7 @@ s32 ngbe_phy_init(struct ngbe_hw *hw)
 		ngbe_phy_read_reg_mdi(hw, 0x0, 0, &value);
 		value |= NGBE_YT_PHY_POWER;
 		ngbe_phy_write_reg_mdi(hw, 0x0, 0, value);
+		spin_unlock_irqrestore(&hw->phy_lock, flags);
 	}
 
 	return ret_val;
@@ -599,6 +608,7 @@ s32 ngbe_phy_reset_yt(struct ngbe_hw *hw)
 	s32 status = 0;
 	u16 value = 0;
 	int i;
+	unsigned long flags;
 
 	if (hw->phy.type != ngbe_phy_yt8521s_sfi)
 		return NGBE_ERR_PHY_TYPE;
@@ -616,28 +626,37 @@ s32 ngbe_phy_reset_yt(struct ngbe_hw *hw)
 		return status;
 
 	/* check chip_mode first */
+	spin_lock_irqsave(&hw->phy_lock, flags);
 	ngbe_phy_read_reg_ext_yt(hw, 0xa001, 0, &value);
+	spin_unlock_irqrestore(&hw->phy_lock, flags);
 
 	if ((value & 7) != 0) {/* fiber_to_rgmii */
+		spin_lock_irqsave(&hw->phy_lock, flags);
 		status = ngbe_phy_read_reg_sds_mii_yt(hw, 0, 0, &value);
 		/* sds software reset */
 		value |= 0x8000;
 		status = ngbe_phy_write_reg_sds_mii_yt(hw, 0, 0, value);
-
+		spin_unlock_irqrestore(&hw->phy_lock, flags);
 		for (i = 0; i < NGBE_PHY_RST_WAIT_PERIOD; i++) {
+			spin_lock_irqsave(&hw->phy_lock, flags);
 			status = ngbe_phy_read_reg_sds_mii_yt(hw, 0, 0, &value);
+			spin_unlock_irqrestore(&hw->phy_lock, flags);
 			if (!(value & 0x8000))
 				break;
 			mdelay(1);
 		}
 	} else {/* utp_to_rgmii */
+		spin_lock_irqsave(&hw->phy_lock, flags);
 		status = ngbe_phy_read_reg_mdi(hw, 0, 0, &value);
 		/* software reset */
 		value |= 0x8000;
 		status = ngbe_phy_write_reg_mdi(hw, 0, 0, value);
+		spin_unlock_irqrestore(&hw->phy_lock, flags);
 
 		for (i = 0; i < NGBE_PHY_RST_WAIT_PERIOD; i++) {
+			spin_lock_irqsave(&hw->phy_lock, flags);
 			status = ngbe_phy_read_reg_mdi(hw, 0, 0, &value);
+			spin_unlock_irqrestore(&hw->phy_lock, flags);
 			if (!(value & 0x8000))
 				break;
 			mdelay(1);
@@ -856,11 +875,14 @@ u32 ngbe_phy_setup_link_yt(struct ngbe_hw *hw,
 	u16 value;
 	u16 value_r4 = 0;
 	u16 value_r9 = 0;
+	unsigned long flags;
 
 	hw->phy.autoneg_advertised = 0;
 
 	/* check chip_mode first */
+	spin_lock_irqsave(&hw->phy_lock, flags);
 	ngbe_phy_read_reg_ext_yt(hw, 0xA001, 0, &value);
+	spin_unlock_irqrestore(&hw->phy_lock, flags);
 
 	if ((value & 7) == 0) {/* utp_to_rgmii */
 		if (!hw->mac.autoneg) {
@@ -882,7 +904,9 @@ u32 ngbe_phy_setup_link_yt(struct ngbe_hw *hw,
 			}
 			/* duplex full */
 			value |= NGBE_MDI_PHY_DUPLEX | 0x8000;
+			spin_lock_irqsave(&hw->phy_lock, flags);
 			ngbe_phy_write_reg_mdi(hw, 0x0, 0, value);
+			spin_unlock_irqrestore(&hw->phy_lock, flags);
 
 			goto skip_an;
 		}
@@ -890,6 +914,7 @@ u32 ngbe_phy_setup_link_yt(struct ngbe_hw *hw,
 		value_r4 = 0x1E0;
 		value_r9 = 0x300;
 		/*disable 100/10base-T Self-negotiation ability*/
+		spin_lock_irqsave(&hw->phy_lock, flags);
 		ngbe_phy_read_reg_mdi(hw, 0x4, 0, &value);
 		value &= ~value_r4;
 		ngbe_phy_write_reg_mdi(hw, 0x4, 0, value);
@@ -929,15 +954,19 @@ u32 ngbe_phy_setup_link_yt(struct ngbe_hw *hw,
 		ngbe_phy_read_reg_mdi(hw, 0x0, 0, &value);
 		value |= 0x9200;
 		ngbe_phy_write_reg_mdi(hw, 0x0, 0, value);
+		spin_unlock_irqrestore(&hw->phy_lock, flags);
 skip_an:
 		/* power on in UTP mode */
+		spin_lock_irqsave(&hw->phy_lock, flags);
 		ngbe_phy_read_reg_mdi(hw, 0x0, 0, &value);
 		value &= ~0x800;
 		ngbe_phy_write_reg_mdi(hw, 0x0, 0, value);
+		spin_unlock_irqrestore(&hw->phy_lock, flags);
 	} else if ((value & 7) == 1) {/* fiber_to_rgmii */
 		hw->phy.autoneg_advertised |= NGBE_LINK_SPEED_1GB_FULL;
 
 		/* RGMII_Config1 : Config rx and tx training delay */
+		spin_lock_irqsave(&hw->phy_lock, flags);
 		ngbe_phy_write_reg_ext_yt(hw, 0xA003, 0, 0x3cf1);
 		ngbe_phy_write_reg_ext_yt(hw, 0xA001, 0, 0x8041);
 
@@ -958,8 +987,10 @@ skip_an:
 			ngbe_phy_write_reg_sds_mii_yt(hw, 0x0, 0, 0x9340);
 		else
 			ngbe_phy_write_reg_sds_mii_yt(hw, 0x0, 0, 0x8140);
+		spin_unlock_irqrestore(&hw->phy_lock, flags);
 	} else if ((value & 7) == 2) {
 		/* power on in UTP mode */
+		spin_lock_irqsave(&hw->phy_lock, flags);
 		ngbe_phy_read_reg_mdi(hw, 0x0, 0, &value);
 		value &= ~0x800;
 		ngbe_phy_write_reg_mdi(hw, 0x0, 0, value);
@@ -970,13 +1001,14 @@ skip_an:
 		ngbe_phy_write_reg_sds_mii_yt(hw, 0x0, 0, value);
 
 		ngbe_phy_read_reg_sds_mii_yt(hw, 0x11, 0, &value);
-
+		spin_unlock_irqrestore(&hw->phy_lock, flags);
 		if (value & 0x400) { /* fiber up */
 			hw->phy.autoneg_advertised |= NGBE_LINK_SPEED_1GB_FULL;
 		} else { /* utp up */
 			value_r4 = 0x1E0;
 			value_r9 = 0x300;
 			/*disable 100/10base-T Self-negotiation ability*/
+			spin_lock_irqsave(&hw->phy_lock, flags);
 			ngbe_phy_read_reg_mdi(hw, 0x4, 0, &value);
 			value &= ~value_r4;
 			ngbe_phy_write_reg_mdi(hw, 0x4, 0, value);
@@ -1016,10 +1048,11 @@ skip_an:
 			ngbe_phy_read_reg_mdi(hw, 0x0, 0, &value);
 			value |= 0x8000;
 			ngbe_phy_write_reg_mdi(hw, 0x0, 0, value);
+			spin_unlock_irqrestore(&hw->phy_lock, flags);
 		}
 	} else if ((value & 7) == 4) {
 		hw->phy.autoneg_advertised |= NGBE_LINK_SPEED_1GB_FULL;
-
+		spin_lock_irqsave(&hw->phy_lock, flags);
 		ngbe_phy_read_reg_ext_yt(hw, 0xA003, 0, &value);
 		value |= 0x8000;
 		ngbe_phy_write_reg_ext_yt(hw, 0xA003, 0, value);
@@ -1037,6 +1070,7 @@ skip_an:
 		ngbe_phy_read_reg_sds_mii_yt(hw, 0x0, 0, &value);
 		value &= ~0x800;
 		ngbe_phy_write_reg_sds_mii_yt(hw, 0x0, 0, value);
+		spin_unlock_irqrestore(&hw->phy_lock, flags);
 	} else if ((value & 7) == 5) {/* sgmii_to_rgmii */
 		if (!hw->mac.autoneg) {
 			switch (speed) {
@@ -1057,7 +1091,9 @@ skip_an:
 			}
 			/* duplex full */
 			value |= NGBE_MDI_PHY_DUPLEX | 0x8000;
+			spin_lock_irqsave(&hw->phy_lock, flags);
 			ngbe_phy_write_reg_sds_mii_yt(hw, 0x0, 0, value);
+			spin_unlock_irqrestore(&hw->phy_lock, flags);
 
 			goto skip_an_sr;
 		}
@@ -1078,17 +1114,21 @@ skip_an:
 
 		/* duplex full */
 		value |= NGBE_MDI_PHY_DUPLEX | 0x8000;
+		spin_lock_irqsave(&hw->phy_lock, flags);
 		ngbe_phy_write_reg_sds_mii_yt(hw, 0x0, 0, value);
 
 		/* software reset to make the above configuration take effect */
 		ngbe_phy_read_reg_sds_mii_yt(hw, 0x0, 0, &value);
 		value |= 0x9200;
 		ngbe_phy_write_reg_sds_mii_yt(hw, 0x0, 0, value);
+		spin_unlock_irqrestore(&hw->phy_lock, flags);
 skip_an_sr:
 		/* power on in UTP mode */
+		spin_lock_irqsave(&hw->phy_lock, flags);
 		ngbe_phy_read_reg_sds_mii_yt(hw, 0x0, 0, &value);
 		value &= ~0x800;
 		ngbe_phy_write_reg_sds_mii_yt(hw, 0x0, 0, value);
+		spin_unlock_irqrestore(&hw->phy_lock, flags);
 	}
 	TCALL(hw, phy.ops.check_event);
 
@@ -1168,9 +1208,12 @@ s32 ngbe_phy_check_event_yt(struct ngbe_hw *hw)
 {
 	u16 value = 0;
 	struct ngbe_adapter *adapter = hw->back;
+	unsigned long flags;
 
+	spin_lock_irqsave(&hw->phy_lock, flags);
 	ngbe_phy_write_reg_ext_yt(hw, 0xa000, 0, 0x0);
 	TCALL(hw, phy.ops.read_reg_mdi, 0x13, 0, &value);
+	spin_unlock_irqrestore(&hw->phy_lock, flags);
 
 	if ((value & (NGBE_YT8521S_SDS_LINK_UP | NGBE_YT8521S_SDS_LINK_DOWN)) ||
 	    (value & (NGBE_YT8521S_UTP_LINK_UP | NGBE_YT8521S_UTP_LINK_DOWN)))
@@ -1210,8 +1253,11 @@ s32 ngbe_phy_get_adv_pause_yt(struct ngbe_hw *hw, u8 *pause_bit)
 {
 	u16 value;
 	s32 status = 0;
+	unsigned long flags;
 
+	spin_lock_irqsave(&hw->phy_lock, flags);
 	status = ngbe_phy_read_reg_sds_mii_yt(hw, 0x04, 0, &value);
+	spin_unlock_irqrestore(&hw->phy_lock, flags);
 	*pause_bit = (u8)((value >> 7) & 0x3);
 
 	return status;
@@ -1256,8 +1302,11 @@ s32 ngbe_phy_get_lp_adv_pause_yt(struct ngbe_hw *hw, u8 *pause_bit)
 {
 	u16 value;
 	s32 status = 0;
+	unsigned long flags;
 
+	spin_lock_irqsave(&hw->phy_lock, flags);
 	status = ngbe_phy_read_reg_sds_mii_yt(hw, 0x05, 0, &value);
+	spin_unlock_irqrestore(&hw->phy_lock, flags);
 	*pause_bit = (u8)((value >> 7) & 0x3);
 
 	return status;
@@ -1302,11 +1351,14 @@ s32 ngbe_phy_set_pause_adv_yt(struct ngbe_hw *hw, u16 pause_bit)
 {
 	u16 value;
 	s32 status = 0;
+	unsigned long flags;
 
+	spin_lock_irqsave(&hw->phy_lock, flags);
 	status = ngbe_phy_read_reg_sds_mii_yt(hw, 0x04, 0, &value);
 	value &= ~0x180;
 	value |= pause_bit;
 	status = ngbe_phy_write_reg_sds_mii_yt(hw, 0x04, 0, value);
+	spin_unlock_irqrestore(&hw->phy_lock, flags);
 
 	return status;
 }
