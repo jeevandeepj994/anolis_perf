@@ -233,6 +233,73 @@ static int __sev_do_cmd_locked(int cmd, void *data, int *psp_ret)
 	return ret;
 }
 
+static int __psp_do_cmd_locked(int cmd, void *data, int *psp_ret)
+{
+	struct psp_device *psp = psp_master;
+	struct sev_device *sev;
+	unsigned int phys_lsb, phys_msb;
+	unsigned int reg, ret = 0;
+
+	if (!psp || !psp->sev_data)
+		return -ENODEV;
+
+	if (psp_dead)
+		return -EBUSY;
+
+	sev = psp->sev_data;
+
+	if (data && WARN_ON_ONCE(!virt_addr_valid(data)))
+		return -EINVAL;
+
+	/* Get the physical address of the command buffer */
+	phys_lsb = data ? lower_32_bits(__psp_pa(data)) : 0;
+	phys_msb = data ? upper_32_bits(__psp_pa(data)) : 0;
+
+	dev_dbg(sev->dev, "sev command id %#x buffer 0x%08x%08x timeout %us\n",
+		cmd, phys_msb, phys_lsb, psp_timeout);
+
+	print_hex_dump_debug("(in):  ", DUMP_PREFIX_OFFSET, 16, 2, data,
+			     sev_cmd_buffer_len(cmd), false);
+
+	iowrite32(phys_lsb, sev->io_regs + sev->vdata->cmdbuff_addr_lo_reg);
+	iowrite32(phys_msb, sev->io_regs + sev->vdata->cmdbuff_addr_hi_reg);
+
+	sev->int_rcvd = 0;
+
+	reg = cmd;
+	reg <<= SEV_CMDRESP_CMD_SHIFT;
+	reg |= SEV_CMDRESP_IOC;
+	iowrite32(reg, sev->io_regs + sev->vdata->cmdresp_reg);
+
+	/* wait for command completion */
+	ret = sev_wait_cmd_ioc(sev, &reg, psp_timeout);
+	if (ret) {
+		if (psp_ret)
+			*psp_ret = 0;
+
+		dev_err(sev->dev, "sev command %#x timed out, disabling PSP\n", cmd);
+		psp_dead = true;
+
+		return ret;
+	}
+
+	psp_timeout = psp_cmd_timeout;
+
+	if (psp_ret)
+		*psp_ret = reg & PSP_CMDRESP_ERR_MASK;
+
+	if (reg & PSP_CMDRESP_ERR_MASK) {
+		dev_dbg(sev->dev, "sev command %#x failed (%#010x)\n",
+			cmd, reg & PSP_CMDRESP_ERR_MASK);
+		ret = -EIO;
+	}
+
+	print_hex_dump_debug("(out): ", DUMP_PREFIX_OFFSET, 16, 2, data,
+			     sev_cmd_buffer_len(cmd), false);
+
+	return ret;
+}
+
 static int sev_do_cmd(int cmd, void *data, int *psp_ret)
 {
 	int rc;
@@ -243,6 +310,18 @@ static int sev_do_cmd(int cmd, void *data, int *psp_ret)
 
 	return rc;
 }
+
+int psp_do_cmd(int cmd, void *data, int *psp_ret)
+{
+	int rc;
+
+	mutex_lock(&sev_cmd_mutex);
+	rc = __psp_do_cmd_locked(cmd, data, psp_ret);
+	mutex_unlock(&sev_cmd_mutex);
+
+	return rc;
+}
+EXPORT_SYMBOL_GPL(psp_do_cmd);
 
 static int __sev_platform_init_locked(int *error)
 {
