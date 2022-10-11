@@ -175,6 +175,7 @@ int ngbe_get_link_ksettings(struct net_device *netdev,
 	bool autoneg = false;
 	bool link_up = 0;
 	u16 value = 0;
+	unsigned long flags;
 
 	ethtool_link_ksettings_zero_link_mode(cmd, supported);
 	ethtool_link_ksettings_zero_link_mode(cmd, advertising);
@@ -292,7 +293,9 @@ int ngbe_get_link_ksettings(struct net_device *netdev,
 		}
 		break;
 	case ngbe_phy_yt8521s_sfi:
+		spin_lock_irqsave(&hw->phy_lock, flags);
 		ngbe_phy_read_reg_ext_yt(hw, 0xA001, 0, &value);
+		spin_unlock_irqrestore(&hw->phy_lock, flags);
 		if ((value & 7) == 0) {//utp_to_rgmii
 			ethtool_link_ksettings_add_link_mode(cmd, supported, TP);
 			ethtool_link_ksettings_add_link_mode(cmd, advertising, TP);
