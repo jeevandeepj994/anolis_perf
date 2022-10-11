@@ -3713,7 +3713,7 @@ static struct rq *finish_task_switch(struct task_struct *prev)
 #ifdef CONFIG_SMP
 
 /* rq->lock is NOT held, but preemption is disabled */
-static void __balance_callback(struct rq *rq)
+static noinline void __balance_callback(struct rq *rq)
 {
 	struct callback_head *head, *next;
 	void (*func)(struct rq *rq);
