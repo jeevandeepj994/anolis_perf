@@ -305,6 +305,11 @@ static const struct psp_vdata pspv1 = {
 	.feature_reg		= 0x105fc,
 	.inten_reg		= 0x10610,
 	.intsts_reg		= 0x10614,
+#ifdef CONFIG_HYGON_PSP2CPU_CMD
+	.p2c_cmdresp_reg	= 0x105e8,
+	.p2c_cmdbuff_addr_lo_reg = 0x105ec,
+	.p2c_cmdbuff_addr_hi_reg = 0x105f0,
+#endif
 };
 
 static const struct psp_vdata pspv2 = {
@@ -312,6 +317,11 @@ static const struct psp_vdata pspv2 = {
 	.feature_reg		= 0x109fc,
 	.inten_reg		= 0x10690,
 	.intsts_reg		= 0x10694,
+#ifdef CONFIG_HYGON_PSP2CPU_CMD
+	.p2c_cmdresp_reg	= 0x109e8,
+	.p2c_cmdbuff_addr_lo_reg = 0x109ec,
+	.p2c_cmdbuff_addr_hi_reg = 0x109f0,
+#endif
 };
 
 static const struct psp_vdata pspv3 = {
