@@ -21,3 +21,4 @@ ccp-crypto-objs := ccp-crypto-main.o \
 		   ccp-crypto-des3.o \
 		   ccp-crypto-rsa.o \
 		   ccp-crypto-sha.o
+obj-$(CONFIG_TDM_HYGON) += tdm_hygon.o
