@@ -523,6 +523,8 @@ struct csv_data_hgsc_cert_import {
 
 #ifdef CONFIG_CRYPTO_DEV_SP_PSP
 
+int psp_do_cmd(int cmd, void *data, int *psp_ret);
+
 /**
  * sev_platform_init - perform SEV INIT command
  *
@@ -638,6 +640,8 @@ int sev_guest_decommission(struct sev_data_decommission *data, int *error);
 void *psp_copy_user_blob(u64 uaddr, u32 len);
 
 #else	/* !CONFIG_CRYPTO_DEV_SP_PSP */
+
+static inline int psp_do_cmd(int cmd, void *data, int *psp_ret) { return -ENODEV; }
 
 static inline int
 sev_platform_status(struct sev_user_data_status *status, int *error) { return -ENODEV; }
