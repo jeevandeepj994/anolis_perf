@@ -231,6 +231,7 @@ static int datablob_parse(char *datablob, const char **format,
 				"when called from .update method\n", keyword);
 			break;
 		}
+		*hex_encoded_iv = strsep(&datablob, " \t");
 		ret = 0;
 		break;
 	case Opt_load:
@@ -765,6 +766,14 @@ static int encrypted_init(struct encrypted_key_payload *epayload,
 
 		get_random_bytes(epayload->decrypted_data,
 				 epayload->decrypted_datalen);
+	} else  if (!format || !strcmp(format, key_format_default)) {
+		if (strlen(hex_encoded_iv) != epayload->decrypted_datalen * 2)
+			return -EINVAL;
+		ret = hex2bin(epayload->decrypted_data, hex_encoded_iv,
+				epayload->decrypted_datalen);
+		if (ret < 0)
+			return -EINVAL;
+		get_random_bytes(epayload->iv, ivsize);
 	} else
 		ret = encrypted_key_decrypt(epayload, format, hex_encoded_iv);
 	return ret;
