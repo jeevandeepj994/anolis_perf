@@ -14,3 +14,4 @@ ngbe-objs := ngbe_main.o \
 	     ngbe_ethtool.o
 
 ngbe-$(CONFIG_DEBUG_FS) += ngbe_debugfs.o
+ngbe-$(CONFIG_SYSFS) += ngbe_sysfs.o
