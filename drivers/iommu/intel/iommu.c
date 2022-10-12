@@ -2801,7 +2801,7 @@ static struct dmar_domain *dmar_insert_one_dev_info(struct intel_iommu *iommu,
 					PASID_RID2PASID);
 		else
 			ret = intel_pasid_setup_second_level(iommu, domain,
-					dev, PASID_RID2PASID);
+					dev, PASID_RID2PASID, 0);
 		spin_unlock_irqrestore(&iommu->lock, flags);
 		if (ret) {
 			dev_err(dev, "Setup RID2PASID failed\n");
@@ -4909,7 +4909,7 @@ static int aux_domain_add_dev(struct dmar_domain *domain,
 					       domain->default_pasid);
 	else
 		ret = intel_pasid_setup_second_level(iommu, domain, dev,
-						     domain->default_pasid);
+						     domain->default_pasid, 0);
 	if (ret)
 		goto table_failed;
 	spin_unlock(&iommu->lock);
@@ -6468,7 +6468,7 @@ static int intel_iommu_attach_dev_pasid(struct iommu_domain *domain,
 					       dev, pasid);
 	else
 		ret = intel_pasid_setup_second_level(iommu, dmar_domain,
-						     dev, pasid);
+						     dev, pasid, 0);
 
 	spin_unlock(&iommu->lock);
 	spin_unlock_irqrestore(&device_domain_lock, flags);

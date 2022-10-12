@@ -709,7 +709,7 @@ static inline int iommu_skip_agaw(struct dmar_domain *domain,
  */
 int intel_pasid_setup_second_level(struct intel_iommu *iommu,
 				   struct dmar_domain *domain,
-				   struct device *dev, u32 pasid)
+				   struct device *dev, u32 pasid, u64 flags)
 {
 	struct pasid_entry *pte;
 	struct dma_pte *pgd;
@@ -744,7 +744,7 @@ int intel_pasid_setup_second_level(struct intel_iommu *iommu,
 	}
 
 	/* Caller must ensure PASID entry is not in use. */
-	if (pasid_pte_is_present(pte))
+	if (pasid_pte_is_present(pte) && !(flags & IOMMU_SVA_SL_ONLY))
 		return -EBUSY;
 
 	pasid_clear_entry(pte);
