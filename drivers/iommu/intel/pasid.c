@@ -313,8 +313,9 @@ intel_pasid_clear_entry(struct intel_iommu *iommu, struct device *dev,
 			u32 pasid, bool fault_ignore, bool keep_pte)
 {
 	struct pasid_entry *pe;
+	bool keep_slt = false;
 	u64 pe_val;
-	bool nested;
+	u8 pgtt = 0;
 
 	pe = intel_pasid_get_entry(dev, pasid);
 	if (WARN_ON(!pe))
@@ -326,8 +327,10 @@ intel_pasid_clear_entry(struct intel_iommu *iommu, struct device *dev,
 	 * from NESTED to SL and keep other bits when unbind gpasid is executed.
 	 */
 	pe_val = READ_ONCE(pe->val[0]);
-	nested = (((pe_val >> 6) & 0x7) == PASID_ENTRY_PGTT_NESTED) ? true : false;
-	if (nested && keep_pte) {
+	pgtt = (pe_val >> 6) & 0x7;
+	keep_slt = (pgtt == PASID_ENTRY_PGTT_NESTED ||
+		    pgtt == PASID_ENTRY_PGTT_SL_ONLY);
+	if (keep_slt && keep_pte) {
 		pe_val &= 0xfffffffffffffebf;
 		WRITE_ONCE(pe->val[0], pe_val);
 		return;
