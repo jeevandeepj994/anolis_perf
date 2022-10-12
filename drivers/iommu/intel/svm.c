@@ -562,7 +562,8 @@ int intel_svm_bind_gpasid(struct iommu_domain *domain,
 	 */
 	spin_lock_irqsave(&iommu->lock, iflags);
 	if (data->flags & IOMMU_SVA_SL_ONLY) {
-		ret = intel_pasid_setup_second_level(iommu, dmar_domain, dev, data->hpasid);
+		ret = intel_pasid_setup_second_level(iommu, dmar_domain, dev,
+						     data->hpasid, data->flags);
 	} else {
 		ret = intel_pasid_setup_nested(iommu, dev,
 					       (pgd_t *)(uintptr_t)data->gpgd,

@@ -114,7 +114,7 @@ int intel_pasid_setup_first_level(struct intel_iommu *iommu,
 				  u32 pasid, u16 did, int flags);
 int intel_pasid_setup_second_level(struct intel_iommu *iommu,
 				   struct dmar_domain *domain,
-				   struct device *dev, u32 pasid);
+				   struct device *dev, u32 pasid, u64 flags);
 int intel_pasid_setup_pass_through(struct intel_iommu *iommu,
 				   struct dmar_domain *domain,
 				   struct device *dev, u32 pasid);
