@@ -1809,8 +1809,7 @@ int arm_spe_process_auxtrace_info(union perf_event *event,
 	else
 		itrace_synth_opts__set_default(&spe->synth_opts, false);
 
-	if (session->arm_spe_synth_opts && (session->arm_spe_synth_opts->set
-				|| session->arm_spe_synth_opts->c2c_mode))
+	if (session->arm_spe_synth_opts && session->arm_spe_synth_opts->set)
 		spe->arm_spe_synth_opts = *session->arm_spe_synth_opts;
 	else
 		arm_spe_synth_opts__set_default(&spe->arm_spe_synth_opts);
