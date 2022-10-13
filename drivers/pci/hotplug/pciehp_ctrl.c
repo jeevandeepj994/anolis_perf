@@ -224,7 +224,8 @@ void pciehp_handle_disable_request(struct controller *ctrl)
 
 void pciehp_handle_presence_or_link_change(struct controller *ctrl, u32 events)
 {
-	int present, link_active;
+	u8 slot_state;
+	int present, link_active, pdce;
 
 	/*
 	 * If the slot is on and presence or link has changed, turn it off.
@@ -251,15 +252,32 @@ void pciehp_handle_presence_or_link_change(struct controller *ctrl, u32 events)
 		break;
 	}
 
-	/* Turn the slot on if it's occupied or link is up */
 	mutex_lock(&ctrl->state_lock);
 	present = pciehp_card_present(ctrl);
 	link_active = pciehp_check_link_active(ctrl);
-	if (present <= 0 && link_active <= 0) {
+	slot_state = ctrl->state;
+	pdce = pciehp_check_present_change_enable(ctrl);
+	ctrl_dbg(ctrl, "%s: P:%d L:%d PDCE:%d PDC:%d S:%d\n", __func__,
+		present, link_active, pdce, (events & PCI_EXP_SLTSTA_PDC), slot_state);
+	/*
+	 * If there is no device link and present, directly return.
+	 * If it's OFF_STATE, but no present-change event, we consider this
+	 * suitation as a noise in safety remove.
+	 */
+	if ((present <= 0 && link_active <= 0) ||
+		(pdce > 0 && !(events & PCI_EXP_SLTSTA_PDC) && slot_state == OFF_STATE)) {
 		mutex_unlock(&ctrl->state_lock);
 		return;
+	} else if (present > 0 && link_active <= 0) {
+		msleep(100);
+		present = pciehp_card_present(ctrl);
+		if (present <= 0) {
+			mutex_unlock(&ctrl->state_lock);
+			return;
+		}
 	}
 
+	/* Turn the slot on if it's occupied or link is up */
 	switch (ctrl->state) {
 	case BLINKINGON_STATE:
 		cancel_delayed_work(&ctrl->button_work);
