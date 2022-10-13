@@ -1716,6 +1716,7 @@ void __free_pages_core(struct page *page, unsigned int order)
 	 * relevant for memory onlining.
 	 */
 	__free_pages_ok(page, order, FPI_TO_TAIL);
+	__SetPageInited(page);
 }
 
 #ifdef CONFIG_NEED_MULTIPLE_NODES
@@ -2450,6 +2451,9 @@ inline void post_alloc_hook(struct page *page, unsigned int order,
 	kasan_alloc_pages(page, order);
 	kernel_poison_pages(page, 1 << order, 1);
 	set_page_owner(page, order, gfp_flags);
+
+	if (unlikely(PageInited(page)))
+		__ClearPageInited(page);
 }
 
 static void prep_new_page(struct page *page, unsigned int order, gfp_t gfp_flags,
