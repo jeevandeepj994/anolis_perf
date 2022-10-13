@@ -146,6 +146,8 @@ enum pageflags {
 #ifdef CONFIG_KFENCE
 	PG_kfence,		/* Page in kfence pool */
 #endif
+	/* Only valid for buddy pages. Used to trace page that are initialized */
+	PG_inited,
 	__NR_PAGEFLAGS,
 
 	/* Filesystems */
@@ -573,6 +575,11 @@ PAGEFLAG(Dup, dup, PF_HEAD)
 #ifdef CONFIG_KFENCE
 __PAGEFLAG(Kfence, kfence, PF_ANY)
 #endif
+
+/*
+ * PageInited() is used to track free pages within the Buddy allocator.
+ */
+__PAGEFLAG(Inited, inited, PF_NO_COMPOUND)
 
 /*
  * On an anonymous page mapped into a user virtual memory area,
@@ -1015,6 +1022,8 @@ static inline void ClearPageSlabPfmemalloc(struct page *page)
 	 1UL << PG_unevictable	| __PG_MLOCKED		|	\
 	 __PG_DUP)
 
+#define __PG_INITED  (1 << PG_inited)
+
 /*
  * Flags checked when a page is prepped for return by the page allocator.
  * Pages being prepped should not have these flags set.  It they are set,
@@ -1024,7 +1033,8 @@ static inline void ClearPageSlabPfmemalloc(struct page *page)
  * alloc-free cycle to prevent from reusing the page.
  */
 #define PAGE_FLAGS_CHECK_AT_PREP	\
-	((((1UL << NR_PAGEFLAGS) - 1) & ~__PG_HWPOISON) | LRU_GEN_MASK | LRU_REFS_MASK)
+	((((1UL << NR_PAGEFLAGS) - 1) & ~(__PG_HWPOISON | __PG_INITED)) \
+	| LRU_GEN_MASK | LRU_REFS_MASK)
 
 #define PAGE_FLAGS_PRIVATE				\
 	(1UL << PG_private | 1UL << PG_private_2)
