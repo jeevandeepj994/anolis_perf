@@ -513,6 +513,15 @@ bool ww_mutex_spin_on_owner(struct mutex *lock, struct ww_acquire_ctx *ww_ctx,
 	return true;
 }
 
+static inline int owner_cpu(struct task_struct *owner)
+{
+        int cpu = 0;
+
+        OSQ_ALTERNATIVE_C_CODE(cpu = task_cpu(owner), "nop", 0);
+
+        return cpu;
+}
+
 /*
  * Look out! "owner" is an entirely speculative pointer access and not
  * reliable.
@@ -539,7 +548,7 @@ bool mutex_spin_on_owner(struct mutex *lock, struct task_struct *owner,
 		 * Use vcpu_is_preempted to detect lock holder preemption issue.
 		 */
 		if (!owner->on_cpu || need_resched() ||
-				vcpu_is_preempted(task_cpu(owner))) {
+				vcpu_is_preempted(owner_cpu(owner))) {
 			ret = false;
 			break;
 		}

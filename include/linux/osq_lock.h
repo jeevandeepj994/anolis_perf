@@ -38,4 +38,10 @@ static inline bool osq_is_locked(struct optimistic_spin_queue *lock)
 	return atomic_read(&lock->tail) != OSQ_UNLOCKED_VAL;
 }
 
+#ifdef ALTERNATIVE_C_CODE
+#define OSQ_ALTERNATIVE_C_CODE(oldinstr, newinstr, feature) ALTERNATIVE_C_CODE(oldinstr, newinstr, feature)
+#else
+#define OSQ_ALTERNATIVE_C_CODE(oldinstr, newinstr, feature) oldinstr;
+#endif
+
 #endif
