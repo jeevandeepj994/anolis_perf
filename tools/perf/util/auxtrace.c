@@ -1582,8 +1582,10 @@ out_err:
 
 void arm_spe_synth_opts__set_default(struct arm_spe_synth_opts *synth_opts)
 {
+	synth_opts->c2c_mode = false;
 	synth_opts->c2c_remote = false;
 	synth_opts->c2c_store = false;
+	synth_opts->c2c_tshare = false;
 }
 
 int arm_spe_parse_synth_opts(const struct option *opt, const char *str,
