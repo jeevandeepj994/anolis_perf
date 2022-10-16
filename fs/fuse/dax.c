@@ -682,6 +682,7 @@ static void fuse_iomap_save_private(struct vm_area_struct *vma,
 	}
 
 	WARN_ON_ONCE(dmap->window_offset % FUSE_DAX_SZ);
+	WARN_ON_ONCE(nr >= db->fc->dax->nr_ranges);
 
 	/* (used by erofs) atomic set bitmap in vma->vm_private_data */
 	if (!test_and_set_bit(nr, db->bitmap)) {
@@ -941,6 +942,7 @@ static void fuse_dax_vma_close(struct vm_area_struct *vma)
 {
 	struct fuse_dax_mapping *dmap;
 	struct virtiofs_dmap_bitmap *db = vma->vm_private_data;
+	struct fuse_conn_dax *fcd;
 
 	/* check if the vma belongs erofs */
 	if (vma->vm_ops == &fuse_dax_vm_ops)
@@ -953,10 +955,12 @@ static void fuse_dax_vma_close(struct vm_area_struct *vma)
 	vma->vm_private_data = NULL;
 	if (!refcount_dec_and_test(&db->count))
 		return;
-	spin_lock(&db->fc->lock);
-	list_for_each_entry(dmap, &db->fc->dax->busy_ranges, busy_list) {
+	fcd = db->fc->dax;
+	spin_lock(&fcd->lock);
+	list_for_each_entry(dmap, &fcd->busy_ranges, busy_list) {
 		unsigned int nr = dmap->window_offset / FUSE_DAX_SZ;
 
+		WARN_ON_ONCE(dmap->window_offset % FUSE_DAX_SZ);
 		if (!test_bit(nr, db->bitmap))
 			continue;
 
@@ -968,7 +972,7 @@ static void fuse_dax_vma_close(struct vm_area_struct *vma)
 			WARN_ON_ONCE(1);
 		}
 	}
-	spin_unlock(&db->fc->lock);
+	spin_unlock(&fcd->lock);
 	kfree(db);
 }
 
