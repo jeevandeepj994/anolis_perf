@@ -1091,7 +1091,7 @@ int smc_llc_cli_add_link(struct smc_link *link, struct smc_llc_qentry *qentry)
 		goto out_reject;
 	}
 	if (lgr->type == SMC_LGR_SINGLE &&
-	    lgr->net->smc.sysctl_disable_multiple_link)
+	    lgr->disable_multiple_link)
 		goto out_reject;
 
 	ini->vlan_id = lgr->vlan_id;
@@ -1219,7 +1219,7 @@ static void smc_llc_cli_add_link_invite(struct smc_link *link,
 	    lgr->type == SMC_LGR_ASYMMETRIC_PEER)
 		goto out;
 	if (lgr->type == SMC_LGR_SINGLE &&
-	    lgr->net->smc.sysctl_disable_multiple_link)
+	    lgr->disable_multiple_link)
 		goto out;
 
 	ini = kzalloc(sizeof(*ini), GFP_KERNEL);
@@ -1467,7 +1467,7 @@ int smc_llc_srv_add_link(struct smc_link *link,
 		goto out;
 	}
 	if (lgr->type == SMC_LGR_SINGLE &&
-	    lgr->net->smc.sysctl_disable_multiple_link)
+	    lgr->disable_multiple_link)
 		goto out;
 
 	/* ignore client add link recommendation, start new flow */
