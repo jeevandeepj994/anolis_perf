@@ -2440,7 +2440,7 @@ static int iommu_check_bind_data(struct iommu_gpasid_bind_data *data)
 		return -EINVAL;
 
 	/* Check all flags */
-	mask = IOMMU_SVA_GPASID_VAL | IOMMU_SVA_HPASID_DEF;
+	mask = IOMMU_SVA_GPASID_VAL | IOMMU_SVA_HPASID_DEF | IOMMU_SVA_SL_ONLY;
 	if (data->flags & ~mask)
 		return -EINVAL;
 
