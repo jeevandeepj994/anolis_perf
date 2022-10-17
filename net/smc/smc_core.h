@@ -336,6 +336,7 @@ struct smc_link_group {
 						/* rsn code for termination */
 			u8			nexthop_mac[ETH_ALEN];
 			u8			uses_gateway;
+			bool		disable_multiple_link;
 			__be32			saddr;
 						/* net namespace */
 			struct net		*net;
