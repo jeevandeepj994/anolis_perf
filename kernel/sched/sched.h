@@ -487,6 +487,10 @@ struct task_group {
 	struct uclamp_se	uclamp[UCLAMP_CNT];
 #endif
 
+#ifdef CONFIG_HT_STABLE
+	bool			need_ht_stable;
+#endif
+
 	CK_HOTFIX_RESERVE(1)
 	CK_HOTFIX_RESERVE(2)
 	CK_HOTFIX_RESERVE(3)
@@ -1208,6 +1212,11 @@ struct rq {
 #ifdef CONFIG_CPU_IDLE
 	/* Must be inspected within a rcu lock section */
 	struct cpuidle_state	*idle_state;
+#endif
+
+#ifdef CONFIG_HT_STABLE
+	bool need_ht_stable;
+	bool in_ht_stable;
 #endif
 
 	CK_HOTFIX_RESERVE(1)
@@ -2896,3 +2905,8 @@ long tg_get_cfs_period(struct task_group *tg);
 
 void swake_up_all_locked(struct swait_queue_head *q);
 void __prepare_to_swait(struct swait_queue_head *q, struct swait_queue *wait);
+
+#ifdef CONFIG_HT_STABLE
+extern void wake_up_idle_ht(struct rq *rq);
+extern bool need_ht_stable(void);
+#endif
