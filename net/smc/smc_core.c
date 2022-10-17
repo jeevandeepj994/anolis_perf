@@ -1165,7 +1165,8 @@ static void smcr_buf_unuse(struct smc_buf_desc *buf_desc, bool is_rmb,
 		smc_buf_free(lgr, is_rmb, buf_desc);
 	} else {
 		buf_desc->used = 0;
-		memset(buf_desc->cpu_addr, 0, buf_desc->len);
+		if (is_rmb)
+			memset(buf_desc->cpu_addr, 0, buf_desc->len);
 	}
 }
 
@@ -1177,8 +1178,6 @@ static void smc_buf_unuse(struct smc_connection *conn,
 			smcr_buf_unuse(conn->sndbuf_desc, false, lgr);
 		} else {
 			conn->sndbuf_desc->used = 0;
-			memset(conn->sndbuf_desc->cpu_addr, 0,
-			       conn->sndbuf_desc->len);
 		}
 	}
 	if (conn->rmb_desc) {
