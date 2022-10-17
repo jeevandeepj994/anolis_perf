@@ -15,6 +15,8 @@ struct smc_dim {
 	u64 prev_idle;
 	u64 prev_softirq;
 	u64 prev_wall;
+	u32 prev_idle_percent;
+	u32 prev_si_percent;
 };
 
 static inline struct smc_dim *to_smcdim(struct dim *dim)
