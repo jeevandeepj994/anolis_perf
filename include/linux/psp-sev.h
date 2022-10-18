@@ -521,7 +521,19 @@ struct csv_data_hgsc_cert_import {
 	u32 hgsc_cert_len;		/* In */
 } __packed;
 
+#ifdef CONFIG_HYGON_PSP2CPU_CMD
+
+typedef int (*p2c_notifier_t)(uint32_t id, uint64_t data);
+
+int psp_register_cmd_notifier(uint32_t cmd_id, int (*notifier)(uint32_t id, uint64_t data));
+
+int psp_unregister_cmd_notifier(uint32_t cmd_id, int (*notifier)(uint32_t id, uint64_t data));
+
+#endif
+
 #ifdef CONFIG_CRYPTO_DEV_SP_PSP
+
+int psp_do_cmd(int cmd, void *data, int *psp_ret);
 
 /**
  * sev_platform_init - perform SEV INIT command
@@ -638,6 +650,8 @@ int sev_guest_decommission(struct sev_data_decommission *data, int *error);
 void *psp_copy_user_blob(u64 uaddr, u32 len);
 
 #else	/* !CONFIG_CRYPTO_DEV_SP_PSP */
+
+static inline int psp_do_cmd(int cmd, void *data, int *psp_ret) { return -ENODEV; }
 
 static inline int
 sev_platform_status(struct sev_user_data_status *status, int *error) { return -ENODEV; }

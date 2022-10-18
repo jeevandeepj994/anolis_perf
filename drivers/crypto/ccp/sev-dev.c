@@ -32,7 +32,7 @@
 #define SEV_FW_FILE		"amd/sev.fw"
 #define SEV_FW_NAME_SIZE	64
 
-static DEFINE_MUTEX(sev_cmd_mutex);
+DEFINE_MUTEX(sev_cmd_mutex);
 static struct sev_misc_dev *misc_dev;
 
 static int psp_cmd_timeout = 100;
@@ -49,6 +49,12 @@ MODULE_FIRMWARE("amd/amd_sev_fam19h_model0xh.sbin"); /* 3rd gen EPYC */
 
 static bool psp_dead;
 static int psp_timeout;
+
+extern int is_hygon_psp;
+extern struct psp_misc_dev *psp_misc;
+extern int psp_mutex_lock_timeout(struct psp_mutex *mutex, uint64_t ms);
+extern int psp_mutex_unlock(struct psp_mutex *mutex);
+extern int psp_mutex_enabled;
 
 /* Trusted Memory Region (TMR):
  *   The TMR is a 1MB area that must be 1MB aligned.  Use the page allocator
@@ -233,6 +239,73 @@ static int __sev_do_cmd_locked(int cmd, void *data, int *psp_ret)
 	return ret;
 }
 
+static int __psp_do_cmd_locked(int cmd, void *data, int *psp_ret)
+{
+	struct psp_device *psp = psp_master;
+	struct sev_device *sev;
+	unsigned int phys_lsb, phys_msb;
+	unsigned int reg, ret = 0;
+
+	if (!psp || !psp->sev_data)
+		return -ENODEV;
+
+	if (psp_dead)
+		return -EBUSY;
+
+	sev = psp->sev_data;
+
+	if (data && WARN_ON_ONCE(!virt_addr_valid(data)))
+		return -EINVAL;
+
+	/* Get the physical address of the command buffer */
+	phys_lsb = data ? lower_32_bits(__psp_pa(data)) : 0;
+	phys_msb = data ? upper_32_bits(__psp_pa(data)) : 0;
+
+	dev_dbg(sev->dev, "sev command id %#x buffer 0x%08x%08x timeout %us\n",
+		cmd, phys_msb, phys_lsb, psp_timeout);
+
+	print_hex_dump_debug("(in):  ", DUMP_PREFIX_OFFSET, 16, 2, data,
+			     sev_cmd_buffer_len(cmd), false);
+
+	iowrite32(phys_lsb, sev->io_regs + sev->vdata->cmdbuff_addr_lo_reg);
+	iowrite32(phys_msb, sev->io_regs + sev->vdata->cmdbuff_addr_hi_reg);
+
+	sev->int_rcvd = 0;
+
+	reg = cmd;
+	reg <<= SEV_CMDRESP_CMD_SHIFT;
+	reg |= SEV_CMDRESP_IOC;
+	iowrite32(reg, sev->io_regs + sev->vdata->cmdresp_reg);
+
+	/* wait for command completion */
+	ret = sev_wait_cmd_ioc(sev, &reg, psp_timeout);
+	if (ret) {
+		if (psp_ret)
+			*psp_ret = 0;
+
+		dev_err(sev->dev, "sev command %#x timed out, disabling PSP\n", cmd);
+		psp_dead = true;
+
+		return ret;
+	}
+
+	psp_timeout = psp_cmd_timeout;
+
+	if (psp_ret)
+		*psp_ret = reg & PSP_CMDRESP_ERR_MASK;
+
+	if (reg & PSP_CMDRESP_ERR_MASK) {
+		dev_dbg(sev->dev, "sev command %#x failed (%#010x)\n",
+			cmd, reg & PSP_CMDRESP_ERR_MASK);
+		ret = -EIO;
+	}
+
+	print_hex_dump_debug("(out): ", DUMP_PREFIX_OFFSET, 16, 2, data,
+			     sev_cmd_buffer_len(cmd), false);
+
+	return ret;
+}
+
 static int sev_do_cmd(int cmd, void *data, int *psp_ret)
 {
 	int rc;
@@ -243,6 +316,29 @@ static int sev_do_cmd(int cmd, void *data, int *psp_ret)
 
 	return rc;
 }
+
+int psp_do_cmd(int cmd, void *data, int *psp_ret)
+{
+	int rc;
+	int mutex_enabled = READ_ONCE(psp_mutex_enabled);
+
+	if (is_hygon_psp && mutex_enabled) {
+		if (psp_mutex_lock_timeout(&psp_misc->data_pg_aligned->mb_mutex,
+					PSP_MUTEX_TIMEOUT) != 1)
+			return -EBUSY;
+	} else {
+		mutex_lock(&sev_cmd_mutex);
+	}
+
+	rc = __psp_do_cmd_locked(cmd, data, psp_ret);
+	if (is_hygon_psp && mutex_enabled)
+		psp_mutex_unlock(&psp_misc->data_pg_aligned->mb_mutex);
+	else
+		mutex_unlock(&sev_cmd_mutex);
+
+	return rc;
+}
+EXPORT_SYMBOL_GPL(psp_do_cmd);
 
 static int __sev_platform_init_locked(int *error)
 {
@@ -294,10 +390,21 @@ static int __sev_platform_init_locked(int *error)
 int sev_platform_init(int *error)
 {
 	int rc;
+	int mutex_enabled = READ_ONCE(psp_mutex_enabled);
 
-	mutex_lock(&sev_cmd_mutex);
+	if (is_hygon_psp && mutex_enabled) {
+		if (psp_mutex_lock_timeout(&psp_misc->data_pg_aligned->mb_mutex,
+					PSP_MUTEX_TIMEOUT) != 1)
+			return -EBUSY;
+	} else {
+		mutex_lock(&sev_cmd_mutex);
+	}
+
 	rc = __sev_platform_init_locked(error);
-	mutex_unlock(&sev_cmd_mutex);
+	if (is_hygon_psp && mutex_enabled)
+		psp_mutex_unlock(&psp_misc->data_pg_aligned->mb_mutex);
+	else
+		mutex_unlock(&sev_cmd_mutex);
 
 	return rc;
 }
@@ -324,10 +431,20 @@ static int __sev_platform_shutdown_locked(int *error)
 static int sev_platform_shutdown(int *error)
 {
 	int rc;
+	int mutex_enabled = READ_ONCE(psp_mutex_enabled);
 
-	mutex_lock(&sev_cmd_mutex);
+	if (is_hygon_psp && mutex_enabled) {
+		if (psp_mutex_lock_timeout(&psp_misc->data_pg_aligned->mb_mutex,
+					PSP_MUTEX_TIMEOUT) != 1)
+			return -EBUSY;
+	} else {
+		mutex_lock(&sev_cmd_mutex);
+	}
 	rc = __sev_platform_shutdown_locked(NULL);
-	mutex_unlock(&sev_cmd_mutex);
+	if (is_hygon_psp && mutex_enabled)
+		psp_mutex_unlock(&psp_misc->data_pg_aligned->mb_mutex);
+	else
+		mutex_unlock(&sev_cmd_mutex);
 
 	return rc;
 }
@@ -896,7 +1013,15 @@ static long sev_ioctl(struct file *file, unsigned int ioctl, unsigned long arg)
 			return -EINVAL;
 	}
 
-	mutex_lock(&sev_cmd_mutex);
+	int mutex_enabled = READ_ONCE(psp_mutex_enabled);
+
+	if (is_hygon_psp && mutex_enabled) {
+		if (psp_mutex_lock_timeout(&psp_misc->data_pg_aligned->mb_mutex,
+					PSP_MUTEX_TIMEOUT) != 1)
+			return -EBUSY;
+	} else {
+		mutex_lock(&sev_cmd_mutex);
+	}
 
 	if (boot_cpu_data.x86_vendor == X86_VENDOR_HYGON) {
 		switch (input.cmd) {
@@ -946,7 +1071,10 @@ static long sev_ioctl(struct file *file, unsigned int ioctl, unsigned long arg)
 	if (copy_to_user(argp, &input, sizeof(struct sev_issue_cmd)))
 		ret = -EFAULT;
 out:
-	mutex_unlock(&sev_cmd_mutex);
+	if (is_hygon_psp && mutex_enabled)
+		psp_mutex_unlock(&psp_misc->data_pg_aligned->mb_mutex);
+	else
+		mutex_unlock(&sev_cmd_mutex);
 
 	return ret;
 }

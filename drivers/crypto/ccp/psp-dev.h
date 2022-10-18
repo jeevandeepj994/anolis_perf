@@ -14,6 +14,7 @@
 #include <linux/list.h>
 #include <linux/bits.h>
 #include <linux/interrupt.h>
+#include <linux/miscdevice.h>
 
 #include "sp-dev.h"
 
@@ -21,6 +22,24 @@
 #define PSP_CMDRESP_ERR_MASK		0xffff
 
 #define MAX_PSP_NAME_LEN		16
+
+#ifdef CONFIG_HYGON_PSP2CPU_CMD
+#define PSP_X86_CMD			BIT(2)
+#define P2C_NOTIFIERS_MAX		16
+#endif
+
+#define PSP_MUTEX_TIMEOUT 600000
+struct psp_mutex {
+	uint64_t locked;
+};
+struct psp_dev_data {
+	struct psp_mutex mb_mutex;
+};
+struct psp_misc_dev {
+	struct kref refcount;
+	struct psp_dev_data *data_pg_aligned;
+	struct miscdevice misc;
+};
 
 extern struct psp_device *psp_master;
 
