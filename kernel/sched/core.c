@@ -4588,6 +4588,9 @@ static void __sched notrace __schedule(bool preempt)
 
 		/* Also unlocks the rq: */
 		rq = context_switch(rq, prev, next, &rf);
+#ifdef CONFIG_HT_STABLE
+		wake_up_idle_ht(rq);
+#endif
 	} else {
 		rq->clock_update_flags &= ~(RQCF_ACT_SKIP|RQCF_REQ_SKIP);
 		rq_unlock_irq(rq, &rf);
@@ -7932,6 +7935,25 @@ static int cpu_uclamp_max_show(struct seq_file *sf, void *v)
 }
 #endif /* CONFIG_UCLAMP_TASK_GROUP */
 
+#ifdef CONFIG_HT_STABLE
+static int cpu_ht_stable_write_u64(struct cgroup_subsys_state *css,
+				struct cftype *cftype, u64 need_ht_stable)
+{
+	struct task_group *tg = css_tg(css);
+
+	tg->need_ht_stable = need_ht_stable;
+	return  0;
+}
+
+static u64 cpu_ht_stable_read_u64(struct cgroup_subsys_state *css,
+			       struct cftype *cft)
+{
+	struct task_group *tg = css_tg(css);
+
+	return (u64)tg->need_ht_stable;
+}
+#endif
+
 #ifdef CONFIG_FAIR_GROUP_SCHED
 static int cpu_shares_write_u64(struct cgroup_subsys_state *css,
 				struct cftype *cftype, u64 shareval)
@@ -8501,6 +8523,13 @@ static struct cftype cpu_legacy_files[] = {
 		.name = "identity",
 		.read_s64 = cpu_identity_read_s64,
 		.write_s64 = cpu_identity_write_s64,
+	},
+#endif
+#ifdef CONFIG_HT_STABLE
+	{
+		.name = "ht_stable",
+		.read_u64 = cpu_ht_stable_read_u64,
+		.write_u64 = cpu_ht_stable_write_u64,
 	},
 #endif
 	{ }	/* Terminate */
