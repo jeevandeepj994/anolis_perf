@@ -1777,6 +1777,22 @@ static struct dentry *ovl_get_root(struct super_block *sb,
 	return root;
 }
 
+static bool ovl_config_opt(struct ovl_fs *ofs, unsigned int opt_mask)
+{
+	int i;
+	bool opt = true;
+
+	/*
+	 * Enable the optimization for container scenarios if all lowerfs are
+	 * configured with opt_mask. The optimization is disabled by default.
+	 * ofs->numfs must be at least 2, thus the default "true" won't be
+	 * returned without checking any lowerfs.
+	 */
+	for (i = 1; opt && i < ofs->numfs; i++)
+		opt = ofs->fs[i].sb->s_iflags & opt_mask;
+	return opt;
+}
+
 static int ovl_fill_super(struct super_block *sb, void *data, int silent)
 {
 	struct path upperpath = { };
@@ -1897,6 +1913,9 @@ static int ovl_fill_super(struct super_block *sb, void *data, int silent)
 		ovl_trusted_xattr_handlers;
 	sb->s_fs_info = ofs;
 	sb->s_flags |= SB_POSIXACL;
+
+	ofs->config.opt_creds = ovl_config_opt(ofs, SB_I_OVL_OPT_CREDS);
+	ofs->config.opt_acl_rcu = ovl_config_opt(ofs, SB_I_OVL_OPT_ACL_RCU);
 
 	err = -ENOMEM;
 	root_dentry = ovl_get_root(sb, upperpath.dentry, oe);
