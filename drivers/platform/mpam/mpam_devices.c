@@ -2281,22 +2281,13 @@ static void mpam_dt_create_foundling_msc(void)
 
 static int __init mpam_msc_driver_init(void)
 {
+	u64 mpamidr;
+	u16 partid_max;
+	u8 pmg_max;
 	bool mpam_not_available = false;
 
 	if (!mpam_cpus_have_feature())
 		return -EOPNOTSUPP;
-
-	/*
-	 * If the MPAM CPU interface is not implemented, or reserved by
-	 * firmware, there is no point touching the rest of the hardware.
-	 */
-	spin_lock(&partid_max_lock);
-	if (!partid_max_init || (!mpam_partid_max && !mpam_pmg_max))
-		mpam_not_available = true;
-	spin_unlock(&partid_max_lock);
-
-	if (mpam_not_available)
-		return 0;
 
 	if (!acpi_disabled)
 		fw_num_msc = acpi_mpam_count_msc();
@@ -2310,6 +2301,25 @@ static int __init mpam_msc_driver_init(void)
 
 	if (acpi_disabled)
 		mpam_dt_create_foundling_msc();
+
+	mpamidr = read_sysreg_s(SYS_MPAMIDR_EL1);
+	partid_max = FIELD_GET(MPAMIDR_PARTID_MAX, mpamidr);
+	pmg_max = FIELD_GET(MPAMIDR_PMG_MAX, mpamidr);
+
+	if (mpam_register_requestor(partid_max, pmg_max))
+		return -EBUSY;
+
+	/*
+	 * If the MPAM CPU interface is not implemented, or reserved by
+	 * firmware, there is no point touching the rest of the hardware.
+	 */
+	spin_lock(&partid_max_lock);
+	if (!partid_max_init || (!mpam_partid_max && !mpam_pmg_max))
+		mpam_not_available = true;
+	spin_unlock(&partid_max_lock);
+
+	if (mpam_not_available)
+		return 0;
 
 	return platform_driver_register(&mpam_msc_driver);
 }
