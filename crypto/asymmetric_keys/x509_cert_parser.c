@@ -422,6 +422,9 @@ int x509_extract_key_data(void *context, size_t hdrlen,
 	case OID_rsaEncryption:
 		ctx->cert->pub->pkey_algo = "rsa";
 		break;
+	case OID_sm2:
+		ctx->cert->pub->pkey_algo = "sm2";
+		break;
 	case OID_id_ecPublicKey:
 		ctx->cert->pub->pkey_algo = "sm2";
 		break;
