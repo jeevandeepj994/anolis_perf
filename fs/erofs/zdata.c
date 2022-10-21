@@ -658,6 +658,9 @@ static int z_erofs_read_fragment(struct inode *inode, erofs_off_t pos,
 	u8 *src, *dst;
 	unsigned int i, cnt;
 
+	if (!packed_inode)
+		return -EFSCORRUPTED;
+
 	pos += EROFS_I(inode)->z_fragmentoff;
 	buf.inode = packed_inode;
 	for (i = 0; i < len; i += cnt) {
