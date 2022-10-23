@@ -7645,7 +7645,8 @@ static void io_sq_thread_stop(struct io_ring_ctx *ctx)
 			 * without being waked up, thus wake it up now to make
 			 * sure the wait will complete.
 			 */
-			wake_up_process(sqd->thread);
+			io_sq_thread_park(sqd);
+			io_sq_thread_unpark(sqd);
 			wait_for_completion(&ctx->sq_thread_comp);
 
 			io_sq_thread_park(sqd);
