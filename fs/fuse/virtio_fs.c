@@ -763,6 +763,37 @@ static int virtio_fs_setup_pagemap_fsdax(struct device *dev,
 	return 0;
 }
 
+static int dax_ondemand;
+static char *dax_ondemand_tag;
+
+static bool dax_ondemand_find_tag(char *str)
+{
+	char *cp, *ptr;
+	size_t len = strlen(str);
+
+	if (dax_ondemand)
+		return true;
+
+	if (!dax_ondemand_tag)
+		return false;
+
+	cp = dax_ondemand_tag;
+
+	while ((ptr = strchr(cp, ',')) != NULL) {
+		if (len == (size_t)(ptr - cp) && !strncmp(cp, str, len))
+			return true;
+
+		cp = ++ptr;
+	}
+
+	if (!strcmp(cp, str))
+		return true;
+
+	return false;
+}
+module_param(dax_ondemand, int, 0444);
+module_param(dax_ondemand_tag, charp, 0444);
+
 static int virtio_fs_setup_dax(struct virtio_device *vdev, struct virtio_fs *fs)
 {
 	struct virtio_shm_region cache_reg;
@@ -815,7 +846,7 @@ static int virtio_fs_setup_dax(struct virtio_device *vdev, struct virtio_fs *fs)
 	pgmap->altmap_valid = false;
 	pgmap->ref = &mi->ref;
 	pgmap->kill = virtio_fs_percpu_kill;
-	pgmap->on_demand = true;
+	pgmap->on_demand = dax_ondemand_find_tag(fs->tag);
 
 	if (virtio_fs_setup_pagemap_fsdax(&vdev->dev, pgmap))
 		return -ENOMEM;
