@@ -1750,6 +1750,10 @@ static int do_test(const char *alg, u32 type, u32 mask, int m, u32 num_mb)
 		ret += tcrypt_test("ccm(sm4)");
 		break;
 
+	case 59:
+		ret += tcrypt_test("cts(cbc(sm4))");
+		break;
+
 	case 100:
 		ret += tcrypt_test("hmac(md5)");
 		break;
@@ -1854,6 +1858,10 @@ static int do_test(const char *alg, u32 type, u32 mask, int m, u32 num_mb)
 		ret += tcrypt_test("cmac(sm4)");
 		break;
 
+	case 160:
+		ret += tcrypt_test("xcbc(sm4)");
+		break;
+
 	case 181:
 		ret += tcrypt_test("authenc(hmac(sha1),cbc(des))");
 		break;
@@ -1889,6 +1897,7 @@ static int do_test(const char *alg, u32 type, u32 mask, int m, u32 num_mb)
 		ret += tcrypt_test("cbc(sm4)");
 		ret += tcrypt_test("cfb(sm4)");
 		ret += tcrypt_test("ctr(sm4)");
+		ret += tcrypt_test("xts(sm4)");
 		break;
 	case 200:
 		test_cipher_speed("ecb(aes)", ENCRYPT, sec, NULL, 0,
@@ -2151,6 +2160,10 @@ static int do_test(const char *alg, u32 type, u32 mask, int m, u32 num_mb)
 				speed_template_16);
 		test_cipher_speed("cbc(sm4)", DECRYPT, sec, NULL, 0,
 				speed_template_16);
+		test_cipher_speed("cts(cbc(sm4))", ENCRYPT, sec, NULL, 0,
+				speed_template_16);
+		test_cipher_speed("cts(cbc(sm4))", DECRYPT, sec, NULL, 0,
+				speed_template_16);
 		test_cipher_speed("cfb(sm4)", ENCRYPT, sec, NULL, 0,
 				speed_template_16);
 		test_cipher_speed("cfb(sm4)", DECRYPT, sec, NULL, 0,
@@ -2159,6 +2172,10 @@ static int do_test(const char *alg, u32 type, u32 mask, int m, u32 num_mb)
 				speed_template_16);
 		test_cipher_speed("ctr(sm4)", DECRYPT, sec, NULL, 0,
 				speed_template_16);
+		test_cipher_speed("xts(sm4)", ENCRYPT, sec, NULL, 0,
+				speed_template_32);
+		test_cipher_speed("xts(sm4)", DECRYPT, sec, NULL, 0,
+				speed_template_32);
 		break;
 
 	case 219:
@@ -2666,6 +2683,10 @@ static int do_test(const char *alg, u32 type, u32 mask, int m, u32 num_mb)
 				speed_template_16);
 		test_acipher_speed("ctr(sm4)", DECRYPT, sec, NULL, 0,
 				speed_template_16);
+		test_acipher_speed("xts(sm4)", ENCRYPT, sec, NULL, 0,
+				speed_template_32);
+		test_acipher_speed("xts(sm4)", DECRYPT, sec, NULL, 0,
+				speed_template_32);
 		break;
 
 	case 600:
