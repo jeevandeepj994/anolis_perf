@@ -1448,7 +1448,8 @@ static bool hva_to_pfn_fast(unsigned long addr, bool write_fault,
 static int hva_to_pfn_slow(unsigned long addr, bool *async, bool write_fault,
 			   bool *writable, kvm_pfn_t *pfn)
 {
-	unsigned int flags = FOLL_HWPOISON;
+	/* The purpose of calling GUP below is only to get a reference. */
+	unsigned int flags = FOLL_HWPOISON | FOLL_GET_PGSTABLE;
 	struct page *page;
 	int npages = 0;
 

@@ -2771,6 +2771,7 @@ static inline struct page *follow_page(struct vm_area_struct *vma,
 #define FOLL_REMOTE	0x2000	/* we are working on non-current tsk/mm */
 #define FOLL_COW	0x4000	/* internal GUP flag */
 #define FOLL_ANON	0x8000	/* don't do file mappings */
+#define FOLL_GET_PGSTABLE 0x80000000	/* do get_page on page not in ZONE_DEVICE */
 
 static inline int vm_fault_to_errno(vm_fault_t vm_fault, int foll_flags)
 {
