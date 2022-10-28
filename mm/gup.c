@@ -79,6 +79,28 @@ static inline bool should_force_cow_break(struct vm_area_struct *vma, unsigned i
 	return is_cow_mapping(vma->vm_flags) && (flags & FOLL_GET);
 }
 
+#ifdef CONFIG_ZONE_DEVICE
+static inline bool pg_stable_pfn(unsigned long pfn)
+{
+	int nid = pfn_to_nid(pfn);
+	struct zone *zone_device = &NODE_DATA(nid)->node_zones[ZONE_DEVICE];
+
+	/*
+	 * The other zones' pages are not kept alive by pgmap
+	 * but memory hotplug instead.
+	 */
+	if (zone_spans_pfn(zone_device, pfn))
+		return false;
+	else
+		return true;
+}
+#else
+static inline bool pg_stable_pfn(unsigned long pfn)
+{
+	return false;
+}
+#endif
+
 static struct page *follow_page_pte(struct vm_area_struct *vma,
 		unsigned long address, pmd_t *pmd, unsigned int flags)
 {
@@ -122,8 +144,24 @@ retry:
 	page = vm_normal_page(vma, address, pte);
 	if (!page && pte_devmap(pte) && (flags & FOLL_GET)) {
 		/*
-		 * Only return device mapping pages in the FOLL_GET case since
-		 * they are only valid while holding the pgmap reference.
+		 * The pages which are not in ZONE_DEVICE don't depend on
+		 * the pgmap ref to keep alive (stable). Therefore if we are
+		 * looking at such a page and the caller explicitly claimed that
+		 * he doesn't really care whether this page is from ZONE_DEVICE
+		 * or not - either a page from ZONE_NORMAL ZONE_MOVABLE etc or
+		 * a page from ZONE_DEVICE are both fine - we could simply
+		 * get_page for those stable ones straightly.
+		 */
+		if ((flags & FOLL_GET_PGSTABLE) &&
+			pg_stable_pfn(pte_pfn(pte))) {
+			page = pte_page(pte);
+			goto page_required;
+		}
+
+		/*
+		 * Only return device mapping pages in the FOLL_GET case
+		 * since they are only valid while holding the pgmap
+		 * reference.
 		 */
 		pgmap = get_dev_pagemap(pte_pfn(pte), NULL);
 		if (pgmap)
@@ -148,6 +186,7 @@ retry:
 		}
 	}
 
+page_required:
 	if (flags & FOLL_SPLIT && PageTransCompound(page)) {
 		int ret;
 		get_page(page);
