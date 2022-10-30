@@ -11,6 +11,7 @@
 #define DAXDEV_F_SYNC (1UL << 0)
 
 struct iomap_ops;
+struct iomap;
 struct dax_device;
 struct dax_operations {
 	/*
@@ -126,6 +127,7 @@ int dax_writeback_mapping_range(struct address_space *mapping,
 
 struct page *dax_layout_busy_page(struct address_space *mapping);
 struct page *dax_layout_busy_page_range(struct address_space *mapping, loff_t start, loff_t end);
+unsigned long dax_load_pfn(struct address_space *mapping, unsigned long index);
 bool dax_lock_mapping_entry(struct page *page);
 void dax_unlock_mapping_entry(struct page *page);
 pgoff_t dax_get_multi_order(struct address_space *mapping, pgoff_t index,
@@ -167,6 +169,11 @@ static inline int dax_writeback_mapping_range(struct address_space *mapping,
 	return -EOPNOTSUPP;
 }
 
+static inline unsigned long dax_load_pfn(struct address_space *mapping, unsigned long index)
+{
+	return 0;
+}
+
 static inline bool dax_lock_mapping_entry(struct page *page)
 {
 	if (IS_DAX(page->mapping->host))
@@ -206,17 +213,19 @@ vm_fault_t dax_finish_sync_fault(struct vm_fault *vmf,
 int dax_delete_mapping_entry(struct address_space *mapping, pgoff_t index);
 int dax_invalidate_mapping_entry_sync(struct address_space *mapping,
 				      pgoff_t index);
-int dax_iomap_pfn(struct iomap *iomap, loff_t pos, size_t size,
-		  pfn_t *pfnp);
+int dax_iomap_direct_access(struct iomap *iomap, loff_t pos, size_t size,
+			    void **kaddr, pfn_t *pfnp);
 
 #ifdef CONFIG_FS_DAX
 int __dax_zero_page_range(struct block_device *bdev,
-		struct dax_device *dax_dev, sector_t sector,
-		unsigned int offset, unsigned int length);
+		struct dax_device *dax_dev, loff_t pos, sector_t sector,
+		unsigned int offset, unsigned int length,
+		struct iomap *iomap, struct iomap *srcmap);
 #else
 static inline int __dax_zero_page_range(struct block_device *bdev,
-		struct dax_device *dax_dev, sector_t sector,
-		unsigned int offset, unsigned int length)
+		struct dax_device *dax_dev, loff_t pos, sector_t sector,
+		unsigned int offset, unsigned int length,
+		struct iomap *iomap, struct iomap *srcmap)
 {
 	return -ENXIO;
 }

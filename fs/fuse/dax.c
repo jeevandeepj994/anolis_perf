@@ -851,7 +851,7 @@ static struct page *fuse_dax_startpfn(struct address_space *mapping,
 	if (WARN_ON_ONCE(iomap->type != IOMAP_MAPPED))
 		return ERR_PTR(-EIO);
 
-	ret = dax_iomap_pfn(iomap, pos, PAGE_SIZE, &pfn);
+	ret = dax_iomap_direct_access(iomap, pos, PAGE_SIZE, NULL, &pfn);
 	if (ret < 0) {
 		fuse_dax_endpfn(mapping, index, iomap, 0);
 		return ERR_PTR(ret);
