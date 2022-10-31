@@ -1005,7 +1005,6 @@ static int arm_spe_process_queues(struct arm_spe *spe, u64 timestamp)
 			ts = timestamp;
 		}
 
-		arm_spe_set_pid_tid_cpu(spe, queue);
 		/*
 		 * A previous context-switch event has set pid/tid in the machine's context, so
 		 * here we need to update the pid/tid in the thread and SPE queue.
