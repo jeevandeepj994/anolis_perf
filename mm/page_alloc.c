@@ -1352,7 +1352,7 @@ static void free_one_page(struct zone *zone,
 	spin_unlock(&zone->lock);
 }
 
-static void __meminit __init_single_page(struct page *page, unsigned long pfn,
+void __meminit __init_single_page(struct page *page, unsigned long pfn,
 				unsigned long zone, int nid)
 {
 	mm_zero_struct_page(page);
@@ -1415,7 +1415,12 @@ void __meminit reserve_bootmem_region(phys_addr_t start, phys_addr_t end)
 			/* Avoid false-positive PageTail() */
 			INIT_LIST_HEAD(&page->lru);
 
-			SetPageReserved(page);
+			/*
+			 * no need for atomic set_bit because the struct
+			 * page is not visible yet so nobody should
+			 * access it yet.
+			 */
+			__SetPageReserved(page);
 		}
 	}
 }
@@ -5909,12 +5914,23 @@ void __meminit memmap_init_zone(unsigned long size, int nid, unsigned long zone,
 	if (highest_memmap_pfn < end_pfn - 1)
 		highest_memmap_pfn = end_pfn - 1;
 
+#ifdef CONFIG_ZONE_DEVICE
 	/*
 	 * Honor reservation requested by the driver for this ZONE_DEVICE
-	 * memory
+	 * memory. We limit the total number of pages to initialize to just
+	 * those that might contain the memory mapping. We will defer the
+	 * ZONE_DEVICE page initialization until after we have released
+	 * the hotplug lock.
 	 */
-	if (altmap && start_pfn == altmap->base_pfn)
-		start_pfn += altmap->reserve;
+	if (zone == ZONE_DEVICE) {
+		if (!altmap)
+			return;
+
+		if (start_pfn == altmap->base_pfn)
+			start_pfn += altmap->reserve;
+		end_pfn = altmap->base_pfn + vmem_altmap_offset(altmap);
+	}
+#endif
 
 	for (pfn = start_pfn; pfn < end_pfn; pfn++) {
 		/*
@@ -5953,7 +5969,7 @@ not_early:
 		page = pfn_to_page(pfn);
 		__init_single_page(page, pfn, zone, nid);
 		if (context == MEMMAP_HOTPLUG)
-			SetPageReserved(page);
+			__SetPageReserved(page);
 
 		/*
 		 * Mark the block movable so that blocks are reserved for
@@ -5977,6 +5993,138 @@ not_early:
 	}
 }
 
+#ifdef CONFIG_ZONE_DEVICE
+DEFINE_SPINLOCK(zdm_lock);
+LIST_HEAD(zdm_list);
+
+int zdm_insert(struct dev_pagemap *pgmap, struct zone *zone,
+		      unsigned long start_pfn, unsigned long nr_pages)
+{
+	struct zdm_context *zdm;
+
+	zdm = kzalloc(sizeof(struct zdm_context), GFP_KERNEL);
+	if (!zdm)
+		return -ENOMEM;
+
+	INIT_LIST_HEAD(&zdm->list);
+	spin_lock_init(&zdm->lock);
+	zdm->pgmap = pgmap;
+	zdm->zone = zone;
+	zdm->start_pfn = start_pfn;
+	zdm->nr_pages = nr_pages;
+
+	spin_lock(&zdm_lock);
+	list_add_rcu(&zdm->list, &zdm_list);
+	spin_unlock(&zdm_lock);
+	return 0;
+}
+
+void zdm_delete(unsigned long start, unsigned long size)
+{
+	struct zdm_context *zdm;
+	struct zdm_context *tmp;
+
+	spin_lock(&zdm_lock);
+	list_for_each_entry_safe(zdm, tmp, &zdm_list, list) {
+		if (start >> PAGE_SHIFT == zdm->start_pfn) {
+			list_del_rcu(&zdm->list);
+			kfree_rcu(zdm, rcu);
+			break;
+		}
+	}
+}
+
+/*
+ * zdm_ondemand_enable should clear pte of page struct page.
+ */
+int __weak zdm_ondemand_enable(struct zone *zone,
+			       unsigned long start_pfn,
+			       unsigned long size,
+			       struct dev_pagemap *pgmap)
+{
+	return -EINVAL;
+}
+
+void __ref memmap_init_zone_device(struct zone *zone,
+				   unsigned long start_pfn,
+				   unsigned long size,
+				   struct dev_pagemap *pgmap)
+{
+	unsigned long pfn, end_pfn = start_pfn + size;
+	struct pglist_data *pgdat = zone->zone_pgdat;
+	unsigned long zone_idx = zone_idx(zone);
+	unsigned long start = jiffies;
+	int nid = pgdat->node_id;
+
+	if (WARN_ON_ONCE(!pgmap || !is_dev_zone(zone)))
+		return;
+
+	/*
+	 * The call to memmap_init_zone should have already taken care
+	 * of the pages reserved for the memmap, so we can just jump to
+	 * the end of that region and start processing the device pages.
+	 */
+	if (pgmap->altmap_valid) {
+		struct vmem_altmap *altmap = &pgmap->altmap;
+
+		start_pfn = altmap->base_pfn + vmem_altmap_offset(altmap);
+		size = end_pfn - start_pfn;
+	}
+
+	if (!zdm_ondemand_enable(zone, start_pfn, size, pgmap)) {
+		pr_info("zdm pagemap on deamnd enabled\n");
+		goto out;
+	}
+
+	for (pfn = start_pfn; pfn < end_pfn; pfn++) {
+		struct page *page = pfn_to_page(pfn);
+
+		__init_single_page(page, pfn, zone_idx, nid);
+
+		/*
+		 * Mark page reserved as it will need to wait for onlining
+		 * phase for it to be fully associated with a zone.
+		 *
+		 * We can use the non-atomic __set_bit operation for setting
+		 * the flag as we are still initializing the pages.
+		 */
+		__SetPageReserved(page);
+
+		/*
+		 * ZONE_DEVICE pages union ->lru with a ->pgmap back
+		 * pointer and hmm_data.  It is a bug if a ZONE_DEVICE
+		 * page is ever freed or placed on a driver-private list.
+		 */
+		page->pgmap = pgmap;
+		page->hmm_data = 0;
+
+		/*
+		 * Mark the block movable so that blocks are reserved for
+		 * movable at startup. This will force kernel allocations
+		 * to reserve their blocks rather than leaking throughout
+		 * the address space during boot when many long-lived
+		 * kernel allocations are made.
+		 *
+		 * bitmap is created for zone's valid pfn range. but memmap
+		 * can be created for invalid pages (for alignment)
+		 * check here not to call set_pageblock_migratetype() against
+		 * pfn out of zone.
+		 *
+		 * Please note that MEMMAP_HOTPLUG path doesn't clear memmap
+		 * because this is done early in sparse_add_one_section
+		 */
+		if (!(pfn & (pageblock_nr_pages - 1))) {
+			set_pageblock_migratetype(page, MIGRATE_MOVABLE);
+			cond_resched();
+		}
+	}
+
+out:
+	pr_info("%s initialised, %lu pages in %ums\n", dev_name(pgmap->dev),
+		size, jiffies_to_msecs(jiffies - start));
+}
+
+#endif
 static void __meminit zone_init_free_lists(struct zone *zone)
 {
 	unsigned int order, t;
