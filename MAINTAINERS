@@ -147,6 +147,7 @@ VIRTIO_ISM
 M:	Xuan Zhuo <xuanzhuo@linux.alibaba.com>
 S:	Maintained
 F:	drivers/misc/virtio_ism/
+F:	tools/virtio/virtio-ism/
 
 TCP RT
 M:	Cambda Zhu <cambda@linux.alibaba.com>
