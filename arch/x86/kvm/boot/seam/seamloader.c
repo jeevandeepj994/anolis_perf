@@ -135,6 +135,9 @@ int __init seam_load_module(void *seamldr, unsigned long seamldr_size)
 	if (WARN_ON(icr_busy))
 		goto free;
 
+	if (!static_cpu_has(X86_FEATURE_FSGSBASE))
+		return -EOPNOTSUPP;
+
 retry_enteraccs:
 	err = launch_seamldr(seamldr_pa, seamldr_size);
 #define SEAMLDR_EMODBUSY	0x8000000000000001ULL
