@@ -54,6 +54,14 @@ SYM_CODE_START(launch_seamldr)
 	 */
 	pushfq
 
+	movq	%cr4, %rax
+	pushq	%rax
+	orq 	$X86_CR4_FSGSBASE, %rax
+	movq	%rax, %cr4
+
+	rdgsbase %rax /* Save GS. */
+	pushq  %rax
+
 	/*
 	 * The NP-SEAMLDR unconditionally sets CR4.PCIDE = 0 and restores CR3
 	 * from %r11.  If CR4.PCIDE = 0, CR3 bit 3 and bit 4 are interpreted as
@@ -166,6 +174,16 @@ SYM_CODE_START(launch_seamldr)
 
 	popq	%rax
 	movq	%rax, %cr3	/* Restore CR3.PCID */
+
+	movq	%cr4, %rax
+	orq 	$X86_CR4_FSGSBASE, %rax
+	movq	%rax, %cr4
+
+	popq	%rax
+	wrgsbase %rax  /* Restore GS. */
+
+	popq	%rax
+	movq	%rax, %cr4
 
 	popfq	/* Restore system/control flags and unmask interrupts. */
 
