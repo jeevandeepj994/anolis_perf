@@ -15,6 +15,25 @@ struct seamldr_params {
 	u64 module_pa_list[SEAMLDR_MAX_NR_MODULE_PAGES];
 } __packed __aligned(PAGE_SIZE);
 
+struct tee_tcb_svn {
+	u16 seam;
+	u8 reserved[14];
+} __packed;
+
+struct __tee_tcb_info {
+	u64 valid;
+	struct tee_tcb_svn tee_tcb_svn;
+	u64 mrseam[6];		/* SHA-384 */
+	u64 mrsignerseam[6];	/* SHA-384 */
+	u64 attributes;
+} __packed;
+
+struct tee_tcb_info {
+	struct __tee_tcb_info info;
+	u8 reserved[111];
+} __packed;
+
+#define P_SEAMLDR_INFO_ALIGNMENT	256
 struct seamldr_info {
 	u32 version;
 	u32 attributes;
@@ -24,11 +43,16 @@ struct seamldr_info {
 	u16 minor_version;
 	u16 major_version;
 	u8 reserved0[2];
-	u32 last_shutdown_x2apic_id;
-	u8 reserved1[228];
-} __packed __aligned(256);
+	u32 acm_x2apicid;
+	u8 reserved1[4];
+	struct __tee_tcb_info seaminfo;
+	u8 seam_ready;
+	u8 seam_debug;
+	u8 p_seamldr_ready;
+	u8 reserved2[88];
+} __packed __aligned(P_SEAMLDR_INFO_ALIGNMENT);
 
-int __init seam_load_module(void *seamldr, unsigned long seamldr_size);
+int __init __no_sanitize_address seam_load_module(struct cpio_data *cpio_np_seamldr);
 bool is_seamrr_enabled(void);
 #endif
 

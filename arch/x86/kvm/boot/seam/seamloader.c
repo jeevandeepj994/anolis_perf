@@ -2,6 +2,7 @@
 
 #define pr_fmt(fmt) "seam: " fmt
 
+#include <linux/earlycpio.h>
 #include <linux/types.h>
 #include <linux/bits.h>
 #include <linux/memblock.h>
@@ -13,7 +14,10 @@
 #include <asm/msr-index.h>
 #include <asm/msr.h>
 #include <asm/page_types.h>
+#include <asm/trapnr.h>
+#include <asm/debugreg.h>
 
+#include "../../events/perf_event.h"
 #include "seamloader.h"
 
 #define INTEL_TDX_BOOT_TIME_SEAMCALL 1
@@ -32,8 +36,10 @@ int seamldr_info(hpa_t seamldr_info)
 	ret = __seamldr_info(seamldr_info);
 	spin_unlock(&seamcall_seamldr_lock);
 
-	if (TDX_ERR(ret, SEAMLDR_INFO))
+	if (ret) {
+		pr_seamcall_error(SEAMLDR_INFO, ret);
 		return -EIO;
+	}
 
 	return 0;
 }
@@ -66,12 +72,6 @@ int seamldr_shutdown(void)
 	return 0;
 }
 
-/* The ACM and input params need to be below 4G. */
-static phys_addr_t __init seam_alloc_lowmem(phys_addr_t size)
-{
-	return memblock_phys_alloc_range(size, PAGE_SIZE, 0, BIT_ULL(32));
-}
-
 bool is_seamrr_enabled(void)
 {
 	u64 mtrrcap, seamrr_base, seamrr_mask;
@@ -97,9 +97,10 @@ bool is_seamrr_enabled(void)
 
 extern u64 launch_seamldr(unsigned long seamldr_pa, unsigned long seamldr_size);
 
-int __init seam_load_module(void *seamldr, unsigned long seamldr_size)
+int __init __no_sanitize_address seam_load_module(struct cpio_data *cpio_np_seamldr)
 {
-	phys_addr_t seamldr_pa;
+	unsigned long np_seamldr_size = cpio_np_seamldr->size;
+	void *np_seamldr;
 	int enteraccs_attempts = 10;
 	u32 icr_busy;
 	int ret;
@@ -108,19 +109,26 @@ int __init seam_load_module(void *seamldr, unsigned long seamldr_size)
 	if (!is_seamrr_enabled())
 		return -EOPNOTSUPP;
 
-	if (!seamldr_size) {
+	if (!np_seamldr_size) {
 		pr_err("Invalid SEAMLDR ACM size\n");
 		return -EINVAL;
 	}
 
 	/* GETSEC[EnterACCS] requires the ACM to be 4k aligned and below 4G. */
-	seamldr_pa = __pa(seamldr);
-	if (seamldr_pa >= BIT_ULL(32) || !IS_ALIGNED(seamldr_pa, 4096)) {
-		seamldr_pa = seam_alloc_lowmem(seamldr_size);
-		if (!seamldr_pa)
-			return -ENOMEM;
-		memcpy(__va(seamldr_pa), seamldr, seamldr_size);
+	np_seamldr = alloc_pages_exact(np_seamldr_size,
+				GFP_KERNEL | __GFP_DMA32);
+	if (!np_seamldr) {
+		pr_info("failed to allocate memory for NP-SEAMLDR ACM. size 0x%lx\n",
+			np_seamldr_size);
+		return -ENOMEM;
 	}
+
+	/*
+	 * KASAN thinks that (cpio_np_seamldr->data, cpio_np_seamldr->data)
+	 * is invalid address because the region comes from the initrd placed
+	 * by boot loader, not by the kernel memory allocator.
+	 */
+	memcpy(np_seamldr, cpio_np_seamldr->data, np_seamldr_size);
 
 	ret = -EIO;
 	/* Ensure APs are in WFS. */
@@ -139,7 +147,7 @@ int __init seam_load_module(void *seamldr, unsigned long seamldr_size)
 		return -EOPNOTSUPP;
 
 retry_enteraccs:
-	err = launch_seamldr(seamldr_pa, seamldr_size);
+	err = launch_seamldr(__pa(np_seamldr), np_seamldr_size);
 #define SEAMLDR_EMODBUSY	0x8000000000000001ULL
 #define SEAMLDR_EUNSPECERR	0x8000000000010003ULL
 	if (err == SEAMLDR_EMODBUSY) {
@@ -158,8 +166,7 @@ retry_enteraccs:
 		ret = 0;
 
 free:
-	if (seamldr_pa != __pa(seamldr))
-		memblock_free_early(seamldr_pa, seamldr_size);
+	free_pages_exact(np_seamldr, np_seamldr_size);
 
 	return ret;
 }
