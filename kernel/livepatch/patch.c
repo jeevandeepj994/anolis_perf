@@ -132,7 +132,7 @@ static void notrace klp_ftrace_handler(unsigned long ip,
 	 */
 	klp_arch_set_pc(fregs, (unsigned long)func->new_func);
 #else
-	ftrace_instruction_pointer_set(fregs, (unsigned long)func->new_func);
+	ftrace_regs_set_instruction_pointer(fregs, (unsigned long)func->new_func);
 #endif
 
 unlock:
