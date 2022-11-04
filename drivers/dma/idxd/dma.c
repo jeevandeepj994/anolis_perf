@@ -275,8 +275,14 @@ idxd_dma_prep_memcpy_sg(struct dma_chan *chan,
 		return NULL;
 	}
 
-	/* prepare DSA_OPCODE_BATCH */
+	/*
+	 * prepare DSA_OPCODE_BATCH with some common flags. We need to
+	 * explicity clear Cache Control flag in batch descriptor, since DSA
+	 * hw don't allow this flag for batch descriptor - DSA Spec 5.5,
+	 * otherwise HW reports Error Code: 0x11 (Invalid flags) - Spec 5.7
+	 */
 	op_flag_setup(flags, &desc_flags);
+	desc_flags &= ~IDXD_OP_FLAG_CC;
 	idxd_prep_desc_common(wq, desc->hw, DSA_OPCODE_BATCH,
 			batch->dma_descs, 0, batch->num,
 			desc->compl_dma, desc_flags);
