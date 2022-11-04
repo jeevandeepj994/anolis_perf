@@ -609,7 +609,9 @@ void qla2x00_async_nack_sp_done(void *s, int res)
 			    sp->fcport->port_name,
 			    vha->fcport_count);
 			sp->fcport->disc_state = DSC_UPD_FCPORT;
+			spin_unlock_irqrestore(&vha->hw->tgt.sess_lock, flags);
 			qla24xx_post_upd_fcport_work(vha, sp->fcport);
+			spin_lock_irqsave(&vha->hw->tgt.sess_lock, flags);
 		} else {
 			sp->fcport->login_retry = 0;
 			sp->fcport->disc_state = DSC_LOGIN_COMPLETE;
