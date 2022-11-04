@@ -54,6 +54,20 @@
  * kstaled's patch directly. Thanks!
  */
 
+/*
+ * In order to speed up the scanning of all PFNs, we use for_each_mem_pfn_range()
+ * to skip gigantic holes, especially, the number of invalid PFNs is 85 times
+ * that of valid PFNs if NUMA is turned off in arm64. That way is a necessary
+ * improvement in kidled. But a function with __init_memblock attribute is used
+ * in for_each_mem_pfn_range(). So __ref is needed in these caller to avoid the
+ * warning from compiler when CONFIG_ARCH_KEEP_MEMBLOCK disabled.
+ */
+#ifdef CONFIG_ARCH_KEEP_MEMBLOCK
+#define __kidled_ref
+#else
+#define __kidled_ref __ref
+#endif
+
 unsigned int kidled_scan_target __read_mostly = KIDLED_SCAN_PAGE;
 struct kidled_scan_control kidled_scan_control;
 /*
@@ -496,6 +510,10 @@ static bool kidled_scan_node(pg_data_t *pgdat,
 {
 	unsigned long pfn = start_pfn;
 	unsigned long node_end = pgdat_end_pfn(pgdat);
+#if !defined(CONFIG_ARCH_KEEP_MEMBLOCK) && !defined(CONFIG_MEMORY_HOTPLUG)
+	unsigned long sequent_invalid_pfns = 0;
+	int nr_nodes = num_online_nodes();
+#endif
 
 	if (kidled_has_slab_target_only(&scan_control))
 		return false;
@@ -524,6 +542,18 @@ static bool kidled_scan_node(pg_data_t *pgdat,
 				!kidled_has_page_target_equal(&scan_control)))
 			break;
 
+#if !defined(CONFIG_ARCH_KEEP_MEMBLOCK) && !defined(CONFIG_MEMORY_HOTPLUG)
+		if (nr_nodes == 1) {
+			if (!pfn_valid(pfn)) {
+				sequent_invalid_pfns++;
+				if (sequent_invalid_pfns % (2 * HPAGE_PMD_NR) == 0)
+					cond_resched();
+				pfn++;
+				continue;
+			}
+			sequent_invalid_pfns = 0;
+		}
+#endif
 		cond_resched();
 		pfn += kidled_scan_page(pgdat, pfn);
 	}
@@ -532,8 +562,15 @@ static bool kidled_scan_node(pg_data_t *pgdat,
 	return pfn >= node_end;
 }
 
-static bool kidled_scan_nodes(struct kidled_scan_control scan_control,
-			      bool restart)
+/*
+ * Here for_each_mem_pfn_range() only used when either CONFIG_ARCH_KEEP_MEMBLOCK
+ * or CONFIG_MEMORY_HOTPLUG is turned on. That because these functions with
+ * __init_memblock would been discarded after system running, then crash would
+ * happen if caller executes to them.
+ */
+#if defined(CONFIG_ARCH_KEEP_MEMBLOCK) || defined(CONFIG_MEMORY_HOTPLUG)
+static __kidled_ref bool kidled_scan_nodes(struct kidled_scan_control scan_control,
+				    bool restart)
 {
 	int i, nid;
 	unsigned long start_pfn, end_pfn;
@@ -592,6 +629,34 @@ static bool kidled_scan_nodes(struct kidled_scan_control scan_control,
 
 	return scan_done;
 }
+#else
+static bool kidled_scan_nodes(struct kidled_scan_control scan_control,
+			      bool restart)
+{
+	unsigned long start_pfn, end_pfn;
+	pg_data_t *pgdat;
+	bool scan_done = true;
+
+	/*
+	 * TODO: Perhaps there are massive holes when NUMA disabled.
+	 * And this scene only find in arm64.
+	 */
+	for_each_online_pgdat(pgdat) {
+		unsigned long node_end = pgdat_end_pfn(pgdat);
+
+		if (restart)
+			pgdat->node_idle_scan_pfn = pgdat->node_start_pfn;
+
+		start_pfn = pgdat->node_idle_scan_pfn;
+		end_pfn = min(start_pfn + DIV_ROUND_UP(pgdat->node_spanned_pages,
+						 scan_control.duration), node_end);
+		scan_done &= kidled_scan_node(pgdat, scan_control, start_pfn,
+					      end_pfn);
+	}
+
+	return scan_done;
+}
+#endif
 
 #ifdef KIDLED_AGE_NOT_IN_PAGE_FLAGS
 void kidled_free_page_age(pg_data_t *pgdat)
@@ -637,16 +702,14 @@ static inline void kidled_scan_done(struct kidled_scan_control scan_control)
 	kidled_scan_rounds++;
 }
 
-static inline void kidled_reset(bool free)
+#ifdef KIDLED_AGE_NOT_IN_PAGE_FLAGS
+static void kidled_reset(bool free)
 {
 	pg_data_t *pgdat;
-	int i, nid;
 
 	kidled_mem_cgroup_reset(SCAN_TARGET_ALL);
 
 	get_online_mems();
-
-#ifdef KIDLED_AGE_NOT_IN_PAGE_FLAGS
 	for_each_online_pgdat(pgdat) {
 		if (!pgdat->node_page_age)
 			continue;
@@ -660,26 +723,54 @@ static inline void kidled_reset(bool free)
 
 		cond_resched();
 	}
-#else
+	put_online_mems();
+}
+#elif defined(CONFIG_ARCH_KEEP_MEMBLOCK) || defined(CONFIG_MEMORY_HOTPLUG)
+static __kidled_ref void kidled_reset(void)
+{
+	pg_data_t *pgdat;
+	int i, nid;
+
+	kidled_mem_cgroup_reset(SCAN_TARGET_ALL);
+
+	get_online_mems();
 	for_each_online_node(nid) {
 		unsigned long pfn, start_pfn, end_pfn;
 
 		pgdat = NODE_DATA(nid);
 		for_each_mem_pfn_range(i, nid, &start_pfn, &end_pfn, NULL) {
 			for (pfn = start_pfn; pfn <= end_pfn; pfn++) {
-				if (!pfn_valid(pfn))
-					continue;
-				kidled_set_page_age(pgdat, pfn, 0);
-
+				if (pfn_valid(pfn))
+					kidled_set_page_age(pgdat, pfn, 0);
 				if (pfn % HPAGE_PMD_NR == 0)
 					cond_resched();
 			}
 		}
 	}
-#endif /* KIDLED_AGE_NOT_IN_PAGE_FLAGS */
-
 	put_online_mems();
 }
+#else
+static void kidled_reset(void)
+{
+	pg_data_t *pgdat;
+
+	kidled_mem_cgroup_reset(SCAN_TARGET_ALL);
+
+	get_online_mems();
+	for_each_online_pgdat(pgdat) {
+		unsigned long pfn, end_pfn = pgdat->node_start_pfn +
+					     pgdat->node_spanned_pages;
+
+		for (pfn = pgdat->node_start_pfn; pfn < end_pfn; pfn++) {
+			if (pfn_valid(pfn))
+				kidled_set_page_age(pgdat, pfn, 0);
+			if (pfn % HPAGE_PMD_NR == 0)
+				cond_resched();
+		}
+	}
+	put_online_mems();
+}
+#endif
 
 static inline bool kidled_should_run(struct kidled_scan_control *p,
 					bool *new, int *count_slab_scan)
@@ -688,8 +779,13 @@ static inline bool kidled_should_run(struct kidled_scan_control *p,
 		struct kidled_scan_control scan_control;
 
 		scan_control  = kidled_get_current_scan_control();
-		if (p->duration)
+		if (p->duration) {
+#ifdef KIDLED_AGE_NOT_IN_PAGE_FLAGS
 			kidled_reset(!scan_control.duration);
+#else
+			kidled_reset();
+#endif
+		}
 		*p = scan_control;
 		*new = true;
 	} else if (unlikely(!kidled_is_scan_target_equal(p))) {
