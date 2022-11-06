@@ -11,8 +11,6 @@
 #include <linux/sched.h>
 #include <linux/resctrl_types.h>
 
-#define IA32_PQR_ASSOC	0x0c8f
-
 void resctrl_arch_reset_resources(void);
 
 /**
@@ -22,8 +20,8 @@ void resctrl_arch_reset_resources(void);
  * @default_rmid:	The user assigned Resource Monitoring ID
  * @default_closid:	The user assigned cached Class Of Service ID
  *
- * The upper 32 bits of IA32_PQR_ASSOC contain closid and the
- * lower 10 bits rmid. The update to IA32_PQR_ASSOC always
+ * The upper 32 bits of MSR_IA32_PQR_ASSOC contain closid and the
+ * lower 10 bits rmid. The update to MSR_IA32_PQR_ASSOC always
  * contains both parts, so we need to cache them. This also
  * stores the user configured per cpu CLOSID and RMID.
  *
@@ -87,7 +85,7 @@ static void __resctrl_sched_in(void)
 	if (closid != state->cur_closid || rmid != state->cur_rmid) {
 		state->cur_closid = closid;
 		state->cur_rmid = rmid;
-		wrmsr(IA32_PQR_ASSOC, rmid, closid);
+		wrmsr(MSR_IA32_PQR_ASSOC, rmid, closid);
 	}
 }
 
