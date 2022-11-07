@@ -440,6 +440,12 @@ static int vp_modern_find_vqs(struct virtio_device *vdev, unsigned int nvqs,
 	return _vp_modern_find_vqs(vdev, &param);
 }
 
+static int vp_modern_find_vqs_vectors(struct virtio_device *vdev,
+				      struct virtio_vqs_vectors *param)
+{
+	return _vp_modern_find_vqs(vdev, param);
+}
+
 static void del_vq(struct virtio_pci_vq_info *info)
 {
 	struct virtqueue *vq = info->vq;
@@ -561,6 +567,7 @@ static const struct virtio_config_ops virtio_pci_config_nodev_ops = {
 	.set_status	= vp_set_status,
 	.reset		= vp_reset,
 	.find_vqs	= vp_modern_find_vqs,
+	.find_vqs_vectors = vp_modern_find_vqs_vectors,
 	.del_vqs	= vp_del_vqs,
 	.get_features	= vp_get_features,
 	.finalize_features = vp_finalize_features,
@@ -579,6 +586,7 @@ static const struct virtio_config_ops virtio_pci_config_ops = {
 	.set_status	= vp_set_status,
 	.reset		= vp_reset,
 	.find_vqs	= vp_modern_find_vqs,
+	.find_vqs_vectors = vp_modern_find_vqs_vectors,
 	.del_vqs	= vp_del_vqs,
 	.get_features	= vp_get_features,
 	.finalize_features = vp_finalize_features,
