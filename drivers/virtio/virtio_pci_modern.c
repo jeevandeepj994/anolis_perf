@@ -552,6 +552,7 @@ static const struct virtio_config_ops virtio_pci_config_nodev_ops = {
 	.set_vq_affinity = vp_set_vq_affinity,
 	.get_vq_affinity = vp_get_vq_affinity,
 	.get_shm_region  = vp_get_shm_region,
+	.vector_to_irq  = vp_irq,
 };
 
 static const struct virtio_config_ops virtio_pci_config_ops = {
@@ -569,6 +570,7 @@ static const struct virtio_config_ops virtio_pci_config_ops = {
 	.set_vq_affinity = vp_set_vq_affinity,
 	.get_vq_affinity = vp_get_vq_affinity,
 	.get_shm_region  = vp_get_shm_region,
+	.vector_to_irq  = vp_irq,
 };
 
 /**
