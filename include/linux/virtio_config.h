@@ -73,6 +73,8 @@ struct virtio_shm_region {
  * @set_vq_affinity: set the affinity for a virtqueue (optional).
  * @get_vq_affinity: get the affinity for a virtqueue (optional).
  * @get_shm_region: get a shared memory region based on the index.
+ * @vector_to_irq: get irq num by vector
+ *	vdev: the virtio_device
  */
 typedef void vq_callback_t(struct virtqueue *);
 struct virtio_config_ops {
@@ -98,6 +100,7 @@ struct virtio_config_ops {
 			int index);
 	bool (*get_shm_region)(struct virtio_device *vdev,
 			       struct virtio_shm_region *region, u8 id);
+	int (*vector_to_irq)(struct virtio_device *vdev, int vector);
 };
 
 /* If driver didn't advertise the feature, it will never appear. */
@@ -215,6 +218,16 @@ int virtio_find_vqs_ctx(struct virtio_device *vdev, unsigned nvqs,
 {
 	return vdev->config->find_vqs(vdev, nvqs, vqs, callbacks, names, ctx,
 				      desc);
+}
+
+/**
+ * virtio_vector_to_irq - get irq num by vector
+ * @dev: the virtio device
+ */
+static inline
+int virtio_vector_to_irq(struct virtio_device *vdev, int vec)
+{
+	return vdev->config->vector_to_irq(vdev, vec);
 }
 
 /**
