@@ -262,8 +262,8 @@ struct name_list_extended {
 	struct get_name_list_extended *l;
 	dma_addr_t		ldma;
 	struct list_head	fcports;
-	spinlock_t		fcports_lock;
 	u32			size;
+	u8			sent;
 };
 /*
  * Timeout timer counts in seconds
@@ -519,6 +519,7 @@ struct srb_iocb {
 enum {
 	TYPE_SRB,
 	TYPE_TGT_CMD,
+	TYPE_TGT_TMCMD,		/* task management */
 };
 
 typedef struct srb {
@@ -2375,11 +2376,13 @@ typedef struct fc_port {
 	unsigned long expires;
 	struct list_head del_list_entry;
 	struct work_struct free_work;
-
+	struct work_struct reg_work;
+	uint64_t jiffies_at_registration;
 	struct qlt_plogi_ack_t *plogi_link[QLT_PLOGI_LINK_MAX];
 
 	uint16_t tgt_id;
 	uint16_t old_tgt_id;
+	uint16_t sec_since_registration;
 
 	uint8_t fcp_prio;
 
@@ -2412,6 +2415,7 @@ typedef struct fc_port {
 	struct qla_tgt_sess *tgt_session;
 	struct ct_sns_desc ct_desc;
 	enum discovery_state disc_state;
+	enum discovery_state next_disc_state;
 	enum login_state fw_login_state;
 	unsigned long dm_login_expire;
 	unsigned long plogi_nack_done_deadline;
@@ -3222,7 +3226,6 @@ enum qla_work_type {
 	QLA_EVT_GPDB,
 	QLA_EVT_PRLI,
 	QLA_EVT_GPSC,
-	QLA_EVT_UPD_FCPORT,
 	QLA_EVT_GNL,
 	QLA_EVT_NACK,
 	QLA_EVT_RELOGIN,
@@ -3483,6 +3486,9 @@ struct qla_qpair {
 	struct list_head qp_list_elem; /* vha->qp_list */
 	struct list_head hints_list;
 	uint16_t cpuid;
+	uint16_t retry_term_cnt;
+	uint32_t retry_term_exchg_addr;
+	uint64_t retry_term_jiff;
 	struct qla_tgt_counters tgt_counters;
 };
 
@@ -4184,6 +4190,10 @@ struct qla_hw_data {
 
 	atomic_t        nvme_active_aen_cnt;
 	uint16_t        nvme_last_rptd_aen;             /* Last recorded aen count */
+
+	atomic_t zio_threshold;
+	uint16_t last_zio_threshold;
+#define DEFAULT_ZIO_THRESHOLD 64
 };
 
 #define FW_ABILITY_MAX_SPEED_MASK	0xFUL
@@ -4263,10 +4273,11 @@ typedef struct scsi_qla_host {
 #define FX00_CRITEMP_RECOVERY	25
 #define FX00_HOST_INFO_RESEND	26
 #define QPAIR_ONLINE_CHECK_NEEDED	27
-#define SET_ZIO_THRESHOLD_NEEDED	28
+#define SET_NVME_ZIO_THRESHOLD_NEEDED	28
 #define DETECT_SFP_CHANGE	29
 #define N2N_LOGIN_NEEDED	30
 #define IOCB_WORK_ACTIVE	31
+#define SET_ZIO_THRESHOLD_NEEDED 32
 
 	unsigned long	pci_flags;
 #define PFLG_DISCONNECTED	0	/* PCI device removed */
