@@ -24,6 +24,10 @@ struct virtio_vqs_vectors {
 	const char           *const *names;
 	const bool           *ctx;
 	struct irq_affinity  *desc;
+
+	int reserve_vectors;
+	u32 vector_start;
+	u32 vector_end;
 };
 
 /**
@@ -99,6 +103,7 @@ struct virtio_config_ops {
 			struct virtqueue *vqs[], vq_callback_t *callbacks[],
 			const char * const names[], const bool *ctx,
 			struct irq_affinity *desc);
+	int (*find_vqs_vectors)(struct virtio_device *vdev, struct virtio_vqs_vectors *ctx);
 	void (*del_vqs)(struct virtio_device *);
 	u64 (*get_features)(struct virtio_device *vdev);
 	int (*finalize_features)(struct virtio_device *vdev);
@@ -227,6 +232,12 @@ int virtio_find_vqs_ctx(struct virtio_device *vdev, unsigned nvqs,
 {
 	return vdev->config->find_vqs(vdev, nvqs, vqs, callbacks, names, ctx,
 				      desc);
+}
+
+static inline
+int virtio_find_vqs_and_vectors(struct virtio_device *vdev, struct virtio_vqs_vectors *param)
+{
+	return vdev->config->find_vqs_vectors(vdev, param);
 }
 
 /**
