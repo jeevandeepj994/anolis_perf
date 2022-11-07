@@ -400,15 +400,13 @@ err_map_notify:
 	return ERR_PTR(err);
 }
 
-static int vp_modern_find_vqs(struct virtio_device *vdev, unsigned nvqs,
-			      struct virtqueue *vqs[],
-			      vq_callback_t *callbacks[],
-			      const char * const names[], const bool *ctx,
-			      struct irq_affinity *desc)
+static int _vp_modern_find_vqs(struct virtio_device *vdev,
+			       struct virtio_vqs_vectors *param)
 {
 	struct virtio_pci_device *vp_dev = to_vp_device(vdev);
 	struct virtqueue *vq;
-	int rc = vp_find_vqs(vdev, nvqs, vqs, callbacks, names, ctx, desc);
+
+	int rc = vp_find_vqs(vdev, param);
 
 	if (rc)
 		return rc;
@@ -422,6 +420,24 @@ static int vp_modern_find_vqs(struct virtio_device *vdev, unsigned nvqs,
 	}
 
 	return 0;
+}
+
+static int vp_modern_find_vqs(struct virtio_device *vdev, unsigned int nvqs,
+			      struct virtqueue *vqs[],
+			      vq_callback_t *callbacks[],
+			      const char * const names[], const bool *ctx,
+			      struct irq_affinity *desc)
+{
+	struct virtio_vqs_vectors param = {};
+
+	param.nvqs = nvqs;
+	param.vqs = vqs;
+	param.callbacks = callbacks;
+	param.names = names;
+	param.ctx = ctx;
+	param.desc = desc;
+
+	return _vp_modern_find_vqs(vdev, &param);
 }
 
 static void del_vq(struct virtio_pci_vq_info *info)
