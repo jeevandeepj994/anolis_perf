@@ -126,6 +126,9 @@ static int uhci_pci_init(struct usb_hcd *hcd)
 	if (to_pci_dev(uhci_dev(uhci))->vendor == PCI_VENDOR_ID_VIA)
 		uhci->oc_low = 1;
 
+	if (to_pci_dev(uhci_dev(uhci))->vendor == PCI_VENDOR_ID_ZHAOXIN)
+		uhci->auto_suspend_delay = 1;
+
 	/* HP's server management chip requires a longer port reset delay. */
 	if (to_pci_dev(uhci_dev(uhci))->vendor == PCI_VENDOR_ID_HP)
 		uhci->wait_for_hp = 1;
