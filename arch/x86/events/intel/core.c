@@ -6724,6 +6724,7 @@ __init int intel_pmu_init(void)
 		x86_pmu.event_constraints = intel_spr_event_constraints;
 		x86_pmu.pebs_constraints = intel_spr_pebs_event_constraints;
 		x86_pmu.limit_period = spr_limit_period;
+		x86_pmu.pebs_ept = 1;
 		x86_pmu.pebs_aliases = NULL;
 		x86_pmu.pebs_prec_dist = true;
 		x86_pmu.pebs_block = true;
