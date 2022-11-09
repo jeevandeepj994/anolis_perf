@@ -41,6 +41,7 @@
 #include <linux/uuid.h>
 #include <linux/ras.h>
 #include <linux/task_work.h>
+#include <linux/set_memory.h>
 
 #include <acpi/actbl1.h>
 #include <acpi/ghes.h>
@@ -476,12 +477,24 @@ static void memory_failure_cb(struct callback_head *twork)
 	int rc;
 	struct mce_task_work *twcb =
 		container_of(twork, struct mce_task_work, twork);
+	unsigned long pfn = twcb->pfn;
 
 	rc = memory_failure(twcb->pfn, twcb->flags);
 	kfree(twcb);
 
 	if (!rc)
 		return;
+
+	/*
+	 * If the pfn reported by ghes can not be recovered, set
+	 * the corresponding page table of linear mapping range
+	 * to be non-present, which avoids the speculative
+	 * access of corrupted memory.
+	 */
+#ifdef CONFIG_ARM64
+	set_memory_np((unsigned long)page_to_virt(pfn_to_page(pfn)), 1);
+#endif
+
 	/*
 	 * -EHWPOISON from memory_failure() means that it already sent SIGBUS
 	 * to the current process with the proper error info, so no need to
