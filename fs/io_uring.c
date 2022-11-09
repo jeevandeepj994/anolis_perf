@@ -7201,11 +7201,11 @@ static int io_sq_thread(void *data)
 			continue;
 		}
 
-		if (kthread_should_park())
-			continue;
-
 		needs_sched = true;
 		prepare_to_wait(&sqd->wait, &wait, TASK_INTERRUPTIBLE);
+		list_for_each_entry(ctx, &sqd->ctx_list, sqd_list)
+			io_ring_set_wakeup_flag(ctx);
+
 		list_for_each_entry(ctx, &sqd->ctx_list, sqd_list) {
 			if ((ctx->flags & IORING_SETUP_IOPOLL) &&
 			    !list_empty_careful(&ctx->iopoll_list)) {
@@ -7218,14 +7218,11 @@ static int io_sq_thread(void *data)
 			}
 		}
 
-		if (needs_sched) {
-			list_for_each_entry(ctx, &sqd->ctx_list, sqd_list)
-				io_ring_set_wakeup_flag(ctx);
-
+		if (needs_sched && !kthread_should_park())
 			schedule();
-			list_for_each_entry(ctx, &sqd->ctx_list, sqd_list)
-				io_ring_clear_wakeup_flag(ctx);
-		}
+
+		list_for_each_entry(ctx, &sqd->ctx_list, sqd_list)
+			io_ring_clear_wakeup_flag(ctx);
 
 		finish_wait(&sqd->wait, &wait);
 		timeout = io_current_time(sqd->idle_mode_us) + sqd->sq_thread_idle;
@@ -7648,7 +7645,8 @@ static void io_sq_thread_stop(struct io_ring_ctx *ctx)
 			 * without being waked up, thus wake it up now to make
 			 * sure the wait will complete.
 			 */
-			wake_up_process(sqd->thread);
+			io_sq_thread_park(sqd);
+			io_sq_thread_unpark(sqd);
 			wait_for_completion(&ctx->sq_thread_comp);
 
 			io_sq_thread_park(sqd);
