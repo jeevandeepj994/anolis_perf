@@ -838,8 +838,7 @@ static unsigned long shrink_slab(gfp_t gfp_mask, int nid,
 	 * reclaim will result in the slab cache is reclaimed, which is
 	 * not expected and maybe lead to the performance regression.
 	 */
-	if (lru_gen_enabled() && background_proactive_reclaim())
-		return 0;
+	bool mglru_background = lru_gen_enabled() && background_proactive_reclaim();
 
 	/*
 	 * The root memcg might be allocated even though memcg is disabled
@@ -848,7 +847,7 @@ static unsigned long shrink_slab(gfp_t gfp_mask, int nid,
 	 * shrink, but skip global shrink.  This may result in premature
 	 * oom.
 	 */
-	if (!mem_cgroup_disabled() && !mem_cgroup_is_root(memcg))
+	if (!mem_cgroup_disabled() && !mem_cgroup_is_root(memcg) && !mglru_background)
 		return shrink_slab_memcg(gfp_mask, nid, memcg, priority);
 
 	if (!down_read_trylock(&shrinker_rwsem))
@@ -860,6 +859,9 @@ static unsigned long shrink_slab(gfp_t gfp_mask, int nid,
 			.nid = nid,
 			.memcg = memcg,
 		};
+
+		if (mglru_background && !(shrinker->flags & SHRINKER_MGLRU_BACKGROUND))
+			continue;
 
 		ret = do_shrink_slab(&sc, shrinker, priority);
 		if (ret == SHRINK_EMPTY)
