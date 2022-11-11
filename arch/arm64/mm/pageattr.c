@@ -11,6 +11,7 @@
 #include <asm/cacheflush.h>
 #include <asm/set_memory.h>
 #include <asm/tlbflush.h>
+#include <asm/mmu_context.h>
 
 struct page_change_data {
 	pgprot_t set_mask;
@@ -241,7 +242,7 @@ bool kernel_page_present(struct page *page)
 	pte_t *ptep;
 	unsigned long addr = (unsigned long)page_address(page);
 
-	if (!can_set_direct_map())
+	if (split_disabled && !can_set_direct_map())
 		return true;
 
 	pgdp = pgd_offset_k(addr);
