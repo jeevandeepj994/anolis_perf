@@ -3741,6 +3741,9 @@ static void intel_unmap_page(struct device *dev, dma_addr_t dev_addr,
 			     size_t size, enum dma_data_direction dir,
 			     unsigned long attrs)
 {
+#if defined(CONFIG_X86) && defined(CONFIG_HAS_DMA)
+	patch_p2cw_single_map(dev, dev_addr, dir, 1);
+#endif
 	intel_unmap(dev, dev_addr, size);
 }
 
@@ -3777,6 +3780,7 @@ static void *intel_alloc_coherent(struct device *dev, size_t size,
 
 	if (!page)
 		page = alloc_pages(flags, order);
+
 	if (!page)
 		return NULL;
 	memset(page_address(page), 0, size);
@@ -3814,6 +3818,10 @@ static void intel_unmap_sg(struct device *dev, struct scatterlist *sglist,
 	unsigned long nrpages = 0;
 	struct scatterlist *sg;
 	int i;
+
+#if defined(CONFIG_X86) && defined(CONFIG_HAS_DMA)
+	patch_p2cw_sg_map(dev, sglist, nelems, dir, 1);
+#endif
 
 	for_each_sg(sglist, sg, nelems, i) {
 		nrpages += aligned_nrpages(sg_dma_address(sg), sg_dma_len(sg));
@@ -3898,9 +3906,29 @@ static int intel_mapping_error(struct device *dev, dma_addr_t dma_addr)
 	return !dma_addr;
 }
 
+void
+intel_sync_single_for_cpu(struct device *dev, dma_addr_t dev_addr,
+			    size_t size, enum dma_data_direction dir)
+{
+#if defined(CONFIG_X86) && defined(CONFIG_HAS_DMA)
+	patch_p2cw_single_map(dev, dev_addr, dir, 1);
+#endif
+}
+
+void
+intel_sync_sg_for_cpu(struct device *dev, struct scatterlist *sglist,
+			int nelems, enum dma_data_direction dir)
+{
+#if defined(CONFIG_X86) && defined(CONFIG_HAS_DMA)
+	patch_p2cw_sg_map(dev, sglist, nelems, dir, 1);
+#endif
+}
+
 const struct dma_map_ops intel_dma_ops = {
 	.alloc = intel_alloc_coherent,
 	.free = intel_free_coherent,
+	.sync_single_for_cpu	= intel_sync_single_for_cpu,
+	.sync_sg_for_cpu	= intel_sync_sg_for_cpu,
 	.map_sg = intel_map_sg,
 	.unmap_sg = intel_unmap_sg,
 	.map_page = intel_map_page,
@@ -5156,6 +5184,20 @@ static phys_addr_t intel_iommu_iova_to_phys(struct iommu_domain *domain,
 
 	return phys;
 }
+
+#if defined(CONFIG_X86) && defined(CONFIG_HAS_DMA)
+phys_addr_t patch_get_real_paddr(struct device *dev, dma_addr_t paddr)
+
+{
+	/*  only patch remote DMA access */
+	if (!iommu_no_mapping(dev)) {
+		struct dmar_domain *domain = find_domain(dev);
+
+		paddr = intel_iommu_iova_to_phys(&(domain->domain), paddr);
+	}
+	return paddr;
+}
+#endif
 
 static bool intel_iommu_capable(enum iommu_cap cap)
 {

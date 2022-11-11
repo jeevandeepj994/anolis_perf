@@ -857,6 +857,9 @@ void swiotlb_unmap_page(struct device *hwdev, dma_addr_t dev_addr,
 			size_t size, enum dma_data_direction dir,
 			unsigned long attrs)
 {
+#if defined(CONFIG_X86) && defined(CONFIG_PCI) && defined(CONFIG_HAS_DMA)
+	patch_p2cw_single_map(hwdev, dev_addr, dir, 0);
+#endif
 	unmap_single(hwdev, dev_addr, size, dir, attrs);
 }
 
@@ -894,6 +897,9 @@ void
 swiotlb_sync_single_for_cpu(struct device *hwdev, dma_addr_t dev_addr,
 			    size_t size, enum dma_data_direction dir)
 {
+#if defined(CONFIG_X86) && defined(CONFIG_PCI) && defined(CONFIG_HAS_DMA)
+	patch_p2cw_single_map(hwdev, dev_addr, dir, 0);
+#endif
 	swiotlb_sync_single(hwdev, dev_addr, size, dir, SYNC_FOR_CPU);
 }
 
@@ -968,6 +974,10 @@ swiotlb_unmap_sg_attrs(struct device *hwdev, struct scatterlist *sgl,
 
 	BUG_ON(dir == DMA_NONE);
 
+#if defined(CONFIG_X86) && defined(CONFIG_PCI) && defined(CONFIG_HAS_DMA)
+	patch_p2cw_sg_map(hwdev, sgl, nelems, dir, 0);
+#endif
+
 	for_each_sg(sgl, sg, nelems, i)
 		unmap_single(hwdev, sg->dma_address, sg_dma_len(sg), dir,
 			     attrs);
@@ -997,6 +1007,10 @@ void
 swiotlb_sync_sg_for_cpu(struct device *hwdev, struct scatterlist *sg,
 			int nelems, enum dma_data_direction dir)
 {
+#if defined(CONFIG_X86) && defined(CONFIG_PCI) && defined(CONFIG_HAS_DMA)
+	patch_p2cw_sg_map(hwdev, sg, nelems, dir, 0);
+#endif
+
 	swiotlb_sync_sg(hwdev, sg, nelems, dir, SYNC_FOR_CPU);
 }
 
