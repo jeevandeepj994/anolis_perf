@@ -25,6 +25,7 @@
 #include <asm/tlbflush.h>
 
 extern bool rodata_full;
+extern bool split_disabled;
 
 static inline void contextidr_thread_switch(struct task_struct *next)
 {

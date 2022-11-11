@@ -115,7 +115,8 @@ static int change_memory_common(unsigned long addr, int numpages,
 			 * changed to read only. Other situations do not suffer
 			 * the mapping type.
 			 */
-			if (pgprot_val(set_mask) == PTE_RDONLY && can_set_block_and_cont_map())
+			if (pgprot_val(set_mask) == PTE_RDONLY && !split_disabled &&
+			    can_set_block_and_cont_map())
 				split_linear_mapping_after_init(virt, PAGE_SIZE, PAGE_KERNEL);
 
 			__change_memory_common((u64)page_address(area->pages[i]),

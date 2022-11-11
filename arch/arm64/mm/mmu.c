@@ -52,6 +52,8 @@ EXPORT_SYMBOL(vabits_actual);
 u64 kimage_voffset __ro_after_init;
 EXPORT_SYMBOL(kimage_voffset);
 
+bool split_disabled __ro_after_init;
+
 /*
  * Empty_zero_page is a special page that is used for zero-initialized data
  * and COW.
@@ -178,6 +180,9 @@ static bool should_clear_cont_pte(pmd_t *pmdp, unsigned long addr, phys_addr_t p
 {
 	phys_addr_t pa = pte_offset_phys(pmdp, addr);
 
+	if (split_disabled)
+		return false;
+
 	return (pa >> CONT_PTE_SHIFT) == (phys >> CONT_PTE_SHIFT);
 }
 
@@ -186,12 +191,18 @@ static bool should_clear_cont_pmd(pud_t *pudp, unsigned long addr, phys_addr_t p
 {
 	phys_addr_t pa = pmd_offset_phys(pudp, addr);
 
+	if (split_disabled)
+		return false;
+
 	return (pa >> CONT_PMD_SHIFT) == (phys >> CONT_PMD_SHIFT);
 }
 
 static bool should_split_pmd(pud_t *pudp, unsigned long addr, phys_addr_t phys)
 {
 	phys_addr_t pa = pmd_offset_phys(pudp, addr);
+
+	if (split_disabled)
+		return false;
 
 	return (pa >> PMD_SHIFT) == (phys >> PMD_SHIFT);
 }
@@ -200,6 +211,9 @@ static bool should_split_pmd(pud_t *pudp, unsigned long addr, phys_addr_t phys)
 static bool should_split_pud(p4d_t *p4dp, unsigned long addr, phys_addr_t phys)
 {
 	phys_addr_t pa = pud_offset_phys(p4dp, addr);
+
+	if (split_disabled)
+		return false;
 
 	return (pa >> PUD_SHIFT) == (phys >> PUD_SHIFT);
 }
@@ -653,7 +667,9 @@ static void __init map_mem(pgd_t *pgdp)
 
 	early_kfence_pool = arm64_kfence_alloc_pool();
 
-	if (!can_set_block_and_cont_map())
+	if (!can_set_block_and_cont_map() ||
+	    (split_disabled &&
+	     (can_set_direct_map() || arm64_kfence_can_set_direct_map())))
 		flags = NO_BLOCK_MAPPINGS | NO_CONT_MAPPINGS;
 
 	/*
@@ -781,6 +797,18 @@ static int __init parse_rodata(char *arg)
 	return 0;
 }
 early_param("rodata", parse_rodata);
+
+static int __init parse_split_mapping(char *arg)
+{
+	split_disabled = false;
+
+	if (strcmp(arg, "off"))
+		return -EINVAL;
+
+	split_disabled = true;
+	return 0;
+}
+early_param("split_mapping", parse_split_mapping);
 
 #ifdef CONFIG_UNMAP_KERNEL_AT_EL0
 static int __init map_entry_trampoline(void)
@@ -1965,7 +1993,9 @@ int arch_add_memory(int nid, u64 start, u64 size,
 	 * KFENCE requires linear map to be mapped at page granularity, so that
 	 * it is possible to protect/unprotect single pages in the KFENCE pool.
 	 */
-	if (!can_set_block_and_cont_map())
+	if (!can_set_block_and_cont_map() ||
+	    (split_disabled &&
+	     (can_set_direct_map() || arm64_kfence_can_set_direct_map())))
 		flags = NO_BLOCK_MAPPINGS | NO_CONT_MAPPINGS;
 
 	__create_pgd_mapping(swapper_pg_dir, start, __phys_to_virt(start),
