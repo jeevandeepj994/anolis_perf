@@ -11,17 +11,21 @@
 #include <linux/kfence.h>
 
 #include <asm/set_memory.h>
+#include <asm/mmu_context.h>
 
 static inline bool arch_kfence_init_pool(struct kfence_pool_area *kpa)
 {
 	unsigned long addr = (unsigned long)kpa->addr;
 
+
+	if (split_disabled || !can_set_block_and_cont_map())
+		return false;
+
 	/*
 	 * If the allocated range is block and contiguous mapping, split it
 	 * to pte level before re-initializing kfence pages.
 	 */
-	if (can_set_block_and_cont_map())
-		split_linear_mapping_after_init(addr, kpa->pool_size, PAGE_KERNEL);
+	split_linear_mapping_after_init(addr, kpa->pool_size, PAGE_KERNEL);
 
 	return true;
 }
@@ -37,6 +41,12 @@ static inline bool arch_kfence_free_pool(unsigned long addr) { return false; }
 
 #ifdef CONFIG_KFENCE
 extern bool kfence_early_init;
-#endif
+static inline bool arm64_kfence_can_set_direct_map(void)
+{
+	return !kfence_early_init;
+}
+#else /* CONFIG_KFENCE */
+static inline bool arm64_kfence_can_set_direct_map(void) { return false; }
+#endif /* CONFIG_KFENCE */
 
 #endif /* __ASM_KFENCE_H */
