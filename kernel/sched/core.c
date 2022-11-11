@@ -4463,6 +4463,7 @@ restart:
  *
  * WARNING: must be called with preemption disabled!
  */
+__attribute__((optimize("no-omit-frame-pointer")))
 static void __sched notrace __schedule(bool preempt)
 {
 	struct task_struct *prev, *next;
