@@ -4966,10 +4966,34 @@ void pci_reset_secondary_bus(struct pci_dev *dev)
 	 * Trhfa for conventional PCI is 2^25 clock cycles.
 	 * Assuming a minimum 33MHz clock this results in a 1s
 	 * delay before we can consider subordinate devices to
-	 * be re-initialized.  PCIe has some ways to shorten this,
-	 * but we don't make use of them yet.
+	 * be re-initialized.
+	 *
+	 * For conventional PCI needing 1s delay after bus reset.
+	 * Using pci_is_pcie to judge the bus is pci or pcie.
+	 * If the bus is pci, sleeping 1s to wait device is ready.
+	 *
+	 * And if the bus is pcie, PCI Express Base Specification Revision 2.0
+	 * (December 20, 2006) in Section 6.6.1 "Conventional Reset" only notes
+	 * 100ms as the minimum waiting time, the same as the newer PCIe spec
+	 * PCI Express Base Specification Revision 3.0 Version 1.a (December 7, 2015)
+	 * and PCI Express Base Specification Revision 5.0 Version 1.0 (May 22, 2019).
+	 * After this time, the OS is permitted to issue Configuration Requests,
+	 * but it is possible that the device responds with Configuration Request
+	 * Retry Status (CRS) Completions, rather than Successful Completion.
+	 * Returning CRS can go on for up to 1 second after a Conventional Reset
+	 * (such as SBR) before the OS can consider the device. This additional
+	 * wait is handled by pci_dev_wait.
+	 *
+	 * Currently, the only callchain that lands in the function modified by
+	 * this patch starts at pci_bridge_secondary_bus_reset which invokes
+	 * one out of two versions of pcibios_reset_secondary_bus that both end
+	 * with a call to pci_reset_secondary_bus.
+	 * Afterwards, pci_bridge_secondary_bus_reset always invokes pci_dev_wait.
 	 */
-	ssleep(1);
+	if (pci_is_pcie(dev))
+		msleep(100);
+	else
+		ssleep(1);
 }
 
 void __weak pcibios_reset_secondary_bus(struct pci_dev *dev)
