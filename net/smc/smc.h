@@ -240,6 +240,8 @@ struct smc_connection {
 struct smc_sock {				/* smc sock container */
 	struct sock		sk;
 	struct socket		*clcsock;	/* internal tcp socket */
+	struct socket		*fbsock;	/* socket for fallback connection */
+	struct socket		*actsock;	/* socket for non-fallback conneciotn*/
 	void			(*clcsk_state_change)(struct sock *sk);
 						/* original stat_change fct. */
 	void			(*clcsk_data_ready)(struct sock *sk);

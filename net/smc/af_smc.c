@@ -133,7 +133,9 @@ static struct sock *smc_tcp_syn_recv_sock(const struct sock *sk,
 	if (unlikely(!smc))
 		goto drop;
 
-	if (READ_ONCE(sk->sk_ack_backlog) + atomic_read(&smc->queued_smc_hs) >
+	if (READ_ONCE(sk->sk_ack_backlog) + atomic_read(&smc->queued_smc_hs)
+			+ READ_ONCE(smc->actsock->sk->sk_ack_backlog)
+			+ READ_ONCE(smc->fbsock->sk->sk_ack_backlog) >
 				sk->sk_max_ack_backlog)
 		goto drop;
 
@@ -298,6 +300,10 @@ static int __smc_release(struct smc_sock *smc)
 				/* wake up clcsock accept */
 				rc = kernel_sock_shutdown(smc->clcsock,
 							  SHUT_RDWR);
+				if (smc->fbsock)
+					sock_release(smc->fbsock);
+				if (smc->actsock)
+					sock_release(smc->actsock);
 			}
 			sk->sk_state = SMC_CLOSED;
 			sk->sk_state_change(sk);
@@ -1698,7 +1704,7 @@ static int smc_clcsock_accept(struct smc_sock *lsmc, struct smc_sock **new_smc)
 
 	mutex_lock(&lsmc->clcsock_release_lock);
 	if (lsmc->clcsock)
-		rc = kernel_accept(lsmc->clcsock, &new_clcsock, SOCK_NONBLOCK);
+		rc = kernel_accept(lsmc->actsock, &new_clcsock, SOCK_NONBLOCK);
 	mutex_unlock(&lsmc->clcsock_release_lock);
 	lock_sock(lsk);
 	if  (rc < 0 && rc != -EAGAIN)
@@ -2514,9 +2520,46 @@ out:
 	sock_put(&lsmc->sk); /* sock_hold in smc_clcsock_data_ready() */
 }
 
+#define SMC_LINK 1
+#define FALLBACK_LINK 2
+static inline int smc_sock_pop_to_another_acceptq(struct smc_sock *lsmc)
+{
+	struct sock *lsk = lsmc->clcsock->sk;
+	struct inet_connection_sock *icsk = inet_csk(lsk);
+	struct inet_connection_sock *dest_icsk;
+	struct request_sock_queue *queue = &icsk->icsk_accept_queue;
+	struct request_sock_queue *dest_queue;
+	struct request_sock *req;
+	struct sock *dst_sock;
+	int ret;
+
+	req = reqsk_queue_remove(queue, lsk);
+	if (!req)
+		return -EINVAL;
+
+	if (tcp_sk(req->sk)->syn_smc || lsmc->sockopt_defer_accept) {
+		dst_sock = lsmc->actsock->sk;
+		ret = SMC_LINK;
+	} else {
+		dst_sock = lsmc->fbsock->sk;
+		ret = FALLBACK_LINK;
+	}
+
+	dest_icsk = inet_csk(dst_sock);
+	dest_queue = &dest_icsk->icsk_accept_queue;
+
+	spin_lock_bh(&dest_queue->rskq_lock);
+	WRITE_ONCE(req->dl_next, dest_queue->rskq_accept_head);
+	sk_acceptq_added(dst_sock);
+	dest_queue->rskq_accept_head = req;
+	spin_unlock_bh(&dest_queue->rskq_lock);
+	return ret;
+}
+
 static void smc_clcsock_data_ready(struct sock *listen_clcsock)
 {
 	struct smc_sock *lsmc;
+	int ret;
 
 	read_lock_bh(&listen_clcsock->sk_callback_lock);
 	lsmc = smc_clcsock_user_data(listen_clcsock);
@@ -2524,12 +2567,37 @@ static void smc_clcsock_data_ready(struct sock *listen_clcsock)
 		goto out;
 	lsmc->clcsk_data_ready(listen_clcsock);
 	if (lsmc->sk.sk_state == SMC_LISTEN) {
-		sock_hold(&lsmc->sk); /* sock_put in smc_tcp_listen_work() */
-		if (!queue_work(smc_tcp_ls_wq, &lsmc->tcp_listen_work))
-			sock_put(&lsmc->sk);
+		ret = smc_sock_pop_to_another_acceptq(lsmc);
+		if (ret == SMC_LINK) {
+			sock_hold(&lsmc->sk); /* sock_put in smc_tcp_listen_work() */
+			if (!queue_work(smc_tcp_ls_wq, &lsmc->tcp_listen_work))
+				sock_put(&lsmc->sk);
+		} else if (ret == FALLBACK_LINK) {
+			lsmc->sk.sk_data_ready(&lsmc->sk);
+		}
 	}
 out:
 	read_unlock_bh(&listen_clcsock->sk_callback_lock);
+}
+
+static void smc_shadow_socket_init(struct socket *sock)
+{
+	struct inet_connection_sock *icsk = inet_csk(sock->sk);
+	struct request_sock_queue *queue = &icsk->icsk_accept_queue;
+
+	tcp_set_state(sock->sk, TCP_LISTEN);
+	sock->sk->sk_ack_backlog = 0;
+
+	inet_csk_delack_init(sock->sk);
+
+	spin_lock_init(&queue->rskq_lock);
+
+	spin_lock_init(&queue->fastopenq.lock);
+	queue->fastopenq.rskq_rst_head = NULL;
+	queue->fastopenq.rskq_rst_tail = NULL;
+	queue->fastopenq.qlen = 0;
+
+	queue->rskq_accept_head = NULL;
 }
 
 static int smc_listen(struct socket *sock, int backlog)
@@ -2579,6 +2647,18 @@ static int smc_listen(struct socket *sock, int backlog)
 	if (smc->limit_smc_hs)
 		tcp_sk(smc->clcsock->sk)->smc_hs_congested = smc_hs_congested;
 
+	rc = sock_create_kern(sock_net(sk), PF_INET, SOCK_STREAM, IPPROTO_TCP,
+			      &smc->fbsock);
+	if (rc)
+		goto out;
+	smc_shadow_socket_init(smc->fbsock);
+
+	rc = sock_create_kern(sock_net(sk), PF_INET, SOCK_STREAM, IPPROTO_TCP,
+			      &smc->actsock);
+	if (rc)
+		goto out;
+	smc_shadow_socket_init(smc->actsock);
+
 	rc = kernel_listen(smc->clcsock, backlog);
 	if (rc) {
 		write_lock_bh(&smc->clcsock->sk->sk_callback_lock);
@@ -2597,6 +2677,103 @@ out:
 	return rc;
 }
 
+static inline bool tcp_reqsk_queue_empty(struct sock *sk)
+{
+	struct inet_connection_sock *icsk = inet_csk(sk);
+	struct request_sock_queue *queue = &icsk->icsk_accept_queue;
+
+	return reqsk_queue_empty(queue);
+}
+
+static inline void
+smc_restore_fbsock_protocol_family(struct socket *new_sock, struct socket *sock)
+{
+	struct smc_sock *lsmc = smc_sk(sock->sk);
+
+	new_sock->sk->sk_data_ready = lsmc->fbsock->sk->sk_data_ready;
+	new_sock->ops = lsmc->fbsock->ops;
+	new_sock->type = lsmc->fbsock->type;
+
+	module_put(sock->ops->owner);
+	__module_get(new_sock->ops->owner);
+
+	if (tcp_sk(new_sock->sk)->syn_smc)
+		pr_err("new sock is not fallback.\n");
+}
+
+static struct sock *
+smc_inet_csk_accept(struct sock *sk, int flags, int *err, bool kern,
+		    struct sock *real_lsk)
+{
+	struct inet_connection_sock *icsk = inet_csk(sk);
+	struct inet_connection_sock *orig_icsk = inet_csk(real_lsk);
+	struct request_sock_queue *queue = &icsk->icsk_accept_queue;
+	struct request_sock_queue *orig_queue = &orig_icsk->icsk_accept_queue;
+	struct request_sock *req;
+	struct sock *newsk;
+	int error;
+
+	lock_sock(sk);
+
+	error = -EINVAL;
+	if (sk->sk_state != TCP_LISTEN)
+		goto out_err;
+
+	if (reqsk_queue_empty(queue)) {
+		error = -EAGAIN;
+		goto out_err;
+	}
+	req = reqsk_queue_remove(queue, sk);
+	newsk = req->sk;
+
+	if (sk->sk_protocol == IPPROTO_TCP &&
+	    tcp_rsk(req)->tfo_listener) {
+		spin_lock_bh(&orig_queue->fastopenq.lock);
+		if (tcp_rsk(req)->tfo_listener) {
+			req->sk = NULL;
+			req = NULL;
+		}
+		spin_unlock_bh(&orig_queue->fastopenq.lock);
+	}
+
+out:
+	release_sock(sk);
+	if (req)
+		reqsk_put(req);
+	return newsk;
+out_err:
+	newsk = NULL;
+	req = NULL;
+	*err = error;
+	goto out;
+}
+
+static int smc_inet_accept(struct socket *sock, struct socket *newsock, int flags,
+			   bool kern, struct socket *real_lsk)
+{
+	struct sock *sk1 = sock->sk, *sk2;
+	int err = -EINVAL;
+
+	sk2 = smc_inet_csk_accept(sk1, flags, &err, kern, real_lsk->sk);
+	if (!sk2)
+		goto do_err;
+
+	lock_sock(sk2);
+
+	sock_rps_record_flow(sk2);
+	WARN_ON(!((1 << sk2->sk_state) &
+		  (TCPF_ESTABLISHED | TCPF_SYN_RECV |
+		  TCPF_CLOSE_WAIT | TCPF_CLOSE)));
+
+	sock_graft(sk2, newsock);
+
+	newsock->state = SS_CONNECTED;
+	err = 0;
+	release_sock(sk2);
+do_err:
+	return err;
+}
+
 static int smc_accept(struct socket *sock, struct socket *new_sock,
 		      int flags, bool kern)
 {
@@ -2607,6 +2784,17 @@ static int smc_accept(struct socket *sock, struct socket *new_sock,
 	int rc = 0;
 
 	lsmc = smc_sk(sk);
+	if (lsmc->sk.sk_state == SMC_LISTEN && !tcp_reqsk_queue_empty(lsmc->fbsock->sk)) {
+		rc = smc_inet_accept(lsmc->fbsock, new_sock, O_NONBLOCK, true, lsmc->clcsock);
+		if (rc == -EAGAIN)
+			goto normal_path;
+		if (rc < 0)
+			return rc;
+		smc_restore_fbsock_protocol_family(new_sock, sock);
+		return rc;
+	}
+
+normal_path:
 	sock_hold(sk); /* sock_put below */
 	lock_sock(sk);
 
@@ -2621,6 +2809,19 @@ static int smc_accept(struct socket *sock, struct socket *new_sock,
 	add_wait_queue_exclusive(sk_sleep(sk), &wait);
 	while (!(nsk = smc_accept_dequeue(sk, new_sock))) {
 		set_current_state(TASK_INTERRUPTIBLE);
+		if (!tcp_reqsk_queue_empty(lsmc->fbsock->sk)) {
+			rc = smc_inet_accept(lsmc->fbsock, new_sock,
+					     O_NONBLOCK, true, lsmc->clcsock);
+			if (rc == -EAGAIN)
+				goto next_round;
+			if (rc < 0)
+				break;
+
+			smc_restore_fbsock_protocol_family(new_sock, sock);
+			nsk = new_sock->sk;
+			break;
+		}
+next_round:
 		if (!timeo) {
 			rc = -EAGAIN;
 			break;
@@ -2755,7 +2956,10 @@ out:
 
 static inline __poll_t smc_accept_poll(struct sock *parent)
 {
-	if (!smc_accept_queue_empty(parent))
+	struct smc_sock *smc = smc_sk(parent);
+
+	if (!reqsk_queue_empty(&inet_csk(smc->fbsock->sk)->icsk_accept_queue) ||
+	    !smc_accept_queue_empty(parent))
 		return EPOLLIN | EPOLLRDNORM;
 
 	return 0;
