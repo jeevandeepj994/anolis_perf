@@ -1797,18 +1797,22 @@ static bool __io_cqring_overflow_flush(struct io_ring_ctx *ctx, bool force,
 	return cqe != NULL;
 }
 
-static void io_cqring_overflow_flush(struct io_ring_ctx *ctx, bool force,
+static bool io_cqring_overflow_flush(struct io_ring_ctx *ctx, bool force,
 				     struct task_struct *tsk,
 				     struct files_struct *files)
 {
+	bool ret = true;
+
 	if (test_bit(0, &ctx->cq_check_overflow)) {
 		/* iopoll syncs against uring_lock, not completion_lock */
 		if (ctx->flags & IORING_SETUP_IOPOLL)
 			mutex_lock(&ctx->uring_lock);
-		__io_cqring_overflow_flush(ctx, force, tsk, files);
+		ret = __io_cqring_overflow_flush(ctx, force, tsk, files);
 		if (ctx->flags & IORING_SETUP_IOPOLL)
 			mutex_unlock(&ctx->uring_lock);
 	}
+
+	return ret;
 }
 
 static void __io_cqring_fill_event(struct io_kiocb *req, long res,
@@ -7297,6 +7301,26 @@ static int io_run_task_work_sig(void)
 	return -EINTR;
 }
 
+/* when returns >0, the caller should retry */
+static inline int io_cqring_wait_schedule(struct io_ring_ctx *ctx,
+					  struct io_wait_queue *iowq,
+					  ktime_t timeout)
+{
+	int ret;
+
+	/* make sure we run task_work before checking for signals */
+	ret = io_run_task_work_sig();
+	if (ret || io_should_wake(iowq))
+		return ret;
+	/* let the caller flush overflows, retry */
+	if (test_bit(0, &ctx->cq_check_overflow))
+		return 1;
+
+	if (!schedule_hrtimeout(&timeout, HRTIMER_MODE_ABS))
+		return -ETIME;
+	return 1;
+}
+
 /*
  * Wait until events become available, if we don't already have some. The
  * application must reap them itself, as they reside on the shared cq ring.
@@ -7315,9 +7339,8 @@ static int io_cqring_wait(struct io_ring_ctx *ctx, int min_events,
 		.to_wait	= min_events,
 	};
 	struct io_rings *rings = ctx->rings;
-	struct timespec64 ts;
-	signed long timeout = 0;
-	int ret = 0;
+	ktime_t timeout = KTIME_MAX;
+	int ret;
 
 	do {
 		io_cqring_overflow_flush(ctx, false, NULL, NULL);
@@ -7341,42 +7364,27 @@ static int io_cqring_wait(struct io_ring_ctx *ctx, int min_events,
 	}
 
 	if (uts) {
+		struct timespec64 ts;
+
 		if (get_timespec64(&ts, uts))
 			return -EFAULT;
-		timeout = timespec64_to_jiffies(&ts);
+		timeout = ktime_add_ns(timespec64_to_ktime(ts), ktime_get_ns());
 	}
 
 	iowq.nr_timeouts = atomic_read(&ctx->cq_timeouts);
 	trace_io_uring_cqring_wait(ctx, min_events);
 	do {
-		io_cqring_overflow_flush(ctx, false, NULL, NULL);
+		/* if we can't even flush overflow, don't wait for more */
+		if (!io_cqring_overflow_flush(ctx, false, NULL, NULL)) {
+			ret = -EBUSY;
+			break;
+		}
 		prepare_to_wait_exclusive(&ctx->wait, &iowq.wq,
 						TASK_INTERRUPTIBLE);
-		/* make sure we run task_work before checking for signals */
-		ret = io_run_task_work_sig();
-		if (ret > 0) {
-			finish_wait(&ctx->wait, &iowq.wq);
-			continue;
-		}
-		else if (ret < 0)
-			break;
-		if (io_should_wake(&iowq))
-			break;
-		if (test_bit(0, &ctx->cq_check_overflow)) {
-			finish_wait(&ctx->wait, &iowq.wq);
-			continue;
-		}
-		if (uts) {
-			timeout = schedule_timeout(timeout);
-			if (timeout == 0) {
-				ret = -ETIME;
-				break;
-			}
-		} else {
-			schedule();
-		}
-	} while (1);
-	finish_wait(&ctx->wait, &iowq.wq);
+		ret = io_cqring_wait_schedule(ctx, &iowq, timeout);
+		finish_wait(&ctx->wait, &iowq.wq);
+		cond_resched();
+	} while (ret > 0);
 
 	restore_saved_sigmask_unless(ret == -EINTR);
 
