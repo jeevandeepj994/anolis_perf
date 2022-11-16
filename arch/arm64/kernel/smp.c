@@ -817,6 +817,9 @@ void __init smp_prepare_cpus(unsigned int max_cpus)
 		set_cpu_present(cpu, true);
 		numa_store_cpu_info(cpu);
 	}
+#ifdef CONFIG_NUMA_AWARE_SPINLOCKS
+	cna_configure_spin_lock_slowpath();
+#endif
 }
 
 static const char *ipi_types[NR_IPI] __tracepoint_string = {
