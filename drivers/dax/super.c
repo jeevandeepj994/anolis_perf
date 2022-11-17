@@ -17,6 +17,28 @@
 #include <linux/fs.h>
 #include "dax-private.h"
 
+/**
+ * struct dax_device - anchor object for dax services
+ * @inode: core vfs
+ * @cdev: optional character interface for "device dax"
+ * @host: optional name for lookups where the device path is not available
+ * @private: dax driver private data
+ * @flags: state and boolean properties
+ * @holder_data: holder of a dax_device: could be filesystem or mapped device
+ * @holder_ops: operations for the inner holder
+ */
+struct dax_device {
+	struct hlist_node list;
+	struct inode inode;
+	struct cdev cdev;
+	const char *host;
+	void *private;
+	unsigned long flags;
+	const struct dax_operations *ops;
+	void *holder_data;
+	const struct dax_holder_operations *holder_ops;
+};
+
 static dev_t dax_devt;
 DEFINE_STATIC_SRCU(dax_srcu);
 static struct vfsmount *dax_mnt;
@@ -58,13 +80,34 @@ int bdev_dax_pgoff(struct block_device *bdev, sector_t sector, size_t size,
 EXPORT_SYMBOL(bdev_dax_pgoff);
 
 #if IS_ENABLED(CONFIG_FS_DAX)
-struct dax_device *fs_dax_get_by_bdev(struct block_device *bdev)
+struct dax_device *fs_dax_get_by_bdev(struct block_device *bdev,
+				void *holder, const struct dax_holder_operations *ops)
 {
+	struct dax_device *dax_dev;
+
 	if (!blk_queue_dax(bdev->bd_disk->queue))
 		return NULL;
-	return dax_get_by_host(bdev->bd_disk->disk_name);
+	dax_dev = dax_get_by_host(bdev->bd_disk->disk_name);
+	if (dax_dev && holder) {
+		if (!cmpxchg(&dax_dev->holder_data, NULL, holder))
+			dax_dev->holder_ops = ops;
+		else
+			dax_dev = NULL;
+	}
+
+	return dax_dev;
 }
 EXPORT_SYMBOL_GPL(fs_dax_get_by_bdev);
+
+void fs_put_dax(struct dax_device *dax_dev, void *holder)
+{
+	if (dax_dev && holder &&
+	    cmpxchg(&dax_dev->holder_data, holder, NULL) == holder)
+		dax_dev->holder_ops = NULL;
+	put_dax(dax_dev);
+}
+EXPORT_SYMBOL_GPL(fs_put_dax);
+
 #endif
 
 bool __generic_fsdax_supported(struct dax_device *dax_dev,
@@ -206,24 +249,6 @@ enum dax_device_flags {
 	DAXDEV_WRITE_CACHE,
 	/* flag to check if device supports synchronous flush */
 	DAXDEV_SYNC,
-};
-
-/**
- * struct dax_device - anchor object for dax services
- * @inode: core vfs
- * @cdev: optional character interface for "device dax"
- * @host: optional name for lookups where the device path is not available
- * @private: dax driver private data
- * @flags: state and boolean properties
- */
-struct dax_device {
-	struct hlist_node list;
-	struct inode inode;
-	struct cdev cdev;
-	const char *host;
-	void *private;
-	unsigned long flags;
-	const struct dax_operations *ops;
 };
 
 static ssize_t write_cache_show(struct device *dev,
@@ -373,6 +398,29 @@ int dax_zero_page_range(struct dax_device *dax_dev, pgoff_t pgoff,
 }
 EXPORT_SYMBOL_GPL(dax_zero_page_range);
 
+int dax_holder_notify_failure(struct dax_device *dax_dev, u64 off,
+			      u64 len, int mf_flags)
+{
+	int rc, id;
+
+	id = dax_read_lock();
+	if (!dax_alive(dax_dev)) {
+		rc = -ENXIO;
+		goto out;
+	}
+
+	if (!dax_dev->holder_ops) {
+		rc = -EOPNOTSUPP;
+		goto out;
+	}
+
+	rc = dax_dev->holder_ops->notify_failure(dax_dev, off, len, mf_flags);
+out:
+	dax_read_unlock(id);
+	return rc;
+}
+EXPORT_SYMBOL_GPL(dax_holder_notify_failure);
+
 #ifdef CONFIG_ARCH_HAS_PMEM_API
 void arch_wb_cache_pmem(void *addr, size_t size);
 void dax_flush(struct dax_device *dax_dev, void *addr, size_t size)
@@ -439,9 +487,16 @@ void kill_dax(struct dax_device *dax_dev)
 	if (!dax_dev)
 		return;
 
+	if (dax_dev->holder_data != NULL)
+		dax_holder_notify_failure(dax_dev, 0, U64_MAX, 0);
+
 	clear_bit(DAXDEV_ALIVE, &dax_dev->flags);
 
 	synchronize_srcu(&dax_srcu);
+
+	/* clear holder data */
+	dax_dev->holder_ops = NULL;
+	dax_dev->holder_data = NULL;
 
 	spin_lock(&dax_host_lock);
 	hlist_del_init(&dax_dev->list);
@@ -623,6 +678,19 @@ void put_dax(struct dax_device *dax_dev)
 	iput(&dax_dev->inode);
 }
 EXPORT_SYMBOL_GPL(put_dax);
+
+/**
+ * dax_holder() - obtain the holder of a dax device
+ * @dax_dev: a dax_device instance
+
+ * Return: the holder's data which represents the holder if registered,
+ * otherwize NULL.
+ */
+void *dax_holder(struct dax_device *dax_dev)
+{
+	return dax_dev->holder_data;
+}
+EXPORT_SYMBOL_GPL(dax_holder);
 
 /**
  * dax_get_by_host() - temporary lookup mechanism for filesystem-dax
