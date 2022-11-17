@@ -18,6 +18,8 @@
 #include <linux/kdebug.h>
 #include <linux/types.h>
 #include <asm/debugreg.h>
+#include <asm/cmdline.h>
+#include <asm/tdx.h>
 
 static volatile unsigned long db_addr[10], dr6[10];
 static volatile unsigned int n;
@@ -66,6 +68,16 @@ static struct notifier_block kvm_unit_test_debug_notifier = {
 static int __init kvm_unit_test_debug_init(void)
 {
 	unsigned long start;
+	u32 eax, sig[3];
+
+	if (cmdline_find_option_bool(boot_command_line, "force_tdx_guest")) {
+		pr_info("Force enabling TDX Guest feature\n");
+	} else {
+		cpuid_count(TDX_CPUID_LEAF_ID, 0, &eax, &sig[0], &sig[2],  &sig[1]);
+
+		if (memcmp(TDX_IDENT, sig, sizeof(sig)))
+			return 0;
+	}
 
 	register_die_notifier(&kvm_unit_test_debug_notifier);
 
