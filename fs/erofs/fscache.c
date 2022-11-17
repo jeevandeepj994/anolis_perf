@@ -214,6 +214,7 @@ static int erofs_fscache_readpages(struct file *filp, struct address_space *mapp
 			return ret;
 
 		if (!(map.m_flags & EROFS_MAP_MAPPED)) {
+			page = lru_to_page(pages);
 			list_del(&page->lru);
 			ret = add_to_page_cache_lru(page, mapping, page->index,
 					readahead_gfp_mask(mapping));
@@ -230,6 +231,7 @@ static int erofs_fscache_readpages(struct file *filp, struct address_space *mapp
 		}
 
 		if (map.m_flags & EROFS_MAP_META) {
+			page = lru_to_page(pages);
 			list_del(&page->lru);
 			ret = add_to_page_cache_lru(page, mapping, page->index,
 					readahead_gfp_mask(mapping));
