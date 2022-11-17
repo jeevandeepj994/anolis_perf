@@ -44,6 +44,9 @@ EXPORT_TRACEPOINT_SYMBOL_GPL(sched_util_est_se_tp);
 EXPORT_TRACEPOINT_SYMBOL_GPL(sched_update_nr_running_tp);
 
 DEFINE_PER_CPU_SHARED_ALIGNED(struct rq, runqueues);
+#if defined(CONFIG_CFS_BANDWIDTH) && defined(CONFIG_SMP)
+DEFINE_PER_CPU_SHARED_ALIGNED(call_single_data_t, cfsb_csd);
+#endif
 
 #ifdef CONFIG_SCHED_DEBUG
 /*

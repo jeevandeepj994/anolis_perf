@@ -777,8 +777,12 @@ struct cfs_rq {
 
 	unsigned long		nr_uninterruptible;
 
+#ifdef CONFIG_SMP
+	CK_KABI_USE(1, 2, struct list_head throttled_csd_list)
+#else
 	CK_KABI_RESERVE(1)
 	CK_KABI_RESERVE(2)
+#endif
 	CK_KABI_RESERVE(3)
 	CK_KABI_RESERVE(4)
 	CK_KABI_RESERVE(5)
@@ -1327,8 +1331,12 @@ struct rq {
 	u64 last_acpu_update_time;
 #endif
 
+#if defined(CONFIG_CFS_BANDWIDTH) && defined(CONFIG_SMP)
+	CK_KABI_USE(1, 2, struct list_head cfsb_csd_list)
+#else
 	CK_KABI_RESERVE(1)
 	CK_KABI_RESERVE(2)
+#endif
 	CK_KABI_RESERVE(3)
 	CK_KABI_RESERVE(4)
 	CK_KABI_RESERVE(5)
@@ -1386,6 +1394,11 @@ DECLARE_PER_CPU_SHARED_ALIGNED(struct rq, runqueues);
 #define task_rq(p)		cpu_rq(task_cpu(p))
 #define cpu_curr(cpu)		(cpu_rq(cpu)->curr)
 #define raw_rq()		raw_cpu_ptr(&runqueues)
+
+#if defined(CONFIG_CFS_BANDWIDTH) && defined(CONFIG_SMP)
+DECLARE_PER_CPU_SHARED_ALIGNED(call_single_data_t, cfsb_csd);
+#define cpu_cfsb_csd(cpu)	(&per_cpu(cfsb_csd, (cpu)))
+#endif
 
 struct sched_group;
 #ifdef CONFIG_SCHED_CORE
