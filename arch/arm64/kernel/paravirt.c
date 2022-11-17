@@ -33,8 +33,8 @@ struct static_key paravirt_steal_rq_enabled;
 
 struct paravirt_patch_template pv_ops = {
 #ifdef CONFIG_PARAVIRT_SPINLOCKS
-	.qspinlock.queued_spin_lock_slowpath	= native_queued_spin_lock_slowpath,
-	.qspinlock.queued_spin_unlock		= native_queued_spin_unlock,
+	.lock.queued_spin_lock_slowpath	= native_queued_spin_lock_slowpath,
+	.lock.queued_spin_unlock		= native_queued_spin_unlock,
 #endif
 	.lock.vcpu_is_preempted		= __native_vcpu_is_preempted,
 };
@@ -474,9 +474,9 @@ void __init pv_qspinlock_init(void)
 	pr_info("PV qspinlocks enabled\n");
 
 	__pv_init_lock_hash();
-	pv_ops.qspinlock.queued_spin_lock_slowpath = __pv_queued_spin_lock_slowpath;
-	pv_ops.qspinlock.queued_spin_unlock = __pv_queued_spin_unlock;
-	pv_ops.qspinlock.wait = kvm_wait;
-	pv_ops.qspinlock.kick = kvm_kick_cpu;
+	pv_ops.lock.queued_spin_lock_slowpath = __pv_queued_spin_lock_slowpath;
+	pv_ops.lock.queued_spin_unlock = __pv_queued_spin_unlock;
+	pv_ops.lock.wait = kvm_wait;
+	pv_ops.lock.kick = kvm_kick_cpu;
 }
 #endif

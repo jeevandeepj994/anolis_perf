@@ -12,20 +12,16 @@ struct pv_time_ops {
 };
 
 struct pv_lock_ops {
-	bool (*vcpu_is_preempted)(int cpu);
-};
-
-struct pv_qspinlock_ops {
 	void (*wait)(u8 *ptr, u8 val);
 	void (*kick)(int cpu);
 	void (*queued_spin_lock_slowpath)(struct qspinlock *lock, u32 val);
 	void (*queued_spin_unlock)(struct qspinlock *lock);
+	bool (*vcpu_is_preempted)(int cpu);
 };
 
 struct paravirt_patch_template {
 	struct pv_time_ops time;
 	struct pv_lock_ops lock;
-	struct pv_qspinlock_ops qspinlock;
 };
 
 extern struct paravirt_patch_template pv_ops;
@@ -55,22 +51,22 @@ bool pv_is_native_spin_unlock(void);
 void __init pv_qspinlock_init(void);
 static inline void pv_wait(u8 *ptr, u8 val)
 {
-	return pv_ops.qspinlock.wait(ptr, val);
+	return pv_ops.lock.wait(ptr, val);
 }
 
 static inline void pv_kick(int cpu)
 {
-	return pv_ops.qspinlock.kick(cpu);
+	return pv_ops.lock.kick(cpu);
 }
 
 static inline void pv_queued_spin_lock_slowpath(struct qspinlock *lock, u32 val)
 {
-	return pv_ops.qspinlock.queued_spin_lock_slowpath(lock, val);
+	return pv_ops.lock.queued_spin_lock_slowpath(lock, val);
 }
 
 static inline void pv_queued_spin_unlock(struct qspinlock *lock)
 {
-	return pv_ops.qspinlock.queued_spin_unlock(lock);
+	return pv_ops.lock.queued_spin_unlock(lock);
 }
 #endif /* CONFIG_PARAVIRT_SPINLOCKS */
 
