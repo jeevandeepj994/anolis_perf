@@ -290,6 +290,9 @@ struct page *__dup_page(struct page *page, struct vm_area_struct *vma)
 
 	VM_BUG_ON_PAGE(!PageLocked(hpage), hpage);
 
+	if (is_zero_page(page))
+		return NULL;
+
 	if (!node_isset(target_node, cpuset_current_mems_allowed)) {
 		if (!node_isset(page_node, cpuset_current_mems_allowed))
 			target_node = first_node(cpuset_current_mems_allowed);

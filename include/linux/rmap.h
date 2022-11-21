@@ -99,6 +99,7 @@ enum ttu_flags {
 	TTU_RMAP_LOCKED		= 0x80,	/* do not grab rmap lock:
 					 * caller holds it */
 	TTU_SPLIT_FREEZE	= 0x100,		/* freeze pte under splitting thp */
+	TTU_ZEROPAGE            = 0x200,		/* unmap zero pages of the same offset */
 };
 
 #ifdef CONFIG_MMU
@@ -197,10 +198,14 @@ int page_referenced(struct page *, int is_locked,
 
 bool try_to_unmap(struct page *, enum ttu_flags flags);
 
+void try_to_unmap_zeropage(struct page *page, enum ttu_flags flags);
+
 /* Avoid racy checks */
 #define PVMW_SYNC		(1 << 0)
 /* Look for migarion entries rather than present PTEs */
 #define PVMW_MIGRATION		(1 << 1)
+/* Avoid extra judgement of zeropage */
+#define PVMW_ZEROPAGE           (1 << 2)
 
 struct page_vma_mapped_walk {
 	struct page *page;
@@ -291,6 +296,7 @@ static inline int page_referenced(struct page *page, int is_locked,
 }
 
 #define try_to_unmap(page, refs) false
+#define try_to_unmap_zeropage(page, refs) false
 
 static inline int page_mkclean(struct page *page)
 {
