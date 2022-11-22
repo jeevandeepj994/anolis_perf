@@ -972,10 +972,9 @@ ifdef CONFIG_STACK_VALIDATION
     # CONFIG_STACK_VALIDATION is not yet support by CONFIG_X86_PIE and warning is displayed before.
     ifndef CONFIG_X86_PIE
       ifdef CONFIG_UNWINDER_ORC
-        @echo "error: Cannot generate ORC metadata for CONFIG_UNWINDER_ORC=y, please install libelf-dev, libelf-devel or elfutils-libelf-devel" >&2
-        @false
+        $(error "Cannot generate ORC metadata for CONFIG_UNWINDER_ORC=y, please install libelf-dev, libelf-devel or elfutils-libelf-devel")
       else
-        @echo "warning: Cannot use CONFIG_STACK_VALIDATION=y, please install libelf-dev, libelf-devel or elfutils-libelf-devel" >&2
+        $(warning "Cannot use CONFIG_STACK_VALIDATION=y, please install libelf-dev, libelf-devel or elfutils-libelf-devel")
       endif
     endif
     SKIP_STACK_VALIDATION := 1
