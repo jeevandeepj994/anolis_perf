@@ -27,8 +27,8 @@ static int cachefiles_ondemand_fd_release(struct inode *inode,
 	radix_tree_for_each_slot(slot, &cache->reqs, &iter, 0) {
 		req = radix_tree_deref_slot_protected(slot,
 						      &cache->reqs.xa_lock);
-		BUG_ON(!req);
-
+		if (WARN_ON(!req))
+			continue;
 		if (req->msg.object_id == object_id &&
 		    req->msg.opcode == CACHEFILES_OP_READ) {
 			req->error = -EIO;
@@ -150,9 +150,13 @@ int cachefiles_ondemand_copen(struct cachefiles_cache *cache, char *args)
 
 	/* fail OPEN request if daemon reports an error */
 	if (size < 0) {
-		if (!IS_ERR_VALUE(size))
-			size = -EINVAL;
-		req->error = size;
+		if (!IS_ERR_VALUE(size)) {
+			req->error = -EINVAL;
+			ret = -EINVAL;
+		} else {
+			req->error = size;
+			ret = 0;
+		}
 		goto out;
 	}
 
@@ -233,7 +237,7 @@ err:
 ssize_t cachefiles_ondemand_daemon_read(struct cachefiles_cache *cache,
 					char __user *_buffer, size_t buflen, loff_t *pos)
 {
-	struct cachefiles_req *req;
+	struct cachefiles_req *req = NULL;
 	struct cachefiles_msg *msg;
 	unsigned long id = 0;
 	size_t n;
@@ -242,52 +246,69 @@ ssize_t cachefiles_ondemand_daemon_read(struct cachefiles_cache *cache,
 	void **slot;
 
 	/*
-	 * Search for a request that has not ever been processed, to prevent
-	 * requests from being processed repeatedly.
+	 * Cyclically search for a request that has not ever been processed,
+	 * to prevent requests from being processed repeatedly, and make
+	 * request distribution fair.
 	 */
 	xa_lock(&cache->reqs);
-	radix_tree_for_each_tagged(slot, &cache->reqs, &iter, 0,
+	radix_tree_for_each_tagged(slot, &cache->reqs, &iter, cache->req_id_next,
 				   CACHEFILES_REQ_NEW) {
-		req = radix_tree_deref_slot_protected(slot,
-				&cache->reqs.xa_lock);
-
-		msg = &req->msg;
-		n = msg->len;
-
-		if (n > buflen) {
-			xa_unlock(&cache->reqs);
-			return -EMSGSIZE;
-		}
-
-		radix_tree_iter_tag_clear(&cache->reqs, &iter,
-				CACHEFILES_REQ_NEW);
-		xa_unlock(&cache->reqs);
-
-		id = iter.index;
-		msg->msg_id = id;
-
-		if (msg->opcode == CACHEFILES_OP_OPEN) {
-			ret = cachefiles_ondemand_get_fd(req);
-			if (ret)
-				goto error;
-		}
-
-		if (copy_to_user(_buffer, msg, n) != 0) {
-			ret = -EFAULT;
-			goto err_put_fd;
-		}
-
-		/* CLOSE request has no reply */
-		if (msg->opcode == CACHEFILES_OP_CLOSE) {
-			xa_lock(&cache->reqs);
-			radix_tree_delete(&cache->reqs, id);
-			xa_unlock(&cache->reqs);
-			complete(&req->done);
-		}
-		return n;
+		req = radix_tree_deref_slot_protected(slot, &cache->reqs.xa_lock);
+		WARN_ON(!req);
+		break;
 	}
+
+	if (!req && cache->req_id_next > 0) {
+		radix_tree_for_each_tagged(slot, &cache->reqs, &iter, 0,
+				CACHEFILES_REQ_NEW) {
+			if (iter.index >= cache->req_id_next)
+				break;
+			req = radix_tree_deref_slot_protected(slot, &cache->reqs.xa_lock);
+			WARN_ON(!req);
+			break;
+		}
+	}
+
+	/* no request tagged with CACHEFILES_REQ_NEW found */
+	if (!req) {
+		xa_unlock(&cache->reqs);
+		return 0;
+	}
+
+	msg = &req->msg;
+	n = msg->len;
+
+	if (n > buflen) {
+		xa_unlock(&cache->reqs);
+		return -EMSGSIZE;
+	}
+
+	radix_tree_iter_tag_clear(&cache->reqs, &iter, CACHEFILES_REQ_NEW);
+	cache->req_id_next = iter.index + 1;
 	xa_unlock(&cache->reqs);
-	return 0;
+
+	id = iter.index;
+	msg->msg_id = id;
+
+	if (msg->opcode == CACHEFILES_OP_OPEN) {
+		ret = cachefiles_ondemand_get_fd(req);
+		if (ret)
+			goto error;
+	}
+
+	if (copy_to_user(_buffer, msg, n) != 0) {
+		ret = -EFAULT;
+		goto err_put_fd;
+	}
+
+	/* CLOSE request has no reply */
+	if (msg->opcode == CACHEFILES_OP_CLOSE) {
+		xa_lock(&cache->reqs);
+		radix_tree_delete(&cache->reqs, id);
+		xa_unlock(&cache->reqs);
+		complete(&req->done);
+	}
+	return n;
 
 err_put_fd:
 	if (msg->opcode == CACHEFILES_OP_OPEN)
@@ -391,21 +412,27 @@ static int cachefiles_ondemand_init_open_req(struct cachefiles_req *req,
 {
 	struct cachefiles_object *object = req->object;
 	struct fscache_cookie *cookie = object->fscache.cookie;
-	struct fscache_cookie *volume;
+	struct fscache_cookie *volume = object->fscache.parent->cookie;
 	struct cachefiles_open *load = (void *)req->msg.data;
 	size_t volume_key_size, cookie_key_size;
 	char *cookie_key, *volume_key;
 
-	/* Cookie key is binary data, which is netfs specific. */
+	/*
+	 * cookie_key is a string without trailing '\0', while cachefiles_open
+	 * expects cookie key a string without trailing '\0'.
+	 */
 	cookie_key_size = cookie->key_len;
 	if (cookie->key_len <= sizeof(cookie->inline_key))
 		cookie_key = cookie->inline_key;
 	else
 		cookie_key = cookie->key;
 
-	volume = object->fscache.parent->cookie;
+	/*
+	 * volume_key is a string without trailing '\0', while cachefiles_open
+	 * expects volume key a string with trailing '\0'.
+	 */
 	volume_key_size = volume->key_len + 1;
-	if (volume_key_size <= sizeof(cookie->inline_key))
+	if (volume->key_len <= sizeof(volume->inline_key))
 		volume_key = volume->inline_key;
 	else
 		volume_key = volume->key;
