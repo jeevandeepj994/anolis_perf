@@ -1,6 +1,6 @@
-config CRYPTO_DEV_YCC
-	tristate "Support for Alibaba YCC cryptographic accelerator"
-	depends on CRYPTO && CRYPTO_HW && PCI
+config CRYPTO_DEV_ALICC
+	tristate "Support for Alibaba cryptographic accelerator"
+	depends on ARM64 && CRYPTO && CRYPTO_HW && PCI
 	default n
 	select CRYPTO_SKCIPHER
 	select CRYPTO_LIB_DES
@@ -13,5 +13,5 @@ config CRYPTO_DEV_YCC
 	select CRYPTO_SM4
 	help
 	  Enables the driver for the on-chip cryptographic accelerator of
-	  Alibaba Yitian SoCs which is based on ARMv9 architecture.
+	  Alibaba SoCs which is based on ARMv9 architecture.
 	  If unsure say N.
