@@ -686,6 +686,7 @@ struct sm2_signature_ctx {
 	MPI sig_s;
 };
 
+#ifndef CONFIG_CRYPTO_SM2
 int sm2_get_signature_r(void *context, size_t hdrlen, unsigned char tag,
 			const void *value, size_t vlen)
 {
@@ -715,6 +716,7 @@ int sm2_get_signature_s(void *context, size_t hdrlen, unsigned char tag,
 
 	return 0;
 }
+#endif
 
 static int ycc_sm2_verify(struct akcipher_request *req)
 {
