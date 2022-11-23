@@ -176,6 +176,123 @@ static int __init pci_iommu_init(void)
 rootfs_initcall(pci_iommu_init);
 
 #ifdef CONFIG_PCI
+/***
+ * usage:
+ * 	set "zhaoxin_patch_bitmask=0|1" in cmdline
+ * value description:
+ *      bit 0: enable(1) node check or not(0). default 1
+*/
+unsigned long zhaoxin_patch_code = ZHAOXIN_PATCH_CODE_DEFAULT;
+static int __init zhaoxin_patch_code_setup(char* str)
+{
+	int err = kstrtoul(str, 0, &zhaoxin_patch_code);
+
+	if (err || (zhaoxin_patch_code >= ZHAOXIN_PATCH_CODE_MAX)) {
+		pr_err("cmdline 'zhaoxin_patch_bitmask=%s' inappropriate\n",
+				str);
+		return err;
+	}
+
+	if (ZHAOXIN_P2CW_NODE_CHECK | zhaoxin_patch_code)
+		pr_info("zhaoxin p2cw patch node check is enabled\n");
+
+	return 0;
+}
+__setup("zhaoxin_patch_bitmask=", zhaoxin_patch_code_setup);
+
+bool zhaoxin_p2cw_patch_en = false;
+static void quirk_zhaoxin_p2cw_patch(struct pci_dev *pci)
+{
+	if (pci->revision == 0x10) {
+		zhaoxin_p2cw_patch_en = true;
+		pr_debug("zhaoxin p2cw patch is enabled\n");
+	}
+}
+DECLARE_PCI_FIXUP_EARLY(0x1d17, 0x1001, quirk_zhaoxin_p2cw_patch);
+DECLARE_PCI_FIXUP_EARLY(0x1d17, 0x345B, quirk_zhaoxin_p2cw_patch);
+
+static struct pci_dev *get_pci_dev(struct device *dev)
+{
+	if (dev_is_pci(dev))
+		return to_pci_dev(dev);
+
+	if (dev->parent)
+		return get_pci_dev(dev->parent);
+
+	return NULL;
+}
+
+static int patch_do_basic_check(struct device *dev,
+		enum dma_data_direction dir)
+{
+	u64 dma_mask = *dev->dma_mask;
+
+	if (zhaoxin_p2cw_patch_en == false)
+		return false;
+
+	if ((dir != DMA_FROM_DEVICE) && (dir != DMA_BIDIRECTIONAL))
+		return false;
+
+	if (dma_mask <= DMA_BIT_MASK(32))
+		return false;
+
+	return true;
+}
+
+static int patch_check_paddr(struct device *dev, phys_addr_t paddr,
+		bool is_iommu)
+{
+	unsigned long pfn;
+
+	if ((zhaoxin_patch_code & ZHAOXIN_P2CW_NODE_CHECK) == 0)
+		return true;
+
+	if (is_iommu)
+		paddr = patch_get_real_paddr(dev, paddr);
+
+	pfn = PFN_DOWN(paddr);
+	if (pfn_to_nid(pfn) != dev_to_node(dev))
+		return true;
+
+	return false;
+}
+
+static void patch_pci_posted_request_order(struct device *dev)
+{
+	u8 vid;
+	struct pci_dev *pci;
+
+	pci = get_pci_dev(dev);
+	if (pci == NULL)
+		return;
+
+	pci_read_config_byte(pci, PCI_VENDOR_ID, &vid);
+}
+
+void patch_p2cw_single_map(struct device *dev, dma_addr_t paddr,
+		enum dma_data_direction dir, bool is_iommu)
+{
+	if (patch_do_basic_check(dev, dir))
+		if (patch_check_paddr(dev, paddr, is_iommu))
+			patch_pci_posted_request_order(dev);
+}
+
+void patch_p2cw_sg_map(struct device *dev, struct scatterlist *sglist,
+		int nelems, enum dma_data_direction dir, bool is_iommu)
+{
+	struct scatterlist *sg;
+	int i;
+
+	if (patch_do_basic_check(dev, dir)) {
+		for_each_sg(sglist, sg, nelems, i) {
+			if (patch_check_paddr(dev, sg_dma_address(sg), is_iommu)) {
+				patch_pci_posted_request_order(dev);
+				break;
+			}
+		}
+	}
+}
+
 /* Many VIA bridges seem to corrupt data for DAC. Disable it here */
 
 static int via_no_dac_cb(struct pci_dev *pdev, void *data)
