@@ -63,7 +63,6 @@
 #define SMC_CLC_DECL_ERR_RTOK	0x09990001  /*	 rtoken handling failed       */
 #define SMC_CLC_DECL_ERR_RDYLNK	0x09990002  /*	 ib ready link failed	      */
 #define SMC_CLC_DECL_ERR_REGBUF	0x09990003  /*	 reg rdma bufs failed	      */
-#define SMC_CLC_DECL_CREDITSERR	0x09990004  /*   announce credits failed      */
 
 #define SMC_FIRST_CONTACT_MASK	0b10	/* first contact bit within typev2 */
 
@@ -191,7 +190,7 @@ struct smcr_clc_msg_accept_confirm {	/* SMCR accept/confirm */
 	u8 qp_mtu   : 4,
 	   rmbe_size : 4;
 #endif
-	u8 init_credits;		/* QP rq init credits for rq flowctrl */
+	u8 reserved;
 	__be64 rmb_dma_addr;	/* RMB virtual address */
 	u8 reserved2;
 	u8 psn[3];		/* packet sequence number */

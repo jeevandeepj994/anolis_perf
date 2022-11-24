@@ -17,10 +17,6 @@
 #include "smc.h"
 #include "smc_core.h"
 #include "smc_sysctl.h"
-#include "smc_core.h"
-
-static int min_sndbuf = SMC_BUF_MIN_SIZE;
-static int min_rcvbuf = SMC_BUF_MIN_SIZE;
 
 static int two = 2;
 
@@ -40,92 +36,6 @@ static struct ctl_table smc_table[] = {
 		.proc_handler	= proc_douintvec_minmax,
 		.extra1		= SYSCTL_ZERO,
 		.extra2		= &two,
-	},
-	{
-		.procname       = "wmem_default",
-		.data           = &init_net.smc.sysctl_wmem_default,
-		.maxlen         = sizeof(init_net.smc.sysctl_wmem_default),
-		.mode           = 0644,
-		.proc_handler   = proc_dointvec_minmax,
-		.extra1         = &min_sndbuf,
-	},
-	{
-		.procname       = "rmem_default",
-		.data           = &init_net.smc.sysctl_rmem_default,
-		.maxlen         = sizeof(init_net.smc.sysctl_rmem_default),
-		.mode           = 0644,
-		.proc_handler   = proc_dointvec_minmax,
-		.extra1         = &min_rcvbuf,
-	},
-	{
-		.procname	= "tcp2smc",
-		.data		= &init_net.smc.sysctl_tcp2smc,
-		.maxlen		= sizeof(init_net.smc.sysctl_tcp2smc),
-		.mode		= 0644,
-		.proc_handler	= proc_dointvec,
-	},
-	{
-		.procname	= "allow_different_subnet",
-		.data		= &init_net.smc.sysctl_allow_different_subnet,
-		.maxlen		= sizeof(init_net.smc.sysctl_allow_different_subnet),
-		.mode		= 0644,
-		.proc_handler	= proc_dointvec_minmax,
-		.extra1		= SYSCTL_ZERO,
-		.extra2		= SYSCTL_ONE,
-	},
-	{
-		.procname       = "limit_handshake",
-		.data           = &init_net.smc.limit_smc_hs,
-		.maxlen         = sizeof(init_net.smc.limit_smc_hs),
-		.mode           = 0644,
-		.proc_handler   = proc_dointvec_minmax,
-		.extra1         = SYSCTL_ZERO,
-		.extra2         = SYSCTL_ONE,
-	},
-	{
-		.procname	= "disable_multiple_link",
-		.data		= &init_net.smc.sysctl_disable_multiple_link,
-		.maxlen		= sizeof(int),
-		.mode		= 0644,
-		.proc_handler	= proc_dointvec_minmax,
-		.extra1		= SYSCTL_ZERO,
-		.extra2		= SYSCTL_ONE,
-	},
-	{
-		.procname	= "simplify_rkey_exhcange",
-		.data		= &init_net.smc.sysctl_simplify_rkey_exhcange,
-		.maxlen		= sizeof(init_net.smc.sysctl_simplify_rkey_exhcange),
-		.mode		= 0644,
-		.proc_handler	= proc_dointvec_minmax,
-		.extra1		= SYSCTL_ZERO,
-		.extra2		= SYSCTL_ONE,
-	},
-	{
-		.procname	= "fastopen",
-		.data		= &init_net.smc.sysctl_smc_fastopen,
-		.maxlen		= sizeof(init_net.smc.sysctl_smc_fastopen),
-		.mode		= 0644,
-		.proc_handler	= proc_dointvec_minmax,
-		.extra1		= SYSCTL_ZERO,
-		.extra2		= SYSCTL_ONE,
-	},
-	{
-		.procname	= "sysctl_smc_experiments",
-		.data		= &init_net.smc.sysctl_smc_experiments,
-		.maxlen		= sizeof(init_net.smc.sysctl_smc_experiments),
-		.mode		= 0644,
-		.proc_handler	= proc_dointvec_minmax,
-		.extra1		= SYSCTL_ZERO,
-		.extra2		= SYSCTL_ONE,
-	},
-	{
-		.procname	= "keep_first_contact_clcsock",
-		.data		= &init_net.smc.sysctl_keep_first_contact_clcsock,
-		.maxlen		= sizeof(int),
-		.mode		= 0644,
-		.proc_handler	= proc_dointvec_minmax,
-		.extra1		= SYSCTL_ZERO,
-		.extra2		= SYSCTL_ONE,
 	},
 	{  }
 };
@@ -152,17 +62,7 @@ int __net_init smc_sysctl_net_init(struct net *net)
 
 	net->smc.sysctl_autocorking_size = SMC_AUTOCORKING_DEFAULT_SIZE;
 	net->smc.sysctl_smcr_buf_type = SMCR_PHYS_CONT_BUFS;
-	net->smc.sysctl_wmem_default = 256 * 1024;
-	net->smc.sysctl_rmem_default = 384 * 1024;
-	net->smc.sysctl_tcp2smc = 0;
-	net->smc.sysctl_allow_different_subnet = 1;
-	net->smc.sysctl_keep_first_contact_clcsock = 1;
-	net->smc.sysctl_disable_multiple_link = 1;
-	/* default on */
-	net->smc.sysctl_simplify_rkey_exhcange = 1;
-	net->smc.sysctl_smc_fastopen = 1;
-	/* default off */
-	net->smc.sysctl_smc_experiments = 0;
+
 	return 0;
 
 err_reg:
