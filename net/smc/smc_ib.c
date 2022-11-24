@@ -27,7 +27,6 @@
 #include "smc_wr.h"
 #include "smc.h"
 #include "smc_netlink.h"
-#include "smc_dim.h"
 
 #define SMC_MAX_CQE 32766	/* max. # of completion queue elements */
 
@@ -132,7 +131,10 @@ int smc_ib_ready_link(struct smc_link *lnk)
 	if (rc)
 		goto out;
 	smc_wr_remember_qp_attr(lnk);
-
+	rc = ib_req_notify_cq(lnk->smcibdev->roce_cq_recv,
+			      IB_CQ_SOLICITED_MASK);
+	if (rc)
+		goto out;
 	rc = smc_wr_rx_post_init(lnk);
 	if (rc)
 		goto out;
@@ -622,31 +624,6 @@ int smcr_nl_get_device(struct sk_buff *skb, struct netlink_callback *cb)
 	return skb->len;
 }
 
-static struct smc_ib_cq *smc_ib_get_least_used_cq(struct smc_ib_device *smcibdev)
-{
-	struct smc_ib_cq *smcibcq, *cq;
-	int min, i;
-
-	smcibcq = smcibdev->smcibcq;
-	cq = smcibcq;
-	min = cq->load;
-
-	for (i = 0; i < smcibdev->num_cq; i++) {
-		if (smcibcq[i].load < min) {
-			cq = &smcibcq[i];
-			min = cq->load;
-		}
-	}
-
-	cq->load++;
-	return cq;
-}
-
-static void smc_ib_put_cq(struct smc_ib_cq *smcibcq)
-{
-	smcibcq->load--;
-}
-
 static void smc_ib_qp_event_handler(struct ib_event *ibevent, void *priv)
 {
 	struct smc_link *lnk = (struct smc_link *)priv;
@@ -670,33 +647,27 @@ static void smc_ib_qp_event_handler(struct ib_event *ibevent, void *priv)
 
 void smc_ib_destroy_queue_pair(struct smc_link *lnk)
 {
-	if (lnk->roce_qp) {
+	if (lnk->roce_qp)
 		ib_destroy_qp(lnk->roce_qp);
-		smc_ib_put_cq(lnk->smcibcq);
-	}
 	lnk->roce_qp = NULL;
-	lnk->smcibcq = NULL;
 }
 
 /* create a queue pair within the protection domain for a link */
 int smc_ib_create_queue_pair(struct smc_link *lnk)
 {
-	struct smc_ib_cq *smcibcq = smc_ib_get_least_used_cq(lnk->smcibdev);
 	int sges_per_buf = (lnk->lgr->smc_version == SMC_V2) ? 2 : 1;
 	struct ib_qp_init_attr qp_attr = {
 		.event_handler = smc_ib_qp_event_handler,
 		.qp_context = lnk,
-		.send_cq = smcibcq->ib_cq,
-		.recv_cq = smcibcq->ib_cq,
+		.send_cq = lnk->smcibdev->roce_cq_send,
+		.recv_cq = lnk->smcibdev->roce_cq_recv,
 		.srq = NULL,
 		.cap = {
 				/* include unsolicited rdma_writes as well,
-				 * there are max. 2 RDMA_WRITE per 1 WR_SEND.
-				 * RDMA_WRITE consumes send queue entities,
-				 * without recv queue entities.
+				 * there are max. 2 RDMA_WRITE per 1 WR_SEND
 				 */
 			.max_send_wr = SMC_WR_BUF_CNT * 3,
-			.max_recv_wr = SMC_WR_BUF_CNT,
+			.max_recv_wr = SMC_WR_BUF_CNT * 3,
 			.max_send_sge = SMC_IB_MAX_SEND_SGE,
 			.max_recv_sge = sges_per_buf,
 			.max_inline_data = 0,
@@ -714,12 +685,10 @@ int smc_ib_create_queue_pair(struct smc_link *lnk)
 
 	lnk->roce_qp = ib_create_qp(lnk->roce_pd, &qp_attr);
 	rc = PTR_ERR_OR_ZERO(lnk->roce_qp);
-	if (IS_ERR(lnk->roce_qp)) {
+	if (IS_ERR(lnk->roce_qp))
 		lnk->roce_qp = NULL;
-	} else {
-		lnk->smcibcq = smcibcq;
+	else
 		smc_wr_remember_qp_attr(lnk);
-	}
 	return rc;
 }
 
@@ -866,27 +835,11 @@ void smc_ib_buf_unmap_sg(struct smc_link *lnk,
 	buf_slot->sgt[lnk->link_idx].sgl->dma_address = 0;
 }
 
-static void smc_ib_cleanup_cq(struct smc_ib_device *smcibdev)
-{
-	int i;
-
-	for (i = 0; i < smcibdev->num_cq; i++) {
-		if (smcibdev->smcibcq[i].ib_cq) {
-			smc_dim_destroy(smcibdev->smcibcq[i].ib_cq);
-			ib_destroy_cq(smcibdev->smcibcq[i].ib_cq);
-		}
-	}
-	smc_wr_remove_dev(smcibdev);
-
-	kfree(smcibdev->smcibcq);
-}
-
 long smc_ib_setup_per_ibdev(struct smc_ib_device *smcibdev)
 {
-	struct ib_cq_init_attr cqattr = { .cqe = SMC_MAX_CQE };
+	struct ib_cq_init_attr cqattr =	{
+		.cqe = SMC_MAX_CQE, .comp_vector = 0 };
 	int cqe_size_order, smc_order;
-	struct smc_ib_cq *smcibcq;
-	int i, num_cq;
 	long rc;
 
 	mutex_lock(&smcibdev->mutex);
@@ -898,40 +851,28 @@ long smc_ib_setup_per_ibdev(struct smc_ib_device *smcibdev)
 	smc_order = MAX_ORDER - cqe_size_order - 1;
 	if (SMC_MAX_CQE + 2 > (0x00000001 << smc_order) * PAGE_SIZE)
 		cqattr.cqe = (0x00000001 << smc_order) * PAGE_SIZE - 2;
-	num_cq = min_t(int, smcibdev->ibdev->num_comp_vectors,
-		       num_online_cpus());
-	smcibdev->num_cq = num_cq;
-	smcibdev->smcibcq = kcalloc(num_cq, sizeof(*smcibcq), GFP_KERNEL);
-	if (!smcibdev->smcibcq) {
-		rc = -ENOMEM;
-		goto err;
+	smcibdev->roce_cq_send = ib_create_cq(smcibdev->ibdev,
+					      smc_wr_tx_cq_handler, NULL,
+					      smcibdev, &cqattr);
+	rc = PTR_ERR_OR_ZERO(smcibdev->roce_cq_send);
+	if (IS_ERR(smcibdev->roce_cq_send)) {
+		smcibdev->roce_cq_send = NULL;
+		goto out;
 	}
-
-	/* initialize CQs */
-	for (i = 0; i < num_cq; i++) {
-		smcibcq = &smcibdev->smcibcq[i];
-		smcibcq->smcibdev = smcibdev;
-		cqattr.comp_vector = i;
-		smcibcq->ib_cq = ib_create_cq(smcibdev->ibdev,
-					      smc_wr_cq_handler, NULL,
-					      smcibcq, &cqattr);
-		rc = PTR_ERR_OR_ZERO(smcibcq->ib_cq);
-		if (IS_ERR(smcibcq->ib_cq)) {
-			smcibcq->ib_cq = NULL;
-			goto err;
-		}
-
-		smc_dim_init(smcibcq->ib_cq);
-		rc = ib_req_notify_cq(smcibcq->ib_cq, IB_CQ_NEXT_COMP);
-		if (rc)
-			goto err;
+	smcibdev->roce_cq_recv = ib_create_cq(smcibdev->ibdev,
+					      smc_wr_rx_cq_handler, NULL,
+					      smcibdev, &cqattr);
+	rc = PTR_ERR_OR_ZERO(smcibdev->roce_cq_recv);
+	if (IS_ERR(smcibdev->roce_cq_recv)) {
+		smcibdev->roce_cq_recv = NULL;
+		goto err;
 	}
 	smc_wr_add_dev(smcibdev);
 	smcibdev->initialized = 1;
 	goto out;
 
 err:
-	smc_ib_cleanup_cq(smcibdev);
+	ib_destroy_cq(smcibdev->roce_cq_send);
 out:
 	mutex_unlock(&smcibdev->mutex);
 	return rc;
@@ -943,7 +884,9 @@ static void smc_ib_cleanup_per_ibdev(struct smc_ib_device *smcibdev)
 	if (!smcibdev->initialized)
 		goto out;
 	smcibdev->initialized = 0;
-	smc_ib_cleanup_cq(smcibdev);
+	ib_destroy_cq(smcibdev->roce_cq_recv);
+	ib_destroy_cq(smcibdev->roce_cq_send);
+	smc_wr_remove_dev(smcibdev);
 out:
 	mutex_unlock(&smcibdev->mutex);
 }

@@ -282,14 +282,8 @@ int smc_tx_sendmsg(struct smc_sock *smc, struct msghdr *msg, size_t len)
 		/* If we need to cork, do nothing and wait for the next
 		 * sendmsg() call or push on tx completion
 		 */
-		if (!smc_tx_should_cork(smc, msg)) {
-			conn->tx_bytes += copylen;
-			++conn->tx_cnt;
+		if (!smc_tx_should_cork(smc, msg))
 			smc_tx_sndbuf_nonempty(conn);
-		} else {
-			conn->tx_corked_bytes += copylen;
-			++conn->tx_corked_cnt;
-		}
 
 		trace_smc_tx_sendmsg(smc, copylen);
 	} /* while (msg_data_left(msg)) */
@@ -357,12 +351,6 @@ static int smc_tx_rdma_write(struct smc_connection *conn, int peer_rmbe_offset,
 		/* offset within RMBE */
 		peer_rmbe_offset;
 	rdma_wr->rkey = lgr->rtokens[conn->rtoken_idx][link->link_idx].rkey;
-	/* rtoken might be deleted if peer freed connection */
-	if (!rdma_wr->rkey ||
-	    (rdma_wr->remote_addr == (conn->tx_off + peer_rmbe_offset))) {
-		pr_warn_ratelimited("smc: unexpected sends during connection termination flow\n");
-		return -EINVAL;
-	}
 	rc = ib_post_send(link->roce_qp, &rdma_wr->wr, NULL);
 	if (rc)
 		smcr_link_down_cond_sched(link);

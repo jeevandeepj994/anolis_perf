@@ -22,6 +22,10 @@
 #define SMC_V1		1		/* SMC version V1 */
 #define SMC_V2		2		/* SMC version V2 */
 #define SMC_RELEASE	0
+
+#define SMCPROTO_SMC		0	/* SMC protocol, IPv4 */
+#define SMCPROTO_SMC6		1	/* SMC protocol, IPv6 */
+
 #define SMC_MAX_ISM_DEVS	8	/* max # of proposed non-native ISM
 					 * devices
 					 */
@@ -228,23 +232,10 @@ struct smc_connection {
 	u8			rx_off;		/* receive offset:
 						 * 0 for SMC-R, 32 for SMC-D
 						 */
-	u64			rx_cnt;		/* rx counter */
-	u64			tx_cnt;		/* tx counter */
-	u64			tx_corked_cnt;	/* tx counter with MSG_MORE flag or corked */
-	u64			rx_bytes;	/* rx size */
-	u64			tx_bytes;	/* tx size */
-	u64			tx_corked_bytes;/* tx size with MSG_MORE flag or corked */
 	u64			peer_token;	/* SMC-D token of peer */
 	u8			killed : 1;	/* abnormal termination */
 	u8			freed : 1;	/* normal termiation */
 	u8			out_of_sync : 1; /* out of sync with peer */
-};
-
-#define SMC_MAX_TCP_LISTEN_WORKS 2
-
-struct smc_tcp_listen_work {
-	struct smc_sock *smc;
-	struct work_struct	work;
 };
 
 struct smc_sock {				/* smc sock container */
@@ -260,19 +251,12 @@ struct smc_sock {				/* smc sock container */
 						/* original error_report fct. */
 	struct smc_connection	conn;		/* smc connection */
 	struct smc_sock		*listen_smc;	/* listen parent */
-	bool			keep_clcsock;
 	struct work_struct	connect_work;	/* handle non-blocking connect*/
-	struct smc_tcp_listen_work	tcp_listen_works[SMC_MAX_TCP_LISTEN_WORKS];
-						/* handle tcp socket accepts */
-	atomic_t		tcp_listen_work_seq;/* used to select tcp_listen_works */
+	struct work_struct	tcp_listen_work;/* handle tcp socket accepts */
 	struct work_struct	smc_listen_work;/* prepare new accept socket */
-	struct work_struct      free_work;      /* free smc conn */
 	struct list_head	accept_q;	/* sockets to be accepted */
 	spinlock_t		accept_q_lock;	/* protects accept_q */
 	bool			limit_smc_hs;	/* put constraint on handshake */
-	bool			simplify_rkey_exhcange;	/*  simplify rkey exchange */
-	/* enable SMC-R handshake proposal via tcp fastopen */
-	bool			smc_fastopen;
 	bool			use_fallback;	/* fallback to tcp */
 	int			fallback_rsn;	/* reason for fallback */
 	u32			peer_diagnosis; /* decline reason from peer */
@@ -289,16 +273,11 @@ struct smc_sock {				/* smc sock container */
 						 * started, waiting for unsent
 						 * data to be sent
 						 */
-	u8			smc_negotiated : 1;
-						/* whether the smc_sock
-						 * was successfully negotiated
-						 * via TCP options.
-						 */
 	u8			connect_nonblock : 1;
 						/* non-blocking connect in
 						 * flight
 						 */
-	struct rw_semaphore	clcsock_release_lock;
+	struct mutex            clcsock_release_lock;
 						/* protects clcsock of a listen
 						 * socket
 						 * */
