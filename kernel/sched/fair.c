@@ -1336,6 +1336,12 @@ int sched_group_identity_enable_handler(struct ctl_table *table, int write,
 	unsigned int old, new;
 
 	mutex_lock(&identity_mutex);
+
+	if (!write) {
+		ret = proc_dointvec_minmax(table, write, buffer, lenp, ppos);
+		goto out;
+	}
+
 	if (atomic_read(&group_identity_count)) {
 		mutex_unlock(&identity_mutex);
 		return -EBUSY;
@@ -1349,6 +1355,7 @@ int sched_group_identity_enable_handler(struct ctl_table *table, int write,
 		else
 			__group_identity_disable();
 	}
+out:
 	mutex_unlock(&identity_mutex);
 	return ret;
 }
