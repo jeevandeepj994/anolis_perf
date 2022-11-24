@@ -7967,17 +7967,20 @@ static int select_idle_core(struct task_struct *p, struct sched_domain *sd, int 
 			bool is_idle = true;
 
 			cpumask_clear_cpu(cpu, cpus);
-			if (!id_idle_cpu(p, cpu, is_expellee, &is_idle))
-				id_idle = false;
-
+			if (!group_identity_disabled()) {
+				if (!id_idle_cpu(p, cpu, is_expellee, &is_idle))
+					id_idle = false;
+			} else {
+				is_idle = available_idle_cpu(cpu);
+			}
 			if (!is_idle)
 				idle = false;
 		}
 
-		if (idle && id_idle)
+		if (idle && (group_identity_disabled() || id_idle))
 			return core;
 
-		if (id_idle)
+		if (!group_identity_disabled() && id_idle)
 			id_backup = core;
 
 		/*
