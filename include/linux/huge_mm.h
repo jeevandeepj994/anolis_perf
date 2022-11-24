@@ -165,6 +165,8 @@ extern unsigned long hugetext_pad_threshold;
 #define hugetext_padding_enabled()			\
 	(hugetext_file_enabled() && hugetext_pad_threshold > 0)
 
+extern inline bool adapt_hugetext_suitable(struct vm_area_struct *vma);
+extern inline bool __khugepaged_max_nr_hugetext(void);
 extern unsigned long hugetext_get_unmapped_area(struct file *filp,
 		unsigned long addr, unsigned long len, unsigned long pgoff,
 		unsigned long flags);
@@ -245,14 +247,20 @@ static inline bool __transparent_hugepage_enabled(struct vm_area_struct *vma)
 	if (vma_is_temporary_stack(vma))
 		return false;
 
+#ifdef CONFIG_HUGETEXT
+	if (hugetext_anon_enabled() &&
+	    vma_is_hugetext_anon(vma, vma->vm_flags)) {
+		if (__khugepaged_max_nr_hugetext() &&
+		    adapt_hugetext_suitable(vma))
+			return false;
+		return true;
+	}
+#endif
+
 	if (transparent_hugepage_flags & (1 << TRANSPARENT_HUGEPAGE_FLAG))
 		return true;
 
 	if (vma_is_dax(vma))
-		return true;
-
-	if (hugetext_anon_enabled()
-			&& vma_is_hugetext_anon(vma, vma->vm_flags))
 		return true;
 
 	if (transparent_hugepage_flags &
