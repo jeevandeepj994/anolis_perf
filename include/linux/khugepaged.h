@@ -28,10 +28,34 @@ static inline void collapse_pte_mapped_thp(struct mm_struct *mm,
 #ifdef CONFIG_HUGETEXT
 extern void khugepaged_enter_exec_vma(struct vm_area_struct *vma,
 				      unsigned long vm_flags);
+extern unsigned long gather_refs_vma_range(struct vm_area_struct *vma,
+					   unsigned long start,
+					   unsigned long end);
+extern void clear_refs_vma_range(struct vm_area_struct *vma, unsigned long start,
+				 unsigned long end);
+extern void khugepaged_enter_adapt_vma(struct vm_area_struct *vma,
+				       unsigned long vm_flags);
+extern inline bool adapt_hugetext_suitable(struct vm_area_struct *vma);
+extern inline bool __khugepaged_max_nr_hugetext(void);
 #else
 static inline void khugepaged_enter_exec_vma(struct vm_area_struct *vma,
 					     unsigned long vm_flags)
 {
+}
+
+static inline void khugepaged_enter_adapt_vma(struct vm_area_struct *vma,
+					      unsigned long vm_flags)
+{
+}
+
+static inline bool adapt_hugetext_suitable(struct vm_area_struct *vma)
+{
+	return false;
+}
+
+static inline bool __khugepaged_max_nr_hugetext(void)
+{
+	return false;
 }
 #endif
 
@@ -84,9 +108,14 @@ static inline int khugepaged_enter(struct vm_area_struct *vma,
 			if (__khugepaged_enter(vma->vm_mm))
 				return -ENOMEM;
 
-	if (hugetext_vma_enabled(vma, vm_flags)
-			&& test_bit(MMF_VM_HUGEPAGE, &vma->vm_mm->flags))
-		khugepaged_enter_exec_vma(vma, vm_flags);
+	if (hugetext_vma_enabled(vma, vm_flags) &&
+	    test_bit(MMF_VM_HUGEPAGE, &vma->vm_mm->flags)) {
+		if (__khugepaged_max_nr_hugetext() && adapt_hugetext_suitable(vma) &&
+		    !shmem_file(vma->vm_file))
+			khugepaged_enter_adapt_vma(vma, vm_flags);
+		else
+			khugepaged_enter_exec_vma(vma, vm_flags);
+	}
 	return 0;
 }
 #else /* CONFIG_TRANSPARENT_HUGEPAGE */
