@@ -313,17 +313,9 @@ static int __smc_release(struct smc_sock *smc)
 	sk->sk_prot->unhash(sk);
 
 	if (sk->sk_state == SMC_CLOSED) {
-		if (smc->clcsock) {
-			release_sock(sk);
-			smc_clcsock_release(smc);
-			lock_sock(sk);
-		}
-
-		if (!smc->use_fallback) {
-			sock_hold(sk);
-			if (!queue_work(smc_close_wq, &smc->free_work))
-				sock_put(sk);
-		}
+		sock_hold(sk);
+		if (!queue_work(smc_close_wq, &smc->free_work))
+			sock_put(sk);
 	}
 
 	return rc;
@@ -394,8 +386,16 @@ static void smc_free_work(struct work_struct *work)
 	sk = &smc->sk;
 
 	lock_sock(sk);
-	if (sk->sk_state == SMC_CLOSED && !smc->use_fallback)
-		smc_conn_free(&smc->conn);
+	if (sk->sk_state == SMC_CLOSED) {
+		if (smc->clcsock) {
+			release_sock(sk);
+			smc_clcsock_release(smc);
+			lock_sock(sk);
+		}
+
+		if (!smc->use_fallback)
+			smc_conn_free(&smc->conn);
+	}
 	release_sock(sk);
 
 	sock_put(sk); /* before queue */
