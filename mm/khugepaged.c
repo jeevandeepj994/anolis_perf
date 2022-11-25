@@ -147,6 +147,7 @@ struct mm_slot {
 	unsigned long evict_timestamp;
 	/* Current state of adapt vma */
 	atomic_t state;
+	int recheck_hugetext;
 	int nr_hugetext;
 #endif
 };
@@ -2752,8 +2753,13 @@ static int adapt_hugetext_behavior(struct mm_slot *mm_slot, void *arg,
 		 * For CLEAR action, try to allocate entries before
 		 * actually clearing pte reference.
 		 */
-		if (behavior == AD_HUGETEXT_CLEAR)
+		if (behavior == AD_HUGETEXT_CLEAR) {
 			adapt_hugetext_add_entry(mm_slot, vma, vm_hstart, vm_hend);
+			/* Back early if it's not recheck_hugetext mode */
+			if (mm_slot->nr_hugetext >= khugepaged_max_nr_hugetext &&
+			    !mm_slot->recheck_hugetext)
+				return -1;
+		}
 
 		xas_lock(&xas);
 		xas_for_each(&xas, entry, vm_hend - 1) {
@@ -2770,16 +2776,20 @@ static int adapt_hugetext_behavior(struct mm_slot *mm_slot, void *arg,
 			} else if (behavior == AD_HUGETEXT_COUNT) {
 				unsigned long *sort_count = (unsigned long *)arg;
 
-				if (entry->status)
+				if (entry->status &&
+				    (!mm_slot->recheck_hugetext || vma->vm_file))
 					continue;
 				*sort_count += 1;
 			} else if (behavior == AD_HUGETEXT_STAT) {
 				struct ref_pair *region_refs = (struct ref_pair *)arg;
 
-				if (entry->status)
+				if (entry->status &&
+				    (!mm_slot->recheck_hugetext || vma->vm_file))
 					continue;
 				region_refs[index].start = entry->start;
 				region_refs[index].refcount = entry->refcount;
+				if (!entry->status)
+					entry->refcount = 0; /* clear record */
 				index++;
 			}
 		}
@@ -2787,6 +2797,46 @@ static int adapt_hugetext_behavior(struct mm_slot *mm_slot, void *arg,
 	}
 
 	return ret;
+}
+
+static void split_adaptive_hugetext(struct mm_slot *mm_slot, void *sort_buffer,
+				    unsigned int sort_count)
+{
+	struct region_entry *entry;
+	struct mm_struct *mm = mm_slot->mm;
+	struct ref_pair {
+		unsigned long start;
+		unsigned long refcount;
+	};
+	struct ref_pair *region_refs = (struct ref_pair *)sort_buffer;
+	int i;
+
+	for (i = khugepaged_max_nr_hugetext; i < sort_count; i++) {
+		struct ref_pair *pair = &region_refs[i];
+		struct vm_area_struct *vma;
+		bool split = 0;
+
+		XA_STATE_ORDER(xas, &mm_slot->adaptive_regions,
+			       pair->start, HPAGE_PMD_ORDER);
+
+		cond_resched();
+		if (!mm_slot->nr_hugetext)
+			break;
+
+		xas_lock(&xas);
+		entry = xas_load(&xas);
+		if (entry && entry->status) {
+			entry->status = 0;
+			entry->refcount = 0;
+			mm_slot->nr_hugetext--;
+			split = true;
+		}
+		xas_unlock(&xas);
+		/* Split huge pmd here to avoid sleeping in atomic context */
+		vma = find_vma(mm, pair->start);
+		if (split && vma && pair->start >= vma->vm_start)
+			split_huge_pmd_address(vma, pair->start, false, NULL);
+	}
 }
 
 /*
@@ -2835,6 +2885,7 @@ static unsigned int khugepaged_scan_adapt_vma(struct page **hpage)
 		 */
 		unsigned long total_count = 0;
 		unsigned long timestamp_gap;
+		int recheck_hugetext = 0;
 
 		timestamp_gap = jiffies_to_msecs(jiffies - mm_slot->evict_timestamp);
 		if (khugepaged_max_nr_hugetext &&
@@ -2847,10 +2898,14 @@ static unsigned int khugepaged_scan_adapt_vma(struct page **hpage)
 
 			mm_slot->evict_timestamp = jiffies;
 			adapt_hugetext_evict_entry(mm_slot, true);
-			goto breakouterloop;
+			if (mm_slot->nr_hugetext == khugepaged_max_nr_hugetext)
+				recheck_hugetext = 1;
+
+			mmap_read_unlock(mm);
 		}
 
-		if (mm_slot->nr_hugetext >= khugepaged_max_nr_hugetext)
+		if (!mm_slot->nr_adapt_vma ||
+		    (recheck_hugetext && mm_slot->nr_hugetext >= khugepaged_max_nr_hugetext))
 			goto breakouterloop_mmap_lock;
 
 		/* Hold write lock for clearing refs */
@@ -2862,9 +2917,11 @@ static unsigned int khugepaged_scan_adapt_vma(struct page **hpage)
 			goto breakouterloop_mmap_lock;
 		}
 
+		mm_slot->recheck_hugetext = recheck_hugetext;
 		ret = adapt_hugetext_behavior(mm_slot, &total_count,
 					      AD_HUGETEXT_CLEAR);
 		if (!total_count || ret < 0) {
+			mm_slot->recheck_hugetext = 0;
 			mmap_write_unlock(mm);
 			goto breakouterloop_mmap_lock; /* No candidate to stat */
 		}
@@ -2878,6 +2935,7 @@ static unsigned int khugepaged_scan_adapt_vma(struct page **hpage)
 		/* Sort and collapse thp candidate */
 		struct ref_pair *sort_buffer = NULL;
 		unsigned int sort_count = 0;
+		int recheck_hugetext = mm_slot->recheck_hugetext;
 
 		if (unlikely(!mmap_read_trylock(mm)))
 			goto breakouterloop_mmap_lock;
@@ -2904,6 +2962,18 @@ static unsigned int khugepaged_scan_adapt_vma(struct page **hpage)
 
 		sort(sort_buffer, sort_count, sizeof(struct ref_pair),
 		     ref_cmp, NULL);
+		if (recheck_hugetext) {
+			/* Split cold THP in recheck_hugetext mode */
+			split_adaptive_hugetext(mm_slot, sort_buffer, sort_count);
+			mm_slot->recheck_hugetext = 0;
+			/* Stop collapsing if file THP is present only */
+			if (mm_slot->nr_hugetext == khugepaged_max_nr_hugetext) {
+				kfree(sort_buffer);
+				atomic_set(&mm_slot->state, AD_HUGETEXT_SCAN_IDLE);
+				goto breakouterloop;
+			}
+		}
+
 		for (i = 0; i < sort_count; i++) {
 			struct ref_pair *pair = &sort_buffer[i];
 			struct vm_area_struct *vma;
@@ -2943,6 +3013,7 @@ static unsigned int khugepaged_scan_adapt_vma(struct page **hpage)
 				ret = khugepaged_scan_pmd(mm, vma, pair->start, hpage);
 			}
 			progress += HPAGE_PMD_NR;
+
 			if (orig_thp < khugepaged_pages_collapsed) {
 				mm_slot->nr_hugetext++;
 				/* Set collapsed status */
