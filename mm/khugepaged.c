@@ -78,6 +78,10 @@ static DECLARE_WAIT_QUEUE_HEAD(khugepaged_wait);
 static unsigned int khugepaged_max_ptes_none __read_mostly;
 static unsigned int khugepaged_max_ptes_swap __read_mostly;
 static unsigned int khugepaged_max_ptes_shared __read_mostly;
+#ifdef CONFIG_HUGETEXT
+static unsigned int khugepaged_max_nr_hugetext __read_mostly;
+#define MAX_NR_HUGETEXT    1024
+#endif
 
 #define MM_SLOTS_HASH_BITS 10
 static __read_mostly DEFINE_HASHTABLE(mm_slots_hash, MM_SLOTS_HASH_BITS);
@@ -337,6 +341,34 @@ static struct kobj_attribute khugepaged_max_ptes_shared_attr =
 	__ATTR(max_ptes_shared, 0644, khugepaged_max_ptes_shared_show,
 	       khugepaged_max_ptes_shared_store);
 
+#ifdef CONFIG_HUGETEXT
+static ssize_t max_nr_hugetext_show(struct kobject *kobj,
+				    struct kobj_attribute *attr,
+				    char *buf)
+{
+	return sprintf(buf, "%d\n", khugepaged_max_nr_hugetext);
+}
+
+static ssize_t max_nr_hugetext_store(struct kobject *kobj,
+				     struct kobj_attribute *attr,
+				     const char *buf, size_t count)
+{
+	int err;
+	unsigned long nr;
+
+	err = kstrtoul(buf, 10, &nr);
+	if (err || nr > MAX_NR_HUGETEXT)
+		return -EINVAL;
+
+	khugepaged_max_nr_hugetext = nr;
+
+	return count;
+}
+
+static struct kobj_attribute khugepaged_max_nr_hugetext_attr =
+__ATTR(max_nr_hugetext, 0644, max_nr_hugetext_show, max_nr_hugetext_store);
+#endif
+
 static struct attribute *khugepaged_attr[] = {
 	&khugepaged_defrag_attr.attr,
 	&khugepaged_max_ptes_none_attr.attr,
@@ -347,6 +379,9 @@ static struct attribute *khugepaged_attr[] = {
 	&full_scans_attr.attr,
 	&scan_sleep_millisecs_attr.attr,
 	&alloc_sleep_millisecs_attr.attr,
+#ifdef CONFIG_HUGETEXT
+	&khugepaged_max_nr_hugetext_attr.attr,
+#endif
 	NULL,
 };
 
@@ -407,6 +442,9 @@ int __init khugepaged_init(void)
 	khugepaged_max_ptes_none = HPAGE_PMD_NR - 1;
 	khugepaged_max_ptes_swap = HPAGE_PMD_NR / 8;
 	khugepaged_max_ptes_shared = HPAGE_PMD_NR / 2;
+#ifdef CONFIG_HUGETEXT
+	khugepaged_max_nr_hugetext = 0; /* unlimited */
+#endif
 
 	return 0;
 }
