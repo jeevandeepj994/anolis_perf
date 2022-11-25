@@ -1991,3 +1991,129 @@ const struct file_operations proc_pid_numa_maps_operations = {
 };
 
 #endif /* CONFIG_NUMA */
+
+#ifdef CONFIG_HUGETEXT
+enum hugetext_refs_types {
+	AD_HUGETEXT_CLEAR_REFS = 1,
+	AD_HUGETEXT_GATHER_REFS
+};
+
+struct hugetext_refs_private {
+	enum hugetext_refs_types type;
+	union {
+		struct mem_size_stats gather;
+		struct clear_refs_private clear;
+	};
+};
+
+static int process_refs_pte_range(pmd_t *pmd, unsigned long addr, unsigned long end,
+				  struct mm_walk *walk)
+{
+	struct vm_area_struct *vma = walk->vma;
+	struct hugetext_refs_private *op = walk->private;
+	pte_t *pte;
+	spinlock_t *ptl;
+
+	ptl = pmd_trans_huge_lock(pmd, vma);
+	if (ptl) {
+		/* Skip pmd mapping */
+		spin_unlock(ptl);
+		goto out;
+	}
+
+	if (pmd_trans_unstable(pmd))
+		goto out;
+	/*
+	 * The mmap_lock held all the way back in m_start() is what
+	 * keeps khugepaged out of here and from collapsing things
+	 * in here.
+	 */
+	pte = pte_offset_map_lock(vma->vm_mm, pmd, addr, &ptl);
+	for (; addr != end; pte++, addr += PAGE_SIZE) {
+		struct page *page;
+		bool young;
+
+		if (!pte_present(*pte))
+			continue;
+
+		page = vm_normal_page(vma, addr, *pte);
+		if (IS_ERR_OR_NULL(page))
+			continue;
+
+		if (op->type == AD_HUGETEXT_CLEAR_REFS) {
+			/* Clear accessed and referenced bits. */
+			ptep_test_and_clear_young(vma, addr, pte);
+			test_and_clear_page_young(page);
+			ClearPageReferenced(page);
+		} else if (op->type == AD_HUGETEXT_GATHER_REFS) {
+			struct mem_size_stats *gather = &op->gather;
+
+			young = pte_young(*pte);
+			/*
+			 * Accumulate the size in pages that have
+			 * been accessed.
+			 */
+			if (young || page_is_young(page) || PageReferenced(page))
+				gather->referenced += PAGE_SIZE;
+		}
+	}
+	pte_unmap_unlock(pte - 1, ptl);
+out:
+	return 0;
+}
+
+unsigned long gather_refs_vma_range(struct vm_area_struct *vma, unsigned long start,
+				    unsigned long end)
+{
+	struct hugetext_refs_private op;
+	const struct mm_walk_ops ops = {
+		.pmd_entry = process_refs_pte_range,
+	};
+
+	op.type = AD_HUGETEXT_GATHER_REFS;
+	memset(&op.gather, 0, sizeof(struct mem_size_stats));
+	/* mmap_lock is already held */
+	if (!start)
+		walk_page_vma(vma, &ops, &op);
+	else
+		walk_page_range(vma->vm_mm, start, end, &ops, &op);
+
+	return op.gather.referenced;
+}
+
+static int hugetext_clear_refs_test_walk(unsigned long start, unsigned long end,
+					 struct mm_walk *walk)
+{
+	struct hugetext_refs_private *op = walk->private;
+	struct clear_refs_private clear = op->clear;
+	struct vm_area_struct *vma = walk->vma;
+
+	if (vma->vm_flags & VM_PFNMAP)
+		return 1;
+
+	if (clear.type == CLEAR_REFS_ANON && vma->vm_file)
+		return 1;
+	if (clear.type == CLEAR_REFS_MAPPED && !vma->vm_file)
+		return 1;
+
+	return 0;
+}
+
+void clear_refs_vma_range(struct vm_area_struct *vma, unsigned long start,
+			  unsigned long end)
+{
+	struct hugetext_refs_private op;
+	const struct mm_walk_ops ops = {
+		.pmd_entry = process_refs_pte_range,
+		.test_walk = hugetext_clear_refs_test_walk,
+	};
+
+	op.type = AD_HUGETEXT_CLEAR_REFS;
+	if (vma_is_anonymous(vma))
+		op.clear.type = CLEAR_REFS_ANON;
+	else
+		op.clear.type = CLEAR_REFS_MAPPED;
+
+	walk_page_range(vma->vm_mm, start, end, &ops, &op);
+}
+#endif /* CONFIG_HUGETEXT */
