@@ -615,7 +615,6 @@ out:
 static int smcr_clnt_conf_first_link(struct smc_sock *smc)
 {
 	struct smc_link *link = smc->conn.lnk;
-	struct net *net = sock_net(&smc->sk);
 	struct smc_llc_qentry *qentry;
 	int rc;
 
@@ -662,7 +661,7 @@ static int smcr_clnt_conf_first_link(struct smc_sock *smc)
 	smc_llc_link_active(link);
 	smcr_lgr_set_type(link->lgr, SMC_LGR_SINGLE);
 
-	if (!net->smc.sysctl_disable_multiple_link) {
+	if (!link->lgr->disable_multiple_link) {
 		/* optional 2nd link, receive ADD LINK request from server */
 		qentry = smc_llc_wait(link->lgr, NULL, SMC_LLC_WAIT_TIME,
 				      SMC_LLC_ADD_LINK);
@@ -1894,7 +1893,6 @@ void smc_close_non_accepted(struct sock *sk)
 static int smcr_serv_conf_first_link(struct smc_sock *smc)
 {
 	struct smc_link *link = smc->conn.lnk;
-	struct net *net = sock_net(&smc->sk);
 	struct smc_llc_qentry *qentry;
 	int rc;
 
@@ -1935,7 +1933,7 @@ static int smcr_serv_conf_first_link(struct smc_sock *smc)
 	smc_llc_link_active(link);
 	smcr_lgr_set_type(link->lgr, SMC_LGR_SINGLE);
 
-	if (!net->smc.sysctl_disable_multiple_link) {
+	if (!link->lgr->disable_multiple_link) {
 		/* initial contact - try to establish second link */
 		smc_llc_srv_add_link(link, NULL);
 	}

@@ -880,6 +880,12 @@ static void smc_ib_cleanup_cq(struct smc_ib_device *smcibdev)
 	kfree(smcibdev->smcibcq);
 }
 
+static void cq_event_handler(struct ib_event *event, void *data)
+{
+	pr_warn_ratelimited("event %u (%s) data %p\n",
+			    event->event, ib_event_msg(event->event), data);
+}
+
 long smc_ib_setup_per_ibdev(struct smc_ib_device *smcibdev)
 {
 	struct ib_cq_init_attr cqattr = { .cqe = SMC_MAX_CQE };
@@ -887,6 +893,7 @@ long smc_ib_setup_per_ibdev(struct smc_ib_device *smcibdev)
 	struct smc_ib_cq *smcibcq;
 	int i, num_cq;
 	long rc;
+	u32 option_cqflag = IB_UVERBS_CQ_FLAGS_LOCK_FREE;
 
 	mutex_lock(&smcibdev->mutex);
 	rc = 0;
@@ -911,10 +918,18 @@ long smc_ib_setup_per_ibdev(struct smc_ib_device *smcibdev)
 		smcibcq = &smcibdev->smcibcq[i];
 		smcibcq->smcibdev = smcibdev;
 		cqattr.comp_vector = i;
+again:
+		cqattr.flags |= option_cqflag;
 		smcibcq->ib_cq = ib_create_cq(smcibdev->ibdev,
-					      smc_wr_cq_handler, NULL,
+					      smc_wr_cq_handler, cq_event_handler,
 					      smcibcq, &cqattr);
 		rc = PTR_ERR_OR_ZERO(smcibcq->ib_cq);
+		if (rc == -EOPNOTSUPP) {
+			smcibcq->ib_cq = NULL;
+			cqattr.flags &= ~option_cqflag;
+			option_cqflag = 0;
+			goto again;
+		}
 		if (IS_ERR(smcibcq->ib_cq)) {
 			smcibcq->ib_cq = NULL;
 			goto err;

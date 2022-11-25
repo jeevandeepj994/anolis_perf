@@ -929,6 +929,8 @@ static int smc_lgr_create(struct smc_sock *smc, struct smc_init_info *ini)
 			goto free_wq;
 		smc_llc_lgr_init(lgr, smc);
 
+		lgr->disable_multiple_link =
+			!!sock_net(&smc->sk)->smc.sysctl_disable_multiple_link;
 		link_idx = SMC_SINGLE_LINK;
 		lnk = &lgr->lnk[link_idx];
 		smcr_link_iw_extension(&lnk->iw_conn_param, smc->clcsock->sk);
@@ -1163,7 +1165,8 @@ static void smcr_buf_unuse(struct smc_buf_desc *buf_desc, bool is_rmb,
 		smc_buf_free(lgr, is_rmb, buf_desc);
 	} else {
 		buf_desc->used = 0;
-		memset(buf_desc->cpu_addr, 0, buf_desc->len);
+		if (is_rmb)
+			memset(buf_desc->cpu_addr, 0, buf_desc->len);
 	}
 }
 
@@ -1175,8 +1178,6 @@ static void smc_buf_unuse(struct smc_connection *conn,
 			smcr_buf_unuse(conn->sndbuf_desc, false, lgr);
 		} else {
 			conn->sndbuf_desc->used = 0;
-			memset(conn->sndbuf_desc->cpu_addr, 0,
-			       conn->sndbuf_desc->len);
 		}
 	}
 	if (conn->rmb_desc) {
@@ -1708,7 +1709,7 @@ void smcr_port_add(struct smc_ib_device *smcibdev, u8 ibport)
 		    !rdma_dev_access_netns(smcibdev->ibdev, lgr->net))
 			continue;
 		if (lgr->type == SMC_LGR_SINGLE &&
-		    lgr->net->smc.sysctl_disable_multiple_link)
+		    lgr->disable_multiple_link)
 			continue;
 
 		/* trigger local add link processing */

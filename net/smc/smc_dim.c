@@ -194,6 +194,8 @@ static bool smc_dim_check_utilization(struct dim *dim)
 	smc_dim->prev_softirq = softirq;
 	smc_dim->prev_idle = wall_idle;
 	smc_dim->prev_wall = wall;
+	smc_dim->prev_idle_percent = idle_percent;
+	smc_dim->prev_si_percent = softirq_percent;
 
 	return idle_percent < CPU_IDLE_UTIL_THRESHOLD &&
 			softirq_percent >= CPU_SOFTIRQ_UTIL_THRESHOLD;
