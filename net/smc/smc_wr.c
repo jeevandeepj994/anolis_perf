@@ -38,16 +38,6 @@
 static DEFINE_HASHTABLE(smc_wr_rx_hash, SMC_WR_RX_HASH_BITS);
 static DEFINE_SPINLOCK(smc_wr_rx_hash_lock);
 
-struct smc_wr_tx_pend {	/* control data for a pending send request */
-	u64			wr_id;		/* work request id sent */
-	smc_wr_tx_handler	handler;
-	enum ib_wc_status	wc_status;	/* CQE status */
-	struct smc_link		*link;
-	u32			idx;
-	struct smc_wr_tx_pend_priv priv;
-	u8			compl_requested;
-};
-
 /******************************** send queue *********************************/
 
 /*------------------------------- completion --------------------------------*/
