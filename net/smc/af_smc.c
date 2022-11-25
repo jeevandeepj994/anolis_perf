@@ -314,7 +314,7 @@ static int __smc_release(struct smc_sock *smc)
 
 	if (sk->sk_state == SMC_CLOSED) {
 		sock_hold(sk);
-		if (!queue_work(smc_close_wq, &smc->free_work))
+		if (!queue_work(smc_hs_wq, &smc->free_work))
 			sock_put(sk);
 	}
 
