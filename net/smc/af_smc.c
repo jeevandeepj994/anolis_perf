@@ -27,7 +27,6 @@
 #include <linux/if_vlan.h>
 #include <linux/rcupdate_wait.h>
 #include <linux/ctype.h>
-#include <linux/swap.h>
 
 #include <net/sock.h>
 #include <net/tcp.h>
@@ -419,8 +418,8 @@ static struct sock *smc_sock_alloc(struct net *net, struct socket *sock,
 	sk->sk_state = SMC_INIT;
 	sk->sk_destruct = smc_destruct;
 	sk->sk_protocol = protocol;
-	sk->sk_sndbuf = net->smc.sysctl_wmem_default;
-	sk->sk_rcvbuf = net->smc.sysctl_rmem_default;
+	WRITE_ONCE(sk->sk_sndbuf, READ_ONCE(net->smc.sysctl_wmem));
+	WRITE_ONCE(sk->sk_rcvbuf, READ_ONCE(net->smc.sysctl_rmem));
 	smc = smc_sk(sk);
 	smc->keep_clcsock = false;
 	for (i = 0; i < SMC_MAX_TCP_LISTEN_WORKS; i++) {
@@ -483,6 +482,8 @@ static int smc_bind(struct socket *sock, struct sockaddr *uaddr,
 		smc->clcsock->sk->sk_reuse = SK_CAN_REUSE;
 	else
 		smc->clcsock->sk->sk_reuse = sk->sk_reuse;
+
+	smc->clcsock->sk->sk_reuseport = sk->sk_reuseport;
 	rc = kernel_bind(smc->clcsock, uaddr, addr_len);
 
 out_rel:
@@ -1968,7 +1969,6 @@ static void smc_listen_out_connected(struct smc_sock *new_smc)
 {
 	struct sock *newsmcsk = &new_smc->sk;
 
-	sk_refcnt_debug_inc(newsmcsk);
 	if (newsmcsk->sk_state == SMC_INIT)
 		newsmcsk->sk_state = SMC_ACTIVE;
 
@@ -3505,14 +3505,14 @@ static int __init smc_init(void)
 
 	rc = register_pernet_subsys(&smc_net_stat_ops);
 	if (rc)
-		return rc;
+		goto out_pernet_subsys;
 
 	smc_ism_init();
 	smc_clc_init();
 
 	rc = smc_nl_init();
 	if (rc)
-		goto out_pernet_subsys;
+		goto out_pernet_subsys_stat;
 
 	rc = smc_pnet_init();
 	if (rc)
@@ -3624,6 +3624,8 @@ out_pnet:
 	smc_pnet_exit();
 out_nl:
 	smc_nl_exit();
+out_pernet_subsys_stat:
+	unregister_pernet_subsys(&smc_net_stat_ops);
 out_pernet_subsys:
 	unregister_pernet_subsys(&smc_net_ops);
 
@@ -3660,3 +3662,4 @@ MODULE_DESCRIPTION("smc socket address family");
 MODULE_LICENSE("GPL");
 MODULE_ALIAS_NETPROTO(PF_SMC);
 MODULE_ALIAS_TCP_ULP("smc");
+MODULE_ALIAS_GENL_FAMILY(SMC_GENL_FAMILY_NAME);

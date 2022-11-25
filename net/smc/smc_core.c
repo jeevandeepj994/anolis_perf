@@ -924,7 +924,8 @@ static int smc_lgr_create(struct smc_sock *smc, struct smc_init_info *ini)
 		}
 		memcpy(lgr->pnet_id, ibdev->pnetid[ibport - 1],
 		       SMC_MAX_PNETID_LEN);
-		if (smc_wr_alloc_lgr_mem(lgr))
+		rc = smc_wr_alloc_lgr_mem(lgr);
+		if (rc)
 			goto free_wq;
 		smc_llc_lgr_init(lgr, smc);
 
@@ -2310,7 +2311,7 @@ out:
 static int smcr_buf_map_usable_links(struct smc_link_group *lgr,
 				     struct smc_buf_desc *buf_desc, bool is_rmb)
 {
-	int i, rc = 0, lnk_cnt = 0;
+	int i, rc = 0, cnt = 0;
 
 	/* protect against parallel link reconfiguration */
 	mutex_lock(&lgr->llc_conf_mutex);
@@ -2323,11 +2324,11 @@ static int smcr_buf_map_usable_links(struct smc_link_group *lgr,
 			rc = -ENOMEM;
 			goto out;
 		}
-		lnk_cnt++;
+		cnt++;
 	}
 out:
 	mutex_unlock(&lgr->llc_conf_mutex);
-	if (!lnk_cnt)
+	if (!rc && !cnt)
 		rc = -EINVAL;
 	return rc;
 }
@@ -2378,14 +2379,13 @@ static int __smc_buf_create(struct smc_sock *smc, bool is_smcd, bool is_rmb)
 	bool is_dgraded = false;
 	struct mutex *lock;	/* lock buffer list */
 	int sk_buf_size;
-	int rc = 0;
 
 	if (is_rmb)
 		/* use socket recv buffer size (w/o overhead) as start value */
-		sk_buf_size = smc->sk.sk_rcvbuf / 2;
+		sk_buf_size = smc->sk.sk_rcvbuf;
 	else
 		/* use socket send buffer size (w/o overhead) as start value */
-		sk_buf_size = smc->sk.sk_sndbuf / 2;
+		sk_buf_size = smc->sk.sk_sndbuf;
 
 	for (bufsize_short = smc_compress_bufsize(sk_buf_size, is_smcd, is_rmb);
 	     bufsize_short >= 0; bufsize_short--) {
@@ -2435,17 +2435,16 @@ static int __smc_buf_create(struct smc_sock *smc, bool is_smcd, bool is_rmb)
 		return PTR_ERR(buf_desc);
 
 	if (!is_smcd) {
-		rc = smcr_buf_map_usable_links(lgr, buf_desc, is_rmb);
-		if (rc) {
+		if (smcr_buf_map_usable_links(lgr, buf_desc, is_rmb)) {
 			smcr_buf_unuse(buf_desc, is_rmb, lgr);
-			return rc;
+			return -ENOMEM;
 		}
 	}
 
 	if (is_rmb) {
 		conn->rmb_desc = buf_desc;
 		conn->rmbe_size_short = bufsize_short;
-		smc->sk.sk_rcvbuf = bufsize * 2;
+		smc->sk.sk_rcvbuf = bufsize;
 		atomic_set(&conn->bytes_to_rcv, 0);
 		conn->rmbe_update_limit =
 			smc_rmb_wnd_update_limit(buf_desc->len);
@@ -2453,7 +2452,7 @@ static int __smc_buf_create(struct smc_sock *smc, bool is_smcd, bool is_rmb)
 			smc_ism_set_conn(conn); /* map RMB/smcd_dev to conn */
 	} else {
 		conn->sndbuf_desc = buf_desc;
-		smc->sk.sk_sndbuf = bufsize * 2;
+		smc->sk.sk_sndbuf = bufsize;
 		atomic_set(&conn->sndbuf_space, bufsize);
 	}
 	return 0;
