@@ -33,6 +33,8 @@ extern unsigned long gather_refs_vma_range(struct vm_area_struct *vma,
 					   unsigned long end);
 extern void clear_refs_vma_range(struct vm_area_struct *vma, unsigned long start,
 				 unsigned long end);
+extern bool hugepage_mapping_check(struct vm_area_struct *vma, unsigned long start,
+				   unsigned long end);
 extern void khugepaged_enter_adapt_vma(struct vm_area_struct *vma,
 				       unsigned long vm_flags);
 extern inline bool adapt_hugetext_suitable(struct vm_area_struct *vma);

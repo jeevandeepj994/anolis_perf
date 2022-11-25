@@ -1995,7 +1995,8 @@ const struct file_operations proc_pid_numa_maps_operations = {
 #ifdef CONFIG_HUGETEXT
 enum hugetext_refs_types {
 	AD_HUGETEXT_CLEAR_REFS = 1,
-	AD_HUGETEXT_GATHER_REFS
+	AD_HUGETEXT_GATHER_REFS,
+	AD_HUGETEXT_CHECK_THP
 };
 
 struct hugetext_refs_private {
@@ -2016,7 +2017,32 @@ static int process_refs_pte_range(pmd_t *pmd, unsigned long addr, unsigned long 
 
 	ptl = pmd_trans_huge_lock(pmd, vma);
 	if (ptl) {
-		/* Skip pmd mapping */
+		if (op->type == AD_HUGETEXT_CHECK_THP) {
+			struct mem_size_stats *gather = &op->gather;
+			struct page *page = NULL;
+
+			if (pmd_present(*pmd)) {
+				page = follow_trans_huge_pmd(vma, addr, pmd,
+							     FOLL_DUMP);
+			} else if (unlikely(thp_migration_supported() &&
+					    is_swap_pmd(*pmd))) {
+				swp_entry_t entry = pmd_to_swp_entry(*pmd);
+
+				if (is_migration_entry(entry))
+					page = migration_entry_to_page(entry);
+			}
+			if (IS_ERR_OR_NULL(page)) {
+				spin_unlock(ptl);
+				return 0;
+			}
+
+			if (PageAnon(page))
+				gather->anonymous_thp += HPAGE_PMD_SIZE;
+			else if (PageSwapBacked(page) || is_zone_device_page(page))
+				; /* pass */
+			else
+				gather->file_thp += HPAGE_PMD_SIZE;
+		}
 		spin_unlock(ptl);
 		goto out;
 	}
@@ -2115,5 +2141,43 @@ void clear_refs_vma_range(struct vm_area_struct *vma, unsigned long start,
 		op.clear.type = CLEAR_REFS_MAPPED;
 
 	walk_page_range(vma->vm_mm, start, end, &ops, &op);
+}
+
+bool hugepage_mapping_check(struct vm_area_struct *vma, unsigned long start,
+			    unsigned long end)
+{
+	bool ret = false;
+	struct hugetext_refs_private op;
+	const struct mm_walk_ops ops = {
+		.pmd_entry = process_refs_pte_range,
+	};
+
+	op.type = AD_HUGETEXT_CHECK_THP;
+	memset(&op.gather, 0, sizeof(struct mem_size_stats));
+
+	/* mmap_lock is already held */
+	walk_page_range(vma->vm_mm, start, end, &ops, &op);
+	if (op.gather.file_thp || op.gather.anonymous_thp)
+		return true;
+
+	/*
+	 * For page cache, that page maybe a huge page but PTE-mapping
+	 * before touched. In order to limit adaptive hugepage under
+	 * max_nr_hugetext, we will handle it as a hugepage here.
+	 */
+	if (vma->vm_file) {
+		struct page *page;
+		struct address_space *mapping = vma->vm_file->f_mapping;
+		pgoff_t pgoff = linear_page_index(vma, start);
+
+		page = find_get_page(mapping, pgoff);
+		if (page) {
+			if (PageTransCompound(page))
+				ret = true;
+			put_page(page);
+		}
+	}
+
+	return ret;
 }
 #endif /* CONFIG_HUGETEXT */
