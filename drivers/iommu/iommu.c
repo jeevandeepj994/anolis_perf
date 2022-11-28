@@ -33,6 +33,9 @@
 #include <linux/bitops.h>
 #include <linux/property.h>
 #include <trace/events/iommu.h>
+#ifdef CONFIG_ARCH_PHYTIUM
+#include <asm/machine_types.h>
+#endif
 
 static struct kset *iommu_group_kset;
 static DEFINE_IDA(iommu_group_ida);
@@ -1312,6 +1315,7 @@ struct iommu_group *iommu_group_get_for_dev(struct device *dev)
 	const struct iommu_ops *ops = dev->bus->iommu_ops;
 	struct iommu_group *group;
 	int ret;
+	unsigned int type = iommu_def_domain_type;
 
 	group = iommu_group_get(dev);
 	if (group)
@@ -1334,13 +1338,19 @@ struct iommu_group *iommu_group_get_for_dev(struct device *dev)
 	if (!group->default_domain) {
 		struct iommu_domain *dom;
 
-		dom = __iommu_domain_alloc(dev->bus, iommu_def_domain_type);
-		if (!dom && iommu_def_domain_type != IOMMU_DOMAIN_DMA) {
+#ifdef CONFIG_ARCH_PHYTIUM
+		if (typeof_ft2000plus() || typeof_s2500()) {
+			type = IOMMU_DOMAIN_IDENTITY;
+			dev_warn(dev, "Note: SMMU will be passthrough on FT2000 & FT2500 machines due to hardware limitation");
+		}
+#endif
+		dom = __iommu_domain_alloc(dev->bus, type);
+		if (!dom && type != IOMMU_DOMAIN_DMA) {
 			dom = __iommu_domain_alloc(dev->bus, IOMMU_DOMAIN_DMA);
 			if (dom) {
 				dev_warn(dev,
 					 "failed to allocate default IOMMU domain of type %u; falling back to IOMMU_DOMAIN_DMA",
-					 iommu_def_domain_type);
+					 type);
 			}
 		}
 
