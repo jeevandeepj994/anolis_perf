@@ -14,6 +14,10 @@
 
 #define SPI_H_DAT_REG_ADDR          0x10108  // SPI Data register address
 
+/* Flow control defines */
+#define NGBE_TAF_SYM_PAUSE (0x1)
+#define NGBE_TAF_ASM_PAUSE (0x2)
+
 u32 ngbe_flash_read_dword(struct ngbe_hw *hw, u32 addr);
 int ngbe_check_flash_load(struct ngbe_hw *hw, u32 check_bit);
 s32 ngbe_init_hw(struct ngbe_hw *hw);
