@@ -501,6 +501,15 @@ static int ngbe_sw_init(struct ngbe_adapter *adapter)
 	adapter->flags2 |= NGBE_FLAG2_TEMP_SENSOR_CAPABLE;
 	adapter->flags2 |= NGBE_FLAG2_EEE_CAPABLE;
 
+	/* default flow control settings */
+	hw->fc.requested_mode = ngbe_fc_full;
+	hw->fc.current_mode = ngbe_fc_full; /* init for ethtool output */
+
+	adapter->last_lfc_mode = hw->fc.current_mode;
+	hw->fc.pause_time = NGBE_DEFAULT_FCPAUSE;
+	hw->fc.send_xon = true;
+	hw->fc.disable_fc_autoneg = false;
+
 	/* set default ring sizes */
 	adapter->tx_ring_count = NGBE_DEFAULT_TXD;
 	adapter->rx_ring_count = NGBE_DEFAULT_RXD;
@@ -5048,6 +5057,28 @@ static void ngbe_disable_rx_drop(struct ngbe_adapter *adapter,
 	wr32(hw, NGBE_PX_RR_CFG(reg_idx), srrctl);
 }
 
+void ngbe_set_rx_drop_en(struct ngbe_adapter *adapter)
+{
+	int i;
+
+	/* We should set the drop enable bit if:
+	 * SR-IOV is enabled
+	 * or
+	 * Number of Rx queues > 1 and flow control is disabled
+	 *
+	 * This allows us to avoid head of line blocking for security
+	 * and performance reasons.
+	 */
+	if (adapter->num_vfs || (adapter->num_rx_queues > 1 &&
+				 !(adapter->hw.fc.current_mode & ngbe_fc_tx_pause))) {
+		for (i = 0; i < adapter->num_rx_queues; i++)
+			ngbe_enable_rx_drop(adapter, adapter->rx_ring[i]);
+	} else {
+		for (i = 0; i < adapter->num_rx_queues; i++)
+			ngbe_disable_rx_drop(adapter, adapter->rx_ring[i]);
+	}
+}
+
 /**
  * ngbe_watchdog_update_link - update the link status
  * @adapter - pointer to the device adapter structure
@@ -5089,6 +5120,11 @@ static void ngbe_watchdog_update_link_status(struct ngbe_adapter *adapter)
 		break;
 	}
 	wr32m(hw, NGBE_CFG_LAN_SPEED, 0x3, lan_speed);
+
+	if (link_up) {
+		TCALL(hw, mac.ops.fc_enable);
+		ngbe_set_rx_drop_en(adapter);
+	}
 
 	if (link_up) {
 		if (link_speed & (NGBE_LINK_SPEED_1GB_FULL |

@@ -159,6 +159,8 @@
 #define NGBE_ETH_P_LLDP                        0x88CC
 #define NGBE_ETH_P_CNM                         0x22E7
 
+#define NGBE_DEFAULT_FCPAUSE   0xFFFF
+
 /* iterator for handling rings in ring container */
 #define ngbe_for_each_ring(pos, head) \
 	for (pos = (head).ring; pos; pos = pos->next)
@@ -503,6 +505,8 @@ struct ngbe_adapter {
 	struct msix_entry *msix_entries;
 	struct ngbe_q_vector *q_vector[MAX_MSIX_Q_VECTORS];
 	u32 atr_sample_rate;
+
+	enum ngbe_fc_mode last_lfc_mode;
 
 	u32 flags;
 	u32 flags2;

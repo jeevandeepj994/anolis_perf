@@ -862,6 +862,9 @@ s32 ngbe_start_hw(struct ngbe_hw *hw)
 
 	NGBE_WRITE_FLUSH(hw);
 
+	/* Setup flow control */
+	ret_val = TCALL(hw, mac.ops.setup_fc);
+
 	/* Clear adapter stopped flag */
 	hw->adapter_stopped = false;
 
@@ -2613,6 +2616,328 @@ u16 ngbe_get_pcie_msix_count(struct ngbe_hw *hw)
 	return msix_count;
 }
 
+/**
+ * ngbe_negotiate_fc - Negotiate flow control
+ * @hw: pointer to hardware structure
+ * @adv_reg: flow control advertised settings
+ * @lp_reg: link partner's flow control settings
+ * @adv_sym: symmetric pause bit in advertisement
+ * @adv_asm: asymmetric pause bit in advertisement
+ * @lp_sym: symmetric pause bit in link partner advertisement
+ * @lp_asm: asymmetric pause bit in link partner advertisement
+ *
+ * Find the intersection between advertised settings and link partner's
+ * advertised settings
+ **/
+static s32 ngbe_negotiate_fc(struct ngbe_hw *hw, u32 adv_reg, u32 lp_reg,
+			     u32 adv_sym, u32 adv_asm, u32 lp_sym, u32 lp_asm)
+{
+	if ((!(adv_reg)) ||  (!(lp_reg))) {
+		ERROR_REPORT3(hw, NGBE_ERROR_UNSUPPORTED,
+			      "Local or link partner's flow control settings are NULL. Local: %x, link partner: %x\n",
+					adv_reg, lp_reg);
+		return NGBE_ERR_FC_NOT_NEGOTIATED;
+	}
+
+	if ((adv_reg & adv_sym) && (lp_reg & lp_sym)) {
+		/* Now we need to check if the user selected Rx ONLY
+		 * of pause frames.  In this case, we had to advertise
+		 * FULL flow control because we could not advertise RX
+		 * ONLY. Hence, we must now check to see if we need to
+		 * turn OFF the TRANSMISSION of PAUSE frames.
+		 */
+		if (hw->fc.requested_mode == ngbe_fc_full) {
+			hw->fc.current_mode = ngbe_fc_full;
+			hw_dbg(hw, "Flow Control = FULL.\n");
+		} else {
+			hw->fc.current_mode = ngbe_fc_rx_pause;
+			hw_dbg(hw, "Flow Control=RX PAUSE frames only\n");
+		}
+	} else if (!(adv_reg & adv_sym) && (adv_reg & adv_asm) &&
+				(lp_reg & lp_sym) && (lp_reg & lp_asm)) {
+		hw->fc.current_mode = ngbe_fc_tx_pause;
+		hw_dbg(hw, "Flow Control = TX PAUSE frames only.\n");
+	} else if ((adv_reg & adv_sym) && (adv_reg & adv_asm) &&
+				!(lp_reg & lp_sym) && (lp_reg & lp_asm)) {
+		hw->fc.current_mode = ngbe_fc_rx_pause;
+		hw_dbg(hw, "Flow Control = RX PAUSE frames only.\n");
+	} else {
+		hw->fc.current_mode = ngbe_fc_none;
+		hw_dbg(hw, "Flow Control = NONE.\n");
+	}
+	return 0;
+}
+
+/**
+ * ngbe_fc_autoneg_copper - Enable flow control IEEE clause 37
+ * @hw: pointer to hardware structure
+ *
+ * Enable flow control according to IEEE clause 37.
+ **/
+static s32 ngbe_fc_autoneg_copper(struct ngbe_hw *hw)
+{
+	u8 technology_ability_reg = 0;
+	u8 lp_technology_ability_reg = 0;
+
+	if (!((hw->subsystem_device_id & NGBE_OEM_MASK) == NGBE_SUBID_RGMII_FPGA)) {
+		TCALL(hw, phy.ops.get_adv_pause, &technology_ability_reg);
+		TCALL(hw, phy.ops.get_lp_adv_pause, &lp_technology_ability_reg);
+	}
+	return ngbe_negotiate_fc(hw, (u32)technology_ability_reg,
+		(u32)lp_technology_ability_reg,
+		NGBE_TAF_SYM_PAUSE, NGBE_TAF_ASM_PAUSE,
+		NGBE_TAF_SYM_PAUSE, NGBE_TAF_ASM_PAUSE);
+}
+
+/**
+ * ngbe_fc_autoneg - Configure flow control
+ * @hw: pointer to hardware structure
+ *
+ * Compares our advertised flow control capabilities to those advertised by
+ * our link partner, and determines the proper flow control mode to use.
+ **/
+void ngbe_fc_autoneg(struct ngbe_hw *hw)
+{
+	s32 ret_val = NGBE_ERR_FC_NOT_NEGOTIATED;
+	u32 speed;
+	bool link_up;
+
+	/* AN should have completed when the cable was plugged in.
+	 * Look for reasons to bail out.  Bail out if:
+	 * - FC autoneg is disabled, or if
+	 * - link is not up.
+	 */
+	if (hw->fc.disable_fc_autoneg) {
+		ERROR_REPORT1(hw, NGBE_ERROR_UNSUPPORTED,
+			      "Flow control autoneg is disabled");
+		goto out;
+	}
+
+	TCALL(hw, mac.ops.check_link, &speed, &link_up, false);
+	if (!link_up) {
+		ERROR_REPORT1(hw, NGBE_ERROR_SOFTWARE, "The link is down");
+		goto out;
+	}
+
+	switch (hw->phy.media_type) {
+	/* Autoneg flow control on fiber adapters */
+	case ngbe_media_type_fiber:
+		break;
+
+	/* Autoneg flow control on copper adapters */
+	case ngbe_media_type_copper:
+			ret_val = ngbe_fc_autoneg_copper(hw);
+		break;
+
+	default:
+		break;
+	}
+
+out:
+	if (ret_val == NGBE_OK) {
+		hw->fc.fc_was_autonegged = true;
+	} else {
+		hw->fc.fc_was_autonegged = false;
+		hw->fc.current_mode = hw->fc.requested_mode;
+	}
+}
+
+/**
+ * ngbe_fc_enable - Enable flow control
+ * @hw: pointer to hardware structure
+ *
+ * Enable flow control according to the current settings.
+ **/
+s32 ngbe_fc_enable(struct ngbe_hw *hw)
+{
+	s32 ret_val = 0;
+	u32 mflcn_reg, fccfg_reg;
+	u32 reg;
+	u32 fcrtl, fcrth;
+
+	/* Validate the water mark configuration */
+	if (!hw->fc.pause_time) {
+		ret_val = NGBE_ERR_INVALID_LINK_SETTINGS;
+		goto out;
+	}
+
+	/* Low water mark of zero causes XOFF floods */
+	if ((hw->fc.current_mode & ngbe_fc_tx_pause) && hw->fc.high_water) {
+		if (!hw->fc.low_water || hw->fc.low_water >= hw->fc.high_water) {
+			ERROR_REPORT1(hw, NGBE_ERROR_INVALID_STATE,
+				      "Invalid water mark configuration\n");
+			ret_val = NGBE_ERR_INVALID_LINK_SETTINGS;
+			goto out;
+		}
+	}
+
+	/* Negotiate the fc mode to use */
+	ngbe_fc_autoneg(hw);
+
+	/* Disable any previous flow control settings */
+	mflcn_reg = rd32(hw, NGBE_MAC_RX_FLOW_CTRL);
+	mflcn_reg &= ~NGBE_MAC_RX_FLOW_CTRL_RFE;
+
+	fccfg_reg = rd32(hw, NGBE_RDB_RFCC);
+	fccfg_reg &= ~NGBE_RDB_RFCC_RFCE_802_3X;
+
+	/* The possible values of fc.current_mode are:
+	 * 0: Flow control is completely disabled
+	 * 1: Rx flow control is enabled (we can receive pause frames,
+	 *    but not send pause frames).
+	 * 2: Tx flow control is enabled (we can send pause frames but
+	 *    we do not support receiving pause frames).
+	 * 3: Both Rx and Tx flow control (symmetric) are enabled.
+	 * other: Invalid.
+	 */
+	switch (hw->fc.current_mode) {
+	case ngbe_fc_none:
+		/* Flow control is disabled by software override or autoneg.
+		 * The code below will actually disable it in the HW.
+		 */
+		break;
+	case ngbe_fc_rx_pause:
+		/* Rx Flow control is enabled and Tx Flow control is
+		 * disabled by software override. Since there really
+		 * isn't a way to advertise that we are capable of RX
+		 * Pause ONLY, we will advertise that we support both
+		 * symmetric and asymmetric Rx PAUSE.  Later, we will
+		 * disable the adapter's ability to send PAUSE frames.
+		 */
+		mflcn_reg |= NGBE_MAC_RX_FLOW_CTRL_RFE;
+		break;
+	case ngbe_fc_tx_pause:
+		/* Tx Flow control is enabled, and Rx Flow control is
+		 * disabled by software override.
+		 */
+		fccfg_reg |= NGBE_RDB_RFCC_RFCE_802_3X;
+		break;
+	case ngbe_fc_full:
+		/* Flow control (both Rx and Tx) is enabled by SW override. */
+		mflcn_reg |= NGBE_MAC_RX_FLOW_CTRL_RFE;
+		fccfg_reg |= NGBE_RDB_RFCC_RFCE_802_3X;
+		break;
+	default:
+		ERROR_REPORT1(hw, NGBE_ERROR_ARGUMENT,
+			      "Flow control param set incorrectly\n");
+		ret_val = NGBE_ERR_CONFIG;
+		goto out;
+	}
+
+	/* Set 802.3x based flow control settings. */
+	wr32(hw, NGBE_MAC_RX_FLOW_CTRL, mflcn_reg);
+	wr32(hw, NGBE_RDB_RFCC, fccfg_reg);
+
+	/* Set up and enable Rx high/low water mark thresholds, enable XON. */
+	if ((hw->fc.current_mode & ngbe_fc_tx_pause) &&
+	    hw->fc.high_water) {
+		/* 32Byte granularity */
+		fcrtl = (hw->fc.low_water << 10) |
+			NGBE_RDB_RFCL_XONE;
+		wr32(hw, NGBE_RDB_RFCL, fcrtl);
+		fcrth = (hw->fc.high_water << 10) |
+			NGBE_RDB_RFCH_XOFFE;
+	} else {
+		wr32(hw, NGBE_RDB_RFCL, 0);
+		/* In order to prevent Tx hangs when the internal Tx
+		 * switch is enabled we must set the high water mark
+		 * to the Rx packet buffer size - 24KB.  This allows
+		 * the Tx switch to function even under heavy Rx
+		 * workloads.
+		 */
+		fcrth = rd32(hw, NGBE_RDB_PB_SZ) - 24576;
+	}
+
+	wr32(hw, NGBE_RDB_RFCH, fcrth);
+
+	/* Configure pause time (2 TCs per register) */
+	reg = hw->fc.pause_time * 0x00010000;
+	wr32(hw, NGBE_RDB_RFCV, reg);
+
+	/* Configure flow control refresh threshold value */
+	wr32(hw, NGBE_RDB_RFCRT, hw->fc.pause_time / 2);
+
+out:
+	return ret_val;
+}
+
+/**
+ * ngbe_setup_fc - Set up flow control
+ * @hw: pointer to hardware structure
+ *
+ * Called at init time to set up flow control.
+ **/
+s32 ngbe_setup_fc(struct ngbe_hw *hw)
+{
+	s32 ret_val = 0;
+	u16 pcap_backplane = 0;
+
+	/* Validate the requested mode */
+	if (hw->fc.strict_ieee && hw->fc.requested_mode == ngbe_fc_rx_pause) {
+		ERROR_REPORT1(hw, NGBE_ERROR_UNSUPPORTED,
+			      "ngbe_fc_rx_pause not valid in strict IEEE mode\n");
+		ret_val = NGBE_ERR_INVALID_LINK_SETTINGS;
+		goto out;
+	}
+
+	/* gig parts do not have a word in the EEPROM to determine the
+	 * default flow control setting, so we explicitly set it to full.
+	 */
+	if (hw->fc.requested_mode == ngbe_fc_default)
+		hw->fc.requested_mode = ngbe_fc_full;
+
+	/* The possible values of fc.requested_mode are:
+	 * 0: Flow control is completely disabled
+	 * 1: Rx flow control is enabled (we can receive pause frames,
+	 *    but not send pause frames).
+	 * 2: Tx flow control is enabled (we can send pause frames but
+	 *    we do not support receiving pause frames).
+	 * 3: Both Rx and Tx flow control (symmetric) are enabled.
+	 * other: Invalid.
+	 */
+	switch (hw->fc.requested_mode) {
+	case ngbe_fc_none:
+		/* Flow control completely disabled by software override. */
+		break;
+	case ngbe_fc_tx_pause:
+		/* Tx Flow control is enabled, and Rx Flow control is
+		 * disabled by software override.
+		 */
+		if (hw->phy.type != ngbe_phy_m88e1512_sfi &&
+		    hw->phy.type != ngbe_phy_yt8521s_sfi)
+			pcap_backplane |= NGBE_SR_AN_MMD_ADV_REG1_PAUSE_ASM;
+		else
+			pcap_backplane |= 0x100;
+		break;
+	case ngbe_fc_rx_pause:
+		 fallthrough;
+	case ngbe_fc_full:
+		/* Flow control (both Rx and Tx) is enabled by SW override. */
+		if (hw->phy.type != ngbe_phy_m88e1512_sfi &&
+		    hw->phy.type != ngbe_phy_yt8521s_sfi)
+			pcap_backplane |= NGBE_SR_AN_MMD_ADV_REG1_PAUSE_SYM |
+				NGBE_SR_AN_MMD_ADV_REG1_PAUSE_ASM;
+		else
+			pcap_backplane |= 0x80;
+		break;
+	default:
+		ERROR_REPORT1(hw, NGBE_ERROR_ARGUMENT,
+			      "Flow control param set incorrectly\n");
+		ret_val = NGBE_ERR_CONFIG;
+		goto out;
+	}
+
+	/* AUTOC restart handles negotiation of 1G on backplane
+	 * and copper.
+	 */
+	if (hw->phy.media_type == ngbe_media_type_copper &&
+	    !((hw->subsystem_device_id & NGBE_OEM_MASK) == NGBE_SUBID_RGMII_FPGA))
+		ret_val = TCALL(hw, phy.ops.set_adv_pause, pcap_backplane);
+
+out:
+	return ret_val;
+}
+
 s32 ngbe_init_ops_common(struct ngbe_hw *hw)
 {
 	struct ngbe_mac_info *mac = &hw->mac;
@@ -2674,6 +2999,10 @@ s32 ngbe_init_ops_common(struct ngbe_hw *hw)
 
 	/* Manageability interface */
 	mac->ops.set_fw_drv_ver = ngbe_set_fw_drv_ver;
+
+	/* Flow Control */
+	mac->ops.fc_enable = ngbe_fc_enable;
+	mac->ops.setup_fc = ngbe_setup_fc;
 
 	mac->mcft_size          = NGBE_SP_MC_TBL_SIZE;
 	mac->vft_size           = NGBE_SP_VFT_TBL_SIZE;
