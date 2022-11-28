@@ -221,7 +221,7 @@ static int __init _parse_table(struct acpi_table_header *table)
 
 		res[next_res].name = "MPAM:MSC";
 		res[next_res].start = tbl_msc->base_address;
-		res[next_res].end = tbl_msc->base_address + tbl_msc->mmio_size;
+		res[next_res].end = tbl_msc->base_address + tbl_msc->mmio_size - 1;
 		res[next_res].flags = IORESOURCE_MEM;
 		next_res++;
 
