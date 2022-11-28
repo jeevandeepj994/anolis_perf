@@ -245,6 +245,9 @@ typedef u32 ngbe_physical_layer;
 #define NGBE_SPI_CMDCFG1               0x10118
 #define NGBE_SPI_ILDR_STATUS           0x10120
 #define NGBE_SPI_ILDR_SWPTR            0x10124
+#define NGBE_SPI_CMD_CMD(_v)           (((_v) & 0x7) << 28)
+#define NGBE_SPI_CMD_CLK(_v)           (((_v) & 0x7) << 25)
+#define NGBE_SPI_CMD_ADDR(_v)          (((_v) & 0x7FFFFF))
 
 #define NGBE_SPI_ILDR_STATUS_SW_RESET  0x00000800U /* software reset done */
 #define NGBE_SPI_ILDR_STATUS_PERST     0x00000001U /* PCIE_PERST is done */
@@ -252,6 +255,10 @@ typedef u32 ngbe_physical_layer;
 
 #define NGBE_SPI_STATUS_FLASH_BYPASS   ((0x1) << 31)
 #define NGBE_MAX_FLASH_LOAD_POLL_TIME  10
+
+#define NGBE_SPI_STATUS_OPDONE         ((0x1))
+#define NGBE_SPI_STATUS_FLASH_BYPASS   ((0x1) << 31)
+#define NGBE_SPI_TIMEOUT               1000
 
 /* ETH MAC */
 #define NGBE_MAC_TX_CFG                0x11000
@@ -1634,6 +1641,12 @@ struct ngbe_addr_filter_info {
 	bool user_set_promisc;
 };
 
+struct ngbe_flash_operations {
+	s32 (*init_params)(struct ngbe_hw *hw);
+	s32 (*read_buffer)(struct ngbe_hw *hw, u32 offset, u32 dwords, u32 *data);
+	s32 (*write_buffer)(struct ngbe_hw *hw, u32 offset, u32 dwords, u32 *data);
+};
+
 /* Flow control parameters */
 struct ngbe_fc_info {
 	u32 high_water; /* Flow Ctrl High-water */
@@ -1647,6 +1660,13 @@ struct ngbe_fc_info {
 	enum ngbe_fc_mode requested_mode; /* FC mode requested by caller */
 };
 
+struct ngbe_flash_info {
+	struct ngbe_flash_operations ops;
+	u32 semaphore_delay;
+	u32 dword_size;
+	u16 address_bits;
+};
+
 struct ngbe_hw {
 	u8 __iomem *hw_addr;
 	void *back;
@@ -1656,6 +1676,7 @@ struct ngbe_hw {
 	struct ngbe_eeprom_info eeprom;
 	struct ngbe_addr_filter_info addr_ctrl;
 	struct ngbe_fc_info fc;
+	struct ngbe_flash_info flash;
 
 	u16 device_id;
 	u16 vendor_id;
