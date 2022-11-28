@@ -409,6 +409,8 @@ s32 ngbe_phy_init(struct ngbe_hw *hw)
 	s32 ret_val = 0;
 	u16 value = 0;
 	int i;
+	u8 lan_id = hw->bus.lan_id;
+	struct ngbe_adapter *adapter = hw->back;
 
 	/* init phy.addr according to HW design */
 	hw->phy.addr = 0;
@@ -421,7 +423,9 @@ s32 ngbe_phy_init(struct ngbe_hw *hw)
 	/* enable interrupts, only link status change and an done is allowed */
 	if (hw->phy.type == ngbe_phy_internal || hw->phy.type == ngbe_phy_internal_yt8521s_sfi) {
 		value = NGBE_INTPHY_INT_LSC | NGBE_INTPHY_INT_ANC;
-		TCALL(hw, phy.ops.write_reg, 0x12, 0xa42, value);
+		ret_val = TCALL(hw, phy.ops.write_reg, 0x12, 0xa42, value);
+		adapter->gphy_efuse[0] = ngbe_flash_read_dword(hw, 0xfe010 + lan_id * 8);
+		adapter->gphy_efuse[1] = ngbe_flash_read_dword(hw, 0xfe010 + lan_id * 8 + 4);
 	} else if (hw->phy.type == ngbe_phy_m88e1512 ||
 				hw->phy.type == ngbe_phy_m88e1512_sfi) {
 		TCALL(hw, phy.ops.write_reg_mdi, 22, 0, 2);
@@ -1307,6 +1311,59 @@ s32 ngbe_phy_set_pause_adv_yt(struct ngbe_hw *hw, u16 pause_bit)
 	return status;
 }
 
+s32 ngbe_gphy_dis_eee(struct ngbe_hw *hw)
+{
+	u16 val = 0;
+
+	TCALL(hw, phy.ops.write_reg, 0x11, 0xa4b, 0x1110);
+	TCALL(hw, phy.ops.write_reg, 0xd, 0x0, 0x7);
+	TCALL(hw, phy.ops.write_reg, 0xe, 0x0, 0x003c);
+	TCALL(hw, phy.ops.write_reg, 0xd, 0x0, 0x4007);
+	TCALL(hw, phy.ops.write_reg, 0xe, 0x0, 0);
+
+	/* disable 10/100M Half Duplex */
+	msleep(100);
+	TCALL(hw, phy.ops.read_reg, 4, 0, &val);
+	val &= 0xff5f;
+	TCALL(hw, phy.ops.write_reg, 0x4, 0x0, val);
+
+	return 0;
+}
+
+s32 ngbe_gphy_efuse_calibration(struct ngbe_hw *hw)
+{
+	u32 efuse[2];
+	struct ngbe_adapter *adapter = hw->back;
+
+	ngbe_gphy_wait_mdio_access_on(hw);
+
+	efuse[0] = adapter->gphy_efuse[0];
+	efuse[1] = adapter->gphy_efuse[1];
+
+	if (!efuse[0] && !efuse[1]) {
+		efuse[0] = 0xFFFFFFFF;
+		efuse[1] = 0xFFFFFFFF;
+	}
+
+	/* calibration */
+	efuse[0] |= 0xF0000100;
+	efuse[1] |= 0xFF807FFF;
+
+	/* EODR, Efuse Output Data Register */
+	ngbe_phy_write_reg(hw, 16, 0xa46, (efuse[0] >>  0) & 0xFFFF);
+	ngbe_phy_write_reg(hw, 17, 0xa46, (efuse[0] >> 16) & 0xFFFF);
+	ngbe_phy_write_reg(hw, 18, 0xa46, (efuse[1] >>  0) & 0xFFFF);
+	ngbe_phy_write_reg(hw, 19, 0xa46, (efuse[1] >> 16) & 0xFFFF);
+
+	ngbe_phy_write_reg(hw, 20, 0xa46, 0x01);    /* set efuse ready */
+	ngbe_gphy_wait_mdio_access_on(hw);
+	ngbe_phy_write_reg(hw, 27, 0xa43, 0x8011);
+	ngbe_phy_write_reg(hw, 28, 0xa43, 0x5737);
+	ngbe_gphy_dis_eee(hw);
+
+	return 0;
+}
+
 s32 ngbe_phy_setup(struct ngbe_hw *hw)
 {
 	int i;
@@ -1325,6 +1382,7 @@ s32 ngbe_phy_setup(struct ngbe_hw *hw)
 		return NGBE_ERR_PHY_TIMEOUT;
 	}
 
+	ngbe_gphy_efuse_calibration(hw);
 	TCALL(hw, phy.ops.write_reg, 20, 0xa46, 2);
 	ngbe_gphy_wait_mdio_access_on(hw);
 

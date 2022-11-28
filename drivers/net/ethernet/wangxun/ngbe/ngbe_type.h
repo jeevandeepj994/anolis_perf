@@ -203,6 +203,7 @@ typedef u32 ngbe_physical_layer;
 /**************** Global Registers ****************************/
 /* chip control Registers */
 #define NGBE_MIS_PWR                   0x10000
+#define NGBE_MIS_PF_SM                 0x10008
 #define NGBE_MIS_RST                   0x1000C
 #define NGBE_MIS_ST                    0x10028
 #define NGBE_MIS_SWSM                  0x1002C
@@ -334,6 +335,7 @@ typedef u32 ngbe_physical_layer;
 #define NGBE_PX_INTA                   0x110
 #define NGBE_PX_GPIE                   0x118
 #define NGBE_PX_IC                     0x120
+#define NGBE_PX_ICS                    0x130
 #define NGBE_PX_IMS                    0x140
 #define NGBE_PX_IMC                    0x150
 #define NGBE_PX_ISB_ADDR_L             0x160
@@ -728,6 +730,246 @@ typedef u32 ngbe_physical_layer;
 #define NGBE_DEVICE_CAPS_WOL_PORT0_1   0x4 /* WoL supported on ports 0 & 1 */
 #define NGBE_DEVICE_CAPS_WOL_PORT0     0x8 /* WoL supported on port 0 */
 #define NGBE_DEVICE_CAPS_WOL_MASK      0xC /* Mask for WoL capabilities */
+
+/*********************** Adv Transmit Descriptor Config Masks ****************/
+#define NGBE_TXD_DTALEN_MASK           0x0000FFFFU /* Data buf length(bytes) */
+#define NGBE_TXD_MAC_LINKSEC           0x00040000U /* Insert LinkSec */
+#define NGBE_TXD_MAC_TSTAMP            0x00080000U /* IEEE1588 time stamp */
+#define NGBE_TXD_IPSEC_SA_INDEX_MASK   0x000003FFU /* IPSec SA index */
+#define NGBE_TXD_IPSEC_ESP_LEN_MASK    0x000001FFU /* IPSec ESP length */
+#define NGBE_TXD_DTYP_MASK             0x00F00000U /* DTYP mask */
+#define NGBE_TXD_DTYP_CTXT             0x00100000U /* Adv Context Desc */
+#define NGBE_TXD_DTYP_DATA             0x00000000U /* Adv Data Descriptor */
+#define NGBE_TXD_EOP                   0x01000000U  /* End of Packet */
+#define NGBE_TXD_IFCS                  0x02000000U /* Insert FCS */
+#define NGBE_TXD_LINKSEC               0x04000000U /* enable linksec */
+#define NGBE_TXD_RS                    0x08000000U /* Report Status */
+#define NGBE_TXD_ECU                   0x10000000U /* DDP hdr type or iSCSI */
+#define NGBE_TXD_QCN                   0x20000000U /* cntag insertion enable */
+#define NGBE_TXD_VLE                   0x40000000U /* VLAN pkt enable */
+#define NGBE_TXD_TSE                   0x80000000U /* TCP Seg enable */
+#define NGBE_TXD_STAT_DD               0x00000001U /* Descriptor Done */
+#define NGBE_TXD_IDX_SHIFT             4 /* Adv desc Index shift */
+#define NGBE_TXD_CC                    0x00000080U /* Check Context */
+#define NGBE_TXD_IPSEC                 0x00000100U /* enable ipsec esp */
+#define NGBE_TXD_IIPCS                 0x00000400U
+#define NGBE_TXD_EIPCS                 0x00000800U
+#define NGBE_TXD_L4CS                  0x00000200U
+#define NGBE_TXD_PAYLEN_SHIFT          13 /* Adv desc PAYLEN shift */
+#define NGBE_TXD_MACLEN_SHIFT          9  /* Adv ctxt desc mac len shift */
+#define NGBE_TXD_VLAN_SHIFT            16  /* Adv ctxt vlan tag shift */
+#define NGBE_TXD_TAG_TPID_SEL_SHIFT    11
+#define NGBE_TXD_IPSEC_TYPE_SHIFT      14
+#define NGBE_TXD_ENC_SHIFT             15
+
+#define NGBE_TXD_TUCMD_IPSEC_TYPE_ESP  0x00004000U /* IPSec Type ESP */
+#define NGBE_TXD_TUCMD_IPSEC_ENCRYPT_EN 0x00008000/* ESP Encrypt Enable */
+#define NGBE_TXD_TUCMD_FCOE            0x00010000U /* FCoE Frame Type */
+#define NGBE_TXD_FCOEF_EOF_MASK        (0x3 << 10) /* FC EOF index */
+#define NGBE_TXD_FCOEF_SOF             ((1 << 2) << 10) /* FC SOF index */
+#define NGBE_TXD_FCOEF_PARINC          ((1 << 3) << 10) /* Rel_Off in F_CTL */
+#define NGBE_TXD_FCOEF_ORIE            ((1 << 4) << 10) /* Orientation End */
+#define NGBE_TXD_FCOEF_ORIS            ((1 << 5) << 10) /* Orientation Start */
+#define NGBE_TXD_FCOEF_EOF_N           (0x0 << 10) /* 00: EOFn */
+#define NGBE_TXD_FCOEF_EOF_T           (0x1 << 10) /* 01: EOFt */
+#define NGBE_TXD_FCOEF_EOF_NI          (0x2 << 10) /* 10: EOFni */
+#define NGBE_TXD_FCOEF_EOF_A           (0x3 << 10) /* 11: EOFa */
+#define NGBE_TXD_L4LEN_SHIFT           8  /* Adv ctxt L4LEN shift */
+#define NGBE_TXD_MSS_SHIFT             16  /* Adv ctxt MSS shift */
+
+#define NGBE_TXD_OUTER_IPLEN_SHIFT     12 /* Adv ctxt OUTERIPLEN shift */
+#define NGBE_TXD_TUNNEL_LEN_SHIFT      21 /* Adv ctxt TUNNELLEN shift */
+#define NGBE_TXD_TUNNEL_TYPE_SHIFT     11 /* Adv Tx Desc Tunnel Type shift */
+#define NGBE_TXD_TUNNEL_DECTTL_SHIFT   27 /* Adv ctxt DECTTL shift */
+#define NGBE_TXD_TUNNEL_UDP            (0x0ULL << NGBE_TXD_TUNNEL_TYPE_SHIFT)
+#define NGBE_TXD_TUNNEL_GRE            (0x1ULL << NGBE_TXD_TUNNEL_TYPE_SHIFT)
+
+#define NGBE_MAX_TXD_PWR       14
+#define NGBE_MAX_DATA_PER_TXD   BIT(NGBE_MAX_TXD_PWR)
+#define TXD_USE_COUNT(S)        DIV_ROUND_UP((S), NGBE_MAX_DATA_PER_TXD)
+#define NGBE_TXD_CMD            (NGBE_TXD_EOP | NGBE_TXD_RS)
+
+/******************* Receive Descriptor bit definitions **********************/
+#define NGBE_RXD_IPSEC_STATUS_SECP             0x00020000U
+#define NGBE_RXD_IPSEC_ERROR_INVALID_PROTOCOL  0x08000000U
+#define NGBE_RXD_IPSEC_ERROR_INVALID_LENGTH    0x10000000U
+#define NGBE_RXD_IPSEC_ERROR_AUTH_FAILED       0x18000000U
+#define NGBE_RXD_IPSEC_ERROR_BIT_MASK          0x18000000U
+
+#define NGBE_RXD_NEXTP_MASK            0x000FFFF0U /* Next Descriptor Index */
+#define NGBE_RXD_NEXTP_SHIFT           0x00000004U
+#define NGBE_RXD_STAT_MASK             0x000fffffU /* Stat/NEXTP: bit 0-19 */
+#define NGBE_RXD_STAT_DD               0x00000001U /* Done */
+#define NGBE_RXD_STAT_EOP              0x00000002U /* End of Packet */
+#define NGBE_RXD_STAT_CLASS_ID_MASK    0x0000001CU
+#define NGBE_RXD_STAT_CLASS_ID_TC_RSS  0x00000000U
+#define NGBE_RXD_STAT_CLASS_ID_SYN     0x00000008U
+#define NGBE_RXD_STAT_CLASS_ID_5_TUPLE 0x0000000CU
+#define NGBE_RXD_STAT_CLASS_ID_L2_ETYPE 0x00000010U
+#define NGBE_RXD_STAT_VP               0x00000020U /* IEEE VLAN Pkt */
+#define NGBE_RXD_STAT_UDPCS            0x00000040U /* UDP xsum calculated */
+#define NGBE_RXD_STAT_L4CS             0x00000080U /* L4 xsum calculated */
+#define NGBE_RXD_STAT_IPCS             0x00000100U /* IP xsum calculated */
+#define NGBE_RXD_STAT_PIF              0x00000200U /* passed in-exact filter */
+#define NGBE_RXD_STAT_OUTERIPCS        0x00000400U /* Cloud IP xsum calculated*/
+#define NGBE_RXD_STAT_VEXT             0x00000800U /* 1st VLAN found */
+#define NGBE_RXD_STAT_LLINT            0x00002000U /* Pkt caused Low Latency Int */
+#define NGBE_RXD_STAT_TS               0x00004000U /* IEEE1588 Time Stamp */
+#define NGBE_RXD_STAT_SECP             0x00008000U /* Security Processing */
+#define NGBE_RXD_STAT_LB               0x00010000U /* Loopback Status */
+#define NGBE_RXD_STAT_FCEOFS           0x00020000U /* FCoE EOF/SOF Stat */
+#define NGBE_RXD_STAT_FCSTAT           0x000C0000U /* FCoE Pkt Stat */
+#define NGBE_RXD_STAT_FCSTAT_NOMTCH    0x00000000U /* 00: No Ctxt Match */
+#define NGBE_RXD_STAT_FCSTAT_NODDP     0x00040000U /* 01: Ctxt w/o DDP */
+#define NGBE_RXD_STAT_FCSTAT_FCPRSP    0x00080000U /* 10: Recv. FCP_RSP */
+#define NGBE_RXD_STAT_FCSTAT_DDP       0x000C0000U /* 11: Ctxt w/ DDP */
+
+#define NGBE_RXD_ERR_MASK              0xfff00000U /* RDESC.ERRORS mask */
+#define NGBE_RXD_ERR_SHIFT             20         /* RDESC.ERRORS shift */
+#define NGBE_RXD_ERR_FCEOFE            0x80000000U /* FCEOFe/IPE */
+#define NGBE_RXD_ERR_HBO               0x00800000U /*Header Buffer Overflow */
+#define NGBE_RXD_ERR_OUTERIPER         0x04000000U /* CRC IP Header error */
+#define NGBE_RXD_ERR_SECERR_MASK       0x18000000U
+#define NGBE_RXD_ERR_RXE               0x20000000U /* Any MAC Error */
+#define NGBE_RXD_ERR_TCPE              0x40000000U /* TCP/UDP Checksum Error */
+#define NGBE_RXD_ERR_IPE               0x80000000U /* IP Checksum Error */
+
+#define NGBE_RXDPS_HDRSTAT_HDRSP       0x00008000U
+#define NGBE_RXDPS_HDRSTAT_HDRLEN_MASK 0x000003FFU
+
+#define NGBE_RXD_RSSTYPE_MASK          0x0000000FU
+#define NGBE_RXD_TPID_MASK             0x000001C0U
+#define NGBE_RXD_TPID_SHIFT            6
+#define NGBE_RXD_HDRBUFLEN_MASK        0x00007FE0U
+#define NGBE_RXD_RSCCNT_MASK           0x001E0000U
+#define NGBE_RXD_RSCCNT_SHIFT          17
+#define NGBE_RXD_HDRBUFLEN_SHIFT       5
+#define NGBE_RXD_SPLITHEADER_EN        0x00001000U
+#define NGBE_RXD_SPH                   0x8000
+
+/* RSS Hash results */
+#define NGBE_RXD_RSSTYPE_NONE          0x00000000U
+#define NGBE_RXD_RSSTYPE_IPV4_TCP      0x00000001U
+#define NGBE_RXD_RSSTYPE_IPV4          0x00000002U
+#define NGBE_RXD_RSSTYPE_IPV6_TCP      0x00000003U
+#define NGBE_RXD_RSSTYPE_IPV4_SCTP     0x00000004U
+#define NGBE_RXD_RSSTYPE_IPV6          0x00000005U
+#define NGBE_RXD_RSSTYPE_IPV6_SCTP     0x00000006U
+#define NGBE_RXD_RSSTYPE_IPV4_UDP      0x00000007U
+#define NGBE_RXD_RSSTYPE_IPV6_UDP      0x00000008U
+
+/* Masks to determine if packets should be dropped due to frame errors */
+#define NGBE_RXD_ERR_FRAME_ERR_MASK    NGBE_RXD_ERR_RXE
+
+#define NGBE_RXD_PKTTYPE(_rxd) \
+	((le32_to_cpu((_rxd)->wb.lower.lo_dword.data) >> 9) & 0xFF)
+
+#define NGBE_RXD_IPV6EX(_rxd) \
+	((le32_to_cpu((_rxd)->wb.lower.lo_dword.data) >> 6) & 0x1)
+
+/**
+ * receive packet type
+ * PTYPE:8 = TUN:2 + PKT:2 + TYP:4
+ **/
+/* TUN */
+#define NGBE_PTYPE_TUN_IPV4            (0x80)
+#define NGBE_PTYPE_TUN_IPV6            (0xC0)
+#define NGBE_MAX_TUNNEL_HDR_LEN        (0x50)
+
+/* PKT for TUN */
+#define NGBE_PTYPE_PKT_IPIP            (0x00) /* IP+IP */
+#define NGBE_PTYPE_PKT_IG              (0x10) /* IP+GRE */
+#define NGBE_PTYPE_PKT_IGM             (0x20) /* IP+GRE+MAC */
+#define NGBE_PTYPE_PKT_IGMV            (0x30) /* IP+GRE+MAC+VLAN */
+/* PKT for !TUN */
+#define NGBE_PTYPE_PKT_MAC             (0x10)
+#define NGBE_PTYPE_PKT_IP              (0x20)
+#define NGBE_PTYPE_PKT_FCOE            (0x30)
+
+/* TYP for PKT=mac */
+#define NGBE_PTYPE_TYP_MAC             (0x01)
+#define NGBE_PTYPE_TYP_TS              (0x02) /* time sync */
+#define NGBE_PTYPE_TYP_FIP             (0x03)
+#define NGBE_PTYPE_TYP_LLDP            (0x04)
+#define NGBE_PTYPE_TYP_CNM             (0x05)
+#define NGBE_PTYPE_TYP_EAPOL           (0x06)
+#define NGBE_PTYPE_TYP_ARP             (0x07)
+/* TYP for PKT=ip */
+#define NGBE_PTYPE_PKT_IPV6            (0x08)
+#define NGBE_PTYPE_TYP_IPFRAG          (0x01)
+#define NGBE_PTYPE_TYP_IP              (0x02)
+#define NGBE_PTYPE_TYP_UDP             (0x03)
+#define NGBE_PTYPE_TYP_TCP             (0x04)
+#define NGBE_PTYPE_TYP_SCTP            (0x05)
+/* TYP for PKT=fcoe */
+#define NGBE_PTYPE_PKT_VFT             (0x08)
+#define NGBE_PTYPE_TYP_FCOE            (0x00)
+#define NGBE_PTYPE_TYP_FCDATA          (0x01)
+#define NGBE_PTYPE_TYP_FCRDY           (0x02)
+#define NGBE_PTYPE_TYP_FCRSP           (0x03)
+#define NGBE_PTYPE_TYP_FCOTHER         (0x04)
+
+#define NGBE_RSS_L4_TYPES_MASK \
+	((1ul << NGBE_RXD_RSSTYPE_IPV4_TCP) | \
+	 (1ul << NGBE_RXD_RSSTYPE_IPV4_UDP) | \
+	 (1ul << NGBE_RXD_RSSTYPE_IPV4_SCTP) | \
+	 (1ul << NGBE_RXD_RSSTYPE_IPV6_TCP) | \
+	 (1ul << NGBE_RXD_RSSTYPE_IPV6_UDP) | \
+	 (1ul << NGBE_RXD_RSSTYPE_IPV6_SCTP))
+
+/* Packet type non-ip values */
+enum ngbe_l2_ptypes {
+	NGBE_PTYPE_L2_ABORTED = (NGBE_PTYPE_PKT_MAC),
+	NGBE_PTYPE_L2_MAC = (NGBE_PTYPE_PKT_MAC | NGBE_PTYPE_TYP_MAC),
+	NGBE_PTYPE_L2_TS = (NGBE_PTYPE_PKT_MAC | NGBE_PTYPE_TYP_TS),
+	NGBE_PTYPE_L2_FIP = (NGBE_PTYPE_PKT_MAC | NGBE_PTYPE_TYP_FIP),
+	NGBE_PTYPE_L2_LLDP = (NGBE_PTYPE_PKT_MAC | NGBE_PTYPE_TYP_LLDP),
+	NGBE_PTYPE_L2_CNM = (NGBE_PTYPE_PKT_MAC | NGBE_PTYPE_TYP_CNM),
+	NGBE_PTYPE_L2_EAPOL = (NGBE_PTYPE_PKT_MAC | NGBE_PTYPE_TYP_EAPOL),
+	NGBE_PTYPE_L2_ARP = (NGBE_PTYPE_PKT_MAC | NGBE_PTYPE_TYP_ARP),
+
+	NGBE_PTYPE_L2_IPV4_FRAG = (NGBE_PTYPE_PKT_IP |
+				    NGBE_PTYPE_TYP_IPFRAG),
+	NGBE_PTYPE_L2_IPV4 = (NGBE_PTYPE_PKT_IP | NGBE_PTYPE_TYP_IP),
+	NGBE_PTYPE_L2_IPV4_UDP = (NGBE_PTYPE_PKT_IP | NGBE_PTYPE_TYP_UDP),
+	NGBE_PTYPE_L2_IPV4_TCP = (NGBE_PTYPE_PKT_IP | NGBE_PTYPE_TYP_TCP),
+	NGBE_PTYPE_L2_IPV4_SCTP = (NGBE_PTYPE_PKT_IP | NGBE_PTYPE_TYP_SCTP),
+	NGBE_PTYPE_L2_IPV6_FRAG = (NGBE_PTYPE_PKT_IP | NGBE_PTYPE_PKT_IPV6 |
+				    NGBE_PTYPE_TYP_IPFRAG),
+	NGBE_PTYPE_L2_IPV6 = (NGBE_PTYPE_PKT_IP | NGBE_PTYPE_PKT_IPV6 |
+			       NGBE_PTYPE_TYP_IP),
+	NGBE_PTYPE_L2_IPV6_UDP = (NGBE_PTYPE_PKT_IP | NGBE_PTYPE_PKT_IPV6 |
+				   NGBE_PTYPE_TYP_UDP),
+	NGBE_PTYPE_L2_IPV6_TCP = (NGBE_PTYPE_PKT_IP | NGBE_PTYPE_PKT_IPV6 |
+				   NGBE_PTYPE_TYP_TCP),
+	NGBE_PTYPE_L2_IPV6_SCTP = (NGBE_PTYPE_PKT_IP | NGBE_PTYPE_PKT_IPV6 |
+				    NGBE_PTYPE_TYP_SCTP),
+
+	NGBE_PTYPE_L2_FCOE = (NGBE_PTYPE_PKT_FCOE | NGBE_PTYPE_TYP_FCOE),
+	NGBE_PTYPE_L2_FCOE_FCDATA = (NGBE_PTYPE_PKT_FCOE |
+				      NGBE_PTYPE_TYP_FCDATA),
+	NGBE_PTYPE_L2_FCOE_FCRDY = (NGBE_PTYPE_PKT_FCOE |
+				     NGBE_PTYPE_TYP_FCRDY),
+	NGBE_PTYPE_L2_FCOE_FCRSP = (NGBE_PTYPE_PKT_FCOE |
+				     NGBE_PTYPE_TYP_FCRSP),
+	NGBE_PTYPE_L2_FCOE_FCOTHER = (NGBE_PTYPE_PKT_FCOE |
+				       NGBE_PTYPE_TYP_FCOTHER),
+	NGBE_PTYPE_L2_FCOE_VFT = (NGBE_PTYPE_PKT_FCOE | NGBE_PTYPE_PKT_VFT),
+	NGBE_PTYPE_L2_FCOE_VFT_FCDATA = (NGBE_PTYPE_PKT_FCOE |
+				NGBE_PTYPE_PKT_VFT | NGBE_PTYPE_TYP_FCDATA),
+	NGBE_PTYPE_L2_FCOE_VFT_FCRDY = (NGBE_PTYPE_PKT_FCOE |
+				NGBE_PTYPE_PKT_VFT | NGBE_PTYPE_TYP_FCRDY),
+	NGBE_PTYPE_L2_FCOE_VFT_FCRSP = (NGBE_PTYPE_PKT_FCOE |
+				NGBE_PTYPE_PKT_VFT | NGBE_PTYPE_TYP_FCRSP),
+	NGBE_PTYPE_L2_FCOE_VFT_FCOTHER = (NGBE_PTYPE_PKT_FCOE |
+				NGBE_PTYPE_PKT_VFT | NGBE_PTYPE_TYP_FCOTHER),
+
+	NGBE_PTYPE_L2_TUN4_MAC = (NGBE_PTYPE_TUN_IPV4 | NGBE_PTYPE_PKT_IGM),
+	NGBE_PTYPE_L2_TUN6_MAC = (NGBE_PTYPE_TUN_IPV6 | NGBE_PTYPE_PKT_IGM),
+};
+
+#define NGBE_RXD_IPV6EX(_rxd) \
+	((le32_to_cpu((_rxd)->wb.lower.lo_dword.data) >> 6) & 0x1)
 
 /* default to trying for four seconds */
 #define NGBE_TRY_LINK_TIMEOUT          (4 * HZ)

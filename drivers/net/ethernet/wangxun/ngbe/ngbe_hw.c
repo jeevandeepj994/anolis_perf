@@ -6,8 +6,13 @@
 #include "ngbe_phy.h"
 #include "ngbe.h"
 
-#define NGBE_SP_RAR_ENTRIES        32
-#define NGBE_FAILED_READ_CFG_WORD  0xffffU
+#define NGBE_SP_RAR_ENTRIES    32
+#define NGBE_SP_MAX_TX_QUEUES  8
+#define NGBE_SP_MAX_RX_QUEUES  8
+#define NGBE_SP_RAR_ENTRIES    32
+#define NGBE_SP_MC_TBL_SIZE    128
+#define NGBE_SP_VFT_TBL_SIZE   128
+#define NGBE_SP_RX_PB_SIZE     42
 
 u8 fmgr_cmd_op(struct ngbe_hw *hw, u32 cmd, u32 cmd_addr)
 {
@@ -2670,6 +2675,12 @@ s32 ngbe_init_ops_common(struct ngbe_hw *hw)
 	/* Manageability interface */
 	mac->ops.set_fw_drv_ver = ngbe_set_fw_drv_ver;
 
+	mac->mcft_size          = NGBE_SP_MC_TBL_SIZE;
+	mac->vft_size           = NGBE_SP_VFT_TBL_SIZE;
+	mac->num_rar_entries    = NGBE_SP_RAR_ENTRIES;
+	mac->rx_pb_size         = NGBE_SP_RX_PB_SIZE;
+	mac->max_rx_queues      = NGBE_SP_MAX_RX_QUEUES;
+	mac->max_tx_queues      = NGBE_SP_MAX_TX_QUEUES;
 	mac->max_msix_vectors   = ngbe_get_pcie_msix_count(hw);
 
 	if (hw->phy.type == ngbe_phy_m88e1512 ||
