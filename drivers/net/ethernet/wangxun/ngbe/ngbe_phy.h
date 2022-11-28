@@ -25,6 +25,7 @@ u32 ngbe_phy_setup_link_yt(struct ngbe_hw *hw,
 										 bool wait);
 s32 ngbe_phy_reset_m88e1512(struct ngbe_hw *hw);
 s32 ngbe_phy_reset_yt(struct ngbe_hw *hw);
+s32 ngbe_phy_check_overtemp(struct ngbe_hw *hw);
 s32 ngbe_phy_check_event_m88e1512(struct ngbe_hw *hw);
 s32 ngbe_phy_check_event_yt(struct ngbe_hw *hw);
 s32 ngbe_phy_get_adv_pause_m88e1512(struct ngbe_hw *hw, u8 *pause_bit);
