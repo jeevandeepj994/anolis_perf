@@ -14,7 +14,7 @@
 #define NGBE_SP_VFT_TBL_SIZE   128
 #define NGBE_SP_RX_PB_SIZE     42
 
-u8 fmgr_cmd_op(struct ngbe_hw *hw, u32 cmd, u32 cmd_addr)
+u8 ngbe_fmgr_cmd_op(struct ngbe_hw *hw, u32 cmd, u32 cmd_addr)
 {
 	u32 cmd_val = 0;
 	u32 time_out = 0;
@@ -41,7 +41,7 @@ u32 ngbe_flash_read_dword(struct ngbe_hw *hw, u32 addr)
 {
 	u8 status;
 
-	status = fmgr_cmd_op(hw, SPI_CMD_READ_DWORD, addr);
+	status = ngbe_fmgr_cmd_op(hw, SPI_CMD_READ_DWORD, addr);
 	if (status)
 		return (u32)status;
 
@@ -2938,6 +2938,431 @@ out:
 	return ret_val;
 }
 
+static int check_image_version(struct ngbe_hw *hw, const u8 *data)
+{
+	u32 image_v = 0x0;
+	u32 f_chip_v = 0x0;
+	u8 rdata_2;
+	u8 rdata_3, rdata_4;
+	u32 f_sub_id;
+	u8 wol = 0, ncsi = 0;
+
+	image_v = data[0x13a] | data[0x13b] << 8 |
+		  data[0x13c] << 16 | data[0x13d] << 24;
+	hw_dbg(hw, "image_version=image_v: %x\n", image_v);
+
+	f_sub_id = data[0xfffdc] << 8 | data[0xfffdd];
+	hw_dbg(hw, "The image's sub_id : %04x\n", f_sub_id);
+	if ((f_sub_id & 0x8000) == 0x8000)
+		ncsi = 1;
+	if ((f_sub_id & 0x4000) == 0x4000)
+		wol = 1;
+	hw_dbg(hw, "=2=ncsi : %x - wol : %x\n", ncsi, wol);
+
+	rdata_2 = data[0xfffd8];
+	hw_dbg(hw, "image_version=rdata_2-fffdc: %x\n", rdata_2);
+	rdata_3 = data[0xbc];
+	hw_dbg(hw, "image_version=rdata_3-bc: %x\n", rdata_3);
+	rdata_4 = data[0x3c];
+	hw_dbg(hw, "image_version=rdata_4-3c: %x\n", rdata_4);
+
+	//check card's chip version
+	if (image_v < 0x10015 && image_v != 0x10012 && image_v != 0x10013) {
+		f_chip_v = 0x41;//'A'
+	} else if (image_v > 0x10015) {
+		f_chip_v = rdata_2 & 0xff;
+	} else if (image_v == 0x10012 || image_v == 0x10013 || image_v == 0x10015) {
+		if (wol == 1 || ncsi == 1) {
+			if (rdata_3 == 0x02)
+				f_chip_v = 0x41;
+			else
+				f_chip_v = 0x42;
+		} else {
+			if (rdata_4 == 0x80)
+				f_chip_v = 0x42;
+			else
+				f_chip_v = 0x41;
+		}
+	}
+
+	return f_chip_v;
+}
+
+static int ngbe_flash_write_unlock(struct ngbe_hw *hw)
+{
+	int status;
+	struct ngbe_hic_read_shadow_ram buffer;
+
+	buffer.hdr.req.cmd = 0x40;
+	buffer.hdr.req.buf_lenh = 0;
+	buffer.hdr.req.buf_lenl = 0;
+	buffer.hdr.req.checksum = 0xFF;
+
+	/* convert offset from words to bytes */
+	buffer.address = 0;
+	/* one word */
+	buffer.length = 0;
+
+	status = ngbe_host_if_command(hw, (u32 *)&buffer,
+				      sizeof(buffer), 5000, false);
+	if (status)
+		return status;
+
+	return status;
+}
+
+u8 fmgr_usr_cmd_op(struct ngbe_hw *hw, u32 usr_cmd)
+{
+	u8 status = 0;
+
+	wr32(hw, SPI_H_USR_CMD_REG_ADDR, usr_cmd);
+	status = ngbe_fmgr_cmd_op(hw, SPI_CMD_USER_CMD, 0);
+
+	return status;
+}
+
+u8 flash_erase_sector(struct ngbe_hw *hw, u32 sec_addr)
+{
+	u8 status = ngbe_fmgr_cmd_op(hw, SPI_CMD_ERASE_SECTOR, sec_addr);
+	return status;
+}
+
+u8 flash_erase_chip(struct ngbe_hw *hw)
+{
+	u8 status = ngbe_fmgr_cmd_op(hw, SPI_CMD_ERASE_CHIP, 0);
+	return status;
+}
+
+u8 flash_write_dword(struct ngbe_hw *hw, u32 addr, u32 dword)
+{
+	u8 status = 0;
+
+	wr32(hw, SPI_H_DAT_REG_ADDR, dword);
+	status = ngbe_fmgr_cmd_op(hw, SPI_CMD_WRITE_DWORD, addr);
+
+	if (status)
+		return status;
+
+	if (dword != ngbe_flash_read_dword(hw, addr))
+		return 1;
+
+	return 0;
+}
+
+int ngbe_upgrade_flash(struct ngbe_hw *hw, u32 region,
+		       const u8 *data, u32 size)
+{
+	u32 sector_num = 0;
+	u32 read_data = 0;
+	u8 status = 0;
+	u8 skip = 0;
+	u32 i = 0, k = 0, n = 0;
+	u8 flash_vendor = 0;
+	u32 num[128] = {0};
+	u32 chip_v = 0, image_v = 0;
+	u32 mac_addr0_dword0_t, mac_addr0_dword1_t;
+	u32 mac_addr1_dword0_t, mac_addr1_dword1_t;
+	u32 mac_addr2_dword0_t, mac_addr2_dword1_t;
+	u32 mac_addr3_dword0_t, mac_addr3_dword1_t;
+	u32 serial_num_dword0_t, serial_num_dword1_t, serial_num_dword2_t;
+
+	read_data = rd32(hw, 0x10200);
+	if (read_data & 0x80000000) {
+		hw_dbg(hw, "The flash has been successfully, please reboot to make it work.\n");
+		return -EOPNOTSUPP;
+	}
+
+	chip_v = (rd32(hw, 0x10010) & BIT(16)) ? 0x41 : 0x42;
+	image_v = check_image_version(hw, data);
+
+	hw_dbg(hw, "Checking chip/image version .......\n");
+	hw_dbg(hw, "The image chip_v is %c\n", image_v);
+	hw_dbg(hw, "The nic chip_v is %c\n", chip_v);
+	if (chip_v != image_v) {
+		hw_dbg(hw, "====The image is not match the Gigabit card (chip version)====\n");
+		hw_dbg(hw, "====Please check your image====\n");
+		return -EOPNOTSUPP;
+	}
+
+	/* check sub_id */
+	hw_dbg(hw, "Checking sub_id .......\n");
+	hw_dbg(hw, "The card's sub_id : %04x\n", hw->subsystem_device_id);
+	hw_dbg(hw, "The image's sub_id : %04x\n", data[0xfffdc] << 8 | data[0xfffdd]);
+	if ((hw->subsystem_device_id & 0xffff) ==
+		((data[0xfffdc] << 8  | data[0xfffdd]) & 0xffff)) {
+		hw_dbg(hw, "It is a right image\n");
+	} else if (hw->subsystem_device_id == 0xffff) {
+		hw_dbg(hw, "update anyway\n");
+	} else {
+		hw_dbg(hw, "====The Gigabit image is not match the Gigabit card====\n");
+		hw_dbg(hw, "====Please check your image====\n");
+		return -EOPNOTSUPP;
+	}
+
+	/*check dev_id*/
+	hw_dbg(hw, "Checking dev_id .......\n");
+	hw_dbg(hw, "The image's dev_id : %04x\n", data[0xfffde] << 8  | data[0xfffdf]);
+	hw_dbg(hw, "The card's dev_id : %04x\n", hw->device_id);
+	if (!((hw->device_id & 0xffff) == ((data[0xfffde] << 8  | data[0xfffdf]) & 0xffff)) &&
+	    !(hw->device_id == 0xffff)) {
+		hw_dbg(hw, "====The Gigabit image is not match the Gigabit card====\n");
+		hw_dbg(hw, "====Please check your image====\n");
+		return -EOPNOTSUPP;
+	}
+
+	/* unlock flash write protect */
+	ngbe_release_eeprom_semaphore(hw);
+	ngbe_flash_write_unlock(hw);
+
+	wr32(hw, 0x10114, 0x9f050206);
+	wr32(hw, 0x10194, 0x9f050206);
+
+	mdelay(1000);
+
+	mac_addr0_dword0_t = ngbe_flash_read_dword(hw, MAC_ADDR0_WORD0_OFFSET_1G);
+	mac_addr0_dword1_t = ngbe_flash_read_dword(hw, MAC_ADDR0_WORD1_OFFSET_1G) & 0xffff;
+	mac_addr1_dword0_t = ngbe_flash_read_dword(hw, MAC_ADDR1_WORD0_OFFSET_1G);
+	mac_addr1_dword1_t = ngbe_flash_read_dword(hw, MAC_ADDR1_WORD1_OFFSET_1G) & 0xffff;
+	mac_addr2_dword0_t = ngbe_flash_read_dword(hw, MAC_ADDR2_WORD0_OFFSET_1G);
+	mac_addr2_dword1_t = ngbe_flash_read_dword(hw, MAC_ADDR2_WORD1_OFFSET_1G) & 0xffff;
+	mac_addr3_dword0_t = ngbe_flash_read_dword(hw, MAC_ADDR3_WORD0_OFFSET_1G);
+	mac_addr3_dword1_t = ngbe_flash_read_dword(hw, MAC_ADDR3_WORD1_OFFSET_1G) & 0xffff;
+
+	serial_num_dword0_t = ngbe_flash_read_dword(hw, PRODUCT_SERIAL_NUM_OFFSET_1G);
+	serial_num_dword1_t = ngbe_flash_read_dword(hw, PRODUCT_SERIAL_NUM_OFFSET_1G + 4);
+	serial_num_dword2_t = ngbe_flash_read_dword(hw, PRODUCT_SERIAL_NUM_OFFSET_1G + 8);
+	hw_dbg(hw, "Old: MAC Address0 is: 0x%04x%08x\n", mac_addr0_dword1_t, mac_addr0_dword0_t);
+	hw_dbg(hw, "MAC Address1 is: 0x%04x%08x\n", mac_addr1_dword1_t, mac_addr1_dword0_t);
+	hw_dbg(hw, "MAC Address2 is: 0x%04x%08x\n", mac_addr2_dword1_t, mac_addr2_dword0_t);
+	hw_dbg(hw, "MAC Address3 is: 0x%04x%08x\n", mac_addr3_dword1_t, mac_addr3_dword0_t);
+
+	for (k = 0; k < 128; k++)
+		num[k] = ngbe_flash_read_dword(hw, 0xfe000 + (k << 2));
+
+	status = fmgr_usr_cmd_op(hw, 0x6);  /* write enable */
+	status = fmgr_usr_cmd_op(hw, 0x98); /* global protection un-lock */
+	mdelay(1000);
+
+	if (flash_vendor == 1) {
+		wr32(hw, SPI_CMD_CFG1_ADDR, 0x0103c720);
+		for (i = 0; i < 8; i++) {
+			flash_erase_sector(hw, i << 7);
+			mdelay(20);
+		}
+		wr32(hw, SPI_CMD_CFG1_ADDR, 0x0103c7d8);
+	}
+
+	/* Winbond Flash, erase chip command is okay, but erase sector doestn't work*/
+	sector_num = size / SPI_SECTOR_SIZE;
+	if (flash_vendor == 2) {
+		status = flash_erase_chip(hw);
+		hw_dbg(hw, "Erase chip command, return status = %0d\n", status);
+		mdelay(1000);
+		wr32(hw, SPI_CMD_CFG1_ADDR, 0x0103c720);
+		for (i = 0; i < sector_num; i++) {
+			status = flash_erase_sector(hw, i * SPI_SECTOR_SIZE);
+			hw_dbg(hw, "Erase sector[%2d] command, return status = %0d\n", i, status);
+			mdelay(50);
+		}
+		wr32(hw, SPI_CMD_CFG1_ADDR, 0x0103c7d8);
+	}
+
+	/* Program Image file in dword */
+	for (i = 0; i < size; i += 4) {
+		read_data = data[i + 3] << 24 |
+					data[i + 2] << 16 |
+					data[i + 1] << 8 |
+					data[i];
+		read_data = __le32_to_cpu(read_data);
+		skip = ((i == MAC_ADDR0_WORD0_OFFSET_1G) ||
+				(i == MAC_ADDR0_WORD1_OFFSET_1G) ||
+				(i == MAC_ADDR1_WORD0_OFFSET_1G) ||
+				(i == MAC_ADDR1_WORD1_OFFSET_1G) ||
+				(i == MAC_ADDR2_WORD0_OFFSET_1G) ||
+				(i == MAC_ADDR2_WORD1_OFFSET_1G) ||
+				(i == MAC_ADDR3_WORD0_OFFSET_1G) ||
+				(i == MAC_ADDR3_WORD1_OFFSET_1G) ||
+				(i >= PRODUCT_SERIAL_NUM_OFFSET_1G &&
+				 i <= PRODUCT_SERIAL_NUM_OFFSET_1G + 8));
+
+		if (read_data != 0xffffffff && !skip) {
+			status = flash_write_dword(hw, i, read_data);
+			if (status) {
+				hw_dbg(hw, "ERROR: Program 0x%08x @addr: 0x%08x is failed !!\n",
+				       read_data, i);
+				read_data = ngbe_flash_read_dword(hw, i);
+				hw_dbg(hw, "Read data from Flash is: 0x%08x\n", read_data);
+				return 1;
+			}
+		}
+		if (i % 4096 == 0)
+			hw_dbg(hw, "\b\b\b\b%3d%%", (int)(i * 100 / size));
+	}
+	flash_write_dword(hw, MAC_ADDR0_WORD0_OFFSET_1G, mac_addr0_dword0_t);
+	flash_write_dword(hw, MAC_ADDR0_WORD1_OFFSET_1G, (mac_addr0_dword1_t | 0x80000000));
+	flash_write_dword(hw, MAC_ADDR1_WORD0_OFFSET_1G, mac_addr1_dword0_t);
+	flash_write_dword(hw, MAC_ADDR1_WORD1_OFFSET_1G, (mac_addr1_dword1_t | 0x80000000));
+	flash_write_dword(hw, MAC_ADDR2_WORD0_OFFSET_1G, mac_addr2_dword0_t);
+	flash_write_dword(hw, MAC_ADDR2_WORD1_OFFSET_1G, (mac_addr2_dword1_t | 0x80000000));
+	flash_write_dword(hw, MAC_ADDR3_WORD0_OFFSET_1G, mac_addr3_dword0_t);
+	flash_write_dword(hw, MAC_ADDR3_WORD1_OFFSET_1G, (mac_addr3_dword1_t | 0x80000000));
+	flash_write_dword(hw, PRODUCT_SERIAL_NUM_OFFSET_1G, serial_num_dword0_t);
+	flash_write_dword(hw, PRODUCT_SERIAL_NUM_OFFSET_1G + 4, serial_num_dword1_t);
+	flash_write_dword(hw, PRODUCT_SERIAL_NUM_OFFSET_1G + 8, serial_num_dword2_t);
+	for (n = 0; n < 128; n++) {
+		if (!(num[n] == 0xffffffff))
+			flash_write_dword(hw, 0xfe000 + (n << 2), num[n]);
+	}
+	wr32(hw, 0x10200, rd32(hw, 0x10200) | 0x80000000);
+
+	return 0;
+}
+
+u16 ngbe_crc16_ccitt(const u8 *buf, int size)
+{
+	u16 crc = 0;
+	int i;
+
+	while (--size >= 0) {
+		crc ^= (u16)*buf++ << 8;
+		for (i = 0; i < 8; i++) {
+			if (crc & 0x8000)
+				crc = crc << 1 ^ 0x1021;
+			else
+				crc <<= 1;
+		}
+	}
+	return crc;
+}
+
+s32 ngbe_upgrade_flash_hostif(struct ngbe_hw *hw, u32 region,
+			      const u8 *data, u32 size)
+{
+	struct ngbe_hic_upg_start start_cmd;
+	struct ngbe_hic_upg_write write_cmd;
+	struct ngbe_hic_upg_verify verify_cmd;
+	u32 offset;
+	s32 status = 0;
+
+	start_cmd.hdr.cmd = FW_FLASH_UPGRADE_START_CMD;
+	start_cmd.hdr.buf_len = FW_FLASH_UPGRADE_START_LEN;
+	start_cmd.hdr.cmd_or_resp.cmd_resv = FW_CEM_CMD_RESERVED;
+	start_cmd.module_id = (u8)region;
+	start_cmd.hdr.checksum = 0;
+	start_cmd.hdr.checksum = ngbe_calculate_checksum((u8 *)&start_cmd,
+							 (FW_CEM_HDR_LEN + start_cmd.hdr.buf_len));
+	start_cmd.pad2 = 0;
+	start_cmd.pad3 = 0;
+
+	status = ngbe_host_if_command(hw, (u32 *)&start_cmd,
+				      sizeof(start_cmd),
+						   NGBE_HI_FLASH_ERASE_TIMEOUT,
+						   true);
+
+	if (start_cmd.hdr.cmd_or_resp.ret_status == FW_CEM_RESP_STATUS_SUCCESS) {
+		status = 0;
+	} else {
+		status = NGBE_ERR_HOST_INTERFACE_COMMAND;
+		return status;
+	}
+
+	for (offset = 0; offset < size;) {
+		write_cmd.hdr.cmd = FW_FLASH_UPGRADE_WRITE_CMD;
+		if (size - offset > 248) {
+			write_cmd.data_len = 248 / 4;
+			write_cmd.eof_flag = 0;
+		} else {
+			write_cmd.data_len = (u8)((size - offset) / 4);
+			write_cmd.eof_flag = 1;
+		}
+		memcpy((u8 *)write_cmd.data, &data[offset], write_cmd.data_len * 4);
+		write_cmd.hdr.buf_len = (write_cmd.data_len + 1) * 4;
+		write_cmd.hdr.cmd_or_resp.cmd_resv = FW_CEM_CMD_RESERVED;
+		write_cmd.check_sum = ngbe_crc16_ccitt((u8 *)write_cmd.data,
+						       write_cmd.data_len * 4);
+
+		status = ngbe_host_if_command(hw, (u32 *)&write_cmd,
+					      sizeof(write_cmd),
+						NGBE_HI_FLASH_UPDATE_TIMEOUT,
+						true);
+		if (start_cmd.hdr.cmd_or_resp.ret_status == FW_CEM_RESP_STATUS_SUCCESS) {
+			status = 0;
+		} else {
+			status = NGBE_ERR_HOST_INTERFACE_COMMAND;
+			return status;
+		}
+		offset += write_cmd.data_len * 4;
+	}
+
+	verify_cmd.hdr.cmd = FW_FLASH_UPGRADE_VERIFY_CMD;
+	verify_cmd.hdr.buf_len = FW_FLASH_UPGRADE_VERIFY_LEN;
+	verify_cmd.hdr.cmd_or_resp.cmd_resv = FW_CEM_CMD_RESERVED;
+	switch (region) {
+	case NGBE_MODULE_EEPROM:
+		verify_cmd.action_flag = NGBE_RELOAD_EEPROM;
+		break;
+	case NGBE_MODULE_FIRMWARE:
+		verify_cmd.action_flag = NGBE_RESET_FIRMWARE;
+		break;
+	case NGBE_MODULE_HARDWARE:
+		verify_cmd.action_flag = NGBE_RESET_LAN;
+		break;
+	default:
+		ERROR_REPORT1(hw, NGBE_ERROR_ARGUMENT,
+			      "%s: region err %x\n", __func__, region);
+		return status;
+	}
+
+	verify_cmd.hdr.checksum = ngbe_calculate_checksum((u8 *)&verify_cmd, (FW_CEM_HDR_LEN +
+					verify_cmd.hdr.buf_len));
+
+	status = ngbe_host_if_command(hw, (u32 *)&verify_cmd,
+				      sizeof(verify_cmd),
+						   NGBE_HI_FLASH_VERIFY_TIMEOUT,
+						   true);
+
+	if (verify_cmd.hdr.cmd_or_resp.ret_status == FW_CEM_RESP_STATUS_SUCCESS)
+		status = 0;
+	else
+		status = NGBE_ERR_HOST_INTERFACE_COMMAND;
+
+	return status;
+}
+
+/**
+ * ngbe_led_on - Turns on the software controllable LEDs.
+ * @hw: pointer to hardware structure
+ * @index: led number to turn on
+ **/
+s32 ngbe_led_on(struct ngbe_hw *hw, u32 index)
+{
+	u32 led_reg = rd32(hw, NGBE_CFG_LED_CTL);
+
+	/* To turn on the LED, set mode to ON. */
+	led_reg |= index | (index << NGBE_CFG_LED_CTL_LINK_OD_SHIFT);
+	wr32(hw, NGBE_CFG_LED_CTL, led_reg);
+	NGBE_WRITE_FLUSH(hw);
+
+	return 0;
+}
+
+/**
+ * ngbe_led_off - Turns off the software controllable LEDs.
+ * @hw: pointer to hardware structure
+ * @index: led number to turn off
+ **/
+s32 ngbe_led_off(struct ngbe_hw *hw, u32 index)
+{
+	u32 led_reg = rd32(hw, NGBE_CFG_LED_CTL);
+
+	/* To turn off the LED, set mode to OFF. */
+	led_reg &= ~(index << NGBE_CFG_LED_CTL_LINK_OD_SHIFT);
+	led_reg |= index;
+	wr32(hw, NGBE_CFG_LED_CTL, led_reg);
+	NGBE_WRITE_FLUSH(hw);
+	return 0;
+}
+
 s32 ngbe_init_ops_common(struct ngbe_hw *hw)
 {
 	struct ngbe_mac_info *mac = &hw->mac;
@@ -3003,6 +3428,10 @@ s32 ngbe_init_ops_common(struct ngbe_hw *hw)
 	/* Flow Control */
 	mac->ops.fc_enable = ngbe_fc_enable;
 	mac->ops.setup_fc = ngbe_setup_fc;
+
+	/* LEDs */
+	mac->ops.led_on = ngbe_led_on;
+	mac->ops.led_off = ngbe_led_off;
 
 	mac->mcft_size          = NGBE_SP_MC_TBL_SIZE;
 	mac->vft_size           = NGBE_SP_VFT_TBL_SIZE;

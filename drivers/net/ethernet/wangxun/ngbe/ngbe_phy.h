@@ -34,6 +34,7 @@ s32 ngbe_phy_get_lp_adv_pause_m88e1512(struct ngbe_hw *hw, u8 *pause_bit);
 s32 ngbe_phy_get_lp_adv_pause_yt(struct ngbe_hw *hw, u8 *pause_bit);
 s32 ngbe_phy_set_pause_adv_m88e1512(struct ngbe_hw *hw, u16 pause_bit);
 s32 ngbe_phy_set_pause_adv_yt(struct ngbe_hw *hw, u16 pause_bit);
+s32 ngbe_phy_write_reg_ext_yt(struct ngbe_hw *hw, u32 addr, u32 type, u16 phy_data);
 s32 ngbe_init_phy_ops_common(struct ngbe_hw *hw);
 s32 ngbe_init_external_phy_ops_common(struct ngbe_hw *hw);
 #endif
