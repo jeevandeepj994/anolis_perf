@@ -368,28 +368,6 @@ decode_rx_desc_ptype(const union ngbe_rx_desc *rx_desc)
 	return ngbe_decode_ptype(NGBE_RXD_PKTTYPE(rx_desc));
 }
 
-static void ngbe_dev_shutdown(struct pci_dev *pdev, bool *enable_wake)
-{
-	struct ngbe_adapter *adapter = pci_get_drvdata(pdev);
-	struct net_device *netdev = adapter->netdev;
-
-	netif_device_detach(netdev);
-
-	pci_disable_device(pdev);
-}
-
-static void ngbe_shutdown(struct pci_dev *pdev)
-{
-	bool wake;
-
-	ngbe_dev_shutdown(pdev, &wake);
-
-	if (system_state == SYSTEM_POWER_OFF) {
-		pci_wake_from_d3(pdev, wake);
-		pci_set_power_state(pdev, PCI_D3hot);
-	}
-}
-
 /**
  *  ngbe_init_ops - Inits func ptrs and MAC type
  *  @hw: pointer to hardware structure
@@ -6137,6 +6115,220 @@ static void ngbe_remove(struct pci_dev *pdev)
 	if (disable_dev)
 		pci_disable_device(pdev);
 }
+
+/**
+ * ngbe_close_suspend - actions necessary to both suspend and close flows
+ * @adapter: the private adapter struct
+ *
+ * This function should contain the necessary work common to both suspending
+ * and closing of the device.
+ */
+static void ngbe_close_suspend(struct ngbe_adapter *adapter)
+{
+	ngbe_ptp_suspend(adapter);
+	ngbe_disable_device(adapter);
+
+	ngbe_clean_all_tx_rings(adapter);
+	ngbe_clean_all_rx_rings(adapter);
+
+	ngbe_free_irq(adapter);
+
+	ngbe_free_isb_resources(adapter);
+	ngbe_free_all_rx_resources(adapter);
+	ngbe_free_all_tx_resources(adapter);
+}
+
+static int ngbe_dev_shutdown(struct pci_dev *pdev, bool *enable_wake)
+{
+	struct ngbe_adapter *adapter = pci_get_drvdata(pdev);
+	struct net_device *netdev = adapter->netdev;
+	struct ngbe_hw *hw = &adapter->hw;
+	u32 wufc = adapter->wol;
+#ifdef CONFIG_PM
+	int retval = 0;
+#endif
+	*enable_wake = !!wufc;
+
+	netif_device_detach(netdev);
+	rtnl_lock();
+	if (netif_running(netdev))
+		ngbe_close_suspend(adapter);
+	rtnl_unlock();
+
+	ngbe_clear_interrupt_scheme(adapter);
+
+#ifdef CONFIG_PM
+	retval = pci_save_state(pdev);
+	if (retval)
+		return retval;
+#endif
+
+	if (wufc) {
+		ngbe_set_rx_mode(netdev);
+		ngbe_configure_rx(adapter);
+		/* enable the optics for SFP+ fiber as we can WoL */
+		TCALL(hw, mac.ops.enable_tx_laser);
+
+		/* turn on all-multi mode if wake on multicast is enabled */
+		if (wufc & NGBE_PSR_WKUP_CTL_MC) {
+			wr32m(hw, NGBE_PSR_CTL,
+			      NGBE_PSR_CTL_MPE, NGBE_PSR_CTL_MPE);
+		}
+
+		pci_clear_master(adapter->pdev);
+		wr32(hw, NGBE_PSR_WKUP_CTL, wufc);
+	} else {
+		wr32(hw, NGBE_PSR_WKUP_CTL, 0);
+	}
+
+	pci_wake_from_d3(pdev, !!wufc);
+
+	ngbe_release_hw_control(adapter);
+
+	if (!test_and_set_bit(__NGBE_DISABLED, &adapter->state))
+		pci_disable_device(pdev);
+
+	return 0;
+}
+
+static void ngbe_shutdown(struct pci_dev *pdev)
+{
+	bool wake;
+
+	ngbe_dev_shutdown(pdev, &wake);
+
+	if (system_state == SYSTEM_POWER_OFF) {
+		pci_wake_from_d3(pdev, wake);
+		pci_set_power_state(pdev, PCI_D3hot);
+	}
+}
+
+#ifdef CONFIG_PM
+static int ngbe_suspend(struct device *dev)
+{
+	int retval;
+	bool wake;
+	struct pci_dev *pdev = to_pci_dev(dev);
+
+	retval = ngbe_dev_shutdown(pdev, &wake);
+	if (retval)
+		return retval;
+
+	if (wake) {
+		pci_prepare_to_sleep(pdev);
+	} else {
+		pci_wake_from_d3(pdev, false);
+		pci_set_power_state(pdev, PCI_D3hot);
+	}
+
+	return 0;
+}
+
+static int ngbe_resume(struct device *dev)
+{
+	struct ngbe_adapter *adapter;
+	struct net_device *netdev;
+	u32 err;
+	struct pci_dev *pdev = to_pci_dev(dev);
+
+	adapter = pci_get_drvdata(pdev);
+	netdev = adapter->netdev;
+	adapter->hw.hw_addr = adapter->io_addr;
+	pci_set_power_state(pdev, PCI_D0);
+	pci_restore_state(pdev);
+
+	/* pci_restore_state clears dev->state_saved so call
+	 * pci_save_state to restore it.
+	 */
+	pci_save_state(pdev);
+	wr32(&adapter->hw, NGBE_PSR_WKUP_CTL, adapter->wol);
+
+	err = pci_enable_device_mem(pdev);
+	if (err) {
+		e_dev_err("Cannot enable PCI device from suspend\n");
+		return err;
+	}
+
+	/* flush memory to make sure state is correct before next watchdog */
+	smp_mb__before_atomic();
+	clear_bit(__NGBE_DISABLED, &adapter->state);
+	pci_set_master(pdev);
+
+	pci_wake_from_d3(pdev, false);
+
+	ngbe_reset(adapter);
+
+	rtnl_lock();
+
+	err = ngbe_init_interrupt_scheme(adapter);
+	if (!err && netif_running(netdev))
+		err = ngbe_open(netdev);
+
+	rtnl_unlock();
+
+	if (err)
+		return err;
+
+	netif_device_attach(netdev);
+
+	return 0;
+}
+
+/**
+ * ngbe_freeze - quiesce the device (no IRQ's or DMA)
+ * @dev: The port's netdev
+ */
+static int ngbe_freeze(struct device *dev)
+{
+	struct ngbe_adapter *adapter = pci_get_drvdata(to_pci_dev(dev));
+	struct net_device *netdev = adapter->netdev;
+
+	netif_device_detach(netdev);
+
+	if (netif_running(netdev)) {
+		ngbe_down(adapter);
+		ngbe_free_irq(adapter);
+	}
+
+	ngbe_reset_interrupt_capability(adapter);
+
+	return 0;
+}
+
+/**
+ * ngbe_thaw - un-quiesce the device
+ * @dev: The port's netdev
+ */
+static int ngbe_thaw(struct device *dev)
+{
+	struct ngbe_adapter *adapter = pci_get_drvdata(to_pci_dev(dev));
+	struct net_device *netdev = adapter->netdev;
+
+	ngbe_set_interrupt_capability(adapter);
+
+	if (netif_running(netdev)) {
+		u32 err = ngbe_request_irq(adapter);
+
+		if (err)
+			return err;
+
+		ngbe_up(adapter);
+	}
+
+	netif_device_attach(netdev);
+
+	return 0;
+}
+
+static const struct dev_pm_ops ngbe_pm_ops = {
+	.suspend        = ngbe_suspend,
+	.resume         = ngbe_resume,
+	.freeze         = ngbe_freeze,
+	.thaw           = ngbe_thaw,
+	.poweroff       = ngbe_suspend,
+	.restore        = ngbe_resume,
+};
+#endif/* CONFIG_PM */
 
 static struct pci_driver ngbe_driver = {
 	.name     = ngbe_driver_name,
