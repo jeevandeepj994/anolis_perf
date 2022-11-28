@@ -4,18 +4,19 @@
 #ifndef _NGBE_H_
 #define _NGBE_H_
 
+#include <net/ip.h>
+#include <linux/pci.h>
+#include <linux/netdevice.h>
+#include <linux/vmalloc.h>
+#include <linux/if_vlan.h>
 #include "ngbe_type.h"
 
 #define NGBE_MAX_FDIR_INDICES		        7
 #define NGBE_MAX_MSIX_Q_VECTORS_EMERALD     9
+#define NGBE_MAX_MSIX_VECTORS_EMERALD       9
 
 #define NGBE_MAX_RX_QUEUES		(NGBE_MAX_FDIR_INDICES + 1)
 #define NGBE_MAX_TX_QUEUES		(NGBE_MAX_FDIR_INDICES + 1)
-
-#define NGBE_FLAG_NEED_LINK_UPDATE             ((u32)(1 << 13))
-#define NGBE_FLAG_NEED_ANC_CHECK               ((u32)(1 << 14))
-
-#define NGBE_FLAG2_SEARCH_FOR_SFP              ((u32)(1 << 5))
 
 #define NGBE_INTR_ALL                  0x1FF
 
@@ -24,6 +25,160 @@
 #define NGBE_DEFAULT_TX_WORK           256
 #define NGBE_DEFAULT_RXD               512 /* default ring size */
 #define NGBE_DEFAULT_RX_WORK           256
+
+#define NGBE_RSS_KEY_SIZE              40
+#define NGBE_MAX_RETA_ENTRIES          128
+
+/* ngbe_adapter.flag */
+#define NGBE_FLAG_MSI_CAPABLE                  BIT(0)
+#define NGBE_FLAG_MSI_ENABLED                  BIT(1)
+#define NGBE_FLAG_MSIX_CAPABLE                 BIT(2)
+#define NGBE_FLAG_MSIX_ENABLED                 BIT(3)
+#define NGBE_FLAG_LLI_PUSH                     BIT(4)
+
+#define NGBE_FLAG_IPSEC_ENABLED                BIT(5)
+
+#define NGBE_FLAG_TPH_ENABLED                  BIT(6)
+#define NGBE_FLAG_TPH_CAPABLE                  BIT(7)
+#define NGBE_FLAG_TPH_ENABLED_DATA             BIT(8)
+
+#define NGBE_FLAG_MQ_CAPABLE                   BIT(9)
+#define NGBE_FLAG_DCB_ENABLED                  BIT(10)
+#define NGBE_FLAG_VMDQ_ENABLED                 BIT(11)
+#define NGBE_FLAG_FAN_FAIL_CAPABLE             BIT(12)
+#define NGBE_FLAG_NEED_LINK_UPDATE             BIT(13)
+#define NGBE_FLAG_NEED_ANC_CHECK               BIT(14)
+#define NGBE_FLAG_FDIR_HASH_CAPABLE            BIT(15)
+#define NGBE_FLAG_FDIR_PERFECT_CAPABLE         BIT(16)
+#define NGBE_FLAG_SRIOV_CAPABLE                BIT(19)
+#define NGBE_FLAG_SRIOV_ENABLED                BIT(20)
+#define NGBE_FLAG_SRIOV_REPLICATION_ENABLE     BIT(21)
+#define NGBE_FLAG_SRIOV_L2SWITCH_ENABLE        BIT(22)
+#define NGBE_FLAG_SRIOV_VEPA_BRIDGE_MODE       BIT(23)
+#define NGBE_FLAG_RX_HWTSTAMP_ENABLED          BIT(24)
+#define NGBE_FLAG_VXLAN_OFFLOAD_CAPABLE        BIT(25)
+#define NGBE_FLAG_VXLAN_OFFLOAD_ENABLE         BIT(26)
+#define NGBE_FLAG_RX_HWTSTAMP_IN_REGISTER      BIT(27)
+#define NGBE_FLAG_NEED_ETH_PHY_RESET           BIT(28)
+#define NGBE_FLAG_RX_HS_ENABLED                BIT(30)
+#define NGBE_FLAG_LINKSEC_ENABLED              BIT(31)
+
+/**
+ * ngbe_adapter.flag2
+ **/
+#define NGBE_FLAG2_RSC_CAPABLE                 BIT(0)
+#define NGBE_FLAG2_RSC_ENABLED                 BIT(1)
+#define NGBE_FLAG2_TEMP_SENSOR_CAPABLE         BIT(3)
+#define NGBE_FLAG2_TEMP_SENSOR_EVENT           BIT(4)
+#define NGBE_FLAG2_SEARCH_FOR_SFP              BIT(5)
+#define NGBE_FLAG2_SFP_NEEDS_RESET             BIT(6)
+#define NGBE_FLAG2_PF_RESET_REQUESTED          BIT(7)
+#define NGBE_FLAG2_FDIR_REQUIRES_REINIT        BIT(8)
+#define NGBE_FLAG2_RSS_FIELD_IPV4_UDP          BIT(9)
+#define NGBE_FLAG2_RSS_FIELD_IPV6_UDP          BIT(10)
+#define NGBE_FLAG2_PTP_PPS_ENABLED             BIT(11)
+#define NGBE_FLAG2_RSS_ENABLED                 BIT(12)
+#define NGBE_FLAG2_EEE_CAPABLE                 BIT(14)
+#define NGBE_FLAG2_EEE_ENABLED                 BIT(15)
+#define NGBE_FLAG2_VXLAN_REREG_NEEDED          BIT(16)
+#define NGBE_FLAG2_DEV_RESET_REQUESTED         BIT(18)
+#define NGBE_FLAG2_RESET_INTR_RECEIVED         BIT(19)
+#define NGBE_FLAG2_GLOBAL_RESET_REQUESTED      BIT(20)
+#define NGBE_FLAG2_MNG_REG_ACCESS_DISABLED     BIT(22)
+#define NGBE_FLAG2_SRIOV_MISC_IRQ_REMAP        BIT(23)
+#define NGBE_FLAG2_PCIE_NEED_RECOVER           BIT(31)
+
+/* preset defaults */
+#define NGBE_FLAGS_SP_INIT (NGBE_FLAG_MSI_CAPABLE |	\
+							NGBE_FLAG_MSIX_CAPABLE |\
+							NGBE_FLAG_MQ_CAPABLE |	\
+							NGBE_FLAG_SRIOV_CAPABLE)
+
+#define NGBE_MAX_JUMBO_FRAME_SIZE      9432 /* max payload 9414 */
+
+#define NGBE_CPU_TO_BE16(_x)                   cpu_to_be16(_x)
+#define NGBE_BE16_TO_CPU(_x)                   be16_to_cpu(_x)
+#define NGBE_CPU_TO_BE32(_x)                   cpu_to_be32(_x)
+#define NGBE_BE32_TO_CPU(_x)                   be32_to_cpu(_x)
+#define NGBE_EEPROM_GRANT_ATTEMPTS             100
+#define NGBE_HTONL(_i)                         htonl(_i)
+#define NGBE_NTOHL(_i)                         ntohl(_i)
+#define NGBE_NTOHS(_i)                         ntohs(_i)
+#define NGBE_CPU_TO_LE32(_i)                   cpu_to_le32(_i)
+#define NGBE_LE32_TO_CPUS(_i)                  le32_to_cpus(_i)
+
+#define NGBE_MAC_STATE_DEFAULT                 0x1
+#define NGBE_MAC_STATE_MODIFIED                0x2
+#define NGBE_MAC_STATE_IN_USE                  0x4
+
+#define NGBE_MAX_RX_DESC_POLL                  10
+
+#define NGBE_RXBUFFER_2K                       2048
+#define NGBE_MAX_RXBUFFER                      16384  /* largest size for single descriptor */
+#define NGBE_ETH_FRAMING                       20
+#define NGBE_RXBUFFER_256                      256  /* Used for skb receive header */
+
+#define NGBE_RX_HDR_SIZE                       NGBE_RXBUFFER_256
+
+#define NGBE_MAX_VF_FUNCTIONS                  8
+#define MAX_RX_QUEUES                          8
+#define MAX_TX_QUEUES                          8
+
+/* TX/RX descriptor defines */
+#define NGBE_DEFAULT_TXD               512 /* default ring size */
+#define NGBE_DEFAULT_TX_WORK           256
+#define NGBE_MAX_TXD                   8192
+#define NGBE_MIN_TXD                   128
+
+#define NGBE_DEFAULT_RXD               512 /* default ring size */
+#define NGBE_DEFAULT_RX_WORK           256
+#define NGBE_MAX_RXD                   8192
+#define NGBE_MIN_RXD                   128
+
+/* Only for array allocations in our adapter struct.
+ * we can actually assign 64 queue vectors based on our extended-extended
+ * interrupt registers.
+ */
+#define MAX_MSIX_Q_VECTORS      NGBE_MAX_MSIX_Q_VECTORS_EMERALD
+#define MAX_MSIX_COUNT          NGBE_MAX_MSIX_VECTORS_EMERALD
+
+#define MIN_MSIX_Q_VECTORS      1
+#define MIN_MSIX_COUNT          (MIN_MSIX_Q_VECTORS + NON_Q_VECTORS)
+
+#define NGBE_INTR_MISC(A) BIT((A)->num_q_vectors)
+#define NGBE_INTR_MISC_VMDQ(A) BIT(((A)->num_q_vectors + (A)->ring_feature[RING_F_VMDQ].offset))
+#define NGBE_MAX_MACVLANS      8
+
+/* iterator for handling rings in ring container */
+#define ngbe_for_each_ring(pos, head) \
+	for (pos = (head).ring; pos; pos = pos->next)
+
+#define NGBE_RING_SIZE(R) ((R)->count < NGBE_MAX_TXD ? (R)->count / 128 : 0)
+
+#define set_ring_hs_enabled(ring) \
+	set_bit(__NGBE_RX_HS_ENABLED, &(ring)->state)
+#define clear_ring_hs_enabled(ring) \
+	clear_bit(__NGBE_RX_HS_ENABLED, &(ring)->state)
+#define ring_is_hs_enabled(ring) \
+	test_bit(__NGBE_RX_HS_ENABLED, &(ring)->state)
+#define check_for_tx_hang(ring) \
+	test_bit(__NGBE_TX_DETECT_HANG, &(ring)->state)
+#define set_check_for_tx_hang(ring) \
+	set_bit(__NGBE_TX_DETECT_HANG, &(ring)->state)
+#define clear_check_for_tx_hang(ring) \
+	clear_bit(__NGBE_TX_DETECT_HANG, &(ring)->state)
+
+#define NGBE_RX_DESC(R, i)     \
+	(&(((union ngbe_rx_desc *)((R)->desc))[i]))
+#define NGBE_TX_DESC(R, i)     \
+	(&(((union ngbe_tx_desc *)((R)->desc))[i]))
+#define NGBE_TX_CTXTDESC(R, i) \
+	(&(((struct ngbe_tx_context_desc *)((R)->desc))[i]))
+
+#define TCP_TIMER_VECTOR       0
+#define OTHER_VECTOR           1
+#define NON_Q_VECTORS          (OTHER_VECTOR + TCP_TIMER_VECTOR)
+#define NGBE_7K_ITR            595
 
 enum ngbe_state_t {
 	__NGBE_TESTING,
@@ -37,10 +192,184 @@ enum ngbe_state_t {
 	__NGBE_IN_SFP_INIT,
 };
 
+enum ngbe_isb_idx {
+	NGBE_ISB_HEADER,
+	NGBE_ISB_MISC,
+	NGBE_ISB_VEC0,
+	NGBE_ISB_VEC1,
+	NGBE_ISB_MAX
+};
+
+enum ngbe_ring_f_enum {
+	RING_F_NONE = 0,
+	RING_F_VMDQ,  /* SR-IOV uses the same ring feature */
+	RING_F_RSS,
+	RING_F_ARRAY_SIZE  /* must be last in enum set */
+};
+
 struct ngbe_mac_addr {
 	u8 addr[ETH_ALEN];
 	u16 state; /* bitmask */
 	u64 pools;
+};
+
+struct ngbe_queue_stats {
+	u64 packets;
+	u64 bytes;
+	u64 yields;
+	u64 misses;
+	u64 cleaned;
+};
+
+enum ngbe_ring_state_t {
+		__NGBE_RX_3K_BUFFER,
+		__NGBE_RX_BUILD_SKB_ENABLED,
+	__NGBE_TX_XPS_INIT_DONE,
+	__NGBE_TX_DETECT_HANG,
+	__NGBE_HANG_CHECK_ARMED,
+	__NGBE_RX_HS_ENABLED,
+};
+
+struct ngbe_fwd_adapter {
+	unsigned long active_vlans[BITS_TO_LONGS(VLAN_N_VID)];
+	struct net_device *vdev;
+	struct ngbe_adapter *adapter;
+	unsigned int tx_base_queue;
+	unsigned int rx_base_queue;
+	int index; /* pool index on PF */
+};
+
+/* wrapper around a pointer to a socket buffer,
+ * so a DMA handle can be stored along with the buffer
+ */
+struct ngbe_tx_buffer {
+	union ngbe_tx_desc *next_to_watch;
+	unsigned long time_stamp;
+	struct sk_buff *skb;
+	unsigned int bytecount;
+	unsigned short gso_segs;
+	__be16 protocol;
+	DEFINE_DMA_UNMAP_ADDR(dma);
+	DEFINE_DMA_UNMAP_LEN(len);
+	u32 tx_flags;
+};
+
+struct ngbe_rx_buffer {
+	struct sk_buff *skb;
+	dma_addr_t dma;
+	dma_addr_t page_dma;
+	struct page *page;
+	unsigned int page_offset;
+};
+
+struct ngbe_ring_container {
+	struct ngbe_ring *ring;        /* pointer to linked list of rings */
+	unsigned int total_bytes;       /* total bytes processed this int */
+	unsigned int total_packets;     /* total packets processed this int */
+	u16 work_limit;                 /* total work allowed per interrupt */
+	u8 count;                       /* total number of rings in vector */
+	u8 itr;                         /* current ITR setting for ring */
+};
+
+struct ngbe_ring;
+
+struct ngbe_tx_queue_stats {
+	u64 restart_queue;
+	u64 tx_busy;
+	u64 tx_done_old;
+};
+
+struct ngbe_rx_queue_stats {
+	u64 non_eop_descs;
+	u64 alloc_rx_page_failed;
+	u64 alloc_rx_buff_failed;
+	u64 csum_good_cnt;
+	u64 csum_err;
+};
+
+struct ngbe_ring {
+	struct ngbe_ring *next;        /* pointer to next ring in q_vector */
+	struct ngbe_q_vector *q_vector; /* backpointer to host q_vector */
+	struct net_device *netdev;      /* netdev ring belongs to */
+	struct device *dev;             /* device for DMA mapping */
+	struct ngbe_fwd_adapter *accel;
+	void *desc;                     /* descriptor ring memory */
+	union {
+		struct ngbe_tx_buffer *tx_buffer_info;
+		struct ngbe_rx_buffer *rx_buffer_info;
+	};
+	unsigned long state;
+	u8 __iomem *tail;
+	dma_addr_t dma;                 /* phys. address of descriptor ring */
+	unsigned int size;              /* length in bytes */
+
+	u16 count;                      /* amount of descriptors */
+
+	u8 queue_index; /* needed for multiqueue queue management */
+
+	/* holds the special value that gets
+	 * the hardware register offset
+	 * associated with this ring, which is
+	 * different for DCB and RSS modes
+	 */
+	u8 reg_idx;
+
+	u16 next_to_use;
+	u16 next_to_clean;
+
+	unsigned long last_rx_timestamp;
+	u16 rx_buf_len;
+	union {
+		u16 next_to_alloc;
+		struct {
+			u8 atr_sample_rate;
+			u8 atr_count;
+		};
+	};
+
+	u8 dcb_tc;
+	struct ngbe_queue_stats stats;
+	struct u64_stats_sync syncp;
+
+	union {
+		struct ngbe_tx_queue_stats tx_stats;
+		struct ngbe_rx_queue_stats rx_stats;
+	};
+} ____cacheline_aligned_in_smp;
+
+/* MAX_MSIX_Q_VECTORS of these are allocated,
+ * but we only use one per queue-specific vector.
+ */
+struct ngbe_q_vector {
+	struct ngbe_adapter *adapter;
+	int cpu;        /* CPU for DCA */
+
+	struct rcu_head rcu;    /* to avoid race with update stats on free */
+	/* index of q_vector within array, also used for
+	 * finding the bit in EICR and friends that
+	 * represents the vector for this ring
+	 */
+	u16 v_idx;
+	u16 itr;        /* Interrupt throttle rate written to EITR */
+	struct ngbe_ring_container rx, tx;
+
+	struct napi_struct napi;
+	struct net_device poll_dev;
+	cpumask_t affinity_mask;
+
+	int numa_node;
+	char name[IFNAMSIZ + 17];
+	bool netpoll_rx;
+
+	/* for dynamic allocation of rings associated with this q_vector */
+	struct ngbe_ring ring[0] ____cacheline_aligned_in_smp;
+};
+
+struct ngbe_ring_feature {
+	u16 limit;      /* upper limit on feature indices */
+	u16 indices;    /* current value of indices */
+	u16 mask;       /* Mask used for feature to ring mapping */
+	u16 offset;     /* offset to start of feature */
 };
 
 /* board specific private data structure */
@@ -51,27 +380,94 @@ struct ngbe_adapter {
 	struct pci_dev *pdev;
 
 	int max_q_vectors;      /* upper limit of q_vectors for device */
+	int num_q_vectors;      /* current number of q_vectors for device */
+	struct ngbe_ring_feature ring_feature[RING_F_ARRAY_SIZE];
+	struct msix_entry *msix_entries;
+	struct ngbe_q_vector *q_vector[MAX_MSIX_Q_VECTORS];
+	u32 atr_sample_rate;
+
 	u32 flags;
 	u32 flags2;
 	unsigned long state;
 
 	unsigned int tx_ring_count;
 	unsigned int rx_ring_count;
+	u64 tx_busy;
 
 	/* Tx fast path data */
+	int num_tx_queues;
 	u16 tx_work_limit;
 
 	/* Rx fast path data */
+	int num_rx_queues;
 	u16 rx_work_limit;
 
 	/* structs defined in ngbe_hw.h */
 	struct ngbe_hw hw;
 	u16 msg_enable;
+	struct ngbe_hw_stats stats;
 
 	struct ngbe_mac_addr *mac_table;
+	u8 rss_indir_tbl[NGBE_MAX_RETA_ENTRIES];
+	u32 rss_key[NGBE_RSS_KEY_SIZE / sizeof(u32)];
+
+	struct timer_list service_timer;
+	struct work_struct service_task;
+
+	/* TX */
+	struct ngbe_ring *tx_ring[MAX_TX_QUEUES] ____cacheline_aligned_in_smp;
+	u32 tx_timeout_count;
+	u64 restart_queue;
+
+	/* RX */
+	struct ngbe_ring *rx_ring[MAX_RX_QUEUES];
+	u64 non_eop_descs;
+	u32 alloc_rx_page_failed;
+	u32 alloc_rx_buff_failed;
+	u64 hw_csum_rx_error;
+	u64 hw_csum_rx_good;
+	u64 hw_rx_no_dma_resources;
+
+	u64 test_icr;
+	struct ngbe_ring test_tx_ring;
+	struct ngbe_ring test_rx_ring;
 
 	u32 tx_timeout_recovery_level;
+
+	u32 interrupt_event;
+
+	u32 link_speed;
+	bool link_up;
+	unsigned long link_check_timeout;
+	u64 lsc_int;
+
+	unsigned int num_vfs;
+	u8 default_up;
+
+	unsigned int queues_per_pool;
+	u32 wol;
+
+	char eeprom_id[32];
+	u16 eeprom_cap;
+	bool netdev_registered;
+
+	/* misc interrupt status block */
+	dma_addr_t isb_dma;
+	u32 *isb_mem;
+	u32 isb_tag[NGBE_ISB_MAX];
+	unsigned long active_vlans[BITS_TO_LONGS(VLAN_N_VID)];
+	unsigned long fwd_bitmask; /* bitmask indicating in use pools */
 };
+
+struct ngbe_cb {
+	dma_addr_t dma;
+	u16     vid;                    /* VLAN tag */
+	u16     append_cnt;             /* number of skb's appended */
+	bool    page_released;
+	bool    dma_released;
+};
+
+#define NGBE_CB(skb) ((struct ngbe_cb *)(skb)->cb)
 
 struct ngbe_msg {
 	u16 msg_enable;
@@ -91,6 +487,16 @@ static struct ngbe_msg *ngbe_hw_to_msg(const struct ngbe_hw *hw)
 	return (struct ngbe_msg *)&adapter->msg_enable;
 }
 
+static inline void ngbe_intr_enable(struct ngbe_hw *hw, u64 qmask)
+{
+	u32 mask;
+
+	mask = (qmask & 0xFFFFFFFF);
+	if (mask) {
+		wr32(hw, NGBE_PX_IMC, mask);
+	}
+}
+
 static inline void ngbe_intr_disable(struct ngbe_hw *hw, u64 qmask)
 {
 	u32 mask;
@@ -103,6 +509,35 @@ static inline void ngbe_intr_disable(struct ngbe_hw *hw, u64 qmask)
 static inline struct device *pci_dev_to_dev(struct pci_dev *pdev)
 {
 	return &pdev->dev;
+}
+
+/* FCoE requires that all Rx buffers be over 2200 bytes in length.  Since
+ * this is twice the size of a half page we need to double the page order
+ * for FCoE enabled Rx queues.
+ */
+static inline unsigned int ngbe_rx_bufsz(struct ngbe_ring __maybe_unused *ring)
+{
+#if MAX_SKB_FRAGS < 8
+	return ALIGN(NGBE_MAX_RXBUFFER / MAX_SKB_FRAGS, 1024);
+#else
+	return NGBE_RXBUFFER_2K;
+#endif
+}
+
+static inline unsigned int ngbe_rx_pg_order(struct ngbe_ring __maybe_unused *ring)
+{
+	return 0;
+}
+
+#define ngbe_rx_pg_size(_ring) (PAGE_SIZE << ngbe_rx_pg_order(_ring))
+
+/* ngbe_desc_unused - calculate if we have unused descriptors */
+static inline u16 ngbe_desc_unused(struct ngbe_ring *ring)
+{
+	u16 ntc = ring->next_to_clean;
+	u16 ntu = ring->next_to_use;
+
+	return ((ntc > ntu) ? 0 : ring->count) + ntc - ntu - 1;
 }
 
 enum {
@@ -143,8 +578,6 @@ enum {
 
 #define hw_dbg(hw, format, arg...) \
 	netdev_dbg(ngbe_hw_to_netdev(hw), format, ## arg)
-#define hw_err(hw, format, arg...) \
-	netdev_err(ngbe_hw_to_netdev(hw), format, ## arg)
 #define e_dev_info(format, arg...) \
 	dev_info(pci_dev_to_dev(adapter->pdev), format, ## arg)
 #define e_dev_warn(format, arg...) \
@@ -163,5 +596,14 @@ enum {
 	netif_warn(adapter, msglvl, adapter->netdev, format, ## arg)
 #define e_crit(msglvl, format, arg...) \
 	netif_crit(adapter, msglvl, adapter->netdev, format, ## arg)
+
+void ngbe_unmap_and_free_tx_res(struct ngbe_ring *ring, struct ngbe_tx_buffer *tx_buffer);
+void ngbe_disable_device(struct ngbe_adapter *adapter);
+void ngbe_set_interrupt_capability(struct ngbe_adapter *adapter);
+void ngbe_set_interrupt_capability(struct ngbe_adapter *adapter);
+void ngbe_reset_interrupt_capability(struct ngbe_adapter *adapter);
+int ngbe_init_interrupt_scheme(struct ngbe_adapter *adapter);
+void ngbe_clear_interrupt_scheme(struct ngbe_adapter *adapter);
+int ngbe_poll(struct napi_struct *napi, int budget);
 
 #endif /* _NGBE_H_ */
