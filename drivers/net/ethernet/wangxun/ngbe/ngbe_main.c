@@ -8,6 +8,9 @@
 #include <linux/string.h>
 #include <linux/aer.h>
 #include <linux/etherdevice.h>
+#include <linux/sctp.h>
+
+#include <net/ip6_checksum.h>
 
 #include "ngbe.h"
 #include "ngbe_phy.h"
@@ -52,6 +55,297 @@ static const struct pci_device_id ngbe_pci_tbl[] = {
 	{ .device = 0 }
 };
 
+union network_header {
+	struct iphdr *ipv4;
+	struct ipv6hdr *ipv6;
+	void *raw;
+};
+
+/* Lookup table mapping the HW PTYPE to the bit field for decoding */
+struct ngbe_dec_ptype ngbe_ptype_lookup[256] = {
+	NGBE_UKN(0x00),
+	NGBE_UKN(0x01),
+	NGBE_UKN(0x02),
+	NGBE_UKN(0x03),
+	NGBE_UKN(0x04),
+	NGBE_UKN(0x05),
+	NGBE_UKN(0x06),
+	NGBE_UKN(0x07),
+	NGBE_UKN(0x08),
+	NGBE_UKN(0x09),
+	NGBE_UKN(0x0A),
+	NGBE_UKN(0x0B),
+	NGBE_UKN(0x0C),
+	NGBE_UKN(0x0D),
+	NGBE_UKN(0x0E),
+	NGBE_UKN(0x0F),
+
+	/* L2: mac */
+	NGBE_UKN(0x10),
+	NGBE_PTT(0x11, L2, NONE, NONE, NONE, NONE, PAY2),
+	NGBE_PTT(0x12, L2, NONE, NONE, NONE, TS,   PAY2),
+	NGBE_PTT(0x13, L2, NONE, NONE, NONE, NONE, PAY2),
+	NGBE_PTT(0x14, L2, NONE, NONE, NONE, NONE, PAY2),
+	NGBE_PTT(0x15, L2, NONE, NONE, NONE, NONE, NONE),
+	NGBE_PTT(0x16, L2, NONE, NONE, NONE, NONE, PAY2),
+	NGBE_PTT(0x17, L2, NONE, NONE, NONE, NONE, NONE),
+
+	/* L2: ethertype filter */
+	NGBE_PTT(0x18, L2, NONE, NONE, NONE, NONE, NONE),
+	NGBE_PTT(0x19, L2, NONE, NONE, NONE, NONE, NONE),
+	NGBE_PTT(0x1A, L2, NONE, NONE, NONE, NONE, NONE),
+	NGBE_PTT(0x1B, L2, NONE, NONE, NONE, NONE, NONE),
+	NGBE_PTT(0x1C, L2, NONE, NONE, NONE, NONE, NONE),
+	NGBE_PTT(0x1D, L2, NONE, NONE, NONE, NONE, NONE),
+	NGBE_PTT(0x1E, L2, NONE, NONE, NONE, NONE, NONE),
+	NGBE_PTT(0x1F, L2, NONE, NONE, NONE, NONE, NONE),
+
+	/* L3: ip non-tunnel */
+	NGBE_UKN(0x20),
+	NGBE_PTT(0x21, IP, FGV4, NONE, NONE, NONE, PAY3),
+	NGBE_PTT(0x22, IP, IPV4, NONE, NONE, NONE, PAY3),
+	NGBE_PTT(0x23, IP, IPV4, NONE, NONE, UDP,  PAY4),
+	NGBE_PTT(0x24, IP, IPV4, NONE, NONE, TCP,  PAY4),
+	NGBE_PTT(0x25, IP, IPV4, NONE, NONE, SCTP, PAY4),
+	NGBE_UKN(0x26),
+	NGBE_UKN(0x27),
+	NGBE_UKN(0x28),
+	NGBE_PTT(0x29, IP, FGV6, NONE, NONE, NONE, PAY3),
+	NGBE_PTT(0x2A, IP, IPV6, NONE, NONE, NONE, PAY3),
+	NGBE_PTT(0x2B, IP, IPV6, NONE, NONE, UDP,  PAY3),
+	NGBE_PTT(0x2C, IP, IPV6, NONE, NONE, TCP,  PAY4),
+	NGBE_PTT(0x2D, IP, IPV6, NONE, NONE, SCTP, PAY4),
+	NGBE_UKN(0x2E),
+	NGBE_UKN(0x2F),
+
+	/* L2: fcoe */
+	NGBE_PTT(0x30, FCOE, NONE, NONE, NONE, NONE, PAY3),
+	NGBE_PTT(0x31, FCOE, NONE, NONE, NONE, NONE, PAY3),
+	NGBE_PTT(0x32, FCOE, NONE, NONE, NONE, NONE, PAY3),
+	NGBE_PTT(0x33, FCOE, NONE, NONE, NONE, NONE, PAY3),
+	NGBE_PTT(0x34, FCOE, NONE, NONE, NONE, NONE, PAY3),
+	NGBE_UKN(0x35),
+	NGBE_UKN(0x36),
+	NGBE_UKN(0x37),
+	NGBE_PTT(0x38, FCOE, NONE, NONE, NONE, NONE, PAY3),
+	NGBE_PTT(0x39, FCOE, NONE, NONE, NONE, NONE, PAY3),
+	NGBE_PTT(0x3A, FCOE, NONE, NONE, NONE, NONE, PAY3),
+	NGBE_PTT(0x3B, FCOE, NONE, NONE, NONE, NONE, PAY3),
+	NGBE_PTT(0x3C, FCOE, NONE, NONE, NONE, NONE, PAY3),
+	NGBE_UKN(0x3D),
+	NGBE_UKN(0x3E),
+	NGBE_UKN(0x3F),
+
+	NGBE_UKN(0x40),
+	NGBE_UKN(0x41),
+	NGBE_UKN(0x42),
+	NGBE_UKN(0x43),
+	NGBE_UKN(0x44),
+	NGBE_UKN(0x45),
+	NGBE_UKN(0x46),
+	NGBE_UKN(0x47),
+	NGBE_UKN(0x48),
+	NGBE_UKN(0x49),
+	NGBE_UKN(0x4A),
+	NGBE_UKN(0x4B),
+	NGBE_UKN(0x4C),
+	NGBE_UKN(0x4D),
+	NGBE_UKN(0x4E),
+	NGBE_UKN(0x4F),
+	NGBE_UKN(0x50),
+	NGBE_UKN(0x51),
+	NGBE_UKN(0x52),
+	NGBE_UKN(0x53),
+	NGBE_UKN(0x54),
+	NGBE_UKN(0x55),
+	NGBE_UKN(0x56),
+	NGBE_UKN(0x57),
+	NGBE_UKN(0x58),
+	NGBE_UKN(0x59),
+	NGBE_UKN(0x5A),
+	NGBE_UKN(0x5B),
+	NGBE_UKN(0x5C),
+	NGBE_UKN(0x5D),
+	NGBE_UKN(0x5E),
+	NGBE_UKN(0x5F),
+	NGBE_UKN(0x60),
+	NGBE_UKN(0x61),
+	NGBE_UKN(0x62),
+	NGBE_UKN(0x63),
+	NGBE_UKN(0x64),
+	NGBE_UKN(0x65),
+	NGBE_UKN(0x66),
+	NGBE_UKN(0x67),
+	NGBE_UKN(0x68),
+	NGBE_UKN(0x69),
+	NGBE_UKN(0x6A),
+	NGBE_UKN(0x6B),
+	NGBE_UKN(0x6C),
+	NGBE_UKN(0x6D),
+	NGBE_UKN(0x6E),
+	NGBE_UKN(0x6F),
+	NGBE_UKN(0x70),
+	NGBE_UKN(0x71),
+	NGBE_UKN(0x72),
+	NGBE_UKN(0x73),
+	NGBE_UKN(0x74),
+	NGBE_UKN(0x75),
+	NGBE_UKN(0x76),
+	NGBE_UKN(0x77),
+	NGBE_UKN(0x78),
+	NGBE_UKN(0x79),
+	NGBE_UKN(0x7A),
+	NGBE_UKN(0x7B),
+	NGBE_UKN(0x7C),
+	NGBE_UKN(0x7D),
+	NGBE_UKN(0x7E),
+	NGBE_UKN(0x7F),
+
+	/* IPv4 --> IPv4/IPv6 */
+	NGBE_UKN(0x80),
+	NGBE_PTT(0x81, IP, IPV4, IPIP, FGV4, NONE, PAY3),
+	NGBE_PTT(0x82, IP, IPV4, IPIP, IPV4, NONE, PAY3),
+	NGBE_PTT(0x83, IP, IPV4, IPIP, IPV4, UDP,  PAY4),
+	NGBE_PTT(0x84, IP, IPV4, IPIP, IPV4, TCP,  PAY4),
+	NGBE_PTT(0x85, IP, IPV4, IPIP, IPV4, SCTP, PAY4),
+	NGBE_UKN(0x86),
+	NGBE_UKN(0x87),
+	NGBE_UKN(0x88),
+	NGBE_PTT(0x89, IP, IPV4, IPIP, FGV6, NONE, PAY3),
+	NGBE_PTT(0x8A, IP, IPV4, IPIP, IPV6, NONE, PAY3),
+	NGBE_PTT(0x8B, IP, IPV4, IPIP, IPV6, UDP,  PAY4),
+	NGBE_PTT(0x8C, IP, IPV4, IPIP, IPV6, TCP,  PAY4),
+	NGBE_PTT(0x8D, IP, IPV4, IPIP, IPV6, SCTP, PAY4),
+	NGBE_UKN(0x8E),
+	NGBE_UKN(0x8F),
+
+	/* IPv4 --> GRE/NAT --> NONE/IPv4/IPv6 */
+	NGBE_PTT(0x90, IP, IPV4, IG, NONE, NONE, PAY3),
+	NGBE_PTT(0x91, IP, IPV4, IG, FGV4, NONE, PAY3),
+	NGBE_PTT(0x92, IP, IPV4, IG, IPV4, NONE, PAY3),
+	NGBE_PTT(0x93, IP, IPV4, IG, IPV4, UDP,  PAY4),
+	NGBE_PTT(0x94, IP, IPV4, IG, IPV4, TCP,  PAY4),
+	NGBE_PTT(0x95, IP, IPV4, IG, IPV4, SCTP, PAY4),
+	NGBE_UKN(0x96),
+	NGBE_UKN(0x97),
+	NGBE_UKN(0x98),
+	NGBE_PTT(0x99, IP, IPV4, IG, FGV6, NONE, PAY3),
+	NGBE_PTT(0x9A, IP, IPV4, IG, IPV6, NONE, PAY3),
+	NGBE_PTT(0x9B, IP, IPV4, IG, IPV6, UDP,  PAY4),
+	NGBE_PTT(0x9C, IP, IPV4, IG, IPV6, TCP,  PAY4),
+	NGBE_PTT(0x9D, IP, IPV4, IG, IPV6, SCTP, PAY4),
+	NGBE_UKN(0x9E),
+	NGBE_UKN(0x9F),
+
+	/* IPv4 --> GRE/NAT --> MAC --> NONE/IPv4/IPv6 */
+	NGBE_PTT(0xA0, IP, IPV4, IGM, NONE, NONE, PAY3),
+	NGBE_PTT(0xA1, IP, IPV4, IGM, FGV4, NONE, PAY3),
+	NGBE_PTT(0xA2, IP, IPV4, IGM, IPV4, NONE, PAY3),
+	NGBE_PTT(0xA3, IP, IPV4, IGM, IPV4, UDP,  PAY4),
+	NGBE_PTT(0xA4, IP, IPV4, IGM, IPV4, TCP,  PAY4),
+	NGBE_PTT(0xA5, IP, IPV4, IGM, IPV4, SCTP, PAY4),
+	NGBE_UKN(0xA6),
+	NGBE_UKN(0xA7),
+	NGBE_UKN(0xA8),
+	NGBE_PTT(0xA9, IP, IPV4, IGM, FGV6, NONE, PAY3),
+	NGBE_PTT(0xAA, IP, IPV4, IGM, IPV6, NONE, PAY3),
+	NGBE_PTT(0xAB, IP, IPV4, IGM, IPV6, UDP,  PAY4),
+	NGBE_PTT(0xAC, IP, IPV4, IGM, IPV6, TCP,  PAY4),
+	NGBE_PTT(0xAD, IP, IPV4, IGM, IPV6, SCTP, PAY4),
+	NGBE_UKN(0xAE),
+	NGBE_UKN(0xAF),
+
+	/* IPv4 --> GRE/NAT --> MAC+VLAN --> NONE/IPv4/IPv6 */
+	NGBE_PTT(0xB0, IP, IPV4, IGMV, NONE, NONE, PAY3),
+	NGBE_PTT(0xB1, IP, IPV4, IGMV, FGV4, NONE, PAY3),
+	NGBE_PTT(0xB2, IP, IPV4, IGMV, IPV4, NONE, PAY3),
+	NGBE_PTT(0xB3, IP, IPV4, IGMV, IPV4, UDP,  PAY4),
+	NGBE_PTT(0xB4, IP, IPV4, IGMV, IPV4, TCP,  PAY4),
+	NGBE_PTT(0xB5, IP, IPV4, IGMV, IPV4, SCTP, PAY4),
+	NGBE_UKN(0xB6),
+	NGBE_UKN(0xB7),
+	NGBE_UKN(0xB8),
+	NGBE_PTT(0xB9, IP, IPV4, IGMV, FGV6, NONE, PAY3),
+	NGBE_PTT(0xBA, IP, IPV4, IGMV, IPV6, NONE, PAY3),
+	NGBE_PTT(0xBB, IP, IPV4, IGMV, IPV6, UDP,  PAY4),
+	NGBE_PTT(0xBC, IP, IPV4, IGMV, IPV6, TCP,  PAY4),
+	NGBE_PTT(0xBD, IP, IPV4, IGMV, IPV6, SCTP, PAY4),
+	NGBE_UKN(0xBE),
+	NGBE_UKN(0xBF),
+
+	/* IPv6 --> IPv4/IPv6 */
+	NGBE_UKN(0xC0),
+	NGBE_PTT(0xC1, IP, IPV6, IPIP, FGV4, NONE, PAY3),
+	NGBE_PTT(0xC2, IP, IPV6, IPIP, IPV4, NONE, PAY3),
+	NGBE_PTT(0xC3, IP, IPV6, IPIP, IPV4, UDP,  PAY4),
+	NGBE_PTT(0xC4, IP, IPV6, IPIP, IPV4, TCP,  PAY4),
+	NGBE_PTT(0xC5, IP, IPV6, IPIP, IPV4, SCTP, PAY4),
+	NGBE_UKN(0xC6),
+	NGBE_UKN(0xC7),
+	NGBE_UKN(0xC8),
+	NGBE_PTT(0xC9, IP, IPV6, IPIP, FGV6, NONE, PAY3),
+	NGBE_PTT(0xCA, IP, IPV6, IPIP, IPV6, NONE, PAY3),
+	NGBE_PTT(0xCB, IP, IPV6, IPIP, IPV6, UDP,  PAY4),
+	NGBE_PTT(0xCC, IP, IPV6, IPIP, IPV6, TCP,  PAY4),
+	NGBE_PTT(0xCD, IP, IPV6, IPIP, IPV6, SCTP, PAY4),
+	NGBE_UKN(0xCE),
+	NGBE_UKN(0xCF),
+
+	/* IPv6 --> GRE/NAT -> NONE/IPv4/IPv6 */
+	NGBE_PTT(0xD0, IP, IPV6, IG,   NONE, NONE, PAY3),
+	NGBE_PTT(0xD1, IP, IPV6, IG,   FGV4, NONE, PAY3),
+	NGBE_PTT(0xD2, IP, IPV6, IG,   IPV4, NONE, PAY3),
+	NGBE_PTT(0xD3, IP, IPV6, IG,   IPV4, UDP,  PAY4),
+	NGBE_PTT(0xD4, IP, IPV6, IG,   IPV4, TCP,  PAY4),
+	NGBE_PTT(0xD5, IP, IPV6, IG,   IPV4, SCTP, PAY4),
+	NGBE_UKN(0xD6),
+	NGBE_UKN(0xD7),
+	NGBE_UKN(0xD8),
+	NGBE_PTT(0xD9, IP, IPV6, IG,   FGV6, NONE, PAY3),
+	NGBE_PTT(0xDA, IP, IPV6, IG,   IPV6, NONE, PAY3),
+	NGBE_PTT(0xDB, IP, IPV6, IG,   IPV6, UDP,  PAY4),
+	NGBE_PTT(0xDC, IP, IPV6, IG,   IPV6, TCP,  PAY4),
+	NGBE_PTT(0xDD, IP, IPV6, IG,   IPV6, SCTP, PAY4),
+	NGBE_UKN(0xDE),
+	NGBE_UKN(0xDF),
+
+	/* IPv6 --> GRE/NAT -> MAC -> NONE/IPv4/IPv6 */
+	NGBE_PTT(0xE0, IP, IPV6, IGM,  NONE, NONE, PAY3),
+	NGBE_PTT(0xE1, IP, IPV6, IGM,  FGV4, NONE, PAY3),
+	NGBE_PTT(0xE2, IP, IPV6, IGM,  IPV4, NONE, PAY3),
+	NGBE_PTT(0xE3, IP, IPV6, IGM,  IPV4, UDP,  PAY4),
+	NGBE_PTT(0xE4, IP, IPV6, IGM,  IPV4, TCP,  PAY4),
+	NGBE_PTT(0xE5, IP, IPV6, IGM,  IPV4, SCTP, PAY4),
+	NGBE_UKN(0xE6),
+	NGBE_UKN(0xE7),
+	NGBE_UKN(0xE8),
+	NGBE_PTT(0xE9, IP, IPV6, IGM,  FGV6, NONE, PAY3),
+	NGBE_PTT(0xEA, IP, IPV6, IGM,  IPV6, NONE, PAY3),
+	NGBE_PTT(0xEB, IP, IPV6, IGM,  IPV6, UDP,  PAY4),
+	NGBE_PTT(0xEC, IP, IPV6, IGM,  IPV6, TCP,  PAY4),
+	NGBE_PTT(0xED, IP, IPV6, IGM,  IPV6, SCTP, PAY4),
+	NGBE_UKN(0xEE),
+	NGBE_UKN(0xEF),
+
+	/* IPv6 --> GRE/NAT -> MAC--> NONE/IPv */
+	NGBE_PTT(0xF0, IP, IPV6, IGMV, NONE, NONE, PAY3),
+	NGBE_PTT(0xF1, IP, IPV6, IGMV, FGV4, NONE, PAY3),
+	NGBE_PTT(0xF2, IP, IPV6, IGMV, IPV4, NONE, PAY3),
+	NGBE_PTT(0xF3, IP, IPV6, IGMV, IPV4, UDP,  PAY4),
+	NGBE_PTT(0xF4, IP, IPV6, IGMV, IPV4, TCP,  PAY4),
+	NGBE_PTT(0xF5, IP, IPV6, IGMV, IPV4, SCTP, PAY4),
+	NGBE_UKN(0xF6),
+	NGBE_UKN(0xF7),
+	NGBE_UKN(0xF8),
+	NGBE_PTT(0xF9, IP, IPV6, IGMV, FGV6, NONE, PAY3),
+	NGBE_PTT(0xFA, IP, IPV6, IGMV, IPV6, NONE, PAY3),
+	NGBE_PTT(0xFB, IP, IPV6, IGMV, IPV6, UDP,  PAY4),
+	NGBE_PTT(0xFC, IP, IPV6, IGMV, IPV6, TCP,  PAY4),
+	NGBE_PTT(0xFD, IP, IPV6, IGMV, IPV6, SCTP, PAY4),
+	NGBE_UKN(0xFE),
+	NGBE_UKN(0xFF),
+};
+
 #define DEFAULT_DEBUG_LEVEL_SHIFT 3
 #define INFO_STRING_LEN           255
 
@@ -59,6 +353,19 @@ static void ngbe_clean_rx_ring(struct ngbe_ring *rx_ring);
 static void ngbe_sync_mac_table(struct ngbe_adapter *adapter);
 static void ngbe_configure_pb(struct ngbe_adapter *adapter);
 static void ngbe_configure(struct ngbe_adapter *adapter);
+static int ngbe_vlan_rx_add_vid(struct net_device *netdev,
+				__always_unused __be16 proto, u16 vid);
+
+static inline struct ngbe_dec_ptype ngbe_decode_ptype(const u8 ptype)
+{
+	return ngbe_ptype_lookup[ptype];
+}
+
+static inline struct ngbe_dec_ptype
+decode_rx_desc_ptype(const union ngbe_rx_desc *rx_desc)
+{
+	return ngbe_decode_ptype(NGBE_RXD_PKTTYPE(rx_desc));
+}
 
 static void ngbe_dev_shutdown(struct pci_dev *pdev, bool *enable_wake)
 {
@@ -1323,6 +1630,862 @@ int ngbe_close(struct net_device *netdev)
 	return 0;
 }
 
+static u64 ngbe_get_tx_completed(struct ngbe_ring *ring)
+{
+	return ring->stats.packets;
+}
+
+static u64 ngbe_get_tx_pending(struct ngbe_ring *ring)
+{
+	struct ngbe_adapter *adapter;
+	struct ngbe_hw *hw;
+	u32 head, tail;
+
+	if (ring->accel)
+		adapter = ring->accel->adapter;
+	else
+		adapter = ring->q_vector->adapter;
+
+	hw = &adapter->hw;
+	head = rd32(hw, NGBE_PX_TR_RP(ring->reg_idx));
+	tail = rd32(hw, NGBE_PX_TR_WP(ring->reg_idx));
+
+	return ((head <= tail) ? tail : tail + ring->count) - head;
+}
+
+static inline bool ngbe_check_tx_hang(struct ngbe_ring *tx_ring)
+{
+	u64 tx_done = ngbe_get_tx_completed(tx_ring);
+	u64 tx_done_old = tx_ring->tx_stats.tx_done_old;
+	u64 tx_pending = ngbe_get_tx_pending(tx_ring);
+
+	clear_check_for_tx_hang(tx_ring);
+
+	/* Check for a hung queue, but be thorough. This verifies
+	 * that a transmit has been completed since the previous
+	 * check AND there is at least one packet pending. The
+	 * ARMED bit is set to indicate a potential hang. The
+	 * bit is cleared if a pause frame is received to remove
+	 * false hang detection due to PFC or 802.3x frames. By
+	 * requiring this to fail twice we avoid races with
+	 * pfc clearing the ARMED bit and conditions where we
+	 * run the check_tx_hang logic with a transmit completion
+	 * pending but without time to complete it yet.
+	 */
+	if (tx_done_old == tx_done && tx_pending) {
+		/* make sure it is true for two checks in a row */
+		return test_and_set_bit(__NGBE_HANG_CHECK_ARMED,
+					&tx_ring->state);
+	}
+
+	/* update completed stats and continue */
+	tx_ring->tx_stats.tx_done_old = tx_done;
+	/* reset the countdown */
+	clear_bit(__NGBE_HANG_CHECK_ARMED, &tx_ring->state);
+
+	return false;
+}
+
+/**
+ * ngbe_clean_tx_irq - Reclaim resources after transmit completes
+ * @q_vector: structure containing interrupt and ring information
+ * @tx_ring: tx ring to clean
+ **/
+static bool ngbe_clean_tx_irq(struct ngbe_q_vector *q_vector,
+			      struct ngbe_ring *tx_ring)
+{
+	struct ngbe_adapter *adapter = q_vector->adapter;
+	struct ngbe_tx_buffer *tx_buffer;
+	union ngbe_tx_desc *tx_desc;
+	unsigned int total_bytes = 0, total_packets = 0;
+	unsigned int budget = q_vector->tx.work_limit;
+	unsigned int i = tx_ring->next_to_clean;
+	struct ngbe_hw *hw = &adapter->hw;
+	u16 vid = 0;
+
+	if (test_bit(__NGBE_DOWN, &adapter->state))
+		return true;
+
+	tx_buffer = &tx_ring->tx_buffer_info[i];
+	tx_desc = NGBE_TX_DESC(tx_ring, i);
+	i -= tx_ring->count;
+
+	do {
+		union ngbe_tx_desc *eop_desc = tx_buffer->next_to_watch;
+
+		/* if next_to_watch is not set then there is no work pending */
+		if (!eop_desc)
+			break;
+
+		/* prevent any other reads prior to eop_desc */
+		smp_rmb();
+
+		/* if DD is not set pending work has not been completed */
+		if (!(eop_desc->wb.status & cpu_to_le32(NGBE_TXD_STAT_DD)))
+			break;
+
+		/* clear next_to_watch to prevent false hangs */
+		tx_buffer->next_to_watch = NULL;
+
+		/* update the statistics for this packet */
+		total_bytes += tx_buffer->bytecount;
+		total_packets += tx_buffer->gso_segs;
+
+		/* free the skb */
+		dev_consume_skb_any(tx_buffer->skb);
+
+		/* unmap skb header data */
+		dma_unmap_single(tx_ring->dev,
+				 dma_unmap_addr(tx_buffer, dma),
+						dma_unmap_len(tx_buffer, len),
+						DMA_TO_DEVICE);
+
+		/* clear tx_buffer data */
+		tx_buffer->skb = NULL;
+		dma_unmap_len_set(tx_buffer, len, 0);
+
+		/* unmap remaining buffers */
+		while (tx_desc != eop_desc) {
+			tx_buffer++;
+			tx_desc++;
+			i++;
+			if (unlikely(!i)) {
+				i -= tx_ring->count;
+				tx_buffer = tx_ring->tx_buffer_info;
+				tx_desc = NGBE_TX_DESC(tx_ring, 0);
+			}
+
+			/* unmap any remaining paged data */
+			if (dma_unmap_len(tx_buffer, len)) {
+				dma_unmap_page(tx_ring->dev,
+					       dma_unmap_addr(tx_buffer, dma),
+							dma_unmap_len(tx_buffer, len),
+							DMA_TO_DEVICE);
+				dma_unmap_len_set(tx_buffer, len, 0);
+			}
+		}
+
+		/* move us one more past the eop_desc for start of next pkt */
+		tx_buffer++;
+		tx_desc++;
+		i++;
+		if (unlikely(!i)) {
+			i -= tx_ring->count;
+			tx_buffer = tx_ring->tx_buffer_info;
+			tx_desc = NGBE_TX_DESC(tx_ring, 0);
+		}
+
+		/* issue prefetch for next Tx descriptor */
+		prefetch(tx_desc);
+
+		/* update budget accounting */
+		budget--;
+	} while (likely(budget));
+
+	i += tx_ring->count;
+	tx_ring->next_to_clean = i;
+	u64_stats_update_begin(&tx_ring->syncp);
+	tx_ring->stats.bytes += total_bytes;
+	tx_ring->stats.packets += total_packets;
+	u64_stats_update_end(&tx_ring->syncp);
+	q_vector->tx.total_bytes += total_bytes;
+	q_vector->tx.total_packets += total_packets;
+
+	if (check_for_tx_hang(tx_ring)) {
+		if (!ngbe_check_tx_hang(tx_ring))
+			adapter->hang_cnt = 0;
+		else
+			adapter->hang_cnt++;
+
+		if (adapter->hang_cnt >= 5) {
+			/* schedule immediate reset if we believe we hung */
+
+			e_err(drv, "Detected Tx Unit Hang\n"
+				"  Tx Queue             <%d>\n"
+				"  TDH, TDT             <%x>, <%x>\n"
+				"  next_to_use          <%x>\n"
+				"  next_to_clean        <%x>\n"
+				"tx_buffer_info[next_to_clean]\n"
+				"  time_stamp           <%lx>\n"
+				"  jiffies              <%lx>\n",
+				tx_ring->queue_index,
+				rd32(hw, NGBE_PX_TR_RP(tx_ring->reg_idx)),
+				rd32(hw, NGBE_PX_TR_WP(tx_ring->reg_idx)),
+				tx_ring->next_to_use, i,
+				tx_ring->tx_buffer_info[i].time_stamp, jiffies);
+
+			pci_read_config_word(adapter->pdev, PCI_VENDOR_ID, &vid);
+			if (vid == NGBE_FAILED_READ_CFG_WORD)
+				e_info(hw, "pcie link has been lost.\n");
+
+			netif_stop_subqueue(tx_ring->netdev, tx_ring->queue_index);
+
+			e_info(probe,
+			       "tx hang %d detected on queue %d, resetting adapter\n",
+				adapter->tx_timeout_count + 1, tx_ring->queue_index);
+
+			/* the adapter is about to reset, no point in enabling stuff */
+			return true;
+		}
+	}
+
+	netdev_tx_completed_queue(txring_txq(tx_ring),
+				  total_packets, total_bytes);
+
+#define TX_WAKE_THRESHOLD (DESC_NEEDED * 2)
+	if (unlikely(total_packets && netif_carrier_ok(tx_ring->netdev) &&
+		     (ngbe_desc_unused(tx_ring) >= TX_WAKE_THRESHOLD))) {
+		/* Make sure that anybody stopping the queue after this
+		 * sees the new next_to_clean.
+		 */
+		smp_mb();
+
+		if (__netif_subqueue_stopped(tx_ring->netdev,
+					     tx_ring->queue_index) &&
+			!test_bit(__NGBE_DOWN, &adapter->state)) {
+			netif_wake_subqueue(tx_ring->netdev,
+					    tx_ring->queue_index);
+			++tx_ring->tx_stats.restart_queue;
+		}
+	}
+
+	return !!budget;
+}
+
+/**
+ * ngbe_is_non_eop - process handling of non-EOP buffers
+ * @rx_ring: Rx ring being processed
+ * @rx_desc: Rx descriptor for current buffer
+ * @skb: Current socket buffer containing buffer in progress
+ *
+ * This function updates next to clean.  If the buffer is an EOP buffer
+ * this function exits returning false, otherwise it will place the
+ * sk_buff in the next buffer to be chained and return true indicating
+ * that this is in fact a non-EOP buffer.
+ **/
+static bool ngbe_is_non_eop(struct ngbe_ring *rx_ring,
+			    union ngbe_rx_desc *rx_desc,
+				 struct sk_buff *skb)
+{
+	struct ngbe_rx_buffer *rx_buffer =
+			&rx_ring->rx_buffer_info[rx_ring->next_to_clean];
+	u32 ntc = rx_ring->next_to_clean + 1;
+
+	/* fetch, update, and store next to clean */
+	ntc = (ntc < rx_ring->count) ? ntc : 0;
+	rx_ring->next_to_clean = ntc;
+
+	prefetch(NGBE_RX_DESC(rx_ring, ntc));
+
+	/* if we are the last buffer then there is nothing else to do */
+	if (likely(ngbe_test_staterr(rx_desc, NGBE_RXD_STAT_EOP)))
+		return false;
+
+	/* place skb in next buffer to be received */
+	if (ring_is_hs_enabled(rx_ring)) {
+		rx_buffer->skb = rx_ring->rx_buffer_info[ntc].skb;
+		rx_buffer->dma = rx_ring->rx_buffer_info[ntc].dma;
+		rx_ring->rx_buffer_info[ntc].dma = 0;
+	}
+	rx_ring->rx_buffer_info[ntc].skb = skb;
+	rx_ring->rx_stats.non_eop_descs++;
+
+	return true;
+}
+
+static inline void ngbe_rx_hash(struct ngbe_ring *ring,
+				union ngbe_rx_desc *rx_desc,
+			  struct sk_buff *skb)
+{
+	u16 rss_type;
+
+	if (!(ring->netdev->features & NETIF_F_RXHASH))
+		return;
+
+	rss_type = le16_to_cpu(rx_desc->wb.lower.lo_dword.hs_rss.pkt_info) &
+		NGBE_RXD_RSSTYPE_MASK;
+
+	if (!rss_type)
+		return;
+
+	skb_set_hash(skb, le32_to_cpu(rx_desc->wb.lower.hi_dword.rss),
+		     (NGBE_RSS_L4_TYPES_MASK & (1ul << rss_type)) ?
+		  PKT_HASH_TYPE_L4 : PKT_HASH_TYPE_L3);
+}
+
+/**
+ * ngbe_rx_checksum - indicate in skb if hw indicated a good cksum
+ * @ring: structure containing ring specific data
+ * @rx_desc: current Rx descriptor being processed
+ * @skb: skb currently being received and modified
+ **/
+static inline void ngbe_rx_checksum(struct ngbe_ring *ring,
+				    union ngbe_rx_desc *rx_desc,
+				   struct sk_buff *skb)
+{
+	struct ngbe_dec_ptype dptype = decode_rx_desc_ptype(rx_desc);
+
+	skb->ip_summed = CHECKSUM_NONE;
+	skb_checksum_none_assert(skb);
+
+	/* Rx csum disabled */
+	if (!(ring->netdev->features & NETIF_F_RXCSUM))
+		return;
+
+	/* if IPv4 header checksum error */
+	if ((ngbe_test_staterr(rx_desc, NGBE_RXD_STAT_IPCS) &&
+	     ngbe_test_staterr(rx_desc, NGBE_RXD_ERR_IPE)) ||
+		(ngbe_test_staterr(rx_desc, NGBE_RXD_STAT_OUTERIPCS) &&
+		ngbe_test_staterr(rx_desc, NGBE_RXD_ERR_OUTERIPER))) {
+		ring->rx_stats.csum_err++;
+		return;
+	}
+
+	/* L4 checksum offload flag must set for the below code to work */
+	if (!ngbe_test_staterr(rx_desc, NGBE_RXD_STAT_L4CS))
+		return;
+
+	/*likely incorrect csum if IPv6 Dest Header found */
+	if (dptype.prot != NGBE_DEC_PTYPE_PROT_SCTP && NGBE_RXD_IPV6EX(rx_desc))
+		return;
+
+	/* if L4 checksum error */
+	if (ngbe_test_staterr(rx_desc, NGBE_RXD_ERR_TCPE)) {
+		ring->rx_stats.csum_err++;
+		return;
+	}
+	/* If there is an outer header present that might contain a checksum
+	 * we need to bump the checksum level by 1 to reflect the fact that
+	 * we are indicating we validated the inner checksum.
+	 */
+	if (dptype.etype >= NGBE_DEC_PTYPE_ETYPE_IG)
+		skb->csum_level = 1;
+
+	/* It must be a TCP or UDP or SCTP packet with a valid checksum */
+	skb->ip_summed = CHECKSUM_UNNECESSARY;
+	ring->rx_stats.csum_good_cnt++;
+}
+
+static void ngbe_rx_vlan(struct ngbe_ring *ring,
+			 union ngbe_rx_desc *rx_desc,
+			 struct sk_buff *skb)
+{
+	u8 idx = 0;
+	u16 ethertype;
+
+	if ((ring->netdev->features & NETIF_F_HW_VLAN_CTAG_RX) &&
+	    ngbe_test_staterr(rx_desc, NGBE_RXD_STAT_VP)) {
+		idx = (le16_to_cpu(rx_desc->wb.lower.lo_dword.hs_rss.pkt_info) &
+			NGBE_RXD_TPID_MASK) >> NGBE_RXD_TPID_SHIFT;
+		ethertype = ring->q_vector->adapter->hw.tpid[idx];
+		__vlan_hwaccel_put_tag(skb,
+				       htons(ethertype),
+						   le16_to_cpu(rx_desc->wb.upper.vlan));
+	}
+}
+
+/**
+ * ngbe_process_skb_fields - Populate skb header fields from Rx descriptor
+ * @rx_ring: rx descriptor ring packet is being transacted on
+ * @rx_desc: pointer to the EOP Rx descriptor
+ * @skb: pointer to current skb being populated
+ *
+ * This function checks the ring, descriptor, and packet information in
+ * order to populate the hash, checksum, VLAN, timestamp, protocol, and
+ * other fields within the skb.
+ **/
+static void ngbe_process_skb_fields(struct ngbe_ring *rx_ring,
+				    union ngbe_rx_desc *rx_desc,
+				  struct sk_buff *skb)
+{
+	ngbe_rx_hash(rx_ring, rx_desc, skb);
+	ngbe_rx_checksum(rx_ring, rx_desc, skb);
+	ngbe_rx_vlan(rx_ring, rx_desc, skb);
+	skb_record_rx_queue(skb, rx_ring->queue_index);
+	skb->protocol = eth_type_trans(skb, rx_ring->netdev);
+}
+
+/**
+ * ngbe_pull_tail - ngbe specific version of skb_pull_tail
+ * @skb: pointer to current skb being adjusted
+ *
+ * This function is an ngbe specific version of __pskb_pull_tail.  The
+ * main difference between this version and the original function is that
+ * this function can make several assumptions about the state of things
+ * that allow for significant optimizations versus the standard function.
+ * As a result we can do things like drop a frag and maintain an accurate
+ * truesize for the skb.
+ */
+static void ngbe_pull_tail(struct sk_buff *skb)
+{
+	skb_frag_t *frag = &skb_shinfo(skb)->frags[0];
+	unsigned char *va;
+	unsigned int pull_len;
+
+	/* it is valid to use page_address instead of kmap since we are
+	 * working with pages allocated out of the lomem pool per
+	 * alloc_page(GFP_ATOMIC)
+	 */
+	va = skb_frag_address(frag);
+
+	/* we need the header to contain the greater of either ETH_HLEN or
+	 * 60 bytes if the skb->len is less than 60 for skb_pad.
+	 */
+	pull_len = eth_get_headlen(skb->dev, va, NGBE_RX_HDR_SIZE);
+
+	/* align pull length to size of long to optimize memcpy performance */
+	skb_copy_to_linear_data(skb, va, ALIGN(pull_len, sizeof(long)));
+
+	/* update all of the pointers */
+	skb_frag_size_sub(frag, pull_len);
+	skb_frag_off_add(frag, pull_len);
+	skb->data_len -= pull_len;
+	skb->tail += pull_len;
+}
+
+/**
+ * ngbe_dma_sync_frag - perform DMA sync for first frag of SKB
+ * @rx_ring: rx descriptor ring packet is being transacted on
+ * @skb: pointer to current skb being updated
+ *
+ * This function provides a basic DMA sync up for the first fragment of an
+ * skb.  The reason for doing this is that the first fragment cannot be
+ * unmapped until we have reached the end of packet descriptor for a buffer
+ * chain.
+ */
+static void ngbe_dma_sync_frag(struct ngbe_ring *rx_ring,
+			       struct sk_buff *skb)
+{
+	/* if the page was released unmap it, else just sync our portion */
+	if (unlikely(NGBE_CB(skb)->page_released)) {
+		dma_unmap_page_attrs(rx_ring->dev, NGBE_CB(skb)->dma,
+				     ngbe_rx_pg_size(rx_ring),
+					 DMA_FROM_DEVICE,
+					 NGBE_RX_DMA_ATTR);
+	} else if (ring_uses_build_skb(rx_ring)) {
+		unsigned long offset = (unsigned long)(skb->data) & ~PAGE_MASK;
+
+		dma_sync_single_range_for_cpu(rx_ring->dev,
+					      NGBE_CB(skb)->dma,
+						  offset,
+						  skb_headlen(skb),
+						  DMA_FROM_DEVICE);
+	} else {
+		skb_frag_t *frag = &skb_shinfo(skb)->frags[0];
+
+		dma_sync_single_range_for_cpu(rx_ring->dev,
+					      NGBE_CB(skb)->dma,
+						  skb_frag_off(frag),
+						  skb_frag_size(frag),
+						  DMA_FROM_DEVICE);
+	}
+}
+
+/**
+ * ngbe_cleanup_headers - Correct corrupted or empty headers
+ * @rx_ring: rx descriptor ring packet is being transacted on
+ * @rx_desc: pointer to the EOP Rx descriptor
+ * @skb: pointer to current skb being fixed
+ *
+ * Check for corrupted packet headers caused by senders on the local L2
+ * embedded NIC switch not setting up their Tx Descriptors right.  These
+ * should be very rare.
+ *
+ * Also address the case where we are pulling data in on pages only
+ * and as such no data is present in the skb header.
+ *
+ * In addition if skb is not at least 60 bytes we need to pad it so that
+ * it is large enough to qualify as a valid Ethernet frame.
+ *
+ * Returns true if an error was encountered and skb was freed.
+ **/
+static bool ngbe_cleanup_headers(struct ngbe_ring *rx_ring,
+				 union ngbe_rx_desc *rx_desc,
+				  struct sk_buff *skb)
+{
+	struct net_device *netdev = rx_ring->netdev;
+
+	/* verify that the packet does not have any known errors */
+	if (unlikely(ngbe_test_staterr(rx_desc,
+				       NGBE_RXD_ERR_FRAME_ERR_MASK) &&
+		!(netdev->features & NETIF_F_RXALL))) {
+		dev_kfree_skb_any(skb);
+		return true;
+	}
+
+	/* place header in linear portion of buffer */
+	if (skb_is_nonlinear(skb)  && !skb_headlen(skb))
+		ngbe_pull_tail(skb);
+
+	/* if eth_skb_pad returns an error the skb was freed */
+	if (eth_skb_pad(skb))
+		return true;
+
+	return false;
+}
+
+/**
+ * ngbe_reuse_rx_page - page flip buffer and store it back on the ring
+ * @rx_ring: rx descriptor ring to store buffers on
+ * @old_buff: donor buffer to have page reused
+ *
+ * Synchronizes page for reuse by the adapter
+ **/
+static void ngbe_reuse_rx_page(struct ngbe_ring *rx_ring,
+			       struct ngbe_rx_buffer *old_buff)
+{
+	struct ngbe_rx_buffer *new_buff;
+	u16 nta = rx_ring->next_to_alloc;
+
+	new_buff = &rx_ring->rx_buffer_info[nta];
+
+	/* update, and store next to alloc */
+	nta++;
+	rx_ring->next_to_alloc = (nta < rx_ring->count) ? nta : 0;
+
+	/* transfer page from old buffer to new buffer */
+	new_buff->page_dma = old_buff->page_dma;
+	new_buff->page = old_buff->page;
+	new_buff->page_offset = old_buff->page_offset;
+
+	/* sync the buffer for use by the device */
+	dma_sync_single_range_for_device(rx_ring->dev, new_buff->page_dma,
+					 new_buff->page_offset,
+					 ngbe_rx_bufsz(rx_ring),
+					 DMA_FROM_DEVICE);
+}
+
+static inline bool ngbe_page_is_reserved(struct page *page)
+{
+	return (page_to_nid(page) != numa_mem_id()) || page_is_pfmemalloc(page);
+}
+
+/**
+ * ngbe_add_rx_frag - Add contents of Rx buffer to sk_buff
+ * @rx_ring: rx descriptor ring to transact packets on
+ * @rx_buffer: buffer containing page to add
+ * @rx_desc: descriptor containing length of buffer written by hardware
+ * @skb: sk_buff to place the data into
+ *
+ * This function will add the data contained in rx_buffer->page to the skb.
+ * This is done either through a direct copy if the data in the buffer is
+ * less than the skb header size, otherwise it will just attach the page as
+ * a frag to the skb.
+ *
+ * The function will then update the page offset if necessary and return
+ * true if the buffer can be reused by the adapter.
+ **/
+static bool ngbe_add_rx_frag(struct ngbe_ring *rx_ring,
+			     struct ngbe_rx_buffer *rx_buffer,
+				  union ngbe_rx_desc *rx_desc,
+				  struct sk_buff *skb)
+{
+	struct page *page = rx_buffer->page;
+	unsigned int size = le16_to_cpu(rx_desc->wb.upper.length);
+	unsigned int truesize = ngbe_rx_bufsz(rx_ring);
+
+	if (size <= NGBE_RX_HDR_SIZE && !skb_is_nonlinear(skb) &&
+	    !ring_is_hs_enabled(rx_ring)) {
+		unsigned char *va = page_address(page) + rx_buffer->page_offset;
+
+		memcpy(__skb_put(skb, size), va, ALIGN(size, sizeof(long)));
+
+		/* page is not reserved, we can reuse buffer as-is */
+		if (likely(!ngbe_page_is_reserved(page)))
+			return true;
+
+		/* this page cannot be reused so discard it */
+		__free_pages(page, ngbe_rx_pg_order(rx_ring));
+		return false;
+	}
+
+	skb_add_rx_frag(skb, skb_shinfo(skb)->nr_frags, page,
+			rx_buffer->page_offset, size, truesize);
+
+	/* avoid re-using remote pages */
+	if (unlikely(ngbe_page_is_reserved(page)))
+		return false;
+
+	/* if we are only owner of page we can reuse it */
+	if (unlikely(page_count(page) != 1))
+		return false;
+
+	/* flip page offset to other buffer */
+	rx_buffer->page_offset ^= truesize;
+
+	/* Even if we own the page, we are not allowed to use atomic_set()
+	 * This would break get_page_unless_zero() users.
+	 */
+	page_ref_inc(page);
+
+	return true;
+}
+
+static struct sk_buff *ngbe_fetch_rx_buffer(struct ngbe_ring *rx_ring,
+					    union ngbe_rx_desc *rx_desc)
+{
+	struct ngbe_rx_buffer *rx_buffer;
+	struct sk_buff *skb;
+	struct page *page;
+
+	rx_buffer = &rx_ring->rx_buffer_info[rx_ring->next_to_clean];
+	page = rx_buffer->page;
+	prefetchw(page);
+
+	skb = rx_buffer->skb;
+
+	if (likely(!skb)) {
+		void *page_addr = page_address(page) +
+				  rx_buffer->page_offset;
+
+		/* prefetch first cache line of first page */
+		prefetch(page_addr);
+#if L1_CACHE_BYTES < 128
+		prefetch(page_addr + L1_CACHE_BYTES);
+#endif
+
+		/* allocate a skb to store the frags */
+		skb = netdev_alloc_skb_ip_align(rx_ring->netdev,
+						NGBE_RX_HDR_SIZE);
+		if (unlikely(!skb)) {
+			rx_ring->rx_stats.alloc_rx_buff_failed++;
+			return NULL;
+		}
+
+		/* we will be copying header into skb->data in
+		 * pskb_may_pull so it is in our interest to prefetch
+		 * it now to avoid a possible cache miss
+		 */
+		prefetchw(skb->data);
+
+		/* Delay unmapping of the first packet. It carries the
+		 * header information, HW may still access the header
+		 * after the writeback.  Only unmap it when EOP is
+		 * reached
+		 */
+		if (likely(ngbe_test_staterr(rx_desc, NGBE_RXD_STAT_EOP)))
+			goto dma_sync;
+
+		NGBE_CB(skb)->dma = rx_buffer->page_dma;
+	} else {
+		if (ngbe_test_staterr(rx_desc, NGBE_RXD_STAT_EOP))
+			ngbe_dma_sync_frag(rx_ring, skb);
+
+dma_sync:
+		/* we are reusing so sync this buffer for CPU use */
+		dma_sync_single_range_for_cpu(rx_ring->dev,
+					      rx_buffer->page_dma,
+						  rx_buffer->page_offset,
+						  ngbe_rx_bufsz(rx_ring),
+						  DMA_FROM_DEVICE);
+
+		rx_buffer->skb = NULL;
+	}
+
+	/* pull page into skb */
+	if (ngbe_add_rx_frag(rx_ring, rx_buffer, rx_desc, skb)) {
+		/* hand second half of page back to the ring */
+		ngbe_reuse_rx_page(rx_ring, rx_buffer);
+	} else if (NGBE_CB(skb)->dma == rx_buffer->page_dma) {
+		/* the page has been released from the ring */
+		NGBE_CB(skb)->page_released = true;
+	} else {
+		/* we are not reusing the buffer so unmap it */
+		dma_unmap_page(rx_ring->dev, rx_buffer->page_dma,
+			       ngbe_rx_pg_size(rx_ring),
+				   DMA_FROM_DEVICE);
+	}
+
+	/* clear contents of buffer_info */
+	rx_buffer->page = NULL;
+
+	return skb;
+}
+
+static inline u16 ngbe_get_hlen(struct ngbe_ring __maybe_unused *rx_ring,
+				union ngbe_rx_desc *rx_desc)
+{
+	__le16 hdr_info = rx_desc->wb.lower.lo_dword.hs_rss.hdr_info;
+	u16 hlen = le16_to_cpu(hdr_info) & NGBE_RXD_HDRBUFLEN_MASK;
+
+	if (hlen > (NGBE_RX_HDR_SIZE << NGBE_RXD_HDRBUFLEN_SHIFT))
+		hlen = 0;
+	else
+		hlen >>= NGBE_RXD_HDRBUFLEN_SHIFT;
+
+	return hlen;
+}
+
+static struct sk_buff *ngbe_fetch_rx_buffer_hs(struct ngbe_ring *rx_ring,
+					       union ngbe_rx_desc *rx_desc)
+{
+	struct ngbe_rx_buffer *rx_buffer;
+	struct sk_buff *skb;
+	struct page *page;
+	int hdr_len = 0;
+
+	rx_buffer = &rx_ring->rx_buffer_info[rx_ring->next_to_clean];
+	page = rx_buffer->page;
+	prefetchw(page);
+
+	skb = rx_buffer->skb;
+	rx_buffer->skb = NULL;
+	prefetchw(skb->data);
+
+	if (!skb_is_nonlinear(skb)) {
+		hdr_len = ngbe_get_hlen(rx_ring, rx_desc);
+		if (hdr_len > 0) {
+			__skb_put(skb, hdr_len);
+			NGBE_CB(skb)->dma_released = true;
+			NGBE_CB(skb)->dma = rx_buffer->dma;
+			rx_buffer->dma = 0;
+		} else {
+			dma_unmap_single(rx_ring->dev,
+					 rx_buffer->dma,
+					 rx_ring->rx_buf_len,
+					 DMA_FROM_DEVICE);
+			rx_buffer->dma = 0;
+			if (likely(ngbe_test_staterr(rx_desc, NGBE_RXD_STAT_EOP)))
+				goto dma_sync;
+			NGBE_CB(skb)->dma = rx_buffer->page_dma;
+			goto add_frag;
+		}
+	}
+
+	if (ngbe_test_staterr(rx_desc, NGBE_RXD_STAT_EOP)) {
+		if (skb_headlen(skb)) {
+			if (NGBE_CB(skb)->dma_released) {
+				dma_unmap_single(rx_ring->dev,
+						 NGBE_CB(skb)->dma,
+						 rx_ring->rx_buf_len,
+						 DMA_FROM_DEVICE);
+				NGBE_CB(skb)->dma = 0;
+				NGBE_CB(skb)->dma_released = false;
+			}
+		} else {
+			ngbe_dma_sync_frag(rx_ring, skb);
+		}
+	}
+
+dma_sync:
+	/* we are reusing so sync this buffer for CPU use */
+	dma_sync_single_range_for_cpu(rx_ring->dev,
+				      rx_buffer->page_dma,
+								rx_buffer->page_offset,
+								ngbe_rx_bufsz(rx_ring),
+								DMA_FROM_DEVICE);
+add_frag:
+	/* pull page into skb */
+	if (ngbe_add_rx_frag(rx_ring, rx_buffer, rx_desc, skb)) {
+		/* hand second half of page back to the ring */
+		ngbe_reuse_rx_page(rx_ring, rx_buffer);
+	} else if (NGBE_CB(skb)->dma == rx_buffer->page_dma) {
+		/* the page has been released from the ring */
+		NGBE_CB(skb)->page_released = true;
+	} else {
+		/* we are not reusing the buffer so unmap it */
+		dma_unmap_page(rx_ring->dev, rx_buffer->page_dma,
+			       ngbe_rx_pg_size(rx_ring),
+					DMA_FROM_DEVICE);
+	}
+
+	/* clear contents of buffer_info */
+	rx_buffer->page = NULL;
+
+	return skb;
+}
+
+static void ngbe_rx_skb(struct ngbe_q_vector *q_vector,
+			struct ngbe_ring *rx_ring,
+		  union ngbe_rx_desc *rx_desc,
+		  struct sk_buff *skb)
+{
+	napi_gro_receive(&q_vector->napi, skb);
+}
+
+/**
+ * ngbe_clean_rx_irq - Clean completed descriptors from Rx ring - bounce buf
+ * @q_vector: structure containing interrupt and ring information
+ * @rx_ring: rx descriptor ring to transact packets on
+ * @budget: Total limit on number of packets to process
+ *
+ * This function provides a "bounce buffer" approach to Rx interrupt
+ * processing.	The advantage to this is that on systems that have
+ * expensive overhead for IOMMU access this provides a means of avoiding
+ * it by maintaining the mapping of the page to the system.
+ *
+ * Returns amount of work completed.
+ **/
+static int ngbe_clean_rx_irq(struct ngbe_q_vector *q_vector,
+			     struct ngbe_ring *rx_ring,
+				   int budget)
+{
+	unsigned int total_rx_bytes = 0, total_rx_packets = 0;
+	u16 cleaned_count = ngbe_desc_unused(rx_ring);
+
+	do {
+		union ngbe_rx_desc *rx_desc;
+		struct sk_buff *skb;
+
+		/* return some buffers to hardware, one at a time is too slow */
+		if (cleaned_count >= NGBE_RX_BUFFER_WRITE) {
+			ngbe_alloc_rx_buffers(rx_ring, cleaned_count);
+			cleaned_count = 0;
+		}
+
+		rx_desc = NGBE_RX_DESC(rx_ring, rx_ring->next_to_clean);
+
+		if (!ngbe_test_staterr(rx_desc, NGBE_RXD_STAT_DD))
+			break;
+
+		/* This memory barrier is needed to keep us from reading
+		 * any other fields out of the rx_desc until we know the
+		 * descriptor has been written back
+		 */
+		dma_rmb();
+
+		/* retrieve a buffer from the ring */
+		if (ring_is_hs_enabled(rx_ring))
+			skb = ngbe_fetch_rx_buffer_hs(rx_ring, rx_desc);
+		else
+			skb = ngbe_fetch_rx_buffer(rx_ring, rx_desc);
+
+		/* exit if we failed to retrieve a buffer */
+		if (!skb)
+			break;
+
+		cleaned_count++;
+
+		/* place incomplete frames back on ring for completion */
+		if (ngbe_is_non_eop(rx_ring, rx_desc, skb))
+			continue;
+
+		/* verify the packet layout is correct */
+		if (ngbe_cleanup_headers(rx_ring, rx_desc, skb))
+			continue;
+
+		/* probably a little skewed due to removing CRC */
+		total_rx_bytes += skb->len;
+
+		/* populate checksum, timestamp, VLAN, and protocol */
+		ngbe_process_skb_fields(rx_ring, rx_desc, skb);
+
+		ngbe_rx_skb(q_vector, rx_ring, rx_desc, skb);
+
+		/* update budget accounting */
+		total_rx_packets++;
+	} while (likely(total_rx_packets < budget));
+
+	u64_stats_update_begin(&rx_ring->syncp);
+	rx_ring->stats.packets += total_rx_packets;
+	rx_ring->stats.bytes += total_rx_bytes;
+	u64_stats_update_end(&rx_ring->syncp);
+	q_vector->rx.total_packets += total_rx_packets;
+	q_vector->rx.total_bytes += total_rx_bytes;
+
+	return total_rx_packets;
+}
+
 /**
  * ngbe_poll - NAPI polling RX/TX cleanup routine
  * @napi: napi struct with our devices info in it
@@ -1332,6 +2495,44 @@ int ngbe_close(struct net_device *netdev)
  **/
 int ngbe_poll(struct napi_struct *napi, int budget)
 {
+	struct ngbe_q_vector *q_vector = container_of(napi, struct ngbe_q_vector, napi);
+	struct ngbe_adapter *adapter = q_vector->adapter;
+	struct ngbe_ring *ring;
+	int per_ring_budget;
+	bool clean_complete = true;
+
+	ngbe_for_each_ring(ring, q_vector->tx) {
+		if (!ngbe_clean_tx_irq(q_vector, ring))
+			clean_complete = false;
+	}
+
+	/* attempt to distribute budget to each queue fairly, but don't allow
+	 * the budget to go below 1 because we'll exit polling
+	 */
+	if (q_vector->rx.count > 1)
+		per_ring_budget = max(budget / q_vector->rx.count, 1);
+	else
+		per_ring_budget = budget;
+
+	ngbe_for_each_ring(ring, q_vector->rx) {
+		int cleaned = ngbe_clean_rx_irq(q_vector, ring,
+						per_ring_budget);
+
+		if (cleaned >= per_ring_budget)
+			clean_complete = false;
+	}
+
+	/* If all work not completed, return budget and keep polling */
+	if (!clean_complete)
+		return budget;
+
+	/* all work done, exit the polling mode */
+	napi_complete(napi);
+
+	if (!test_bit(__NGBE_DOWN, &adapter->state))
+		ngbe_intr_enable(&adapter->hw,
+				 NGBE_INTR_Q(q_vector->v_idx));
+
 	return 0;
 }
 
@@ -1353,9 +2554,1094 @@ static inline unsigned long ngbe_tso_features(void)
 	return features;
 }
 
+static int __ngbe_maybe_stop_tx(struct ngbe_ring *tx_ring, u16 size)
+{
+	netif_stop_subqueue(tx_ring->netdev, tx_ring->queue_index);
+
+	/* Herbert's original patch had:
+	 *  smp_mb__after_netif_stop_queue();
+	 * but since that doesn't exist yet, just open code it.
+	 */
+	smp_mb();
+
+	/* We need to check again in a case another CPU has just
+	 * made room available.
+	 */
+	if (likely(ngbe_desc_unused(tx_ring) < size))
+		return -EBUSY;
+
+	/* A reprieve! - use start_queue because it doesn't call schedule */
+	netif_start_subqueue(tx_ring->netdev, tx_ring->queue_index);
+	++tx_ring->tx_stats.restart_queue;
+
+	return 0;
+}
+
+static inline int ngbe_maybe_stop_tx(struct ngbe_ring *tx_ring, u16 size)
+{
+	if (likely(ngbe_desc_unused(tx_ring) >= size))
+		return 0;
+
+	return __ngbe_maybe_stop_tx(tx_ring, size);
+}
+
+void ngbe_tx_ctxtdesc(struct ngbe_ring *tx_ring, u32 vlan_macip_lens,
+		      u32 fcoe_sof_eof, u32 type_tucmd, u32 mss_l4len_idx)
+{
+	struct ngbe_tx_context_desc *context_desc;
+	u16 i = tx_ring->next_to_use;
+
+	context_desc = NGBE_TX_CTXTDESC(tx_ring, i);
+
+	i++;
+	tx_ring->next_to_use = (i < tx_ring->count) ? i : 0;
+
+	/* set bits to identify this as an advanced context descriptor */
+	type_tucmd |= NGBE_TXD_DTYP_CTXT;
+	context_desc->vlan_macip_lens   = cpu_to_le32(vlan_macip_lens);
+	context_desc->seqnum_seed       = cpu_to_le32(fcoe_sof_eof);
+	context_desc->type_tucmd_mlhl   = cpu_to_le32(type_tucmd);
+	context_desc->mss_l4len_idx     = cpu_to_le32(mss_l4len_idx);
+}
+
+static u8 get_ipv6_proto(struct sk_buff *skb, int offset)
+{
+	struct ipv6hdr *hdr = (struct ipv6hdr *)(skb->data + offset);
+	u8 nexthdr = hdr->nexthdr;
+
+	offset += sizeof(struct ipv6hdr);
+
+	while (ipv6_ext_hdr(nexthdr)) {
+		struct ipv6_opt_hdr _hdr, *hp;
+
+		if (nexthdr == NEXTHDR_NONE)
+			break;
+
+		hp = skb_header_pointer(skb, offset, sizeof(_hdr), &_hdr);
+		if (!hp)
+			break;
+
+		if (nexthdr == NEXTHDR_FRAGMENT)
+			break;
+		else if (nexthdr == NEXTHDR_AUTH)
+			offset +=  ipv6_authlen(hp);
+		else
+			offset +=  ipv6_optlen(hp);
+
+		nexthdr = hp->nexthdr;
+	}
+
+	return nexthdr;
+}
+
+static struct ngbe_dec_ptype encode_tx_desc_ptype(const struct ngbe_tx_buffer *first)
+{
+	struct sk_buff *skb = first->skb;
+	u8 tun_prot = 0;
+	u8 l4_prot = 0;
+	u8 ptype = 0;
+
+	if (skb->encapsulation) {
+		union network_header hdr;
+
+		switch (first->protocol) {
+		case htons(ETH_P_IP):
+			tun_prot = ip_hdr(skb)->protocol;
+			if (ip_hdr(skb)->frag_off & htons(IP_MF | IP_OFFSET))
+				goto encap_frag;
+			ptype = NGBE_PTYPE_TUN_IPV4;
+			break;
+		case htons(ETH_P_IPV6):
+			tun_prot = get_ipv6_proto(skb, skb_network_offset(skb));
+			if (tun_prot == NEXTHDR_FRAGMENT)
+				goto encap_frag;
+			ptype = NGBE_PTYPE_TUN_IPV6;
+			break;
+		default:
+			goto exit;
+		}
+
+		if (tun_prot == IPPROTO_IPIP) {
+			hdr.raw = (void *)inner_ip_hdr(skb);
+			ptype |= NGBE_PTYPE_PKT_IPIP;
+		} else if (tun_prot == IPPROTO_UDP) {
+			hdr.raw = (void *)inner_ip_hdr(skb);
+		} else {
+			goto exit;
+		}
+
+		switch (hdr.ipv4->version) {
+		case IPVERSION:
+			l4_prot = hdr.ipv4->protocol;
+			if (hdr.ipv4->frag_off & htons(IP_MF | IP_OFFSET)) {
+				ptype |= NGBE_PTYPE_TYP_IPFRAG;
+				goto exit;
+			}
+			break;
+		case 6:
+			l4_prot = get_ipv6_proto(skb,
+						 skb_inner_network_offset(skb));
+			ptype |= NGBE_PTYPE_PKT_IPV6;
+			if (l4_prot == NEXTHDR_FRAGMENT) {
+				ptype |= NGBE_PTYPE_TYP_IPFRAG;
+				goto exit;
+			}
+			break;
+		default:
+			goto exit;
+		}
+	} else {
+encap_frag:
+		switch (first->protocol) {
+		case htons(ETH_P_IP):
+			l4_prot = ip_hdr(skb)->protocol;
+			ptype = NGBE_PTYPE_PKT_IP;
+			if (ip_hdr(skb)->frag_off & htons(IP_MF | IP_OFFSET)) {
+				ptype |= NGBE_PTYPE_TYP_IPFRAG;
+				goto exit;
+			}
+			break;
+#ifdef NETIF_F_IPV6_CSUM
+		case htons(ETH_P_IPV6):
+			l4_prot = get_ipv6_proto(skb, skb_network_offset(skb));
+			ptype = NGBE_PTYPE_PKT_IP | NGBE_PTYPE_PKT_IPV6;
+			if (l4_prot == NEXTHDR_FRAGMENT) {
+				ptype |= NGBE_PTYPE_TYP_IPFRAG;
+				goto exit;
+			}
+			break;
+#endif /* NETIF_F_IPV6_CSUM */
+		case htons(ETH_P_1588):
+			ptype = NGBE_PTYPE_L2_TS;
+			goto exit;
+		case htons(ETH_P_FIP):
+			ptype = NGBE_PTYPE_L2_FIP;
+			goto exit;
+		case htons(NGBE_ETH_P_LLDP):
+			ptype = NGBE_PTYPE_L2_LLDP;
+			goto exit;
+		case htons(NGBE_ETH_P_CNM):
+			ptype = NGBE_PTYPE_L2_CNM;
+			goto exit;
+		case htons(ETH_P_PAE):
+			ptype = NGBE_PTYPE_L2_EAPOL;
+			goto exit;
+		case htons(ETH_P_ARP):
+			ptype = NGBE_PTYPE_L2_ARP;
+			goto exit;
+		default:
+			ptype = NGBE_PTYPE_L2_MAC;
+			goto exit;
+		}
+	}
+
+	switch (l4_prot) {
+	case IPPROTO_TCP:
+		ptype |= NGBE_PTYPE_TYP_TCP;
+		break;
+	case IPPROTO_UDP:
+		ptype |= NGBE_PTYPE_TYP_UDP;
+		break;
+	case IPPROTO_SCTP:
+		ptype |= NGBE_PTYPE_TYP_SCTP;
+		break;
+	default:
+		ptype |= NGBE_PTYPE_TYP_IP;
+		break;
+	}
+
+exit:
+	return ngbe_decode_ptype(ptype);
+}
+
+static int ngbe_tso(struct ngbe_ring *tx_ring,
+		    struct ngbe_tx_buffer *first,
+					u8 *hdr_len,  struct ngbe_dec_ptype dptype)
+{
+	struct sk_buff *skb = first->skb;
+	u32 vlan_macip_lens, type_tucmd;
+	u32 mss_l4len_idx, l4len;
+	struct tcphdr *tcph;
+	struct iphdr *iph;
+	u32 tunhdr_eiplen_tunlen = 0;
+	u8 tun_prot = 0;
+	bool enc = skb->encapsulation;
+
+	struct ipv6hdr *ipv6h;
+
+	if (skb->ip_summed != CHECKSUM_PARTIAL)
+		return 0;
+
+	if (!skb_is_gso(skb))
+		return 0;
+
+	if (skb_header_cloned(skb)) {
+		int err = pskb_expand_head(skb, 0, 0, GFP_ATOMIC);
+
+		if (err)
+			return err;
+	}
+
+	iph = enc ? inner_ip_hdr(skb) : ip_hdr(skb);
+	if (iph->version == 4) {
+		tcph = enc ? inner_tcp_hdr(skb) : tcp_hdr(skb);
+		iph->tot_len = 0;
+		iph->check = 0;
+		tcph->check = ~csum_tcpudp_magic(iph->saddr,
+						iph->daddr, 0,
+						IPPROTO_TCP,
+						0);
+		first->tx_flags |= NGBE_TX_FLAGS_TSO |
+						   NGBE_TX_FLAGS_CSUM |
+						   NGBE_TX_FLAGS_IPV4 |
+						   NGBE_TX_FLAGS_CC;
+	} else if (iph->version == 6 && skb_is_gso_v6(skb)) {
+		ipv6h = enc ? inner_ipv6_hdr(skb) : ipv6_hdr(skb);
+		tcph = enc ? inner_tcp_hdr(skb) : tcp_hdr(skb);
+		ipv6h->payload_len = 0;
+		tcph->check =
+		    ~csum_ipv6_magic(&ipv6h->saddr,
+				     &ipv6h->daddr,
+				     0, IPPROTO_TCP, 0);
+		first->tx_flags |= NGBE_TX_FLAGS_TSO |
+							NGBE_TX_FLAGS_CSUM |
+							NGBE_TX_FLAGS_CC;
+	}
+
+	/* compute header lengths */
+	l4len = enc ? inner_tcp_hdrlen(skb) : tcp_hdrlen(skb);
+	*hdr_len = enc ? (skb_inner_transport_header(skb) - skb->data)
+		       : skb_transport_offset(skb);
+	*hdr_len += l4len;
+
+	/* update gso size and bytecount with header size */
+	first->gso_segs = skb_shinfo(skb)->gso_segs;
+	first->bytecount += (first->gso_segs - 1) * *hdr_len;
+
+	/* mss_l4len_id: use 0 as index for TSO */
+	mss_l4len_idx = l4len << NGBE_TXD_L4LEN_SHIFT;
+	mss_l4len_idx |= skb_shinfo(skb)->gso_size << NGBE_TXD_MSS_SHIFT;
+
+	/* vlan_macip_lens: HEADLEN, MACLEN, VLAN tag */
+	if (enc) {
+		switch (first->protocol) {
+		case htons(ETH_P_IP):
+			tun_prot = ip_hdr(skb)->protocol;
+			first->tx_flags |= NGBE_TX_FLAGS_OUTER_IPV4;
+			break;
+		case htons(ETH_P_IPV6):
+			tun_prot = ipv6_hdr(skb)->nexthdr;
+			break;
+		default:
+			break;
+		}
+		switch (tun_prot) {
+		case IPPROTO_UDP:
+			tunhdr_eiplen_tunlen = NGBE_TXD_TUNNEL_UDP;
+			tunhdr_eiplen_tunlen |=
+					((skb_network_header_len(skb) >> 2) <<
+					NGBE_TXD_OUTER_IPLEN_SHIFT) |
+					(((skb_inner_mac_header(skb) -
+					skb_transport_header(skb)) >> 1) <<
+					NGBE_TXD_TUNNEL_LEN_SHIFT);
+			break;
+		case IPPROTO_GRE:
+			tunhdr_eiplen_tunlen = NGBE_TXD_TUNNEL_GRE;
+			tunhdr_eiplen_tunlen |=
+					((skb_network_header_len(skb) >> 2) <<
+					NGBE_TXD_OUTER_IPLEN_SHIFT) |
+					(((skb_inner_mac_header(skb) -
+					skb_transport_header(skb)) >> 1) <<
+					NGBE_TXD_TUNNEL_LEN_SHIFT);
+			break;
+		case IPPROTO_IPIP:
+			tunhdr_eiplen_tunlen = (((char *)inner_ip_hdr(skb) -
+						(char *)ip_hdr(skb)) >> 2) <<
+						NGBE_TXD_OUTER_IPLEN_SHIFT;
+			break;
+		default:
+			break;
+		}
+
+		vlan_macip_lens = skb_inner_network_header_len(skb) >> 1;
+	} else {
+		vlan_macip_lens = skb_network_header_len(skb) >> 1;
+	}
+
+	vlan_macip_lens |= skb_network_offset(skb) << NGBE_TXD_MACLEN_SHIFT;
+	vlan_macip_lens |= first->tx_flags & NGBE_TX_FLAGS_VLAN_MASK;
+
+	type_tucmd = dptype.ptype << 24;
+	ngbe_tx_ctxtdesc(tx_ring, vlan_macip_lens, tunhdr_eiplen_tunlen,
+			 type_tucmd, mss_l4len_idx);
+
+	return 1;
+}
+
+static void ngbe_tx_csum(struct ngbe_ring *tx_ring,
+			 struct ngbe_tx_buffer *first, struct ngbe_dec_ptype dptype)
+{
+	struct sk_buff *skb = first->skb;
+	u32 vlan_macip_lens = 0;
+	u32 mss_l4len_idx = 0;
+	u32 tunhdr_eiplen_tunlen = 0;
+	u8 tun_prot = 0;
+	u32 type_tucmd;
+
+	if (skb->ip_summed != CHECKSUM_PARTIAL) {
+		if (!(first->tx_flags & NGBE_TX_FLAGS_HW_VLAN) &&
+		    !(first->tx_flags & NGBE_TX_FLAGS_CC))
+			return;
+		vlan_macip_lens = skb_network_offset(skb) <<
+				  NGBE_TXD_MACLEN_SHIFT;
+	} else {
+		u8 l4_prot = 0;
+		union {
+			struct iphdr *ipv4;
+			struct ipv6hdr *ipv6;
+			u8 *raw;
+		} network_hdr;
+		union {
+			struct tcphdr *tcphdr;
+			u8 *raw;
+		} transport_hdr;
+
+		if (skb->encapsulation) {
+			network_hdr.raw = skb_inner_network_header(skb);
+			transport_hdr.raw = skb_inner_transport_header(skb);
+			vlan_macip_lens = skb_network_offset(skb) <<
+					  NGBE_TXD_MACLEN_SHIFT;
+			switch (first->protocol) {
+			case htons(ETH_P_IP):
+				tun_prot = ip_hdr(skb)->protocol;
+				break;
+			case htons(ETH_P_IPV6):
+				tun_prot = ipv6_hdr(skb)->nexthdr;
+				break;
+			default:
+				if (unlikely(net_ratelimit())) {
+					dev_warn(tx_ring->dev,
+						 "partial checksum but version=%d\n",
+					 network_hdr.ipv4->version);
+				}
+				return;
+			}
+			switch (tun_prot) {
+			case IPPROTO_UDP:
+				tunhdr_eiplen_tunlen = NGBE_TXD_TUNNEL_UDP;
+				tunhdr_eiplen_tunlen |=
+					((skb_network_header_len(skb) >> 2) <<
+					NGBE_TXD_OUTER_IPLEN_SHIFT) |
+					(((skb_inner_mac_header(skb) -
+					skb_transport_header(skb)) >> 1) <<
+					NGBE_TXD_TUNNEL_LEN_SHIFT);
+				break;
+			case IPPROTO_GRE:
+				tunhdr_eiplen_tunlen = NGBE_TXD_TUNNEL_GRE;
+				tunhdr_eiplen_tunlen |=
+					((skb_network_header_len(skb) >> 2) <<
+					NGBE_TXD_OUTER_IPLEN_SHIFT) |
+					(((skb_inner_mac_header(skb) -
+					skb_transport_header(skb)) >> 1) <<
+					NGBE_TXD_TUNNEL_LEN_SHIFT);
+				break;
+			case IPPROTO_IPIP:
+				tunhdr_eiplen_tunlen =
+					(((char *)inner_ip_hdr(skb) -
+					 (char *)ip_hdr(skb)) >> 2) <<
+					NGBE_TXD_OUTER_IPLEN_SHIFT;
+				break;
+			default:
+				break;
+			}
+		} else {
+			network_hdr.raw = skb_network_header(skb);
+			transport_hdr.raw = skb_transport_header(skb);
+			vlan_macip_lens = skb_network_offset(skb) <<
+					  NGBE_TXD_MACLEN_SHIFT;
+		}
+
+		switch (network_hdr.ipv4->version) {
+		case IPVERSION:
+			vlan_macip_lens |=
+				(transport_hdr.raw - network_hdr.raw) >> 1;
+			l4_prot = network_hdr.ipv4->protocol;
+			break;
+		case 6:
+			vlan_macip_lens |=
+				(transport_hdr.raw - network_hdr.raw) >> 1;
+			l4_prot = network_hdr.ipv6->nexthdr;
+			break;
+		default:
+			break;
+		}
+
+		switch (l4_prot) {
+		case IPPROTO_TCP:
+		mss_l4len_idx = (transport_hdr.tcphdr->doff * 4) <<
+				NGBE_TXD_L4LEN_SHIFT;
+			break;
+		case IPPROTO_SCTP:
+			mss_l4len_idx = sizeof(struct sctphdr) <<
+					NGBE_TXD_L4LEN_SHIFT;
+			break;
+		case IPPROTO_UDP:
+			mss_l4len_idx = sizeof(struct udphdr) <<
+					NGBE_TXD_L4LEN_SHIFT;
+			break;
+		default:
+			break;
+		}
+
+		/* update TX checksum flag */
+		first->tx_flags |= NGBE_TX_FLAGS_CSUM;
+	}
+	first->tx_flags |= NGBE_TX_FLAGS_CC;
+	/* vlan_macip_lens: MACLEN, VLAN tag */
+	vlan_macip_lens |= first->tx_flags & NGBE_TX_FLAGS_VLAN_MASK;
+
+	type_tucmd = dptype.ptype << 24;
+	ngbe_tx_ctxtdesc(tx_ring, vlan_macip_lens, tunhdr_eiplen_tunlen,
+			 type_tucmd, mss_l4len_idx);
+}
+
+static u32 ngbe_tx_cmd_type(u32 tx_flags)
+{
+	/* set type for advanced descriptor with frame checksum insertion */
+	u32 cmd_type = NGBE_TXD_DTYP_DATA | NGBE_TXD_IFCS;
+
+	/* set HW vlan bit if vlan is present */
+	cmd_type |= NGBE_SET_FLAG(tx_flags, NGBE_TX_FLAGS_HW_VLAN, NGBE_TXD_VLE);
+
+	/* set segmentation enable bits for TSO/FSO */
+	cmd_type |= NGBE_SET_FLAG(tx_flags, NGBE_TX_FLAGS_TSO, NGBE_TXD_TSE);
+
+	/* set timestamp bit if present */
+	cmd_type |= NGBE_SET_FLAG(tx_flags, NGBE_TX_FLAGS_TSTAMP, NGBE_TXD_MAC_TSTAMP);
+
+	cmd_type |= NGBE_SET_FLAG(tx_flags, NGBE_TX_FLAGS_LINKSEC, NGBE_TXD_LINKSEC);
+
+	return cmd_type;
+}
+
+static void ngbe_tx_olinfo_status(union ngbe_tx_desc *tx_desc,
+				  u32 tx_flags, unsigned int paylen)
+{
+	u32 olinfo_status = paylen << NGBE_TXD_PAYLEN_SHIFT;
+
+	/* enable L4 checksum for TSO and TX checksum offload */
+	olinfo_status |= NGBE_SET_FLAG(tx_flags,
+					NGBE_TX_FLAGS_CSUM,
+					NGBE_TXD_L4CS);
+
+	/* enable IPv4 checksum for TSO */
+	olinfo_status |= NGBE_SET_FLAG(tx_flags,
+					NGBE_TX_FLAGS_IPV4,
+					NGBE_TXD_IIPCS);
+	/* enable outer IPv4 checksum for TSO */
+	olinfo_status |= NGBE_SET_FLAG(tx_flags,
+					NGBE_TX_FLAGS_OUTER_IPV4,
+					NGBE_TXD_EIPCS);
+	/* Check Context must be set if Tx switch is enabled, which it
+	 * always is for case where virtual functions are running
+	 */
+	olinfo_status |= NGBE_SET_FLAG(tx_flags,
+					NGBE_TX_FLAGS_CC,
+					NGBE_TXD_CC);
+
+	olinfo_status |= NGBE_SET_FLAG(tx_flags,
+					NGBE_TX_FLAGS_IPSEC,
+					NGBE_TXD_IPSEC);
+
+	tx_desc->read.olinfo_status = cpu_to_le32(olinfo_status);
+}
+
+static int ngbe_tx_map(struct ngbe_ring *tx_ring,
+		       struct ngbe_tx_buffer *first,
+		   const u8 hdr_len)
+{
+	struct sk_buff *skb = first->skb;
+	struct ngbe_tx_buffer *tx_buffer;
+	union ngbe_tx_desc *tx_desc;
+	skb_frag_t *frag;
+	dma_addr_t dma;
+	unsigned int data_len, size;
+	u32 tx_flags = first->tx_flags;
+	u32 cmd_type = ngbe_tx_cmd_type(tx_flags);
+	u16 i = tx_ring->next_to_use;
+
+	tx_desc = NGBE_TX_DESC(tx_ring, i);
+
+	ngbe_tx_olinfo_status(tx_desc, tx_flags, skb->len - hdr_len);
+
+	size = skb_headlen(skb);
+	data_len = skb->data_len;
+
+	dma = dma_map_single(tx_ring->dev, skb->data, size, DMA_TO_DEVICE);
+
+	tx_buffer = first;
+
+	for (frag = &skb_shinfo(skb)->frags[0];; frag++) {
+		if (dma_mapping_error(tx_ring->dev, dma))
+			goto dma_error;
+
+		/* record length, and DMA address */
+		dma_unmap_len_set(tx_buffer, len, size);
+		dma_unmap_addr_set(tx_buffer, dma, dma);
+
+		tx_desc->read.buffer_addr = cpu_to_le64(dma);
+
+		while (unlikely(size > NGBE_MAX_DATA_PER_TXD)) {
+			tx_desc->read.cmd_type_len = cpu_to_le32(cmd_type ^ NGBE_MAX_DATA_PER_TXD);
+
+			i++;
+			tx_desc++;
+			if (i == tx_ring->count) {
+				tx_desc = NGBE_TX_DESC(tx_ring, 0);
+				i = 0;
+			}
+			tx_desc->read.olinfo_status = 0;
+
+			dma += NGBE_MAX_DATA_PER_TXD;
+			size -= NGBE_MAX_DATA_PER_TXD;
+
+			tx_desc->read.buffer_addr = cpu_to_le64(dma);
+		}
+
+		if (likely(!data_len))
+			break;
+
+		tx_desc->read.cmd_type_len = cpu_to_le32(cmd_type ^ size);
+
+		i++;
+		tx_desc++;
+		if (i == tx_ring->count) {
+			tx_desc = NGBE_TX_DESC(tx_ring, 0);
+			i = 0;
+		}
+		tx_desc->read.olinfo_status = 0;
+
+		size = skb_frag_size(frag);
+
+		data_len -= size;
+
+		dma = skb_frag_dma_map(tx_ring->dev, frag, 0, size,
+				       DMA_TO_DEVICE);
+
+		tx_buffer = &tx_ring->tx_buffer_info[i];
+	}
+
+	/* write last descriptor with RS and EOP bits */
+	cmd_type |= size | NGBE_TXD_CMD;
+	tx_desc->read.cmd_type_len = cpu_to_le32(cmd_type);
+
+	netdev_tx_sent_queue(txring_txq(tx_ring), first->bytecount);
+
+	/* set the timestamp */
+	first->time_stamp = jiffies;
+
+	/* Force memory writes to complete before letting h/w know there
+	 * are new descriptors to fetch.	(Only applicable for weak-ordered
+	 * memory model archs, such as IA-64).
+	 *
+	 * We also need this memory barrier to make certain all of the
+	 * status bits have been updated before next_to_watch is written.
+	 */
+	wmb();
+
+	/* set next_to_watch value indicating a packet is present */
+	first->next_to_watch = tx_desc;
+
+	i++;
+	if (i == tx_ring->count)
+		i = 0;
+
+	tx_ring->next_to_use = i;
+
+	ngbe_maybe_stop_tx(tx_ring, DESC_NEEDED);
+
+	skb_tx_timestamp(skb);
+
+	if (netif_xmit_stopped(txring_txq(tx_ring)) || !netdev_xmit_more())
+		writel(i, tx_ring->tail);
+
+	return 0;
+dma_error:
+	dev_err(tx_ring->dev, "TX DMA map failed\n");
+
+	/* clear dma mappings for failed tx_buffer_info map */
+	for (;;) {
+		tx_buffer = &tx_ring->tx_buffer_info[i];
+		if (dma_unmap_len(tx_buffer, len))
+			dma_unmap_page(tx_ring->dev,
+				       dma_unmap_addr(tx_buffer, dma),
+					 dma_unmap_len(tx_buffer, len),
+					 DMA_TO_DEVICE);
+		dma_unmap_len_set(tx_buffer, len, 0);
+		if (tx_buffer == first)
+			break;
+		if (i == 0)
+			i += tx_ring->count;
+		i--;
+	}
+
+	dev_kfree_skb_any(first->skb);
+	first->skb = NULL;
+
+	tx_ring->next_to_use = i;
+
+	return -1;
+}
+
+netdev_tx_t ngbe_xmit_frame_ring(struct sk_buff *skb,
+				 struct ngbe_adapter __maybe_unused *adapter,
+				  struct ngbe_ring *tx_ring)
+{
+	struct ngbe_tx_buffer *first;
+	int tso;
+	u32 tx_flags = 0;
+	unsigned short f;
+	u16 count = TXD_USE_COUNT(skb_headlen(skb));
+	__be16 protocol = skb->protocol;
+	u8 hdr_len = 0;
+	struct ngbe_dec_ptype dptype;
+
+	/* need: 1 descriptor per page * PAGE_SIZE/NGBE_MAX_DATA_PER_TXD,
+	 * + 1 desc for skb_headlen/NGBE_MAX_DATA_PER_TXD,
+	 * + 2 desc gap to keep tail from touching head,
+	 * + 1 desc for context descriptor,
+	 * otherwise try next time
+	 */
+	for (f = 0; f < skb_shinfo(skb)->nr_frags; f++)
+		count += TXD_USE_COUNT(skb_frag_size(&skb_shinfo(skb)->
+						     frags[f]));
+
+	if (ngbe_maybe_stop_tx(tx_ring, count + 3)) {
+		tx_ring->tx_stats.tx_busy++;
+		return NETDEV_TX_BUSY;
+	}
+
+	/* record the location of the first descriptor for this packet */
+	first = &tx_ring->tx_buffer_info[tx_ring->next_to_use];
+	first->skb = skb;
+	first->bytecount = skb->len;
+	first->gso_segs = 1;
+
+	/* if we have a HW VLAN tag being added default to the HW one */
+	if (skb_vlan_tag_present(skb)) {
+		tx_flags |= skb_vlan_tag_get(skb) << NGBE_TX_FLAGS_VLAN_SHIFT;
+		tx_flags |= NGBE_TX_FLAGS_HW_VLAN;
+	}
+
+	/* it is a SW VLAN check the next protocol and store the tag */
+	if (protocol == htons(ETH_P_8021Q) || protocol == htons(ETH_P_8021AD)) {
+		struct vlan_hdr *vhdr, _vhdr;
+
+		vhdr = skb_header_pointer(skb, ETH_HLEN, sizeof(_vhdr), &_vhdr);
+		if (!vhdr)
+			goto out_drop;
+
+		protocol = vhdr->h_vlan_encapsulated_proto;
+		tx_flags |= NGBE_TX_FLAGS_SW_VLAN;
+	}
+
+	/* record initial flags and protocol */
+	first->tx_flags = tx_flags;
+	first->protocol = protocol;
+
+	dptype = encode_tx_desc_ptype(first);
+
+	tso = ngbe_tso(tx_ring, first, &hdr_len, dptype);
+	if (tso < 0)
+		goto out_drop;
+	else if (!tso)
+		ngbe_tx_csum(tx_ring, first, dptype);
+
+	ngbe_tx_map(tx_ring, first, hdr_len);
+
+	return NETDEV_TX_OK;
+
+out_drop:
+	dev_kfree_skb_any(first->skb);
+	first->skb = NULL;
+
+	e_dev_err("%s drop\n", __func__);
+
+	return NETDEV_TX_OK;
+}
+
+static netdev_tx_t ngbe_xmit_frame(struct sk_buff *skb,
+				   struct net_device *netdev)
+{
+	struct ngbe_adapter *adapter = netdev_priv(netdev);
+	struct ngbe_ring *tx_ring;
+	unsigned int r_idx = skb->queue_mapping;
+
+	if (!netif_carrier_ok(netdev)) {
+		dev_kfree_skb_any(skb);
+		return NETDEV_TX_OK;
+	}
+
+	/* The minimum packet size for olinfo paylen is 17 so pad the skb
+	 * in order to meet this minimum size requirement.
+	 */
+	if (skb_put_padto(skb, 17))
+		return NETDEV_TX_OK;
+
+	if (r_idx >= adapter->num_tx_queues)
+		r_idx = r_idx % adapter->num_tx_queues;
+	tx_ring = adapter->tx_ring[r_idx];
+
+	return ngbe_xmit_frame_ring(skb, adapter, tx_ring);
+}
+
+/**
+ * ngbe_set_mac - Change the Ethernet Address of the NIC
+ * @netdev: network interface device structure
+ * @p: pointer to an address structure
+ *
+ * Returns 0 on success, negative on failure
+ **/
+static int ngbe_set_mac(struct net_device *netdev, void *p)
+{
+	struct ngbe_adapter *adapter = netdev_priv(netdev);
+	struct ngbe_hw *hw = &adapter->hw;
+	struct sockaddr *addr = p;
+
+	if (!is_valid_ether_addr(addr->sa_data))
+		return -EADDRNOTAVAIL;
+
+	ngbe_del_mac_filter(adapter, hw->mac.addr, 0);
+	memcpy(netdev->dev_addr, addr->sa_data, netdev->addr_len);
+	memcpy(hw->mac.addr, addr->sa_data, netdev->addr_len);
+
+	ngbe_mac_set_default_filter(adapter, hw->mac.addr);
+	e_info(drv, "The mac has been set to %02X:%02X:%02X:%02X:%02X:%02X\n",
+	       hw->mac.addr[0], hw->mac.addr[1], hw->mac.addr[2],
+		 hw->mac.addr[3], hw->mac.addr[4], hw->mac.addr[5]);
+
+	return 0;
+}
+
+/**
+ * ngbe_change_mtu - Change the Maximum Transfer Unit
+ * @netdev: network interface device structure
+ * @new_mtu: new value for maximum frame size
+ *
+ * Returns 0 on success, negative on failure
+ **/
+static int ngbe_change_mtu(struct net_device *netdev, int new_mtu)
+{
+	struct ngbe_adapter *adapter = netdev_priv(netdev);
+
+	if (new_mtu < 68 || new_mtu > 9414)
+		return -EINVAL;
+
+	/* we cannot allow legacy VFs to enable their receive
+	 * paths when MTU greater than 1500 is configured.  So display a
+	 * warning that legacy VFs will be disabled.
+	 */
+	if (adapter->flags & NGBE_FLAG_SRIOV_ENABLED &&
+	    new_mtu > ETH_DATA_LEN)
+		e_warn(probe, "Setting MTU > 1500 will disable legacy VFs\n");
+
+	e_info(probe, "changing MTU from %d to %d\n", netdev->mtu, new_mtu);
+
+	/* must set new MTU before calling down or up */
+	netdev->mtu = new_mtu;
+
+	if (netif_running(netdev))
+		ngbe_reinit_locked(adapter);
+
+	return 0;
+}
+
+/**
+ * ngbe_tx_timeout - Respond to a Tx Hang
+ * @netdev: network interface device structure
+ **/
+static void ngbe_tx_timeout(struct net_device *netdev, unsigned int txqueue)
+{
+	struct ngbe_adapter *adapter = netdev_priv(netdev);
+	struct ngbe_hw *hw = &adapter->hw;
+	bool real_tx_hang = false;
+	int i;
+	u16 value = 0;
+	u32 value2 = 0;
+	u32 head, tail;
+
+#define TX_TIMEO_LIMIT 16000
+	for (i = 0; i < adapter->num_tx_queues; i++) {
+		struct ngbe_ring *tx_ring = adapter->tx_ring[i];
+
+		if (check_for_tx_hang(tx_ring) && ngbe_check_tx_hang(tx_ring)) {
+			real_tx_hang = true;
+			e_info(drv, "&&%s:i=%d&&", __func__, i);
+		}
+	}
+
+	pci_read_config_word(adapter->pdev, PCI_VENDOR_ID, &value);
+	ERROR_REPORT1(hw, NGBE_ERROR_POLLING, "pci vendor id is 0x%x\n", value);
+
+	pci_read_config_word(adapter->pdev, PCI_COMMAND, &value);
+	ERROR_REPORT1(hw, NGBE_ERROR_POLLING, "pci command reg is 0x%x.\n", value);
+
+	value2 = rd32(&adapter->hw, 0x10000);
+	ERROR_REPORT1(hw, NGBE_ERROR_POLLING, "reg 0x10000 value is 0x%08x\n", value2);
+	value2 = rd32(&adapter->hw, 0x180d0);
+	ERROR_REPORT1(hw, NGBE_ERROR_POLLING, "reg 0x180d0 value is 0x%08x\n", value2);
+	value2 = rd32(&adapter->hw, 0x180d4);
+	ERROR_REPORT1(hw, NGBE_ERROR_POLLING, "reg 0x180d4 value is 0x%08x\n", value2);
+	value2 = rd32(&adapter->hw, 0x180d8);
+	ERROR_REPORT1(hw, NGBE_ERROR_POLLING, "reg 0x180d8 value is 0x%08x\n", value2);
+	value2 = rd32(&adapter->hw, 0x180dc);
+	ERROR_REPORT1(hw, NGBE_ERROR_POLLING, "reg 0x180dc value is 0x%08x\n", value2);
+
+	for (i = 0; i < adapter->num_tx_queues; i++) {
+		head = rd32(&adapter->hw, NGBE_PX_TR_RP(adapter->tx_ring[i]->reg_idx));
+		tail = rd32(&adapter->hw, NGBE_PX_TR_WP(adapter->tx_ring[i]->reg_idx));
+
+		ERROR_REPORT1(hw, NGBE_ERROR_POLLING,
+			      "tx ring %d next_to_use is %d, next_to_clean is %d\n",
+			i, adapter->tx_ring[i]->next_to_use, adapter->tx_ring[i]->next_to_clean);
+		ERROR_REPORT1(hw, NGBE_ERROR_POLLING,
+			      "tx ring %d hw rp is 0x%x, wp is 0x%x\n", i, head, tail);
+	}
+
+	value2 = rd32(&adapter->hw, NGBE_PX_IMS);
+	ERROR_REPORT1(hw, NGBE_ERROR_POLLING,
+		      "PX_IMS value is 0x%08x\n", value2);
+
+	if (value2) {
+		ERROR_REPORT1(hw, NGBE_ERROR_POLLING, "clear interrupt mask.\n");
+		wr32(&adapter->hw, NGBE_PX_ICS, value2);
+		wr32(&adapter->hw, NGBE_PX_IMC, value2);
+	}
+
+	ERROR_REPORT1(hw, NGBE_ERROR_POLLING, "tx timeout. do pcie recovery.\n");
+	if (adapter->hw.bus.lan_id == 0) {
+		adapter->flags2 |= NGBE_FLAG2_PCIE_NEED_RECOVER;
+		ngbe_service_event_schedule(adapter);
+	} else {
+		wr32(&adapter->hw, NGBE_MIS_PF_SM, 1);
+	}
+}
+
+static int ngbe_vlan_rx_kill_vid(struct net_device *netdev,
+				 __always_unused __be16 proto, u16 vid)
+{
+	struct ngbe_adapter *adapter = netdev_priv(netdev);
+	struct ngbe_hw *hw = &adapter->hw;
+	int pool_ndx = 0;
+
+	/* User is not allowed to remove vlan ID 0 */
+	if (!vid)
+		return 0;
+
+	/* remove VID from filter table */
+	if (hw->mac.ops.set_vfta)
+		TCALL(hw, mac.ops.set_vfta, vid, pool_ndx, false);
+
+	clear_bit(vid, adapter->active_vlans);
+	return 0;
+}
+
+static int ngbe_ioctl(struct net_device *netdev, struct ifreq *ifr, int cmd)
+{
+	return 0;
+}
+
+/**
+ * ngbe_get_stats64 - Get System Network Statistics
+ * @netdev: network interface device structure
+ * @stats: storage space for 64bit statistics
+ *
+ * Returns 64bit statistics, for use in the ndo_get_stats64 callback. This
+ * function replaces ngbe_get_stats for kernels which support it.
+ */
+static void ngbe_get_stats64(struct net_device *netdev,
+			     struct rtnl_link_stats64 *stats)
+{
+	struct ngbe_adapter *adapter = netdev_priv(netdev);
+	int i;
+
+	rcu_read_lock();
+	for (i = 0; i < adapter->num_rx_queues; i++) {
+		struct ngbe_ring *ring = READ_ONCE(adapter->rx_ring[i]);
+		u64 bytes, packets;
+		unsigned int start;
+
+		if (ring) {
+			do {
+				start = u64_stats_fetch_begin_irq(&ring->syncp);
+				packets = ring->stats.packets;
+				bytes   = ring->stats.bytes;
+			} while (u64_stats_fetch_retry_irq(&ring->syncp,
+				 start));
+			stats->rx_packets += packets;
+			stats->rx_bytes   += bytes;
+		}
+	}
+
+	for (i = 0; i < adapter->num_tx_queues; i++) {
+		struct ngbe_ring *ring = READ_ONCE(adapter->tx_ring[i]);
+		u64 bytes, packets;
+		unsigned int start;
+
+		if (ring) {
+			do {
+				start = u64_stats_fetch_begin_irq(&ring->syncp);
+				packets = ring->stats.packets;
+				bytes   = ring->stats.bytes;
+			} while (u64_stats_fetch_retry_irq(&ring->syncp,
+				 start));
+			stats->tx_packets += packets;
+			stats->tx_bytes   += bytes;
+		}
+	}
+	rcu_read_unlock();
+	/* following stats updated by ngbe_watchdog_task() */
+	stats->multicast        = netdev->stats.multicast;
+	stats->rx_errors        = netdev->stats.rx_errors;
+	stats->rx_length_errors = netdev->stats.rx_length_errors;
+	stats->rx_crc_errors    = netdev->stats.rx_crc_errors;
+	stats->rx_missed_errors = netdev->stats.rx_missed_errors;
+}
+
+static int ngbe_ndo_fdb_add(struct ndmsg *ndm, struct nlattr *tb[],
+			    struct net_device *dev,
+			     const unsigned char *addr,
+			     u16 vid,
+			     u16 flags,
+			     struct netlink_ext_ack *extack)
+{
+	/* guarantee we can provide a unique filter for the unicast address */
+	if (is_unicast_ether_addr(addr) || is_link_local_ether_addr(addr)) {
+		if (netdev_uc_count(dev) >= NGBE_MAX_PF_MACVLANS)
+			return -ENOMEM;
+	}
+
+	return ndo_dflt_fdb_add(ndm, tb, dev, addr, vid, flags);
+}
+
+static netdev_features_t ngbe_features_check(struct sk_buff *skb,
+					     struct net_device *dev,
+					netdev_features_t features)
+{
+	u32 vlan_num = 0;
+	u16 vlan_depth = skb->mac_len;
+	__be16 type = skb->protocol;
+	struct vlan_hdr *vh;
+
+	if (skb_vlan_tag_present(skb))
+		vlan_num++;
+
+	if (vlan_depth)
+		vlan_depth -= VLAN_HLEN;
+	else
+		vlan_depth = ETH_HLEN;
+
+	while (type == htons(ETH_P_8021Q) || type == htons(ETH_P_8021AD)) {
+		vlan_num++;
+		vh = (struct vlan_hdr *)(skb->data + vlan_depth);
+		type = vh->h_vlan_encapsulated_proto;
+		vlan_depth += VLAN_HLEN;
+	}
+
+	if (vlan_num > 2)
+		features &= ~(NETIF_F_HW_VLAN_CTAG_TX |
+					NETIF_F_HW_VLAN_STAG_TX);
+
+	if (skb->encapsulation) {
+		if (unlikely(skb_inner_mac_header(skb) -
+					skb_transport_header(skb) >
+					NGBE_MAX_TUNNEL_HDR_LEN))
+			return features & ~NETIF_F_CSUM_MASK;
+	}
+
+	return features;
+}
+
+void ngbe_do_reset(struct net_device *netdev)
+{
+	struct ngbe_adapter *adapter = netdev_priv(netdev);
+
+	if (netif_running(netdev))
+		ngbe_reinit_locked(adapter);
+	else
+		ngbe_reset(adapter);
+}
+
+static int ngbe_set_features(struct net_device *netdev,
+			     netdev_features_t features)
+{
+	struct ngbe_adapter *adapter = netdev_priv(netdev);
+	bool need_reset = false;
+
+	if (features & NETIF_F_HW_VLAN_CTAG_RX)
+		ngbe_vlan_strip_enable(adapter);
+	else
+		ngbe_vlan_strip_disable(adapter);
+
+	if (features & NETIF_F_RXHASH) {
+		if (!(adapter->flags2 & NGBE_FLAG2_RSS_ENABLED)) {
+			wr32m(&adapter->hw, NGBE_RDB_RA_CTL,
+			      NGBE_RDB_RA_CTL_RSS_EN, NGBE_RDB_RA_CTL_RSS_EN);
+			adapter->flags2 |= NGBE_FLAG2_RSS_ENABLED;
+		}
+	} else {
+		if (adapter->flags2 & NGBE_FLAG2_RSS_ENABLED) {
+			wr32m(&adapter->hw, NGBE_RDB_RA_CTL,
+			      NGBE_RDB_RA_CTL_RSS_EN, ~NGBE_RDB_RA_CTL_RSS_EN);
+			adapter->flags2 &= ~NGBE_FLAG2_RSS_ENABLED;
+		}
+	}
+
+	if (need_reset)
+		ngbe_do_reset(netdev);
+
+	return 0;
+}
+
+static netdev_features_t ngbe_fix_features(struct net_device *netdev,
+					   netdev_features_t features)
+{
+	/* If Rx checksum is disabled, then RSC/LRO should also be disabled */
+	if (!(features & NETIF_F_RXCSUM))
+		features &= ~NETIF_F_LRO;
+
+	/* Turn off LRO if not RSC capable */
+	features &= ~NETIF_F_LRO;
+
+	if (!(features & NETIF_F_HW_VLAN_CTAG_RX))
+		features &= ~NETIF_F_HW_VLAN_STAG_RX;
+	else
+		features |= NETIF_F_HW_VLAN_STAG_RX;
+	if (!(features & NETIF_F_HW_VLAN_CTAG_TX))
+		features &= ~NETIF_F_HW_VLAN_STAG_TX;
+	else
+		features |= NETIF_F_HW_VLAN_STAG_TX;
+
+	return features;
+}
+
 static const struct net_device_ops ngbe_netdev_ops = {
-	.ndo_open = ngbe_open,
-	.ndo_stop = ngbe_close,
+	.ndo_open               = ngbe_open,
+	.ndo_stop               = ngbe_close,
+	.ndo_start_xmit         = ngbe_xmit_frame,
+	.ndo_set_rx_mode        = ngbe_set_rx_mode,
+	.ndo_validate_addr      = eth_validate_addr,
+	.ndo_set_mac_address    = ngbe_set_mac,
+	.ndo_change_mtu         = ngbe_change_mtu,
+	.ndo_tx_timeout         = ngbe_tx_timeout,
+	.ndo_vlan_rx_add_vid    = ngbe_vlan_rx_add_vid,
+	.ndo_vlan_rx_kill_vid   = ngbe_vlan_rx_kill_vid,
+	.ndo_do_ioctl           = ngbe_ioctl,
+	.ndo_get_stats64        = ngbe_get_stats64,
+	.ndo_fdb_add            = ngbe_ndo_fdb_add,
+	.ndo_features_check     = ngbe_features_check,
+	.ndo_set_features       = ngbe_set_features,
+	.ndo_fix_features       = ngbe_fix_features,
 };
 
 void ngbe_assign_netdev_ops(struct net_device *dev)
@@ -1600,7 +3886,7 @@ static int ngbe_lpbthresh(struct ngbe_adapter *adapter)
 static void ngbe_pbthresh_setup(struct ngbe_adapter *adapter)
 {
 	struct ngbe_hw *hw = &adapter->hw;
-	int num_tc = netdev_get_num_tc(adapter->netdev);
+	int num_tc = 0;//netdev_get_num_tc(adapter->netdev);
 
 	if (!num_tc)
 		num_tc = 1;
@@ -1617,7 +3903,7 @@ static void ngbe_configure_pb(struct ngbe_adapter *adapter)
 {
 	struct ngbe_hw *hw = &adapter->hw;
 	int hdrm = 0;
-	int tc = netdev_get_num_tc(adapter->netdev);
+	int tc = 0;//netdev_get_num_tc(adapter->netdev);
 
 	TCALL(hw, mac.ops.setup_rxpba, tc, hdrm, PBA_STRATEGY_EQUAL);
 	ngbe_pbthresh_setup(adapter);
@@ -1712,6 +3998,8 @@ static u8 *ngbe_addr_list_itr(struct ngbe_hw __maybe_unused *hw,
 {
 	struct netdev_hw_addr *mc_ptr;
 	u8 *addr = *mc_addr_ptr;
+
+	*vmdq = 0;
 
 	mc_ptr = container_of(addr, struct netdev_hw_addr, addr[0]);
 	if (mc_ptr->list.next) {
@@ -3237,7 +5525,6 @@ static int ngbe_probe(struct pci_dev *pdev,
 	struct ngbe_adapter *adapter = NULL;
 	struct net_device *netdev;
 	struct ngbe_hw *hw = NULL;
-	struct device *dev = &pdev->dev;
 	int err;
 	int size;
 	u32 eeprom_cksum_devcap = 0;
@@ -3249,6 +5536,7 @@ static int ngbe_probe(struct pci_dev *pdev,
 	char *i_s_var;
 	static int cards_found;
 	u32 devcap = 0;
+	netdev_features_t hw_features;
 
 	err = pci_enable_device_mem(pdev);
 	if (err)
@@ -3279,10 +5567,8 @@ static int ngbe_probe(struct pci_dev *pdev,
 									   0x1000);
 
 	size = sizeof(struct ngbe_adapter);
-	netdev = devm_alloc_etherdev_mqs(dev,
-					 size,
-									 NGBE_MAX_TX_QUEUES,
-									 NGBE_MAX_RX_QUEUES);
+
+	netdev = alloc_etherdev_mq(sizeof(struct ngbe_adapter), NGBE_MAX_TX_QUEUES);
 	if (!netdev) {
 		err = -ENOMEM;
 		goto err_pci_release_regions;
@@ -3337,6 +5623,39 @@ static int ngbe_probe(struct pci_dev *pdev,
 		e_dev_err("HW reset failed: %d\n", err);
 		goto err_sw_init;
 	}
+
+	netdev->features |= NETIF_F_SG | NETIF_F_IP_CSUM;
+	netdev->features |= NETIF_F_IPV6_CSUM;
+
+	netdev->features |= NETIF_F_HW_VLAN_CTAG_TX |
+						NETIF_F_HW_VLAN_CTAG_RX;
+
+	netdev->features |= NETIF_F_HW_VLAN_STAG_TX |
+						NETIF_F_HW_VLAN_STAG_RX;
+	netdev->features |= ngbe_tso_features();
+
+	netdev->features |= NETIF_F_RXHASH;
+
+	netdev->features |= NETIF_F_RXCSUM;
+	/* copy netdev features into list of user selectable features */
+	hw_features = netdev->hw_features;
+	hw_features |= netdev->features;
+
+	/* set this bit last since it cannot be part of hw_features */
+	netdev->features |= NETIF_F_HW_VLAN_CTAG_FILTER;
+	netdev->features |= NETIF_F_HW_VLAN_STAG_FILTER;
+	netdev->features |= NETIF_F_NTUPLE;
+
+	hw_features |= NETIF_F_NTUPLE;
+	netdev->hw_features = hw_features;
+
+	netdev->vlan_features |= NETIF_F_SG |
+							 NETIF_F_IP_CSUM |
+							 NETIF_F_IPV6_CSUM |
+							 NETIF_F_TSO |
+							 NETIF_F_TSO6;
+
+	netdev->hw_enc_features |= NETIF_F_SG | NETIF_F_IP_CSUM;
 
 	/* MTU range: 68 - 9414 */
 	netdev->min_mtu = ETH_MIN_MTU;
