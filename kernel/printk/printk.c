@@ -84,6 +84,12 @@ static DEFINE_SEMAPHORE(console_sem);
 struct console *console_drivers;
 EXPORT_SYMBOL_GPL(console_drivers);
 
+/*
+ * During panic, heavy printk by other CPUs can delay the
+ * panic and risk deadlock on console resources.
+ */
+static int __read_mostly suppress_panic_printk;
+
 #ifdef CONFIG_LOCKDEP
 static struct lockdep_map console_lock_dep_map = {
 	.name = "console_lock"
@@ -245,6 +251,11 @@ static void __up_console_sem(unsigned long ip)
 	printk_safe_exit_irqrestore(flags);
 }
 #define up_console_sem() __up_console_sem(_RET_IP_)
+
+static bool panic_in_progress(void)
+{
+	return unlikely(atomic_read(&panic_cpu) != PANIC_CPU_INVALID);
+}
 
 /*
  * This is used for debugging the mess that is the VT code by
@@ -1661,6 +1672,16 @@ static int console_trylock_spinning(void)
 	if (console_trylock())
 		return 1;
 
+	/*
+	 * It's unsafe to spin once a panic has begun. If we are the
+	 * panic CPU, we may have already halted the owner of the
+	 * console_sem. If we are not the panic CPU, then we should
+	 * avoid taking console_sem, so the panic CPU has a better
+	 * chance of cleanly acquiring it later.
+	 */
+	if (panic_in_progress())
+		return 0;
+
 	printk_safe_enter_irqsave(flags);
 
 	raw_spin_lock(&console_owner_lock);
@@ -1904,6 +1925,10 @@ asmlinkage int vprintk_emit(int facility, int level,
 	bool in_sched = false, pending_output;
 	unsigned long flags;
 	u64 curr_log_seq;
+
+        if (unlikely(suppress_panic_printk) &&
+            atomic_read(&panic_cpu) != raw_smp_processor_id())
+                return 0;
 
 	if (level == LOGLEVEL_SCHED) {
 		level = LOGLEVEL_DEFAULT;
@@ -2278,6 +2303,25 @@ int is_console_locked(void)
 EXPORT_SYMBOL(is_console_locked);
 
 /*
+ * Return true when this CPU should unlock console_sem without pushing all
+ * messages to the console. This reduces the chance that the console is
+ * locked when the panic CPU tries to use it.
+ */
+static bool abandon_console_lock_in_panic(void)
+{
+        if (!panic_in_progress())
+                return false;
+
+        /*
+         * We can use raw_smp_processor_id() here because it is impossible for
+         * the task to be migrated to the panic_cpu, or away from it. If
+         * panic_cpu has already been set, and we're not currently executing on
+         * that CPU, then we never will be.
+         */
+        return atomic_read(&panic_cpu) != raw_smp_processor_id();
+}
+
+/*
  * Check if we have any console that is capable of printing while cpu is
  * booting or shutting down. Requires console_sem.
  */
@@ -2323,6 +2367,7 @@ void console_unlock(void)
 {
 	static char ext_text[CONSOLE_EXT_LOG_MAX];
 	static char text[LOG_LINE_MAX + PREFIX_MAX];
+	static char panic_console_dropped;
 	unsigned long flags;
 	bool do_cond_resched, retry;
 
@@ -2375,6 +2420,10 @@ again:
 			/* messages are gone, move to first one */
 			console_seq = log_first_seq;
 			console_idx = log_first_idx;
+			if (panic_in_progress() && panic_console_dropped++ > 10) {
+				suppress_panic_printk = 1;
+				pr_warn_once("Too many dropped messages. Suppress messages on non-panic CPUs to prevent livelock.\n");
+			}
 		} else {
 			len = 0;
 		}
@@ -2436,6 +2485,10 @@ skip:
 
 		printk_safe_exit_irqrestore(flags);
 
+                /* Allow panic_cpu to take over the consoles safely */
+                if (abandon_console_lock_in_panic())
+                        break;
+
 		if (do_cond_resched)
 			cond_resched();
 	}
@@ -2457,7 +2510,7 @@ skip:
 	raw_spin_unlock(&logbuf_lock);
 	printk_safe_exit_irqrestore(flags);
 
-	if (retry && console_trylock())
+	if (retry && !abandon_console_lock_in_panic() && console_trylock())
 		goto again;
 }
 EXPORT_SYMBOL(console_unlock);
