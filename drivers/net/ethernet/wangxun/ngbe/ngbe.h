@@ -846,6 +846,7 @@ void ngbe_ptp_stop(struct ngbe_adapter *adapter);
 void ngbe_ptp_check_pps_event(struct ngbe_adapter *adapter);
 void ngbe_ptp_rx_hwtstamp(struct ngbe_adapter *adapter, struct sk_buff *skb);
 void ngbe_ptp_start_cyclecounter(struct ngbe_adapter *adapter);
+void ngbe_ptp_suspend(struct ngbe_adapter *adapter);
 void ngbe_set_ethtool_ops(struct net_device *netdev);
 
 #endif /* _NGBE_H_ */
