@@ -9,6 +9,7 @@
 #include <linux/aer.h>
 #include <linux/etherdevice.h>
 #include <linux/sctp.h>
+#include <linux/mdio.h>
 
 #include <net/ip6_checksum.h>
 
@@ -875,6 +876,8 @@ void ngbe_irq_enable(struct ngbe_adapter *adapter, bool queues, bool flush)
 	if (adapter->flags2 & NGBE_FLAG2_TEMP_SENSOR_CAPABLE)
 		mask |= NGBE_PX_MISC_IEN_OVER_HEAT;
 
+	mask |= NGBE_PX_MISC_IEN_TIMESYNC;
+
 	wr32(&adapter->hw, NGBE_GPIO_DDR, 0x1);
 	wr32(&adapter->hw, NGBE_GPIO_INTEN, 0x3);
 	wr32(&adapter->hw, NGBE_GPIO_INTTYPE_LEVEL, 0x0);
@@ -933,6 +936,9 @@ static irqreturn_t ngbe_msix_other(int __always_unused irq, void *data)
 	}
 
 	ngbe_check_overtemp_event(adapter, eicr);
+
+	if (unlikely(eicr & NGBE_PX_MISC_IC_TIMESYNC))
+		ngbe_ptp_check_pps_event(adapter);
 
 	/* re-enable the original interrupt state, no lsc, no queues */
 	if (!test_bit(__NGBE_DOWN, &adapter->state))
@@ -1134,6 +1140,9 @@ static irqreturn_t ngbe_intr(int __always_unused irq, void *data)
 		ngbe_service_event_schedule(adapter);
 	}
 	ngbe_check_overtemp_event(adapter, eicr_misc);
+
+	if (unlikely(eicr_misc & NGBE_PX_MISC_IC_TIMESYNC))
+		ngbe_ptp_check_pps_event(adapter);
 
 	adapter->isb_mem[NGBE_ISB_MISC] = 0;
 
@@ -1505,6 +1514,9 @@ void ngbe_reset(struct ngbe_adapter *adapter)
 	hw->mac.dmac_config.link_speed = 0;
 	hw->mac.dmac_config.fcoe_tc = 0;
 	hw->mac.dmac_config.num_tcs = 0;
+
+	if (test_bit(__NGBE_PTP_RUNNING, &adapter->state))
+		ngbe_ptp_reset(adapter);
 }
 
 /**
@@ -1599,6 +1611,8 @@ int ngbe_open(struct net_device *netdev)
 			goto err_set_queues;
 	}
 
+	ngbe_ptp_init(adapter);
+
 	ngbe_up_complete(adapter);
 
 	return 0;
@@ -1626,6 +1640,8 @@ err_setup_tx:
 int ngbe_close(struct net_device *netdev)
 {
 	struct ngbe_adapter *adapter = netdev_priv(netdev);
+
+	ngbe_ptp_stop(adapter);
 
 	ngbe_down(adapter);
 	ngbe_free_irq(adapter);
@@ -2007,8 +2023,17 @@ static void ngbe_process_skb_fields(struct ngbe_ring *rx_ring,
 				    union ngbe_rx_desc *rx_desc,
 				  struct sk_buff *skb)
 {
+	u32 flags = rx_ring->q_vector->adapter->flags;
+
 	ngbe_rx_hash(rx_ring, rx_desc, skb);
 	ngbe_rx_checksum(rx_ring, rx_desc, skb);
+
+	if (unlikely(flags & NGBE_FLAG_RX_HWTSTAMP_ENABLED) &&
+	    unlikely(ngbe_test_staterr(rx_desc, NGBE_RXD_STAT_TS))) {
+		ngbe_ptp_rx_hwtstamp(rx_ring->q_vector->adapter, skb);
+		rx_ring->last_rx_timestamp = jiffies;
+	}
+
 	ngbe_rx_vlan(rx_ring, rx_desc, skb);
 	skb_record_rx_queue(skb, rx_ring->queue_index);
 	skb->protocol = eth_type_trans(skb, rx_ring->netdev);
@@ -3254,6 +3279,23 @@ netdev_tx_t ngbe_xmit_frame_ring(struct sk_buff *skb,
 		tx_flags |= NGBE_TX_FLAGS_SW_VLAN;
 	}
 
+	if (unlikely(skb_shinfo(skb)->tx_flags & SKBTX_HW_TSTAMP) &&
+	    adapter->ptp_clock) {
+		if (!test_and_set_bit_lock(__NGBE_PTP_TX_IN_PROGRESS,
+					   &adapter->state)) {
+			skb_shinfo(skb)->tx_flags |= SKBTX_IN_PROGRESS;
+
+			tx_flags |= NGBE_TX_FLAGS_TSTAMP;
+
+			/* schedule check for Tx timestamp */
+			adapter->ptp_tx_skb = skb_get(skb);
+			adapter->ptp_tx_start = jiffies;
+			schedule_work(&adapter->ptp_tx_work);
+		} else {
+			adapter->tx_hwtstamp_skipped++;
+		}
+	}
+
 	/* record initial flags and protocol */
 	first->tx_flags = tx_flags;
 	first->protocol = protocol;
@@ -3455,9 +3497,33 @@ static int ngbe_vlan_rx_kill_vid(struct net_device *netdev,
 	return 0;
 }
 
+static int ngbe_mii_ioctl(struct net_device *netdev, struct ifreq *ifr, int cmd)
+{
+	struct mii_ioctl_data *mii = (struct mii_ioctl_data *)&ifr->ifr_data;
+	int prtad, devad, ret = 0;
+
+	prtad = (mii->phy_id & MDIO_PHY_ID_PRTAD) >> 5;
+	devad = (mii->phy_id & MDIO_PHY_ID_DEVAD);
+
+	return ret;
+}
+
 static int ngbe_ioctl(struct net_device *netdev, struct ifreq *ifr, int cmd)
 {
-	return 0;
+	struct ngbe_adapter *adapter = netdev_priv(netdev);
+
+	switch (cmd) {
+	case SIOCGHWTSTAMP:
+		return ngbe_ptp_get_ts_config(adapter, ifr);
+	case SIOCSHWTSTAMP:
+		return ngbe_ptp_set_ts_config(adapter, ifr);
+
+	case SIOCGMIIREG:
+	case SIOCSMIIREG:
+		return ngbe_mii_ioctl(netdev, ifr, cmd);
+	default:
+		return -EOPNOTSUPP;
+	}
 }
 
 /**
@@ -5127,6 +5193,11 @@ static void ngbe_watchdog_update_link_status(struct ngbe_adapter *adapter)
 	}
 
 	if (link_up) {
+		adapter->last_rx_ptp_check = jiffies;
+
+		if (test_bit(__NGBE_PTP_RUNNING, &adapter->state))
+			ngbe_ptp_start_cyclecounter(adapter);
+
 		if (link_speed & (NGBE_LINK_SPEED_1GB_FULL |
 				NGBE_LINK_SPEED_100_FULL | NGBE_LINK_SPEED_10_FULL)) {
 			wr32(hw, NGBE_MAC_TX_CFG,
@@ -5210,6 +5281,9 @@ static void ngbe_watchdog_link_is_down(struct ngbe_adapter *adapter)
 	/* only continue if link was up previously */
 	if (!netif_carrier_ok(netdev))
 		return;
+
+	if (test_bit(__NGBE_PTP_RUNNING, &adapter->state))
+		ngbe_ptp_start_cyclecounter(adapter);
 
 	e_info(drv, "NIC Link is Down\n");
 	netif_carrier_off(netdev);
@@ -5450,6 +5524,13 @@ static void ngbe_service_task(struct work_struct *work)
 	ngbe_check_overtemp_subtask(adapter);
 	ngbe_watchdog_subtask(adapter);
 	ngbe_check_hang_subtask(adapter);
+
+	if (test_bit(__NGBE_PTP_RUNNING, &adapter->state)) {
+		ngbe_ptp_overflow_check(adapter);
+		if (unlikely(adapter->flags &
+			NGBE_FLAG_RX_HWTSTAMP_IN_REGISTER))
+			ngbe_ptp_rx_hang(adapter);
+	}
 
 	ngbe_service_event_complete(adapter);
 }
