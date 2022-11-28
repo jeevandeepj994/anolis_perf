@@ -95,7 +95,7 @@ LIST_HEAD(mpam_classes);
 
 static u32 __mpam_read_reg(struct mpam_msc *msc, u16 reg)
 {
-	WARN_ON_ONCE(reg > msc->mapped_hwpage_sz);
+	WARN_ON_ONCE(reg >= msc->mapped_hwpage_sz);
 	WARN_ON_ONCE(!cpumask_test_cpu(smp_processor_id(), &msc->accessibility));
 
 	return readl_relaxed(msc->mapped_hwpage + reg);
@@ -103,7 +103,7 @@ static u32 __mpam_read_reg(struct mpam_msc *msc, u16 reg)
 
 static void __mpam_write_reg(struct mpam_msc *msc, u16 reg, u32 val)
 {
-	WARN_ON_ONCE(reg > msc->mapped_hwpage_sz);
+	WARN_ON_ONCE(reg >= msc->mapped_hwpage_sz);
 	WARN_ON_ONCE(!cpumask_test_cpu(smp_processor_id(), &msc->accessibility));
 
 	writel_relaxed(val, msc->mapped_hwpage + reg);
@@ -1731,8 +1731,13 @@ static int mpam_msc_drv_probe(struct platform_device *pdev)
 			err = PTR_ERR(io);
 			break;
 		}
-		msc->mapped_hwpage_sz = msc_res->end - msc_res->start;
+		msc->mapped_hwpage_sz = msc_res->end - msc_res->start + 1;
 		msc->mapped_hwpage = io;
+		if (msc->mapped_hwpage_sz < MPAM_MIN_MMIO_SIZE) {
+			pr_err("MSC MMIO space size is too small\n");
+			err = -EINVAL;
+			break;
+		}
 
 		msc->id = mpam_num_msc++;
 		list_add_rcu(&msc->glbl_list, &mpam_all_msc);
