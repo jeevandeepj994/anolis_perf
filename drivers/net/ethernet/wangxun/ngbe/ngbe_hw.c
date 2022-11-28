@@ -95,6 +95,7 @@ s32 ngbe_get_copper_link_capabilities(struct ngbe_hw *hw,
 {
 	s32 status = 0;
 	u16 value = 0;
+	unsigned long flags;
 
 	*speed = 0;
 
@@ -121,7 +122,9 @@ s32 ngbe_get_copper_link_capabilities(struct ngbe_hw *hw,
 	}
 
 	if (hw->phy.type == ngbe_phy_yt8521s_sfi) {
+		spin_lock_irqsave(&hw->phy_lock, flags);
 		ngbe_phy_read_reg_ext_yt(hw, 0xA001, 0, &value);
+		spin_unlock_irqrestore(&hw->phy_lock, flags);
 		if ((value & 7) == 1) {
 			*speed = NGBE_LINK_SPEED_1GB_FULL;
 			hw->phy.link_mode = NGBE_PHYSICAL_LAYER_1000BASE_T;
@@ -1819,10 +1822,13 @@ s32 ngbe_check_mac_link_yt(struct ngbe_hw *hw, u32 *speed, bool *link_up, bool w
 	u16 value = 0;
 	s32 status = 0;
 	u16 speed_sta = 0;
+	unsigned long flags;
 
 	if (wait) {
 		for (i = 0; i < NGBE_LINK_UP_TIME; i++) {
+			spin_lock_irqsave(&hw->phy_lock, flags);
 			status = ngbe_phy_read_reg_sds_mii_yt(hw, 0x11, 0, &value);
+			spin_unlock_irqrestore(&hw->phy_lock, flags);
 			if (value & 0x400)
 				*link_up = true;
 			else
@@ -1833,6 +1839,7 @@ s32 ngbe_check_mac_link_yt(struct ngbe_hw *hw, u32 *speed, bool *link_up, bool w
 			msleep(100);
 		}
 	} else {
+		spin_lock_irqsave(&hw->phy_lock, flags);
 		status = ngbe_phy_read_reg_sds_mii_yt(hw, 0x11, 0, &value);
 
 		if (value & 0x400) {
@@ -1846,6 +1853,7 @@ s32 ngbe_check_mac_link_yt(struct ngbe_hw *hw, u32 *speed, bool *link_up, bool w
 			else
 				*link_up = false;
 		}
+		spin_unlock_irqrestore(&hw->phy_lock, flags);
 	}
 
 	speed_sta = value & 0xC000;
