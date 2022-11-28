@@ -30,4 +30,16 @@ config TXGBE
 	  To compile this driver as a module, choose M here. The module
 	  will be called txgbe.
 
+config NGBE
+       tristate "Netswift PCI-Express Gigabit Ethernet support"
+       depends on PCI
+       imply PTP_1588_CLOCK
+       help
+         This driver supports Netswift gigabit ethernet adapters.
+         For more information on how to identify your adapter, go
+         to <http://www.net-swift.com>
+
+         To compile this driver as a module, choose M here. The module
+         will be called ngbe.
+
 endif # NET_VENDOR_WANGXUN
