@@ -19,6 +19,7 @@
 
 #define SMC_LLC_WAIT_FIRST_TIME		(5 * HZ)
 #define SMC_LLC_WAIT_TIME		(2 * HZ)
+#define SMC_LLC_TESTLINK_DEFAULT_TIME	(30 * HZ)
 
 #define SMC_LLC_ANNOUNCE_CR_MAX_RETRY	(1)
 
@@ -50,6 +51,12 @@ enum smc_llc_msg_type {
 
 #define smc_link_downing(state) \
 	(cmpxchg(state, SMC_LNK_ACTIVE, SMC_LNK_INACTIVE) == SMC_LNK_ACTIVE)
+
+#define SMC_IS_NONE_FLOW(type)		\
+	((type) == SMC_LLC_FLOW_NONE)
+
+#define SMC_IS_PARALLEL_FLOW(type)	\
+	(((type) == SMC_LLC_FLOW_RKEY) || SMC_IS_NONE_FLOW(type))
 
 /* LLC DELETE LINK Request Reason Codes */
 #define SMC_LLC_DEL_LOST_PATH		0x00010000

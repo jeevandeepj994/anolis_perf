@@ -266,7 +266,6 @@ struct smc_sock {				/* smc sock container */
 						/* handle tcp socket accepts */
 	atomic_t		tcp_listen_work_seq;/* used to select tcp_listen_works */
 	struct work_struct	smc_listen_work;/* prepare new accept socket */
-	struct work_struct      free_work;      /* free smc conn */
 	struct list_head	accept_q;	/* sockets to be accepted */
 	spinlock_t		accept_q_lock;	/* protects accept_q */
 	bool			limit_smc_hs;	/* put constraint on handshake */

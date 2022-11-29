@@ -26,8 +26,9 @@ struct netns_smc {
 #endif
 	unsigned int			sysctl_autocorking_size;
 	unsigned int			sysctl_smcr_buf_type;
-	int				sysctl_wmem_default;
-	int				sysctl_rmem_default;
+	int				sysctl_smcr_testlink_time;
+	int				sysctl_wmem;
+	int				sysctl_rmem;
 	int				sysctl_tcp2smc;
 	int				sysctl_allow_different_subnet;
 	int				sysctl_disable_multiple_link;

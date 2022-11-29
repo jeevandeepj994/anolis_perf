@@ -3,12 +3,11 @@
 /* Authors: Cheng Xu <chengyou@linux.alibaba.com> */
 /*          Kai Shen <kaishen@linux.alibaba.com> */
 /* Copyright (c) 2020-2022, Alibaba Group. */
-//#include "kcompat.h"
 
 #include "erdma.h"
-#include "erdma_stats.h"
 
-static const char * const erdma_stats_names[] = {
+
+static const char *const erdma_stats_names[] = {
 	[ERDMA_STATS_IW_LISTEN_CREATE] = "listen_create_cnt",
 	[ERDMA_STATS_IW_LISTEN_IPV6] = "listen_ipv6_cnt",
 	[ERDMA_STATS_IW_LISTEN_SUCCESS] = "listen_success_cnt",
@@ -62,32 +61,48 @@ static const char * const erdma_stats_names[] = {
 	[ERDMA_STATS_CMD_REG_USR_MR] = "verbs_reg_usr_mr_cnt",
 	[ERDMA_STATS_CMD_REG_USR_MR_FAILED] = "verbs_reg_usr_mr_failed_cnt",
 
+	[ERDMA_STATS_TX_REQS_CNT] = "hw_tx_reqs_cnt",
+	[ERDMA_STATS_TX_PACKETS_CNT] = "hw_tx_packets_cnt",
+	[ERDMA_STATS_TX_BYTES_CNT] = "hw_tx_bytes_cnt",
+	[ERDMA_STATS_TX_DISABLE_DROP_CNT] = "hw_disable_drop_cnt",
+	[ERDMA_STATS_TX_BPS_METER_DROP_CNT] = "hw_bps_limit_drop_cnt",
+	[ERDMA_STATS_TX_PPS_METER_DROP_CNT] = "hw_pps_limit_drop_cnt",
+	[ERDMA_STATS_RX_PACKETS_CNT] = "hw_rx_packets_cnt",
+	[ERDMA_STATS_RX_BYTES_CNT] = "hw_rx_bytes_cnt",
+	[ERDMA_STATS_RX_DISABLE_DROP_CNT] = "hw_rx_disable_drop_cnt",
+	[ERDMA_STATS_RX_BPS_METER_DROP_CNT] = "hw_rx_bps_limit_drop_cnt",
+	[ERDMA_STATS_RX_PPS_METER_DROP_CNT] = "hw_rx_pps_limit_drop_cnt",
 };
 
-struct rdma_hw_stats *erdma_alloc_hw_stats(struct ib_device *ibdev, port_t port_num)
+struct rdma_hw_stats *erdma_alloc_hw_stats(struct ib_device *ibdev,
+					   port_t port_num)
 {
-	return rdma_alloc_hw_stats_struct(erdma_stats_names,
-			ERDMA_STATS_MAX, RDMA_HW_STATS_DEFAULT_LIFESPAN);
+	return rdma_alloc_hw_stats_struct(erdma_stats_names, ERDMA_STATS_MAX,
+					  RDMA_HW_STATS_DEFAULT_LIFESPAN);
 }
 
-int erdma_get_hw_stats(struct ib_device *ibdev,
-	struct rdma_hw_stats *stats, port_t port_num, int index)
+int erdma_get_hw_stats(struct ib_device *ibdev, struct rdma_hw_stats *stats,
+		       port_t port_num, int index)
 {
 	struct erdma_dev *dev = to_edev(ibdev);
 
-	atomic64_set(&dev->stats.value[ERDMA_STATS_CMDQ_SUBMITTED], dev->cmdq.sq.total_cmds);
-	atomic64_set(&dev->stats.value[ERDMA_STATS_CMDQ_COMP], dev->cmdq.sq.total_comp_cmds);
+	atomic64_set(&dev->stats.value[ERDMA_STATS_CMDQ_SUBMITTED],
+		     dev->cmdq.sq.total_cmds);
+	atomic64_set(&dev->stats.value[ERDMA_STATS_CMDQ_COMP],
+		     dev->cmdq.sq.total_comp_cmds);
 	atomic64_set(&dev->stats.value[ERDMA_STATS_CMDQ_EQ_NOTIFY],
-			atomic64_read(&dev->cmdq.eq.notify_num));
+		     atomic64_read(&dev->cmdq.eq.notify_num));
 	atomic64_set(&dev->stats.value[ERDMA_STATS_CMDQ_EQ_EVENT],
-			atomic64_read(&dev->cmdq.eq.event_num));
+		     atomic64_read(&dev->cmdq.eq.event_num));
 	atomic64_set(&dev->stats.value[ERDMA_STATS_CMDQ_CQ_ARMED],
-			atomic64_read(&dev->cmdq.cq.armed_num));
-	atomic64_set(&dev->stats.value[ERDMA_STATS_AEQ_EVENT], atomic64_read(&dev->aeq.event_num));
+		     atomic64_read(&dev->cmdq.cq.armed_num));
+	atomic64_set(&dev->stats.value[ERDMA_STATS_AEQ_EVENT],
+		     atomic64_read(&dev->aeq.event_num));
 	atomic64_set(&dev->stats.value[ERDMA_STATS_AEQ_NOTIFY],
-			atomic64_read(&dev->aeq.notify_num));
+		     atomic64_read(&dev->aeq.notify_num));
 
-	memcpy(&stats->value[0], &dev->stats.value[0], sizeof(u64) * ERDMA_STATS_MAX);
+	memcpy(&stats->value[0], &dev->stats.value[0],
+	       sizeof(u64) * ERDMA_STATS_MAX);
 
 	return stats->num_counters;
 }

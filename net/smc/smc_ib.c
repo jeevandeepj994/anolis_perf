@@ -682,7 +682,6 @@ void smc_ib_destroy_queue_pair(struct smc_link *lnk)
 int smc_ib_create_queue_pair(struct smc_link *lnk)
 {
 	struct smc_ib_cq *smcibcq = smc_ib_get_least_used_cq(lnk->smcibdev);
-	int sges_per_buf = (lnk->lgr->smc_version == SMC_V2) ? 2 : 1;
 	struct ib_qp_init_attr qp_attr = {
 		.event_handler = smc_ib_qp_event_handler,
 		.qp_context = lnk,
@@ -698,7 +697,7 @@ int smc_ib_create_queue_pair(struct smc_link *lnk)
 			.max_send_wr = SMC_WR_BUF_CNT * 3,
 			.max_recv_wr = SMC_WR_BUF_CNT,
 			.max_send_sge = SMC_IB_MAX_SEND_SGE,
-			.max_recv_sge = sges_per_buf,
+			.max_recv_sge = 1,
 			.max_inline_data = 0,
 		},
 		.sq_sig_type = IB_SIGNAL_REQ_WR,
@@ -881,6 +880,12 @@ static void smc_ib_cleanup_cq(struct smc_ib_device *smcibdev)
 	kfree(smcibdev->smcibcq);
 }
 
+static void cq_event_handler(struct ib_event *event, void *data)
+{
+	pr_warn_ratelimited("event %u (%s) data %p\n",
+			    event->event, ib_event_msg(event->event), data);
+}
+
 long smc_ib_setup_per_ibdev(struct smc_ib_device *smcibdev)
 {
 	struct ib_cq_init_attr cqattr = { .cqe = SMC_MAX_CQE };
@@ -888,6 +893,7 @@ long smc_ib_setup_per_ibdev(struct smc_ib_device *smcibdev)
 	struct smc_ib_cq *smcibcq;
 	int i, num_cq;
 	long rc;
+	u32 option_cqflag = IB_UVERBS_CQ_FLAGS_LOCK_FREE;
 
 	mutex_lock(&smcibdev->mutex);
 	rc = 0;
@@ -912,10 +918,18 @@ long smc_ib_setup_per_ibdev(struct smc_ib_device *smcibdev)
 		smcibcq = &smcibdev->smcibcq[i];
 		smcibcq->smcibdev = smcibdev;
 		cqattr.comp_vector = i;
+again:
+		cqattr.flags |= option_cqflag;
 		smcibcq->ib_cq = ib_create_cq(smcibdev->ibdev,
-					      smc_wr_cq_handler, NULL,
+					      smc_wr_cq_handler, cq_event_handler,
 					      smcibcq, &cqattr);
 		rc = PTR_ERR_OR_ZERO(smcibcq->ib_cq);
+		if (rc == -EOPNOTSUPP) {
+			smcibcq->ib_cq = NULL;
+			cqattr.flags &= ~option_cqflag;
+			option_cqflag = 0;
+			goto again;
+		}
 		if (IS_ERR(smcibcq->ib_cq)) {
 			smcibcq->ib_cq = NULL;
 			goto err;

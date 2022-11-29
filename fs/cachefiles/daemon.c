@@ -75,6 +75,7 @@ static const struct cachefiles_daemon_cmd cachefiles_daemon_cmds[] = {
 	{ "tag",	cachefiles_daemon_tag		},
 #ifdef CONFIG_CACHEFILES_ONDEMAND
 	{ "copen",	cachefiles_ondemand_copen	},
+	{ "restore",	cachefiles_ondemand_restore	},
 #endif
 	{ "",		NULL				}
 };
@@ -359,14 +360,26 @@ static __poll_t cachefiles_daemon_poll(struct file *file,
 					   struct poll_table_struct *poll)
 {
 	struct cachefiles_cache *cache = file->private_data;
+	struct cachefiles_req *req;
+	struct radix_tree_iter iter;
 	__poll_t mask;
+	void **slot;
 
 	poll_wait(file, &cache->daemon_pollwq, poll);
 	mask = 0;
 
 	if (cachefiles_in_ondemand_mode(cache)) {
-		if (!radix_tree_empty(&cache->reqs))
-			mask |= EPOLLIN;
+		if (!radix_tree_empty(&cache->reqs)) {
+			radix_tree_for_each_tagged(slot, &cache->reqs, &iter, 0,
+					CACHEFILES_REQ_NEW) {
+				req = radix_tree_deref_slot_protected(slot,
+						&cache->reqs.xa_lock);
+				if (!cachefiles_ondemand_is_reopening_read(req)) {
+					mask |= EPOLLIN;
+					break;
+				}
+			}
+		}
 	} else {
 		if (test_bit(CACHEFILES_STATE_CHANGED, &cache->flags))
 			mask |= EPOLLIN;

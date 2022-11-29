@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: GPL-2.0
-#ifndef __YCC_RING_H
-#define __YCC_RING_H
+#ifndef __ALICC_RING_H
+#define __ALICC_RING_H
 
 #include <linux/spinlock.h>
 #include <linux/interrupt.h>
 
-#include "ycc_dev.h"
+#include "alicc_dev.h"
 
 #define CMD_ILLEGAL			0x15
 #define CMD_UNDERATTACK			0x25
@@ -30,13 +30,13 @@ enum ring_type {
 	INVAL_RING,
 };
 
-struct ycc_ring {
+struct alicc_ring {
 	u16 ring_id;
 	u32 status;
 	atomic_t ref_cnt;
 	void __iomem *csr_vaddr;	/* config register address */
 	resource_size_t csr_paddr;
-	struct ycc_dev *ydev;		/* belongs to which ydev */
+	struct alicc_dev *ydev;		/* belongs to which ydev */
 	struct uio_info *uio_info;
 	struct dentry *debug_dir;
 
@@ -57,18 +57,18 @@ struct ycc_ring {
 	struct work_struct work;
 };
 
-struct ycc_flags {
+struct alicc_flags {
 	void *ptr;
-	int (*ycc_done_callback)(void *ptr, u16 state);
+	int (*alicc_done_callback)(void *ptr, u16 state);
 };
 
-struct ycc_resp_desc {
+struct alicc_resp_desc {
 	u64 private_ptr;
 	u16 state;
 	u8 reserved[6];
 };
 
-struct ycc_skcipher_cmd {
+struct alicc_skcipher_cmd {
 	u8 cmd_id;
 	u8 mode;
 	u64 sptr:48;
@@ -80,7 +80,7 @@ struct ycc_skcipher_cmd {
 	u8 padding;
 } __packed;
 
-struct ycc_aead_cmd {
+struct alicc_aead_cmd {
 	u8 cmd_id;
 	u8 mode;
 	u64 sptr:48;	/* include aad + payload */
@@ -93,7 +93,7 @@ struct ycc_aead_cmd {
 	u8 taglen;	/* authenc size */
 } __packed;
 
-struct ycc_rsa_enc_cmd {
+struct alicc_rsa_enc_cmd {
 	u8 cmd_id;
 	u64 sptr:48;
 	u16 key_id;
@@ -103,7 +103,7 @@ struct ycc_rsa_enc_cmd {
 	u64 dptr:48;
 } __packed;
 
-struct ycc_rsa_dec_cmd {
+struct alicc_rsa_dec_cmd {
 	u8 cmd_id;
 	u64 sptr:48;
 	u16 key_id;
@@ -114,48 +114,48 @@ struct ycc_rsa_dec_cmd {
 	u64 dptr:48;
 } __packed;
 
-struct ycc_sm2_verify_cmd {
+struct alicc_sm2_verify_cmd {
 	u8 cmd_id;
 	u64 sptr:48;
 	u16 key_id;
 	u64 keyptr:48;
 } __packed;
 
-union ycc_real_cmd {
-	struct ycc_skcipher_cmd ske_cmd;
-	struct ycc_aead_cmd aead_cmd;
-	struct ycc_rsa_enc_cmd rsa_enc_cmd;
-	struct ycc_rsa_dec_cmd rsa_dec_cmd;
-	struct ycc_sm2_verify_cmd sm2_verify_cmd;
+union alicc_real_cmd {
+	struct alicc_skcipher_cmd ske_cmd;
+	struct alicc_aead_cmd aead_cmd;
+	struct alicc_rsa_enc_cmd rsa_enc_cmd;
+	struct alicc_rsa_dec_cmd rsa_dec_cmd;
+	struct alicc_sm2_verify_cmd sm2_verify_cmd;
 	u8 padding[32];
 };
 
-struct ycc_cmd_desc {
-	union ycc_real_cmd cmd;
+struct alicc_cmd_desc {
+	union alicc_real_cmd cmd;
 	u64 private_ptr;
 	u8 reserved0[16];
 	u8 reserved1[8];
 } __packed;
 
-static inline void ycc_ring_get(struct ycc_ring *ring)
+static inline void alicc_ring_get(struct alicc_ring *ring)
 {
 	atomic_inc(&ring->ref_cnt);
 }
 
-static inline void ycc_ring_put(struct ycc_ring *ring)
+static inline void alicc_ring_put(struct alicc_ring *ring)
 {
 	atomic_dec(&ring->ref_cnt);
 }
 
-static inline bool ycc_ring_stopped(struct ycc_ring *ring)
+static inline bool alicc_ring_stopped(struct alicc_ring *ring)
 {
-	return !!(YCC_CSR_RD(ring->csr_vaddr, REG_RING_CFG) & RING_STOP_BIT);
+	return !!(ALICC_CSR_RD(ring->csr_vaddr, REG_RING_CFG) & RING_STOP_BIT);
 }
 
-int ycc_enqueue(struct ycc_ring *ring, void *cmd);
-void ycc_dequeue(struct ycc_ring *ring);
-struct ycc_ring *ycc_crypto_get_ring(void);
-void ycc_crypto_free_ring(struct ycc_ring *ring);
-int ycc_dev_rings_init(struct ycc_dev *ydev, u32 max_desc, int user_rings);
-void ycc_dev_rings_release(struct ycc_dev *ydev, int user_rings);
+int alicc_enqueue(struct alicc_ring *ring, void *cmd);
+void alicc_dequeue(struct alicc_ring *ring);
+struct alicc_ring *alicc_crypto_get_ring(void);
+void alicc_crypto_free_ring(struct alicc_ring *ring);
+int alicc_dev_rings_init(struct alicc_dev *ydev, u32 max_desc, int user_rings);
+void alicc_dev_rings_release(struct alicc_dev *ydev, int user_rings);
 #endif

@@ -16,13 +16,12 @@
 
 #include "smc.h"
 #include "smc_core.h"
+#include "smc_llc.h"
 #include "smc_sysctl.h"
-#include "smc_core.h"
-
-static int min_sndbuf = SMC_BUF_MIN_SIZE;
-static int min_rcvbuf = SMC_BUF_MIN_SIZE;
 
 static int two = 2;
+static int min_sndbuf = SMC_BUF_MIN_SIZE;
+static int min_rcvbuf = SMC_BUF_MIN_SIZE;
 
 static struct ctl_table smc_table[] = {
 	{
@@ -42,20 +41,27 @@ static struct ctl_table smc_table[] = {
 		.extra2		= &two,
 	},
 	{
-		.procname       = "wmem_default",
-		.data           = &init_net.smc.sysctl_wmem_default,
-		.maxlen         = sizeof(init_net.smc.sysctl_wmem_default),
-		.mode           = 0644,
-		.proc_handler   = proc_dointvec_minmax,
-		.extra1         = &min_sndbuf,
+		.procname	= "smcr_testlink_time",
+		.data		= &init_net.smc.sysctl_smcr_testlink_time,
+		.maxlen		= sizeof(int),
+		.mode		= 0644,
+		.proc_handler	= proc_dointvec_jiffies,
 	},
 	{
-		.procname       = "rmem_default",
-		.data           = &init_net.smc.sysctl_rmem_default,
-		.maxlen         = sizeof(init_net.smc.sysctl_rmem_default),
-		.mode           = 0644,
-		.proc_handler   = proc_dointvec_minmax,
-		.extra1         = &min_rcvbuf,
+		.procname	= "wmem",
+		.data		= &init_net.smc.sysctl_wmem,
+		.maxlen		= sizeof(int),
+		.mode		= 0644,
+		.proc_handler	= proc_dointvec_minmax,
+		.extra1		= &min_sndbuf,
+	},
+	{
+		.procname	= "rmem",
+		.data		= &init_net.smc.sysctl_rmem,
+		.maxlen		= sizeof(int),
+		.mode		= 0644,
+		.proc_handler	= proc_dointvec_minmax,
+		.extra1		= &min_rcvbuf,
 	},
 	{
 		.procname	= "tcp2smc",
@@ -152,8 +158,9 @@ int __net_init smc_sysctl_net_init(struct net *net)
 
 	net->smc.sysctl_autocorking_size = SMC_AUTOCORKING_DEFAULT_SIZE;
 	net->smc.sysctl_smcr_buf_type = SMCR_PHYS_CONT_BUFS;
-	net->smc.sysctl_wmem_default = 256 * 1024;
-	net->smc.sysctl_rmem_default = 384 * 1024;
+	net->smc.sysctl_smcr_testlink_time = SMC_LLC_TESTLINK_DEFAULT_TIME;
+	WRITE_ONCE(net->smc.sysctl_wmem, READ_ONCE(net->ipv4.sysctl_tcp_wmem[1]));
+	WRITE_ONCE(net->smc.sysctl_rmem, READ_ONCE(net->ipv4.sysctl_tcp_rmem[1]));
 	net->smc.sysctl_tcp2smc = 0;
 	net->smc.sysctl_allow_different_subnet = 1;
 	net->smc.sysctl_keep_first_contact_clcsock = 1;
