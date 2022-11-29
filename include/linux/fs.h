@@ -1766,8 +1766,6 @@ int vfs_fchmod(struct file *file, umode_t mode);
 int vfs_utimes(const struct path *path, struct timespec64 *times);
 
 extern long vfs_ioctl(struct file *file, unsigned int cmd, unsigned long arg);
-extern int do_vfs_ioctl(struct file *filp, unsigned int fd,
-			unsigned int cmd, unsigned long arg);
 
 #ifdef CONFIG_COMPAT
 extern long compat_ptr_ioctl(struct file *file, unsigned int cmd,
