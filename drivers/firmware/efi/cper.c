@@ -695,13 +695,12 @@ static void yitian_ddr_raw_data_print(const char *pfx,
 	}
 }
 
-void yitian_raw_data_print(const char *pfx,
-			const struct acpi_hest_generic_status *estatus)
+bool yitian_estatus_check_header(const struct acpi_hest_generic_status *estatus)
 {
 	struct yitian_raw_data_header *header;
 
 	if (estatus->raw_data_length < sizeof(*header))
-		return;
+		return false;
 
 	header = (struct yitian_raw_data_header *)((void *)estatus +
 						   estatus->raw_data_offset);
@@ -711,7 +710,7 @@ void yitian_raw_data_print(const char *pfx,
 	(YITIAN_SIGNATURE_16(A, B) | (YITIAN_SIGNATURE_16(C, D) << 16))
 
 	if (header->signature != YITIAN_SIGNATURE_32('r', 'a', 'w', 'd'))
-		return;
+		return false;
 
 	/*
 	 * ONLY processor, CMN, GIC, and SMMU has raw error data which follow
@@ -719,7 +718,21 @@ void yitian_raw_data_print(const char *pfx,
 	 * implementation defined.
 	 */
 	if (!header->common_reg_nr)
+		return false;
+
+	return true;
+}
+
+void yitian_raw_data_print(const char *pfx,
+			const struct acpi_hest_generic_status *estatus)
+{
+	struct yitian_raw_data_header *header;
+
+	if (!yitian_estatus_check_header(estatus))
 		return;
+
+	header = (struct yitian_raw_data_header *)((void *)estatus +
+						   estatus->raw_data_offset);
 
 	printk("%s type: %s (0x%x), common_reg_nr:%d\n", pfx,
 	       yitian_raw_err_type_str(header->type), header->type,
