@@ -181,7 +181,9 @@ struct erofs_sb_info {
 
 static inline bool erofs_is_fscache_mode(struct super_block *sb)
 {
-	return IS_ENABLED(CONFIG_EROFS_FS_ONDEMAND) && !sb->s_bdev;
+	/* to distinguish from rafsv6 which also works in nodev mode */
+	return IS_ENABLED(CONFIG_EROFS_FS_ONDEMAND) && !sb->s_bdev &&
+	       EROFS_SB(sb)->fsid;
 }
 
 enum {
