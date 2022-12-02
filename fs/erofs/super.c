@@ -504,6 +504,12 @@ static int erofs_parse_options(struct super_block *sb, char *options)
 			return -EINVAL;
 		}
 	}
+
+	if (sbi->blob_dir_path && !sbi->bootstrap_path) {
+		erofs_err(sb, "bootstrap_path required in RAFS mode");
+		return -EINVAL;
+	}
+
 	return 0;
 }
 
@@ -787,11 +793,10 @@ static void erofs_kill_sb(struct super_block *sb)
 	erofs_free_dev_context(sbi->devs);
 	if (sbi->bootstrap)
 		filp_close(sbi->bootstrap, NULL);
-	if (sbi->blob_dir_path) {
+	if (sbi->blob_dir_path)
 		path_put(&sbi->blob_dir);
-		kfree(sbi->blob_dir_path);
-	}
 	kfree(sbi->bootstrap_path);
+	kfree(sbi->blob_dir_path);
 	erofs_fscache_unregister_cookie(&sbi->s_fscache);
 	erofs_fscache_unregister_fs(sb);
 	kfree(sbi->fsid);
