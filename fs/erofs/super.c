@@ -510,6 +510,11 @@ static int erofs_parse_options(struct super_block *sb, char *options)
 		return -EINVAL;
 	}
 
+	if (sbi->bootstrap_path && sbi->fsid) {
+		erofs_err(sb, "fscache/RAFS modes are mutually exclusive");
+		return -EINVAL;
+	}
+
 	return 0;
 }
 
@@ -734,7 +739,7 @@ static void erofs_free_dev_context(struct erofs_dev_context *devs)
 	kfree(devs);
 }
 
-static bool erofs_mount_is_rafs_v6(char *options)
+static bool erofs_mount_is_nodev(char *options)
 {
 	substring_t args[MAX_OPT_ARGS];
 	char *tmpstr, *p;
@@ -772,7 +777,7 @@ static bool erofs_mount_is_rafs_v6(char *options)
 static struct dentry *erofs_mount(struct file_system_type *fs_type, int flags,
 				  const char *dev_name, void *data)
 {
-	if (erofs_mount_is_rafs_v6(data))
+	if (erofs_mount_is_nodev(data))
 		return mount_nodev(fs_type, flags, data, erofs_fill_super);
 	return mount_bdev(fs_type, flags, dev_name, data, erofs_fill_super);
 }
