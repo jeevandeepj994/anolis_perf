@@ -476,6 +476,11 @@ static int erofs_fc_parse_param(struct fs_context *fc,
 		return -EINVAL;
 	}
 
+	if (ctx->bootstrap_path && ctx->fsid) {
+		errorfc(fc, "fscache/RAFS modes are mutually exclusive");
+		return -EINVAL;
+	}
+
 	return 0;
 }
 
