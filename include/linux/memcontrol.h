@@ -454,6 +454,11 @@ struct mem_cgroup {
 	bool allow_duptext;
 #endif
 
+#ifdef CONFIG_TEXT_UNEVICTABLE
+	bool allow_unevictable;
+	unsigned int unevictable_percent;
+#endif
+
 #if IS_ENABLED(CONFIG_RECLAIM_COLDPGS)
 	struct reclaim_coldpgs_control	coldpgs_control;
 	struct reclaim_coldpgs_stats __percpu *coldpgs_stats;
