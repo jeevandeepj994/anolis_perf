@@ -95,7 +95,7 @@ LIST_HEAD(mpam_classes);
 
 static u32 __mpam_read_reg(struct mpam_msc *msc, u16 reg)
 {
-	WARN_ON_ONCE(reg > msc->mapped_hwpage_sz);
+	WARN_ON_ONCE(reg >= msc->mapped_hwpage_sz);
 	WARN_ON_ONCE(!cpumask_test_cpu(smp_processor_id(), &msc->accessibility));
 
 	return readl_relaxed(msc->mapped_hwpage + reg);
@@ -103,7 +103,7 @@ static u32 __mpam_read_reg(struct mpam_msc *msc, u16 reg)
 
 static void __mpam_write_reg(struct mpam_msc *msc, u16 reg, u32 val)
 {
-	WARN_ON_ONCE(reg > msc->mapped_hwpage_sz);
+	WARN_ON_ONCE(reg >= msc->mapped_hwpage_sz);
 	WARN_ON_ONCE(!cpumask_test_cpu(smp_processor_id(), &msc->accessibility));
 
 	writel_relaxed(val, msc->mapped_hwpage + reg);
@@ -1661,6 +1661,24 @@ static int get_msc_affinity(struct mpam_msc *msc)
 
 static int fw_num_msc;
 
+static int mpam_msc_drv_remove(struct platform_device *pdev)
+{
+	struct mpam_msc *msc = platform_get_drvdata(pdev);
+
+	if (!msc)
+		return 0;
+
+	mutex_lock(&mpam_list_lock);
+	mpam_num_msc--;
+	platform_set_drvdata(pdev, NULL);
+	list_del_rcu(&msc->glbl_list);
+	mpam_msc_destroy(msc);
+	synchronize_rcu();
+	mutex_unlock(&mpam_list_lock);
+
+	return 0;
+}
+
 static int mpam_msc_drv_probe(struct platform_device *pdev)
 {
 	int err;
@@ -1703,7 +1721,6 @@ static int mpam_msc_drv_probe(struct platform_device *pdev)
 
 		err = mpam_msc_setup_error_irq(msc);
 		if (err) {
-			devm_kfree(&pdev->dev, msc);
 			msc = ERR_PTR(err);
 			break;
 		}
@@ -1711,12 +1728,16 @@ static int mpam_msc_drv_probe(struct platform_device *pdev)
 		io = devm_platform_get_and_ioremap_resource(pdev, 0, &msc_res);
 		if (IS_ERR(io)) {
 			pr_err("Failed to map MSC base address\n");
-			devm_kfree(&pdev->dev, msc);
 			err = PTR_ERR(io);
 			break;
 		}
-		msc->mapped_hwpage_sz = msc_res->end - msc_res->start;
+		msc->mapped_hwpage_sz = msc_res->end - msc_res->start + 1;
 		msc->mapped_hwpage = io;
+		if (msc->mapped_hwpage_sz < MPAM_MIN_MMIO_SIZE) {
+			pr_err("MSC MMIO space size is too small\n");
+			err = -EINVAL;
+			break;
+		}
 
 		msc->id = mpam_num_msc++;
 		list_add_rcu(&msc->glbl_list, &mpam_all_msc);
@@ -1731,6 +1752,9 @@ static int mpam_msc_drv_probe(struct platform_device *pdev)
 		else
 			err = mpam_dt_parse_resources(msc, plat_data);
 	}
+
+	if (err)
+		mpam_msc_drv_remove(pdev);
 
 	if (!err && fw_num_msc == mpam_num_msc)
 		mpam_register_cpuhp_callbacks(&mpam_discovery_cpu_online);
@@ -2184,24 +2208,6 @@ void mpam_enable(struct work_struct *work)
 
 	if (all_devices_probed && !atomic_fetch_inc(&once))
 		mpam_enable_once();
-}
-
-static int mpam_msc_drv_remove(struct platform_device *pdev)
-{
-	struct mpam_msc *msc = platform_get_drvdata(pdev);
-
-	if (!msc)
-		return 0;
-
-	mutex_lock(&mpam_list_lock);
-	mpam_num_msc--;
-	platform_set_drvdata(pdev, NULL);
-	list_del_rcu(&msc->glbl_list);
-	mpam_msc_destroy(msc);
-	synchronize_rcu();
-	mutex_unlock(&mpam_list_lock);
-
-	return 0;
 }
 
 struct mpam_write_config_arg {
