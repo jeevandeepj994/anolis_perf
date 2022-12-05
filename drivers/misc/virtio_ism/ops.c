@@ -31,6 +31,7 @@ struct virtio_ism_region {
 	u64 offset;
 	u64 token;
 
+	void *vaddr;
 	void *notify_data;
 	virtio_ism_callback callback;
 };
@@ -239,23 +240,44 @@ static struct virtio_ism_region *virtio_ism_region_get(struct virtio_ism *ism, u
 	return r;
 }
 
-static int virtio_ism_region_init(struct virtio_ism *ism, u64 offset, u64 token,
-				  virtio_ism_callback callback,
-				  void *notify_data)
+static void *virtio_ism_region_init(struct virtio_ism *ism, u64 offset, u64 token,
+				    virtio_ism_callback callback,
+				    void *notify_data)
 {
 	struct virtio_ism_irq_ctx *ctx;
 	struct virtio_ism_region *r;
-	int vector, err;
+	int vector, err, n, i;
+	struct page **pgs;
+	void *vaddr;
+
+	n = ism->region_size >> PAGE_SHIFT;
+
+	pgs = kcalloc(n, sizeof(*pgs), GFP_KERNEL);
+	if (!pgs)
+		return ERR_PTR(-ENOMEM);
+
+	for (i = 0; i < n; ++i)
+		pgs[i] = virt_to_page(ism->shm_p + offset + (i << PAGE_SHIFT));
+
+	vaddr = vmap(pgs, n, VM_READ, PAGE_KERNEL);
+
+	kfree(pgs);
+
+	if (!vaddr)
+		return ERR_PTR(-ENOMEM);
 
 	r = kmalloc(sizeof(*r), GFP_KERNEL);
-	if (!r)
-		return -ENOMEM;
+	if (!r) {
+		err = -ENOMEM;
+		goto err_alloc;
+	}
 
 	r->ism         = ism;
 	r->token       = token;
 	r->offset      = offset;
 	r->callback    = callback;
 	r->notify_data = notify_data;
+	r->vaddr       = vaddr;
 
 	ctx = virtio_ism_irq_ctx_find(ism);
 	if (IS_ERR(ctx)) {
@@ -272,13 +294,15 @@ static int virtio_ism_region_init(struct virtio_ism *ism, u64 offset, u64 token,
 
 	++ism->stats.region_active;
 	rb_add(&r->rb_node, &ism->rbtree, __region_less);
-	return 0;
+	return vaddr;
 
 err:
 	virtio_ism_irq_ctx_unbind(r);
 err_ctx:
 	kfree(r);
-	return err;
+err_alloc:
+	vfree(vaddr);
+	return ERR_PTR(err);
 }
 
 static void virtio_ism_kick(struct virtio_ism *ism, void *addr)
@@ -311,6 +335,7 @@ static void virtio_ism_detach(struct virtio_ism *ism, u64 token)
 
 	rb_erase(&r->rb_node, &ism->rbtree);
 	virtio_ism_irq_ctx_unbind(r);
+	vfree(r->vaddr);
 	kfree(r);
 
 	dev_detach(ism, token);
@@ -325,6 +350,7 @@ static void *__alloc(struct virtio_ism *ism, bool alloc, u64 *token,
 {
 	u64 offset;
 	int err;
+	void *p;
 
 	mutex_lock(&ism->mutex);
 
@@ -341,13 +367,13 @@ static void *__alloc(struct virtio_ism *ism, bool alloc, u64 *token,
 	if (err)
 		goto err_cmd;
 
-	err = virtio_ism_region_init(ism, offset, *token, cb, notify_data);
-	if (err)
+	p = virtio_ism_region_init(ism, offset, *token, cb, notify_data);
+	if (IS_ERR(p))
 		goto err_irq;
 
 	mutex_unlock(&ism->mutex);
 
-	return ism->shm_p + offset;
+	return p;
 
 err_irq:
 	dev_detach(ism, *token);

@@ -69,7 +69,7 @@ static int virtio_ism_mmap(struct file *f, struct vm_area_struct *vma)
 	if (!ctx->p)
 		return -ENOMEM;
 
-	pfn = virt_to_phys(ctx->p) >> PAGE_SHIFT;
+	pfn = vmalloc_to_pfn(ctx->p);
 
 	return io_remap_pfn_range(vma, vma->vm_start, pfn, size, vma->vm_page_prot);
 }
