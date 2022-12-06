@@ -504,6 +504,17 @@ static int erofs_parse_options(struct super_block *sb, char *options)
 			return -EINVAL;
 		}
 	}
+
+	if (sbi->blob_dir_path && !sbi->bootstrap_path) {
+		erofs_err(sb, "bootstrap_path required in RAFS mode");
+		return -EINVAL;
+	}
+
+	if (sbi->bootstrap_path && sbi->fsid) {
+		erofs_err(sb, "fscache/RAFS modes are mutually exclusive");
+		return -EINVAL;
+	}
+
 	return 0;
 }
 
@@ -576,6 +587,11 @@ static int rafs_v6_fill_super(struct super_block *sb, void *data)
 		f = filp_open(sbi->bootstrap_path, O_RDONLY | O_LARGEFILE, 0);
 		if (IS_ERR(f))
 			return PTR_ERR(f);
+		if (!S_ISREG(f->f_inode->i_mode)) {
+			erofs_err(sb, "bootstrap_path %s shall be regular file",
+					sbi->bootstrap_path);
+			return -EINVAL;
+		}
 		sbi->bootstrap = f;
 	}
 	if (sbi->blob_dir_path) {
@@ -723,7 +739,7 @@ static void erofs_free_dev_context(struct erofs_dev_context *devs)
 	kfree(devs);
 }
 
-static bool erofs_mount_is_rafs_v6(char *options)
+static bool erofs_mount_is_nodev(char *options)
 {
 	substring_t args[MAX_OPT_ARGS];
 	char *tmpstr, *p;
@@ -761,7 +777,7 @@ static bool erofs_mount_is_rafs_v6(char *options)
 static struct dentry *erofs_mount(struct file_system_type *fs_type, int flags,
 				  const char *dev_name, void *data)
 {
-	if (erofs_mount_is_rafs_v6(data))
+	if (erofs_mount_is_nodev(data))
 		return mount_nodev(fs_type, flags, data, erofs_fill_super);
 	return mount_bdev(fs_type, flags, dev_name, data, erofs_fill_super);
 }
@@ -787,11 +803,10 @@ static void erofs_kill_sb(struct super_block *sb)
 	erofs_free_dev_context(sbi->devs);
 	if (sbi->bootstrap)
 		filp_close(sbi->bootstrap, NULL);
-	if (sbi->blob_dir_path) {
+	if (sbi->blob_dir_path)
 		path_put(&sbi->blob_dir);
-		kfree(sbi->blob_dir_path);
-	}
 	kfree(sbi->bootstrap_path);
+	kfree(sbi->blob_dir_path);
 	erofs_fscache_unregister_cookie(&sbi->s_fscache);
 	erofs_fscache_unregister_fs(sb);
 	kfree(sbi->fsid);
