@@ -2499,8 +2499,10 @@ static inline void task_ca_update_block(struct task_struct *tsk,
 #endif
 
 #ifdef CONFIG_PSI
+#ifdef CONFIG_CGROUPS
 extern struct cftype cgroup_v1_psi_files[];
-#endif
+#endif /* CONFIG_CGROUPS */
+#endif /* CONFIG_PSI */
 
 #ifndef CONFIG_RICH_CONTAINER_CG_SWITCH
 long tg_get_cfs_quota(struct task_group *tg);
