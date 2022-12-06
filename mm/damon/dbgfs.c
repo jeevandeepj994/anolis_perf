@@ -159,6 +159,8 @@ static bool damos_action_valid(int action)
 	case DAMOS_PAGEOUT:
 	case DAMOS_HUGEPAGE:
 	case DAMOS_NOHUGEPAGE:
+	case DAMOS_LRU_DEPRIO:
+	case DAMOS_LRU_PRIO:
 	case DAMOS_STAT:
 		return true;
 	default:

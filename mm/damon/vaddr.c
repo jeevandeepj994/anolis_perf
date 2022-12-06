@@ -14,6 +14,7 @@
 #include <linux/page_idle.h>
 #include <linux/pagewalk.h>
 #include <linux/sched/mm.h>
+#include <linux/swap.h>
 
 #include "prmtv-common.h"
 
@@ -705,6 +706,84 @@ bool damon_va_target_valid(void *target)
 	return false;
 }
 
+struct damon_lru_walk_private {
+	bool active;
+};
+
+static int damon_lru_entry(pmd_t *pmd, unsigned long addr,
+		unsigned long next, struct mm_walk *walk)
+{
+	pte_t *pte;
+	spinlock_t *ptl;
+	struct page *page;
+	struct damon_lru_walk_private *arg = walk->private;
+	bool need_active = arg->active;
+
+#ifdef CONFIG_TRANSPARENT_HUGEPAGE
+	if (pmd_huge(*pmd)) {
+		ptl = pmd_lock(walk->mm, pmd);
+		if (pmd_huge(*pmd)) {
+			page = pmd_page(*pmd);
+			if (!page) {
+				spin_unlock(ptl);
+				return 0;
+			}
+			if (need_active)
+				mark_page_accessed(page);
+			else
+				deactivate_page(page);
+		}
+		spin_unlock(ptl);
+	}
+#endif
+	if (pmd_none(*pmd) || unlikely(pmd_bad(*pmd)))
+		return 0;
+	pte = pte_offset_map_lock(walk->mm, pmd, addr, &ptl);
+	if (!pte_present(*pte)) {
+		pte_unmap_unlock(pte, ptl);
+		return 0;
+	}
+	page = pte_page(*pte);
+	if (need_active)
+		mark_page_accessed(page);
+	else
+		deactivate_page(page);
+	pte_unmap_unlock(pte, ptl);
+
+	return 0;
+}
+
+static const struct mm_walk_ops damon_lru_ops = {
+	.pmd_entry = damon_lru_entry,
+};
+
+void damon_lru_sort(struct damon_ctx *ctx, bool active)
+{
+	struct damon_target *t;
+	struct damon_region *r;
+	struct mm_struct *mm;
+	struct damon_lru_walk_private arg = {
+		.active = active,
+	};
+
+	damon_for_each_target(t, ctx) {
+		mm = damon_get_mm(t);
+		if (!mm)
+			continue;
+
+		damon_for_each_region(r, t) {
+			if (r->lru_sort_done)
+				continue;
+			/* in there we need sure inactive or active */
+			walk_page_range(mm, r->ar.start, r->ar.end,
+					&damon_lru_ops, &arg);
+			r->lru_sort_done = true;
+		}
+		mmput(mm);
+	}
+
+}
+
 #ifndef CONFIG_ADVISE_SYSCALLS
 static int damos_madvise(struct damon_target *target, struct damon_region *r,
 			int behavior)
@@ -751,6 +830,12 @@ int damon_va_apply_scheme(struct damon_ctx *ctx, struct damon_target *t,
 	case DAMOS_NOHUGEPAGE:
 		madv_action = MADV_NOHUGEPAGE;
 		break;
+	case DAMOS_LRU_DEPRIO:
+		damon_lru_sort(ctx, false);
+		return 0;
+	case DAMOS_LRU_PRIO:
+		damon_lru_sort(ctx, true);
+		return 0;
 	case DAMOS_STAT:
 		return 0;
 	default:
