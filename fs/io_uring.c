@@ -7048,6 +7048,7 @@ static void io_sqd_init_new(struct io_sq_data *sqd)
 	io_sqd_update_thread_idle(sqd);
 }
 
+#ifdef CONFIG_CGROUP_CPUACCT
 struct cgrp_migr_info {
 	pid_t pid;
 	char *path;
@@ -7133,6 +7134,7 @@ out:
 		kfree(buf);
 	return ret;
 }
+#endif /* CONFIG_CGROUP_CPUACCT */
 
 static int io_sq_thread(void *data)
 {
@@ -9988,6 +9990,7 @@ static int io_uring_create(unsigned entries, struct io_uring_params *p,
 	if (!(p->flags & IORING_SETUP_R_DISABLED))
 		io_sq_offload_start(ctx);
 
+#ifdef CONFIG_CGROUP_CPUACCT
 	if ((p->flags & IORING_SETUP_SQ_AFF) &&
 	    (ctx->flags & IORING_SETUP_SQPOLL_PERCPU) && percpu_sqd) {
 		int cpu = p->sq_thread_cpu;
@@ -10004,6 +10007,7 @@ static int io_uring_create(unsigned entries, struct io_uring_params *p,
 		if (ret < 0)
 			goto err;
 	}
+#endif /* CONFIG_CGROUP_CPUACCT */
 
 	memset(&p->sq_off, 0, sizeof(p->sq_off));
 	p->sq_off.head = offsetof(struct io_rings, sq.head);
