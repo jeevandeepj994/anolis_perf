@@ -582,6 +582,11 @@ static int rafs_v6_fill_super(struct super_block *sb, void *data)
 		f = filp_open(sbi->bootstrap_path, O_RDONLY | O_LARGEFILE, 0);
 		if (IS_ERR(f))
 			return PTR_ERR(f);
+		if (!S_ISREG(f->f_inode->i_mode)) {
+			erofs_err(sb, "bootstrap_path %s shall be regular file",
+					sbi->bootstrap_path);
+			return -EINVAL;
+		}
 		sbi->bootstrap = f;
 	}
 	if (sbi->blob_dir_path) {
