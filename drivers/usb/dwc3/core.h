@@ -1260,6 +1260,7 @@ struct dwc3 {
 	unsigned		dis_metastability_quirk:1;
 
 	unsigned		dis_split_quirk:1;
+	unsigned		sofitpsync:1;
 
 	u16			imod_interval;
 };
@@ -1456,17 +1457,9 @@ bool dwc3_has_imod(struct dwc3 *dwc);
 int dwc3_event_buffers_setup(struct dwc3 *dwc);
 void dwc3_event_buffers_cleanup(struct dwc3 *dwc);
 
-#if IS_ENABLED(CONFIG_USB_DWC3_HOST) || IS_ENABLED(CONFIG_USB_DWC3_DUAL_ROLE)
 int dwc3_host_init(struct dwc3 *dwc);
 void dwc3_host_exit(struct dwc3 *dwc);
-#else
-static inline int dwc3_host_init(struct dwc3 *dwc)
-{ return 0; }
-static inline void dwc3_host_exit(struct dwc3 *dwc)
-{ }
-#endif
 
-#if IS_ENABLED(CONFIG_USB_DWC3_GADGET) || IS_ENABLED(CONFIG_USB_DWC3_DUAL_ROLE)
 int dwc3_gadget_init(struct dwc3 *dwc);
 void dwc3_gadget_exit(struct dwc3 *dwc);
 int dwc3_gadget_set_test_mode(struct dwc3 *dwc, int mode);
@@ -1476,69 +1469,18 @@ int dwc3_send_gadget_ep_cmd(struct dwc3_ep *dep, unsigned int cmd,
 		struct dwc3_gadget_ep_cmd_params *params);
 int dwc3_send_gadget_generic_command(struct dwc3 *dwc, unsigned int cmd,
 		u32 param);
-#else
-static inline int dwc3_gadget_init(struct dwc3 *dwc)
-{ return 0; }
-static inline void dwc3_gadget_exit(struct dwc3 *dwc)
-{ }
-static inline int dwc3_gadget_set_test_mode(struct dwc3 *dwc, int mode)
-{ return 0; }
-static inline int dwc3_gadget_get_link_state(struct dwc3 *dwc)
-{ return 0; }
-static inline int dwc3_gadget_set_link_state(struct dwc3 *dwc,
-		enum dwc3_link_state state)
-{ return 0; }
 
-static inline int dwc3_send_gadget_ep_cmd(struct dwc3_ep *dep, unsigned int cmd,
-		struct dwc3_gadget_ep_cmd_params *params)
-{ return 0; }
-static inline int dwc3_send_gadget_generic_command(struct dwc3 *dwc,
-		int cmd, u32 param)
-{ return 0; }
-#endif
-
-#if IS_ENABLED(CONFIG_USB_DWC3_DUAL_ROLE)
 int dwc3_drd_init(struct dwc3 *dwc);
 void dwc3_drd_exit(struct dwc3 *dwc);
 void dwc3_otg_init(struct dwc3 *dwc);
 void dwc3_otg_exit(struct dwc3 *dwc);
 void dwc3_otg_update(struct dwc3 *dwc, bool ignore_idstatus);
 void dwc3_otg_host_init(struct dwc3 *dwc);
-#else
-static inline int dwc3_drd_init(struct dwc3 *dwc)
-{ return 0; }
-static inline void dwc3_drd_exit(struct dwc3 *dwc)
-{ }
-static inline void dwc3_otg_init(struct dwc3 *dwc)
-{ }
-static inline void dwc3_otg_exit(struct dwc3 *dwc)
-{ }
-static inline void dwc3_otg_update(struct dwc3 *dwc, bool ignore_idstatus)
-{ }
-static inline void dwc3_otg_host_init(struct dwc3 *dwc)
-{ }
-#endif
 
 /* power management interface */
-#if !IS_ENABLED(CONFIG_USB_DWC3_HOST)
 int dwc3_gadget_suspend(struct dwc3 *dwc);
 int dwc3_gadget_resume(struct dwc3 *dwc);
 void dwc3_gadget_process_pending_events(struct dwc3 *dwc);
-#else
-static inline int dwc3_gadget_suspend(struct dwc3 *dwc)
-{
-	return 0;
-}
-
-static inline int dwc3_gadget_resume(struct dwc3 *dwc)
-{
-	return 0;
-}
-
-static inline void dwc3_gadget_process_pending_events(struct dwc3 *dwc)
-{
-}
-#endif /* !IS_ENABLED(CONFIG_USB_DWC3_HOST) */
 
 #if IS_ENABLED(CONFIG_USB_DWC3_ULPI)
 int dwc3_ulpi_init(struct dwc3 *dwc);
