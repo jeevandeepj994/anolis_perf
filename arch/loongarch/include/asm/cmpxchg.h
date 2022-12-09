@@ -102,8 +102,10 @@ static inline unsigned long __xchg(volatile void *ptr, unsigned long x,
 	"	move	$t0, %z4			\n"		\
 	"	" st "	$t0, %1				\n"		\
 	"	beqz	$t0, 1b				\n"		\
+	"	b	3f				"		\
 	"2:						\n"		\
 	__WEAK_LLSC_MB							\
+	"3:						"		\
 	: "=&r" (__ret), "=ZB"(*m)					\
 	: "ZB"(*m), "Jr" (old), "Jr" (new)				\
 	: "t0", "memory");						\
