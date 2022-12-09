@@ -482,14 +482,10 @@ retry:
 		/*
 		 * The pages which are not in ZONE_DEVICE don't depend on
 		 * the pgmap ref to keep alive (stable). Therefore if we are
-		 * looking at such a page and the caller explicitly claimed that
-		 * he doesn't really care whether this page is from ZONE_DEVICE
-		 * or not - either a page from ZONE_NORMAL ZONE_MOVABLE etc or
-		 * a page from ZONE_DEVICE are both fine - we could simply
-		 * get_page for those stable ones straightly.
+		 * looking at such a page - we could simply get_page for
+		 * those stable ones straightly.
 		 */
-		if ((flags & FOLL_GET_PGSTABLE) &&
-			pg_stable_pfn(pte_pfn(pte))) {
+		if (pg_stable_pfn(pte_pfn(pte))) {
 			page = pte_page(pte);
 			goto page_required;
 		}
