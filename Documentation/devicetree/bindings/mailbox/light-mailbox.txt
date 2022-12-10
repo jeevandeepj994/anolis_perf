@@ -15,7 +15,7 @@ Required properties:
 - reg :		Should contain the registers location and length
 - interrupts :	Interrupt number. The interrupt specifier format depends
 		on the interrupt controller parent.
-- icu_cpu_id :  Should be the ICU CPU ID defined in SOC.
+- icu_cpu_id :  Shoule be the ICU CPU ID defined in SOC.
 - #mbox-cells:  Must be 2.
 			  <&phandle type channel>
 			    phandle	: Label name of controller
