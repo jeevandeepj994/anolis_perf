@@ -919,7 +919,6 @@ static int setup_callback_client(struct nfs4_client *clp, struct nfs4_cb_conn *c
 			trace_nfsd_cb_setup_err(clp, -EINVAL);
 			return -EINVAL;
 		}
-		clp->cl_cb_conn.cb_xprt = conn->cb_xprt;
 		clp->cl_cb_session = ses;
 		args.bc_xprt = conn->cb_xprt;
 		args.prognumber = clp->cl_cb_session->se_cb_prog;
@@ -939,6 +938,9 @@ static int setup_callback_client(struct nfs4_client *clp, struct nfs4_cb_conn *c
 		rpc_shutdown_client(client);
 		return -ENOMEM;
 	}
+
+	if (clp->cl_minorversion != 0)
+		clp->cl_cb_conn.cb_xprt = conn->cb_xprt;
 	clp->cl_cb_client = client;
 	clp->cl_cb_cred = cred;
 	trace_nfsd_cb_setup(clp);
