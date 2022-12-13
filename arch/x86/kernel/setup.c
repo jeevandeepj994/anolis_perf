@@ -539,6 +539,15 @@ static void __init reserve_crashkernel(void)
 		return;
 	}
 
+	if (sev_active() || sme_active()) {
+		unsigned long long swiotlb_sz;
+
+		swiotlb_sz = ALIGN(swiotlb_size_or_default(), SZ_1M);
+		crash_size += swiotlb_sz;
+		pr_info("Reserving %ldMB of extra memory for crashkernel\n",
+			(unsigned long)swiotlb_sz >> 20);
+	}
+
 	/* 0 means: find the address automatically */
 	if (!crash_base) {
 		/*
