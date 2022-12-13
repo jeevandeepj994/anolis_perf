@@ -98,7 +98,7 @@ void dma_wbinv_range(unsigned long start, unsigned long end)
 	for (; i < end; i += L1_CACHE_BYTES)
 		asm volatile (".long 0x02b5000b"); /* dcache.cipa a0 */
 
-	sync_is();
+	sync_is()
 }
 
 void dma_wb_range(unsigned long start, unsigned long end)
@@ -108,5 +108,5 @@ void dma_wb_range(unsigned long start, unsigned long end)
 	for (; i < end; i += L1_CACHE_BYTES)
 		asm volatile (".long 0x0295000b"); /* dcache.cpa a0 */
 
-	sync_is();
+	sync_is()
 }

@@ -444,7 +444,7 @@ static int light_clocks_probe(struct platform_device *pdev)
 	clks[CLK_OUT_4] = thead_light_clk_mux_flags("clk_out_4",
 			ap_base + 0x1c0, 4, 1, clk_out_4_sels,
 			ARRAY_SIZE(clk_out_4_sels), CLK_SET_RATE_PARENT);
-	clks[PERI_I2S_SRC_CLK] = thead_light_clk_mux_flags("peri_i2s_src_clk"
+	clks[PERI_I2S_SRC_CLK] = thead_light_clk_mux_flags("peri_i2s_src_clk",
 			ap_base + 0x1f0, 0, 1, peri_i2s_src_clk_sels,
 			ARRAY_SIZE(peri_i2s_src_clk_sels), CLK_SET_RATE_PARENT);
 	clks[NPU_CCLK] = thead_light_clk_mux_flags("npu_cclk",
