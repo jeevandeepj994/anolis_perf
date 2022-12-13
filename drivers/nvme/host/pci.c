@@ -26,9 +26,15 @@
 #include <linux/io-64-nonatomic-hi-lo.h>
 #include <linux/sed-opal.h>
 #include <linux/pci-p2pdma.h>
+#include <linux/pci_hotplug.h>
+#ifdef CONFIG_ARM64
+#include <linux/arm-smccc.h>
+#endif
 
 #include "trace.h"
 #include "nvme.h"
+
+static bool nvme_vpp_enable;
 
 #define SQ_SIZE(q)	((q)->q_depth << (q)->sqes)
 #define CQ_SIZE(q)	((q)->q_depth * sizeof(struct nvme_completion))
@@ -2929,6 +2935,33 @@ static void nvme_async_probe(void *data, async_cookie_t cookie)
 	nvme_put_ctrl(&dev->ctrl);
 }
 
+static void nvme_set_power_indicator(struct pci_dev *pdev, u8 pwr)
+{
+	struct pci_slot *slot;
+	struct hotplug_slot *hp_slot;
+	const struct hotplug_slot_ops *ops;
+
+	if (!nvme_vpp_enable)
+		return;
+
+	slot = pdev->slot;
+	if (!slot)
+		return;
+
+	hp_slot = slot->hotplug;
+	if (!hp_slot)
+		return;
+
+	ops = hp_slot->ops;
+	if (!ops || !ops->set_power_indicator)
+		return;
+
+	if (pdev->bus && pdev->bus->self)
+		if (pdev->bus->self->vendor == PCI_VENDOR_ID_ALIBABA &&
+		    pdev->bus->self->device == 0x8000)
+			ops->set_power_indicator(hp_slot, pwr);
+}
+
 static int nvme_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 {
 	int node, result = -ENOMEM;
@@ -2999,6 +3032,8 @@ static int nvme_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 			quirks);
 	if (result)
 		goto release_mempool;
+
+	nvme_set_power_indicator(pdev, 0);
 
 	dev_info(dev->ctrl.device, "pci function %s\n", dev_name(&pdev->dev));
 
@@ -3071,7 +3106,8 @@ static void nvme_remove(struct pci_dev *pdev)
 	if (!pci_device_is_present(pdev)) {
 		nvme_change_ctrl_state(&dev->ctrl, NVME_CTRL_DEAD);
 		nvme_dev_disable(dev, true);
-	}
+	} else
+		nvme_set_power_indicator(pdev, 1);
 
 	flush_work(&dev->ctrl.reset_work);
 	nvme_stop_ctrl(&dev->ctrl);
@@ -3362,12 +3398,28 @@ static struct pci_driver nvme_driver = {
 	.err_handler	= &nvme_err_handler,
 };
 
+static bool nvme_enable_vpp(void)
+{
+#ifdef CONFIG_ARM64
+	struct arm_smccc_res res;
+
+	arm_smccc_smc(ARM_SMCCC_VENDOR_ENABLE_VPP_FUNC_ID,
+			0, 0, 0, 0, 0, 0, 0, &res);
+
+	return res.a0 != ARM_SMCCC_VENDOR_ENABLE_VPP_FUNC_ID ? false : true;
+#else
+	return false;
+#endif
+}
+
 static int __init nvme_init(void)
 {
 	BUILD_BUG_ON(sizeof(struct nvme_create_cq) != 64);
 	BUILD_BUG_ON(sizeof(struct nvme_create_sq) != 64);
 	BUILD_BUG_ON(sizeof(struct nvme_delete_queue) != 64);
 	BUILD_BUG_ON(IRQ_AFFINITY_MAX_SETS < 2);
+
+	nvme_vpp_enable = nvme_enable_vpp();
 
 	return pci_register_driver(&nvme_driver);
 }
