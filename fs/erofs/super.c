@@ -132,10 +132,10 @@ static int erofs_init_device(struct erofs_buf *buf, struct super_block *sb,
 			     struct erofs_device_info *dif, erofs_off_t *pos)
 {
 	struct erofs_sb_info *sbi = EROFS_SB(sb);
+	struct erofs_fscache *fscache;
 	struct erofs_deviceslot *dis;
 	struct block_device *bdev;
 	void *ptr;
-	int ret;
 
 	ptr = erofs_read_metabuf(buf, sb, erofs_blknr(*pos), EROFS_KMAP);
 	if (IS_ERR(ptr))
@@ -153,10 +153,10 @@ static int erofs_init_device(struct erofs_buf *buf, struct super_block *sb,
 	}
 
 	if (erofs_is_fscache_mode(sb)) {
-		ret = erofs_fscache_register_cookie(sb, &dif->fscache,
-				dif->path, false);
-		if (ret)
-			return ret;
+		fscache = erofs_fscache_register_cookie(sb, dif->path, false);
+		if (IS_ERR(fscache))
+			return PTR_ERR(fscache);
+		dif->fscache = fscache;
 	} else if (sbi->blob_dir_path) {
 		struct file *f;
 
@@ -371,6 +371,7 @@ enum {
 	Opt_cache_strategy,
 	Opt_device,
 	Opt_fsid,
+	Opt_domain_id,
 	Opt_bootstrap_path,
 	Opt_blob_dir_path,
 	Opt_opt_creds_on,
@@ -386,6 +387,7 @@ static match_table_t erofs_tokens = {
 	{Opt_cache_strategy, "cache_strategy=%s"},
 	{Opt_device, "device=%s"},
 	{Opt_fsid, "fsid=%s"},
+	{Opt_domain_id, "domain_id=%s"},
 	{Opt_bootstrap_path, "bootstrap_path=%s"},
 	{Opt_blob_dir_path, "blob_dir_path=%s"},
 	{Opt_opt_creds_on, "opt_creds=on"},
@@ -476,6 +478,17 @@ static int erofs_parse_options(struct super_block *sb, char *options)
 				return -ENOMEM;
 #else
 			erofs_err(sb, "fsid option not supported");
+			return -EINVAL;
+#endif
+			break;
+		case Opt_domain_id:
+#ifdef CONFIG_EROFS_FS_ONDEMAND
+			kfree(sbi->domain_id);
+			sbi->domain_id = match_strdup(&args[0]);
+			if (!sbi->domain_id)
+				return -ENOMEM;
+#else
+			erofs_err(sb, "domain_id option not supported");
 			return -EINVAL;
 #endif
 			break;
@@ -654,11 +667,6 @@ static int erofs_fill_super(struct super_block *sb, void *data, int silent)
 		if (err)
 			return err;
 
-		err = erofs_fscache_register_cookie(sb, &sbi->s_fscache,
-						    sbi->fsid, true);
-		if (err)
-			return err;
-
 		err = super_setup_bdi(sb);
 		if (err)
 			return err;
@@ -724,7 +732,8 @@ static int erofs_release_device_info(int id, void *ptr, void *data)
 		blkdev_put(dif->bdev, FMODE_READ | FMODE_EXCL);
 	if (dif->blobfile)
 		filp_close(dif->blobfile, NULL);
-	erofs_fscache_unregister_cookie(&dif->fscache);
+	erofs_fscache_unregister_cookie(dif->fscache);
+	dif->fscache = NULL;
 	kfree(dif->path);
 	kfree(dif);
 	return 0;
@@ -777,6 +786,10 @@ static bool erofs_mount_is_nodev(char *options)
 static struct dentry *erofs_mount(struct file_system_type *fs_type, int flags,
 				  const char *dev_name, void *data)
 {
+	/* pseudo mount for anon inodes */
+	if (flags & SB_KERNMOUNT)
+		return mount_pseudo(fs_type, "erofs:", NULL, NULL, EROFS_SUPER_MAGIC);
+
 	if (erofs_mount_is_nodev(data))
 		return mount_nodev(fs_type, flags, data, erofs_fill_super);
 	return mount_bdev(fs_type, flags, dev_name, data, erofs_fill_super);
@@ -791,6 +804,12 @@ static void erofs_kill_sb(struct super_block *sb)
 	struct erofs_sb_info *sbi;
 
 	WARN_ON(sb->s_magic != EROFS_SUPER_MAGIC);
+
+	/* pseudo mount for anon inodes */
+	if (sb->s_flags & SB_KERNMOUNT) {
+		kill_anon_super(sb);
+		return;
+	}
 
 	if (sb->s_bdev)
 		kill_block_super(sb);
@@ -807,9 +826,9 @@ static void erofs_kill_sb(struct super_block *sb)
 		path_put(&sbi->blob_dir);
 	kfree(sbi->bootstrap_path);
 	kfree(sbi->blob_dir_path);
-	erofs_fscache_unregister_cookie(&sbi->s_fscache);
 	erofs_fscache_unregister_fs(sb);
 	kfree(sbi->fsid);
+	kfree(sbi->domain_id);
 	kfree(sbi);
 	sb->s_fs_info = NULL;
 }
@@ -826,10 +845,11 @@ static void erofs_put_super(struct super_block *sb)
 	iput(sbi->managed_cache);
 	sbi->managed_cache = NULL;
 #endif
-	erofs_fscache_unregister_cookie(&sbi->s_fscache);
+	erofs_fscache_unregister_cookie(sbi->s_fscache);
+	sbi->s_fscache = NULL;
 }
 
-static struct file_system_type erofs_fs_type = {
+struct file_system_type erofs_fs_type = {
 	.owner          = THIS_MODULE,
 	.name           = "erofs",
 	.mount          = erofs_mount,
@@ -950,6 +970,8 @@ static int erofs_show_options(struct seq_file *seq, struct dentry *root)
 #ifdef CONFIG_EROFS_FS_ONDEMAND
 	if (sbi->fsid)
 		seq_printf(seq, ",fsid=%s", sbi->fsid);
+	if (sbi->domain_id)
+		seq_printf(seq, ",domain_id=%s", sbi->domain_id);
 #endif
 	if (test_opt(sbi, OPT_CREDS))
 		seq_puts(seq, ",opt_creds=on");
