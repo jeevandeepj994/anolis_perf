@@ -606,16 +606,6 @@ static int shmem_add_to_page_cache(struct page *page,
 	page->mapping = mapping;
 	page->index = index;
 
-	if (!PageSwapCache(page)) {
-		error = mem_cgroup_charge(page, charge_mm, gfp);
-		if (error) {
-			page->mapping = NULL;
-			page_ref_sub(page, nr);
-			return error;
-		}
-	}
-	cgroup_throttle_swaprate(page, gfp);
-
 	xa_lock_irq(&mapping->i_pages);
 	if (PageTransHuge(page)) {
 		void __rcu **results;
@@ -1755,6 +1745,13 @@ repeat:
 				goto failed;
 		}
 
+		if (!PageSwapCache(page)) {
+			error = mem_cgroup_charge(page, charge_mm, gfp);
+			if (error)
+				goto failed;
+		}
+		cgroup_throttle_swaprate(page, gfp);
+
 		error = shmem_add_to_page_cache(page, mapping, index,
 						swp_to_radix_entry(swap), gfp,
 						charge_mm);
@@ -1846,6 +1843,18 @@ alloc_nohuge:
 
 		if (sgp == SGP_WRITE)
 			__SetPageReferenced(page);
+
+		/*
+		 * Charging memcg here to avoid sleeping in atomic
+		 * context.
+		 */
+		if (!PageSwapCache(page)) {
+			error = mem_cgroup_charge(page, charge_mm,
+						  gfp & GFP_RECLAIM_MASK);
+			if (error)
+				goto unacct;
+		}
+		cgroup_throttle_swaprate(page, gfp & GFP_RECLAIM_MASK);
 
 		error = radix_tree_maybe_preload_order(gfp & GFP_RECLAIM_MASK,
 				compound_order(page));
@@ -2331,6 +2340,13 @@ static int shmem_mfill_atomic_pte(struct mm_struct *dst_mm,
 	max_off = DIV_ROUND_UP(i_size_read(inode), PAGE_SIZE);
 	if (unlikely(offset >= max_off))
 		goto out_release;
+
+	if (!PageSwapCache(page)) {
+		ret = mem_cgroup_charge(page, dst_mm, gfp & GFP_RECLAIM_MASK);
+		if (ret)
+			goto out_release;
+	}
+	cgroup_throttle_swaprate(page, gfp & GFP_RECLAIM_MASK);
 
 	ret = radix_tree_maybe_preload(gfp & GFP_RECLAIM_MASK);
 	if (!ret) {
