@@ -105,6 +105,8 @@ bool insn_cfi_match(struct instruction *insn, struct cfi_state *cfi2);
 bool is_first_func_insn(struct objtool_file *file,
 			struct instruction *insn, struct symbol *sym);
 
+int decode_instructions(struct objtool_file *file);
+
 #define sec_for_each_insn(file, _sec, insn)				\
 	for (insn = find_insn(file, _sec, 0);				\
 	     insn && insn->sec == _sec;					\
