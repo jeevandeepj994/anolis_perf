@@ -8,7 +8,7 @@
 #include <objtool/insn.h>
 #include <objtool/warn.h>
 
-static unsigned long nr_insns;
+unsigned long nr_insns;
 
 /*
  * Call the arch-specific instruction decoder for all the instructions and add

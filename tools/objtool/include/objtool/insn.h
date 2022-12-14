@@ -9,6 +9,8 @@
 #include <objtool/objtool.h>
 #include <objtool/arch.h>
 
+extern unsigned long nr_insns;
+
 struct insn_state {
 	struct cfi_state cfi;
 	unsigned int uaccess_stack;
@@ -100,12 +102,15 @@ struct instruction *next_insn_same_func(struct objtool_file *file,
 					struct instruction *insn);
 struct instruction *prev_insn_same_sec(struct objtool_file *file,
 				       struct instruction *insn);
+struct instruction *prev_insn_same_sym(struct objtool_file *file,
+				       struct instruction *insn);
 struct reloc *insn_reloc(struct objtool_file *file, struct instruction *insn);
 bool insn_cfi_match(struct instruction *insn, struct cfi_state *cfi2);
 bool is_first_func_insn(struct objtool_file *file,
 			struct instruction *insn, struct symbol *sym);
 
 int decode_instructions(struct objtool_file *file);
+int read_unwind_hints(struct objtool_file *file);
 
 #define sec_for_each_insn(file, _sec, insn)				\
 	for (insn = find_insn(file, _sec, 0);				\

@@ -67,8 +67,8 @@ struct instruction *prev_insn_same_sec(struct objtool_file *file,
 	return insn - 1;
 }
 
-static struct instruction *prev_insn_same_sym(struct objtool_file *file,
-					      struct instruction *insn)
+struct instruction *prev_insn_same_sym(struct objtool_file *file,
+                                       struct instruction *insn)
 {
 	struct instruction *prev = prev_insn_same_sec(file, insn);
 
