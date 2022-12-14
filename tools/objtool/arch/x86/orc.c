@@ -6,15 +6,16 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include <linux/objtool.h>
+#include <linux/objtool_types.h>
 
 #include <objtool/check.h>
+#include <objtool/insn.h>
 #include <objtool/orc.h>
 #include <objtool/warn.h>
 #include <objtool/endianness.h>
 
 int init_orc_entry(struct orc_entry *orc, struct cfi_state *cfi,
-		   struct instruction *insn);
+		   struct instruction *insn)
 {
 	struct cfi_reg *bp = &cfi->regs[CFI_BP];
 
