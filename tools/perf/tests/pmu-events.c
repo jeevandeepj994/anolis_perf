@@ -910,7 +910,7 @@ static struct test_metric metrics[] = {
 	{ "(imx8_ddr0@read\\-cycles@ + imx8_ddr0@write\\-cycles@)", },
 };
 
-static int metric_parse_fake(const char *str)
+static int metric_parse_fake(const char *metric_name, const char *str)
 {
 	struct expr_parse_ctx *ctx;
 	struct hashmap_entry *cur;
@@ -919,7 +919,7 @@ static int metric_parse_fake(const char *str)
 	size_t bkt;
 	int i;
 
-	pr_debug("parsing '%s'\n", str);
+	pr_debug("parsing '%s': '%s'\n", metric_name, str);
 
 	ctx = expr__ctx_new();
 	if (!ctx) {
@@ -947,10 +947,25 @@ static int metric_parse_fake(const char *str)
 		}
 	}
 
-	if (expr__parse(&result, ctx, str))
-		pr_err("expr__parse failed\n");
-	else
-		ret = 0;
+	ret = 0;
+	if (expr__parse(&result, ctx, str)) {
+		/*
+		 * Parsing failed, make numbers go from large to small which can
+		 * resolve divide by zero issues.
+		 */
+		i = 1024;
+		hashmap__for_each_entry(ctx->ids, cur, bkt)
+			expr__add_id_val(ctx, strdup(cur->key), i--);
+		if (expr__parse(&result, ctx, str)) {
+			pr_err("expr__parse failed for %s\n", metric_name);
+			/* The following have hard to avoid divide by zero. */
+			if (!strcmp(metric_name, "tma_clears_resteers") ||
+			    !strcmp(metric_name, "tma_mispredicts_resteers"))
+				ret = 0;
+			else
+				ret = -1;
+		}
+	}
 
 out:
 	expr__ctx_free(ctx);
@@ -964,7 +979,7 @@ static int test__parsing_fake_callback(const struct pmu_event *pe,
 	if (!pe->metric_expr)
 		return 0;
 
-	return metric_parse_fake(pe->metric_expr);
+	return metric_parse_fake(pe->metric_name, pe->metric_expr);
 }
 
 /*
@@ -977,7 +992,7 @@ static int test_parsing_fake(void)
 	int err = 0;
 
 	for (size_t i = 0; i < ARRAY_SIZE(metrics); i++) {
-		err = metric_parse_fake(metrics[i].str);
+		err = metric_parse_fake("", metrics[i].str);
 		if (err)
 			return err;
 	}
