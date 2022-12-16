@@ -426,6 +426,7 @@ extern pgprot_t protection_map[16];
  * @FAULT_FLAG_REMOTE: The fault is not for current task/mm.
  * @FAULT_FLAG_INSTRUCTION: The fault was during an instruction fetch.
  * @FAULT_FLAG_INTERRUPTIBLE: The fault can be interrupted by non-fatal signals.
+ * @FAULT_FLAG_NONZEROPAGE: The fault can not be filled with zero page.
  *
  * About @FAULT_FLAG_ALLOW_RETRY and @FAULT_FLAG_TRIED: we can specify
  * whether we would allow page faults to retry by specifying these two
@@ -456,6 +457,7 @@ extern pgprot_t protection_map[16];
 #define FAULT_FLAG_REMOTE			0x80
 #define FAULT_FLAG_INSTRUCTION  		0x100
 #define FAULT_FLAG_INTERRUPTIBLE		0x200
+#define FAULT_FLAG_NONZEROPAGE			0x400
 
 /*
  * The default fault flags that should be used by most of the
@@ -1740,6 +1742,11 @@ extern int mlock_fixup(struct vm_area_struct *vma,
 		struct vm_area_struct **prev,
 		unsigned long start, unsigned long end,
 		vm_flags_t newflags);
+/*
+ * Zap flag definitions
+ * @ZAP_ZEROPAGE: Only unmap the zeropages in the indicated range.
+ */
+#define ZAP_ZEROPAGE			0x01
 
 /*
  * Parameter block passed down to zap_pte_range in exceptional cases.
@@ -1749,6 +1756,7 @@ struct zap_details {
 	pgoff_t	first_index;			/* Lowest page->index to unmap */
 	pgoff_t last_index;			/* Highest page->index to unmap */
 	struct page *single_page;		/* Locked page to be unmapped */
+	unsigned int flags;			/* Flags to indicate pages to unmap */
 };
 
 struct page *vm_normal_page(struct vm_area_struct *vma, unsigned long addr,
@@ -1799,6 +1807,7 @@ extern int fixup_user_fault(struct mm_struct *mm,
 void unmap_mapping_page(struct page *page);
 void unmap_mapping_pages(struct address_space *mapping,
 		pgoff_t start, pgoff_t nr, bool even_cows);
+void unmap_mapping_zeropages(struct address_space *mapping);
 void unmap_mapping_range(struct address_space *mapping,
 		loff_t const holebegin, loff_t const holelen, int even_cows);
 #else
@@ -1820,6 +1829,7 @@ static inline int fixup_user_fault(struct mm_struct *mm, unsigned long address,
 static inline void unmap_mapping_page(struct page *page) { }
 static inline void unmap_mapping_pages(struct address_space *mapping,
 		pgoff_t start, pgoff_t nr, bool even_cows) { }
+static inline void unmap_mapping_zeropages(struct address_space *mapping) { }
 static inline void unmap_mapping_range(struct address_space *mapping,
 		loff_t const holebegin, loff_t const holelen, int even_cows) { }
 #endif

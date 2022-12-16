@@ -4966,7 +4966,7 @@ void pci_reset_secondary_bus(struct pci_dev *dev)
 	 * Trhfa for conventional PCI is 2^25 clock cycles.
 	 * Assuming a minimum 33MHz clock this results in a 1s
 	 * delay before we can consider subordinate devices to
-	 * be re-initialized.  PCIe has some ways to shorten this,
+	 * be re-initialized. PCIe has some ways to shorten this,
 	 * but we don't make use of them yet.
 	 */
 	ssleep(1);

@@ -32,7 +32,6 @@ smc_gen_ueid_policy[SMC_NLA_EID_TABLE_MAX + 1] = {
 					  },
 };
 
-#define SMC_CMD_MAX_ATTR 1
 /* SMC_GENL generic netlink operation definition */
 static const struct genl_ops smc_gen_nl_ops[] = {
 	{

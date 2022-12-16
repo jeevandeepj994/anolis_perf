@@ -38,7 +38,33 @@ MODULE_PARM_DESC(iax_verify_compress,
 static LIST_HEAD(iax_devices);
 static DEFINE_SPINLOCK(iax_devices_lock);
 
-static struct crypto_comp *deflate_generic_tfm;
+struct deflate_generic_ctx {
+	struct crypto_comp *deflate_generic_tfm;
+};
+
+static int iax_deflate_generic_init(struct crypto_tfm *tfm)
+{
+	struct deflate_generic_ctx *ctx = crypto_tfm_ctx(tfm);
+	struct crypto_comp *deflate_tfm;
+
+	if (crypto_has_comp("deflate-generic", 0, 0))
+		deflate_tfm = crypto_alloc_comp("deflate-generic", 0, 0);
+
+	if (IS_ERR_OR_NULL(deflate_tfm)) {
+		pr_err("IAX could not alloc %s tfm: errcode = %ld\n",
+		       "deflate-generic", PTR_ERR(deflate_tfm));
+		return -ENOMEM;
+	}
+	ctx->deflate_generic_tfm = deflate_tfm;
+	return 0;
+}
+
+static void iax_deflate_generic_exit(struct crypto_tfm *tfm)
+{
+	struct deflate_generic_ctx *ctx = crypto_tfm_ctx(tfm);
+
+	crypto_free_comp(ctx->deflate_generic_tfm);
+}
 
 static int iax_wqs_get(struct iax_device *iax_device)
 {
@@ -863,12 +889,13 @@ static int iax_comp_compress(struct crypto_tfm *tfm,
 			     const u8 *src, unsigned int slen,
 			     u8 *dst, unsigned int *dlen)
 {
+	struct deflate_generic_ctx *ctx = crypto_tfm_ctx(tfm);
 	u64 start_time_ns;
 	int ret = 0;
 
 	if (!iax_crypto_enabled) {
 		pr_debug("%s: iax_crypto disabled, using deflate-generic compression\n", __func__);
-		ret = crypto_comp_compress(deflate_generic_tfm,
+		ret = crypto_comp_compress(ctx->deflate_generic_tfm,
 					   src, slen, dst, dlen);
 		return ret;
 	}
@@ -889,12 +916,13 @@ static int iax_comp_decompress(struct crypto_tfm *tfm,
 			       const u8 *src, unsigned int slen,
 			       u8 *dst, unsigned int *dlen)
 {
+	struct deflate_generic_ctx *ctx = crypto_tfm_ctx(tfm);
 	u64 start_time_ns;
 	int ret = 0;
 
 	if (!iax_crypto_enabled) {
 		pr_debug("%s: iax_crypto disabled, using deflate-generic decompression\n", __func__);
-		ret = crypto_comp_decompress(deflate_generic_tfm,
+		ret = crypto_comp_decompress(ctx->deflate_generic_tfm,
 					     src, slen, dst, dlen);
 		return ret;
 	}
@@ -917,6 +945,9 @@ static struct crypto_alg iax_comp_deflate = {
 	.cra_flags		= CRYPTO_ALG_TYPE_COMPRESS,
 	.cra_priority		= IAX_ALG_PRIORITY,
 	.cra_module		= THIS_MODULE,
+	.cra_ctxsize		= sizeof(struct deflate_generic_ctx),
+	.cra_init		= iax_deflate_generic_init,
+	.cra_exit		= iax_deflate_generic_exit,
 	.cra_u			= {
 		.compress = {
 			.coa_compress	= iax_comp_compress,
@@ -928,6 +959,7 @@ static struct crypto_alg iax_comp_deflate = {
 static int iax_comp_acompress(struct acomp_req *req)
 {
 	struct crypto_tfm *tfm = req->base.tfm;
+	struct deflate_generic_ctx *ctx = crypto_tfm_ctx(tfm);
 	u64 start_time_ns;
 	void *src, *dst;
 	int ret = 0;
@@ -937,7 +969,7 @@ static int iax_comp_acompress(struct acomp_req *req)
 
 	if (!iax_crypto_enabled) {
 		pr_debug("%s: iax_crypto disabled, using deflate-generic compression\n", __func__);
-		ret = crypto_comp_compress(deflate_generic_tfm,
+		ret = crypto_comp_compress(ctx->deflate_generic_tfm,
 					   src, req->slen, dst, &req->dlen);
 		kunmap_atomic(src);
 		kunmap_atomic(dst);
@@ -965,6 +997,7 @@ static int iax_comp_acompress(struct acomp_req *req)
 static int iax_comp_adecompress(struct acomp_req *req)
 {
 	struct crypto_tfm *tfm = req->base.tfm;
+	struct deflate_generic_ctx *ctx = crypto_tfm_ctx(tfm);
 	u64 start_time_ns;
 	void *src, *dst;
 	int ret;
@@ -974,7 +1007,7 @@ static int iax_comp_adecompress(struct acomp_req *req)
 
 	if (!iax_crypto_enabled) {
 		pr_debug("%s: iax_crypto disabled, using deflate-generic decompression\n", __func__);
-		ret = crypto_comp_decompress(deflate_generic_tfm,
+		ret = crypto_comp_decompress(ctx->deflate_generic_tfm,
 					     src, req->slen, dst, &req->dlen);
 		kunmap_atomic(src);
 		kunmap_atomic(dst);
@@ -1005,6 +1038,9 @@ static struct acomp_alg iax_acomp_deflate = {
 		.cra_name		= "deflate",
 		.cra_driver_name	= "iax_crypto",
 		.cra_module		= THIS_MODULE,
+		.cra_ctxsize		= sizeof(struct deflate_generic_ctx),
+		.cra_init		= iax_deflate_generic_init,
+		.cra_exit		= iax_deflate_generic_exit,
 		.cra_priority           = IAX_ALG_PRIORITY,
 	}
 };
@@ -1164,15 +1200,6 @@ static int __init iax_crypto_init_module(void)
 	nr_cpus = num_online_cpus();
 	nr_nodes = num_online_nodes();
 
-	if (crypto_has_comp("deflate-generic", 0, 0))
-		deflate_generic_tfm = crypto_alloc_comp("deflate-generic", 0, 0);
-
-	if (IS_ERR_OR_NULL(deflate_generic_tfm)) {
-		pr_err("IAX could not alloc %s tfm: errcode = %ld\n",
-		       "deflate-generic", PTR_ERR(deflate_generic_tfm));
-		return -ENOMEM;
-	}
-
 	wq_table = alloc_percpu(struct idxd_wq *);
 	if (!wq_table)
 		return -ENOMEM;
@@ -1200,7 +1227,6 @@ out:
 err_crypto_register:
 	idxd_driver_unregister(&iax_crypto_driver);
 err_driver_register:
-	crypto_free_comp(deflate_generic_tfm);
 	free_percpu(wq_table);
 
 	goto out;
@@ -1213,7 +1239,6 @@ static void __exit iax_crypto_cleanup_module(void)
 	iax_unregister_compression_device();
 	free_percpu(wq_table);
 	free_iax_devices();
-	crypto_free_comp(deflate_generic_tfm);
 	pr_info("%s: cleaned up\n", __func__);
 }
 

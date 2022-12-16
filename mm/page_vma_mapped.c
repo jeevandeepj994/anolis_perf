@@ -110,6 +110,9 @@ static bool check_pte(struct page_vma_mapped_walk *pvmw)
 			return false;
 
 		pfn = pte_pfn(*pvmw->pte);
+
+		if (pvmw->flags & PVMW_ZEROPAGE)
+			return is_zero_pfn(pfn);
 	}
 
 	return pfn_is_match(pvmw->page, pfn);

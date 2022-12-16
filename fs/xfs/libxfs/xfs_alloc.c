@@ -2517,7 +2517,15 @@ xfs_alloc_fix_freelist(
 		goto out_agbp_relse;
 	}
 
-	need = xfs_alloc_min_freelist(mp, pag);
+	/*
+	 * Also need to fulfill freespace btree splits by reservaing more
+	 * blocks to perform multiple allocations from a single AG and
+	 * transaction if needed.
+	 */
+	if (args->postallocs)
+		need = xfs_alloc_min_freelist(mp, pag) << 1;
+	else
+		need = xfs_alloc_min_freelist(mp, pag);
 	if (!xfs_alloc_space_available(args, need, flags |
 			XFS_ALLOC_FLAG_CHECK))
 		goto out_agbp_relse;
@@ -2541,7 +2549,10 @@ xfs_alloc_fix_freelist(
 		xfs_agfl_reset(tp, agbp, pag);
 
 	/* If there isn't enough total space or single-extent, reject it. */
-	need = xfs_alloc_min_freelist(mp, pag);
+	if (args->postallocs)
+		need = xfs_alloc_min_freelist(mp, pag) << 1;
+	else
+		need = xfs_alloc_min_freelist(mp, pag);
 	if (!xfs_alloc_space_available(args, need, flags))
 		goto out_agbp_relse;
 

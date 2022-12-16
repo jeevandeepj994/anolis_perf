@@ -5,61 +5,61 @@
 #include <linux/uaccess.h>
 #include <linux/slab.h>
 #include <linux/fs.h>
-#include "ycc_cdev.h"
+#include "alicc_cdev.h"
 
-static struct ycc_cdev ycdev;
+static struct alicc_cdev ycdev;
 
-static int ycc_cdev_open(struct inode *inode, struct file *filp)
+static int alicc_cdev_open(struct inode *inode, struct file *filp)
 {
 	return 0;
 }
 
-static int ycc_cdev_release(struct inode *inode, struct file *filp)
+static int alicc_cdev_release(struct inode *inode, struct file *filp)
 {
 	return 0;
 }
 
-static long ycc_cdev_ioctl(struct file *filp, unsigned int cmd,
+static long alicc_cdev_ioctl(struct file *filp, unsigned int cmd,
 			  unsigned long arg)
 {
 	return 0;
 }
 
-static const struct file_operations ycc_fops = {
-	.open = ycc_cdev_open,
-	.release = ycc_cdev_release,
-	.unlocked_ioctl = ycc_cdev_ioctl,
+static const struct file_operations alicc_fops = {
+	.open = alicc_cdev_open,
+	.release = alicc_cdev_release,
+	.unlocked_ioctl = alicc_cdev_ioctl,
 };
 
-int ycc_cdev_register(void)
+int alicc_cdev_register(void)
 {
 	struct device *device;
 	int ret;
 
-	ret = alloc_chrdev_region(&ycdev.devno, 0, 1, YCC_CDEV_NAME);
+	ret = alloc_chrdev_region(&ycdev.devno, 0, 1, ALICC_CDEV_NAME);
 	if (ret) {
-		pr_err("Failed to alloc ycc cdev region\n");
+		pr_err("Failed to alloc alicc cdev region\n");
 		return ret;
 	}
 
-	ycdev.class = class_create(THIS_MODULE, YCC_CDEV_NAME);
+	ycdev.class = class_create(THIS_MODULE, ALICC_CDEV_NAME);
 	if (IS_ERR(ycdev.class)) {
-		pr_err("Failed to create ycc cdev class\n");
+		pr_err("Failed to create alicc cdev class\n");
 		ret = PTR_ERR(ycdev.class);
 		goto unregister_region;
 	}
 
-	cdev_init(&ycdev.cdev, &ycc_fops);
+	cdev_init(&ycdev.cdev, &alicc_fops);
 	ret = cdev_add(&ycdev.cdev, ycdev.devno, 1);
 	if (ret) {
-		pr_err("Failed to add ycc cdev\n");
+		pr_err("Failed to add alicc cdev\n");
 		goto destroy_class;
 	}
 
 	device = device_create(ycdev.class, NULL, ycdev.devno,
-			       NULL, YCC_CDEV_NAME);
+			       NULL, ALICC_CDEV_NAME);
 	if (IS_ERR(device)) {
-		pr_err("Failed to create ycc cdev device\n");
+		pr_err("Failed to create alicc cdev device\n");
 		ret = PTR_ERR(device);
 		goto del_cdev;
 	}
@@ -74,7 +74,7 @@ unregister_region:
 	return ret;
 }
 
-void ycc_cdev_unregister(void)
+void alicc_cdev_unregister(void)
 {
 	device_destroy(ycdev.class, ycdev.devno);
 	cdev_del(&ycdev.cdev);

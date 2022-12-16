@@ -2895,8 +2895,10 @@ static inline bool async_load_calc_enabled(void)
 #endif
 
 #ifdef CONFIG_PSI
+#ifdef CONFIG_CGROUPS
 extern struct cftype cgroup_v1_psi_files[];
-#endif
+#endif /* CONFIG_CGROUPS */
+#endif /* CONFIG_PSI */
 
 #ifndef CONFIG_RICH_CONTAINER_CG_SWITCH
 long tg_get_cfs_quota(struct task_group *tg);

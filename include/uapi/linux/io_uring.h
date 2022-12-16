@@ -134,7 +134,6 @@ enum {
 	IORING_OP_PROVIDE_BUFFERS,
 	IORING_OP_REMOVE_BUFFERS,
 	IORING_OP_TEE,
-	IORING_OP_IOCTL,
 
 	/* this goes last, obviously */
 	IORING_OP_LAST,
@@ -230,7 +229,7 @@ struct io_cqring_offsets {
 #define IORING_ENTER_SQ_WAKEUP	(1U << 1)
 #define IORING_ENTER_SQ_WAIT	(1U << 2)
 #define IORING_ENTER_EXT_ARG	(1U << 3)
-#define IORING_ENTER_SQ_SUBMIT_ON_IDLE	(1U << 4)
+#define IORING_ENTER_SQ_SUBMIT_ON_IDLE	(1U << 31)
 
 /*
  * Passed in for io_uring_setup(2). Copied back with updated info on success

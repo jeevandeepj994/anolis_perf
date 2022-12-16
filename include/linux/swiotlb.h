@@ -6,6 +6,7 @@
 #include <linux/init.h>
 #include <linux/types.h>
 #include <linux/limits.h>
+#include <linux/spinlock.h>
 
 struct device;
 struct page;
@@ -33,6 +34,44 @@ enum swiotlb_force {
 
 /* default to 64MB */
 #define IO_TLB_DEFAULT_SIZE (64UL<<20)
+
+/**
+ * struct io_tlb_mem - IO TLB Memory Pool Descriptor
+ *
+ * @start:	The start address of the swiotlb memory pool. Used to do a quick
+ *		range check to see if the memory was in fact allocated by this
+ *		API.
+ * @end:	The end address of the swiotlb memory pool. Used to do a quick
+ *		range check to see if the memory was in fact allocated by this
+ *		API.
+ * @nslabs:	The number of IO TLB blocks (in groups of 64) between @start and
+ *		@end. This is command line adjustable via setup_io_tlb_npages.
+ * @used:	The number of used IO TLB block.
+ * @list:	The free list describing the number of free entries available
+ *		from each index.
+ * @orig_addr:	The original address corresponding to a mapped entry.
+ * @debugfs:	The dentry to debugfs.
+ * @late_alloc:	%true if allocated using the page allocator
+ * @nareas:  The area number in the pool.
+ * @area_nslabs: The slot number in the area.
+ */
+struct io_tlb_mem {
+	phys_addr_t start;
+	phys_addr_t end;
+	unsigned long nslabs;
+	unsigned long used;
+	struct dentry *debugfs;
+	bool late_alloc;
+	unsigned int nareas;
+	unsigned int area_nslabs;
+	struct io_tlb_area *areas;
+	struct io_tlb_slot {
+		phys_addr_t orig_addr;
+		unsigned int list;
+	} slots[];
+};
+
+extern struct io_tlb_mem *io_tlb_default_mem;
 
 extern void swiotlb_init(int verbose);
 int swiotlb_init_with_tbl(char *tlb, unsigned long nslabs, int verbose);
@@ -75,14 +114,16 @@ extern phys_addr_t io_tlb_start, io_tlb_end;
 
 static inline bool is_swiotlb_buffer(phys_addr_t paddr)
 {
-	return paddr >= io_tlb_start && paddr < io_tlb_end;
+	struct io_tlb_mem *mem = io_tlb_default_mem;
+
+	return mem && paddr >= mem->start && paddr < mem->end;
 }
 
 void __init swiotlb_exit(void);
 unsigned int swiotlb_max_segment(void);
 size_t swiotlb_max_mapping_size(struct device *dev);
 bool is_swiotlb_active(void);
-void __init swiotlb_adjust_size(unsigned long new_size);
+void __init swiotlb_adjust_size(unsigned long size);
 #else
 #define swiotlb_force SWIOTLB_NO_FORCE
 static inline bool is_swiotlb_buffer(phys_addr_t paddr)
@@ -106,7 +147,7 @@ static inline bool is_swiotlb_active(void)
 	return false;
 }
 
-static inline void swiotlb_adjust_size(unsigned long new_size)
+static inline void swiotlb_adjust_size(unsigned long size)
 {
 }
 #endif /* CONFIG_SWIOTLB */

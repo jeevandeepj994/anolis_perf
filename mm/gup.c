@@ -392,6 +392,28 @@ static inline bool can_follow_write_pte(pte_t pte, unsigned int flags)
 		((flags & FOLL_FORCE) && (flags & FOLL_COW) && pte_dirty(pte));
 }
 
+#ifdef CONFIG_ZONE_DEVICE
+static inline bool pg_stable_pfn(unsigned long pfn)
+{
+	int nid = pfn_to_nid(pfn);
+	struct zone *zone_device = &NODE_DATA(nid)->node_zones[ZONE_DEVICE];
+
+	/*
+	 * The other zones' pages are not kept alive by pgmap
+	 * but memory hotplug instead.
+	 */
+	if (zone_spans_pfn(zone_device, pfn))
+		return false;
+	else
+		return true;
+}
+#else
+static inline bool pg_stable_pfn(unsigned long pfn)
+{
+	return false;
+}
+#endif
+
 static struct page *follow_page_pte(struct vm_area_struct *vma,
 		unsigned long address, pmd_t *pmd, unsigned int flags,
 		struct dev_pagemap **pgmap)
@@ -406,6 +428,18 @@ static struct page *follow_page_pte(struct vm_area_struct *vma,
 	if (WARN_ON_ONCE((flags & (FOLL_PIN | FOLL_GET)) ==
 			 (FOLL_PIN | FOLL_GET)))
 		return ERR_PTR(-EINVAL);
+
+	/*
+	 * Considering PTE level hugetlb, like continuous-PTE hugetlb on
+	 * ARM64 architecture.
+	 */
+	if (is_vm_hugetlb_page(vma)) {
+		page = follow_huge_pmd_pte(vma, address, flags);
+		if (page)
+			return page;
+		return no_page_table(vma, flags);
+	}
+
 retry:
 	if (unlikely(pmd_bad(*pmd)))
 		return no_page_table(vma, flags);
@@ -446,6 +480,17 @@ retry:
 	page = vm_normal_page(vma, address, pte);
 	if (!page && pte_devmap(pte) && (flags & (FOLL_GET | FOLL_PIN))) {
 		/*
+		 * The pages which are not in ZONE_DEVICE don't depend on
+		 * the pgmap ref to keep alive (stable). Therefore if we are
+		 * looking at such a page - we could simply get_page for
+		 * those stable ones straightly.
+		 */
+		if (pg_stable_pfn(pte_pfn(pte))) {
+			page = pte_page(pte);
+			goto page_required;
+		}
+
+		/*
 		 * Only return device mapping pages in the FOLL_GET or FOLL_PIN
 		 * case since they are only valid while holding the pgmap
 		 * reference.
@@ -471,6 +516,7 @@ retry:
 		}
 	}
 
+page_required:
 	if (flags & FOLL_SPLIT && PageTransCompound(page)) {
 		get_page(page);
 		pte_unmap_unlock(ptep, ptl);
@@ -567,7 +613,7 @@ static struct page *follow_pmd_mask(struct vm_area_struct *vma,
 	if (pmd_none(pmdval))
 		return no_page_table(vma, flags);
 	if (pmd_huge(pmdval) && is_vm_hugetlb_page(vma)) {
-		page = follow_huge_pmd(mm, address, pmd, flags);
+		page = follow_huge_pmd_pte(vma, address, flags);
 		if (page)
 			return page;
 		return no_page_table(vma, flags);
@@ -870,6 +916,8 @@ static int faultin_page(struct vm_area_struct *vma,
 	/* mlock all present pages, but do not fault in new pages */
 	if ((*flags & (FOLL_POPULATE | FOLL_MLOCK)) == FOLL_MLOCK)
 		return -ENOENT;
+	if (*flags & FOLL_POPULATE)
+		fault_flags |= FAULT_FLAG_NONZEROPAGE;
 	if (*flags & FOLL_WRITE)
 		fault_flags |= FAULT_FLAG_WRITE;
 	if (*flags & FOLL_REMOTE)

@@ -399,6 +399,10 @@ static const struct vfio_pci_regops vfio_pci_dma_fault_regops = {
 static void vfio_pci_mregion_release(struct vfio_pci_device *vdev,
 				      struct vfio_pci_region *region)
 {
+	if (!vdev->mig_pages)
+		return;
+
+	kfree(vdev->mig_pages);
 }
 
 static int vfio_pci_mregion_mmap(struct vfio_pci_device *vdev,

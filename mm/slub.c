@@ -1813,14 +1813,19 @@ static struct page *allocate_slab(struct kmem_cache *s, gfp_t flags, int node)
 	page->frozen = 1;
 
 out:
+	if (page) {
+		inc_slabs_node(s, page_to_nid(page), page->objects);
+
+		/*
+		 * This should been called before disabling irq to
+		 * avoid causing might_sleep.
+		 */
+		if (unlikely(kidled_alloc_slab_age(page, s, alloc_gfp)))
+			pr_warn("Fails to trace %s:%p cold slab distribution.\n", s->name, page);
+	}
+
 	if (gfpflags_allow_blocking(flags))
 		local_irq_disable();
-	if (!page)
-		return NULL;
-
-	inc_slabs_node(s, page_to_nid(page), page->objects);
-	if (unlikely(kidled_alloc_slab_age(page, s, alloc_gfp)))
-		pr_warn("Fails to trace %s:%p cold slab distribution.\n", s->name, page);
 
 	return page;
 }

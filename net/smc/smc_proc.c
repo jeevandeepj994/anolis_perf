@@ -6,6 +6,7 @@
 #include "smc.h"
 #include "smc_proc.h"
 #include "smc_core.h"
+#include "smc_dim.h"
 
 static void *smc_get_next(struct seq_file *seq, void *cur)
 {
@@ -236,6 +237,51 @@ static struct smc_proc_entry smc_proc[] = {
 #endif
 };
 
+static int proc_show_dim(struct seq_file *seq, void *v)
+{
+	static const char * const state_str[] = {"park", "tired", "right", "left"};
+	struct smc_ib_device *ibdev;
+	int i = 0;
+
+	seq_printf(seq, "%-9s%-6s%-6s%-6s%-6s%-6s%-6s%-6s%-6s%-6s%-8s%-8s%-8s\n",
+		   "dev", "idx", "dim", "idle", "si", "ix", "state", "left",
+		   "right", "tired", "cpms", "epms", "cpe");
+
+	mutex_lock(&smc_ib_devices.mutex);
+	list_for_each_entry(ibdev, &smc_ib_devices.list, list) {
+		for (i = 0; i < ibdev->num_cq; i++) {
+			seq_printf(seq, "%-9s%-6d", ibdev->ibdev->name, i);
+			if (ibdev->smcibcq[i].ib_cq && ibdev->smcibcq[i].ib_cq->dim) {
+				struct smc_dim *dim = to_smcdim(ibdev->smcibcq[i].ib_cq->dim);
+
+				seq_printf(seq, "%-6s%-6d%-6d%-6d%-6s%-6d%-6d%-6d%-8d%-8d%-8d\n",
+					   dim->use_dim ? "ON" : "OFF", dim->prev_idle_percent,
+					   dim->prev_si_percent, dim->dim.profile_ix,
+					   state_str[dim->dim.tune_state], dim->dim.steps_left,
+					   dim->dim.steps_right, dim->dim.tired,
+					   dim->dim.prev_stats.cpms, dim->dim.prev_stats.epms,
+					   dim->dim.prev_stats.cpe_ratio);
+			} else {
+				seq_puts(seq, "  -     -     -     -     -     -     -     -      -       -       -\n");
+			}
+		}
+	}
+	mutex_unlock(&smc_ib_devices.mutex);
+	return 0;
+}
+
+static int proc_open_dim(struct inode *inode, struct file *file)
+{
+	single_open(file, proc_show_dim, NULL);
+	return 0;
+}
+
+static struct proc_ops dim_file_ops = {
+.proc_open     = proc_open_dim,
+.proc_read     = seq_read,
+.proc_release  = single_release,
+};
+
 extern struct smc_lgr_list smc_lgr_list;
 static int proc_show_links(struct seq_file *seq, void *v)
 {
@@ -283,28 +329,36 @@ static struct proc_ops link_file_ops = {
 
 static int __net_init smc_proc_dir_init(struct net *net)
 {
+	struct proc_dir_entry *proc_net_smc;
 	int i, rc = -ENOMEM;
 
-	net->proc_net_smc = proc_net_mkdir(net, "smc", net->proc_net);
-	if (!net->proc_net_smc)
+	proc_net_smc = proc_net_mkdir(net, "smc", net->proc_net);
+	if (!proc_net_smc)
 		goto err;
 
 	for (i = 0; i < ARRAY_SIZE(smc_proc); i++) {
 		if (!proc_create_net_data(smc_proc[i].name, 0444,
-					  net->proc_net_smc, &smc_proc[i].ops,
+					  proc_net_smc, &smc_proc[i].ops,
 					  sizeof(struct smc_proc_private),
 					  NULL))
 			goto err_entry;
 	}
 
-	if (!proc_create("links", 0444, net->proc_net_smc, &link_file_ops))
+	if (!proc_create("links", 0444, proc_net_smc, &link_file_ops))
 		goto err_entry;
 
+	if (!proc_create("dim", 0444, proc_net_smc, &dim_file_ops))
+		goto err_link;
+
+	net->proc_net_smc = proc_net_smc;
 	return 0;
+
+err_link:
+	remove_proc_entry("links", proc_net_smc);
 
 err_entry:
 	for (i -= 1; i >= 0; i--)
-		remove_proc_entry(smc_proc[i].name, net->proc_net_smc);
+		remove_proc_entry(smc_proc[i].name, proc_net_smc);
 
 	remove_proc_entry("smc", net->proc_net);
 err:
@@ -314,11 +368,13 @@ err:
 static void __net_exit smc_proc_dir_exit(struct net *net)
 {
 	int i;
+	struct proc_dir_entry *proc_net_smc = net->proc_net_smc;
 
-	remove_proc_entry("links", net->proc_net_smc);
+	remove_proc_entry("dim", proc_net_smc);
+	remove_proc_entry("links", proc_net_smc);
 
 	for (i = 0; i < ARRAY_SIZE(smc_proc); i++)
-		remove_proc_entry(smc_proc[i].name, net->proc_net_smc);
+		remove_proc_entry(smc_proc[i].name, proc_net_smc);
 
 	remove_proc_entry("smc", net->proc_net);
 }

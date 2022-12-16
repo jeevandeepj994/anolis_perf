@@ -546,6 +546,13 @@ static int rapl_cpu_offline(unsigned int cpu)
 	struct rapl_pmu *pmu = cpu_to_rapl_pmu(cpu);
 	int target;
 
+	/*
+	 * cpu_to_rapl_pmu() should return a valid pointer, but when
+	 * it returns NULL, offline procedure is supposed to halt.
+	 */
+	if (!pmu)
+		return -ENODEV;
+
 	/* Check if exiting cpu is used for collecting rapl events */
 	if (!cpumask_test_and_clear_cpu(cpu, &rapl_cpu_mask))
 		return 0;

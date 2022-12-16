@@ -19,6 +19,8 @@
 #include <linux/swapops.h>
 #include <linux/shmem_fs.h>
 #include <linux/page_dup.h>
+#include <linux/sort.h>
+#include <linux/delay.h>
 
 #include <asm/tlb.h>
 #include <asm/pgalloc.h>
@@ -78,6 +80,26 @@ static DECLARE_WAIT_QUEUE_HEAD(khugepaged_wait);
 static unsigned int khugepaged_max_ptes_none __read_mostly;
 static unsigned int khugepaged_max_ptes_swap __read_mostly;
 static unsigned int khugepaged_max_ptes_shared __read_mostly;
+#ifdef CONFIG_HUGETEXT
+static unsigned int khugepaged_max_nr_hugetext __read_mostly;
+static unsigned int khugepaged_sample_period_millisecs __read_mostly;
+static void khugepaged_gather_refs_work(struct work_struct *work);
+
+enum {
+	AD_HUGETEXT_SCAN_IDLE = 0,
+	AD_HUGETEXT_SCAN_SAMPLE,
+	AD_HUGETEXT_SCAN_SAMPLE_COMPLETE
+};
+
+enum {
+	AD_HUGETEXT_CLEAR = 0,
+	AD_HUGETEXT_COUNT,
+	AD_HUGETEXT_STAT
+};
+
+#define MAX_NR_HUGETEXT    1024
+#define HUGETEXT_SAMPLE_PERIOD 2000
+#endif
 
 #define MM_SLOTS_HASH_BITS 10
 static __read_mostly DEFINE_HASHTABLE(mm_slots_hash, MM_SLOTS_HASH_BITS);
@@ -85,6 +107,18 @@ static __read_mostly DEFINE_HASHTABLE(mm_slots_hash, MM_SLOTS_HASH_BITS);
 static struct kmem_cache *mm_slot_cache __read_mostly;
 
 #define MAX_PTE_MAPPED_THP 8
+
+struct region_entry {
+	unsigned long start;
+	unsigned long end;
+	unsigned long refcount;
+	int status; /* 0: free, 1: collapsed */
+};
+
+struct adapt_vma_t {
+	unsigned long vm_hstart;
+	unsigned long vm_hend;
+};
 
 /**
  * struct mm_slot - hash lookup from mm to mm_slot
@@ -106,6 +140,15 @@ struct mm_slot {
 	/* exec vma vm_start in this mm */
 	int nr_exec_vma;
 	unsigned long exec_vma[MAX_EXEC_VMA];
+	int nr_adapt_vma;
+	struct adapt_vma_t adapt_vmas[MAX_EXEC_VMA];
+	struct xarray adaptive_regions;
+	struct delayed_work work;
+	unsigned long evict_timestamp;
+	/* Current state of adapt vma */
+	atomic_t state;
+	int recheck_hugetext;
+	int nr_hugetext;
 #endif
 };
 
@@ -337,6 +380,69 @@ static struct kobj_attribute khugepaged_max_ptes_shared_attr =
 	__ATTR(max_ptes_shared, 0644, khugepaged_max_ptes_shared_show,
 	       khugepaged_max_ptes_shared_store);
 
+#ifdef CONFIG_HUGETEXT
+static ssize_t max_nr_hugetext_show(struct kobject *kobj,
+				    struct kobj_attribute *attr,
+				    char *buf)
+{
+	return sprintf(buf, "%d\n", khugepaged_max_nr_hugetext);
+}
+
+static ssize_t max_nr_hugetext_store(struct kobject *kobj,
+				     struct kobj_attribute *attr,
+				     const char *buf, size_t count)
+{
+	int err;
+	unsigned long nr;
+
+	err = kstrtoul(buf, 10, &nr);
+	if (err || nr > MAX_NR_HUGETEXT)
+		return -EINVAL;
+
+	khugepaged_max_nr_hugetext = nr;
+	/*
+	 * Setting sample_period_millisecs = 0 seconds if disable
+	 * adaptive hugetext, or 120 seconds in case itself has no value.
+	 */
+	if (!khugepaged_max_nr_hugetext)
+		khugepaged_sample_period_millisecs = 0;
+	else if (!khugepaged_sample_period_millisecs)
+		khugepaged_sample_period_millisecs = 120 * 1000;
+
+	return count;
+}
+
+static struct kobj_attribute khugepaged_max_nr_hugetext_attr =
+__ATTR(max_nr_hugetext, 0644, max_nr_hugetext_show, max_nr_hugetext_store);
+
+static ssize_t sample_period_millisecs_show(struct kobject *kobj,
+					    struct kobj_attribute *attr,
+					    char *buf)
+{
+	return sprintf(buf, "%u\n", khugepaged_sample_period_millisecs);
+}
+
+static ssize_t sample_period_millisecs_store(struct kobject *kobj,
+					     struct kobj_attribute *attr,
+					     const char *buf, size_t count)
+{
+	int err;
+	unsigned long msecs;
+
+	err = kstrtoul(buf, 10, &msecs);
+	if (err || msecs > UINT_MAX)
+		return -EINVAL;
+
+	khugepaged_sample_period_millisecs = msecs;
+
+	return count;
+}
+
+static struct kobj_attribute khugepaged_sample_period_millisecs_attr =
+__ATTR(sample_period_millisecs, 0644, sample_period_millisecs_show,
+	sample_period_millisecs_store);
+#endif
+
 static struct attribute *khugepaged_attr[] = {
 	&khugepaged_defrag_attr.attr,
 	&khugepaged_max_ptes_none_attr.attr,
@@ -347,6 +453,10 @@ static struct attribute *khugepaged_attr[] = {
 	&full_scans_attr.attr,
 	&scan_sleep_millisecs_attr.attr,
 	&alloc_sleep_millisecs_attr.attr,
+#ifdef CONFIG_HUGETEXT
+	&khugepaged_max_nr_hugetext_attr.attr,
+	&khugepaged_sample_period_millisecs_attr.attr,
+#endif
 	NULL,
 };
 
@@ -407,6 +517,10 @@ int __init khugepaged_init(void)
 	khugepaged_max_ptes_none = HPAGE_PMD_NR - 1;
 	khugepaged_max_ptes_swap = HPAGE_PMD_NR / 8;
 	khugepaged_max_ptes_shared = HPAGE_PMD_NR / 2;
+#ifdef CONFIG_HUGETEXT
+	khugepaged_max_nr_hugetext = 0; /* unlimited */
+	khugepaged_sample_period_millisecs = 0;
+#endif
 
 	return 0;
 }
@@ -493,6 +607,198 @@ static bool hugepage_vma_check(struct vm_area_struct *vma,
 }
 
 #ifdef CONFIG_HUGETEXT
+inline bool adapt_hugetext_suitable(struct vm_area_struct *vma)
+{
+	unsigned long size = vma->vm_end - vma->vm_start;
+
+	if (size >= khugepaged_max_nr_hugetext * HPAGE_PMD_SIZE)
+		return true;
+
+	return false;
+}
+
+/*
+ * Split hugepage and erase xarray entries when the vmas have been
+ * changed too much.
+ */
+static void adapt_hugetext_evict_entry(struct mm_slot *mm_slot, bool sleep)
+{
+	int index = 0, i;
+	struct vm_area_struct *vma;
+	struct mm_struct *mm = mm_slot->mm;
+	struct adapt_vma_t new_adapt_vmas[MAX_EXEC_VMA];
+	int total_thp = 0;
+
+	memset(new_adapt_vmas, 0, sizeof(new_adapt_vmas));
+	for (i = 0; i < mm_slot->nr_adapt_vma; i++) {
+		int evict = 1;
+		unsigned long start = mm_slot->adapt_vmas[i].vm_hstart;
+		unsigned long end = mm_slot->adapt_vmas[i].vm_hend;
+		unsigned long addr;
+
+		XA_STATE_ORDER(xas, &mm_slot->adaptive_regions, start,
+			       HPAGE_PMD_ORDER);
+
+		if (sleep)
+			cond_resched();
+		vma = find_vma(mm, start);
+		if (vma && hugetext_vma_enabled(vma, vma->vm_flags) &&
+		    adapt_hugetext_suitable(vma)) {
+			unsigned long hstart =
+				(vma->vm_start + ~HPAGE_PMD_MASK) & HPAGE_PMD_MASK;
+			unsigned long hend = vma->vm_end & HPAGE_PMD_MASK;
+
+			if (hstart == start && hend == end) {
+				new_adapt_vmas[index] = mm_slot->adapt_vmas[i];
+				index++;
+				evict = 0;
+			}
+		}
+
+		/*
+		 * Two operations are as below:
+		 *  1) stat total THP for adaptive hugetext;
+		 *  2) free all entries for non-adaptive hugetext;
+		 */
+		for (addr = start; addr < end; addr += HPAGE_PMD_SIZE) {
+			struct vm_area_struct *new_vma;
+			struct region_entry *entry;
+			bool split = false;
+
+			xas_lock(&xas);
+			xas_set(&xas, addr);
+			entry = xas_load(&xas);
+			if (!entry || xas_retry(&xas, entry)) {
+				; /* Nothing */
+			} else if (likely(!evict)) {
+				entry->status = 0;
+				if (hugepage_mapping_check(vma, entry->start,
+							   entry->end)) {
+					entry->status = 1;
+					total_thp++;
+				}
+			} else if (evict) {
+				split = entry->status ? true : false;
+				__xa_erase(&mm_slot->adaptive_regions, xas.xa_index);
+				kfree(entry);
+			}
+			xas_unlock(&xas);
+
+			/*
+			 * Split huge pmd here to avoid sleeping in atomic
+			 * context.
+			 *
+			 * Since file THP would not been split, and only it's
+			 * pmd entry and rmap is cleared in split_huge_pmd_address().
+			 * The pmd mapping will been recreated once something
+			 * touch them, then lead to inaccurate mm_slot->nr_hugetext
+			 * because of splitting file THP. The above problems
+			 * will not occur on anon THP.
+			 */
+			if (split) {
+				new_vma = find_vma(mm, addr);
+				if (new_vma && !new_vma->vm_file &&
+				    addr >= new_vma->vm_start)
+					split_huge_pmd_address(new_vma, addr,
+							       false, NULL);
+			}
+		}
+	}
+
+	/* Update adapt_vmas[] */
+	memcpy(mm_slot->adapt_vmas, new_adapt_vmas, sizeof(new_adapt_vmas));
+	mm_slot->nr_adapt_vma = index;
+	mm_slot->nr_hugetext = total_thp;
+}
+
+static bool adapt_hugetext_selected(struct vm_area_struct *vma,
+				    struct mm_slot *mm_slot, bool sleep)
+{
+	unsigned long hstart = (vma->vm_start + ~HPAGE_PMD_MASK) & HPAGE_PMD_MASK;
+	unsigned long hend = vma->vm_end & HPAGE_PMD_MASK;
+	int i;
+	bool overlap = false;
+
+	if (!mm_slot->nr_adapt_vma)
+		return false;
+	for (i = 0; i < mm_slot->nr_adapt_vma; i++) {
+		unsigned long start = mm_slot->adapt_vmas[i].vm_hstart;
+		unsigned long end = mm_slot->adapt_vmas[i].vm_hend;
+
+		/* Here checking whether the vma is selected */
+		if (hstart == start && hend == end)
+			return true;
+		if (!(hend <= start || hstart >= end))
+			overlap = true;
+	}
+
+	/*
+	 * Try to evict adaptive vmas which were already changed
+	 * when input address overlaps with one of them.
+	 */
+	if (overlap)
+		adapt_hugetext_evict_entry(mm_slot, sleep);
+
+	return false;
+}
+
+void adapt_hugetext_add_entry(struct mm_slot *mm_slot, struct vm_area_struct *vma,
+			      unsigned long start, unsigned long end)
+{
+	XA_STATE_ORDER(xas, &mm_slot->adaptive_regions, start, HPAGE_PMD_ORDER);
+	unsigned long i;
+	struct region_entry *entry;
+
+	xas_lock(&xas);
+	/*
+	 * Back early by checking whether last entry has
+	 * been allocated or not.
+	 */
+	xas_set(&xas, end - HPAGE_PMD_SIZE);
+	if (xas_load(&xas))
+		goto out;
+
+	for (i = start; i < end; i += HPAGE_PMD_SIZE) {
+		xas_set(&xas, i);
+		if (xas_load(&xas))
+			continue;
+		entry = kmalloc(sizeof(*entry), GFP_ATOMIC);
+		if (!entry)
+			break;
+		entry->start = i;
+		entry->end = i + HPAGE_PMD_SIZE;
+		entry->refcount = 0;
+		entry->status = 0;
+		if (hugepage_mapping_check(vma, i, i + HPAGE_PMD_SIZE)) {
+			entry->status = 1;
+			mm_slot->nr_hugetext += 1;
+		}
+		xas_store(&xas, entry);
+	}
+out:
+	xas_unlock(&xas);
+}
+
+void adapt_hugetext_free_entry(struct mm_slot *mm_slot)
+{
+	XA_STATE_ORDER(xas, &mm_slot->adaptive_regions, 0, HPAGE_PMD_ORDER);
+	struct region_entry *entry;
+
+	xas_lock(&xas);
+	xas_for_each(&xas, entry, ULONG_MAX) {
+		__xa_erase(&mm_slot->adaptive_regions, xas.xa_index);
+		kfree(entry);
+	}
+	xas_unlock(&xas);
+
+	xa_destroy(&mm_slot->adaptive_regions);
+}
+
+inline bool __khugepaged_max_nr_hugetext(void)
+{
+	return khugepaged_max_nr_hugetext ? true : false;
+}
+
 /*
  * Record vma->vm_start, instead of vma itself which is volatile, and
  * revalidate the cached address when scan.
@@ -519,6 +825,37 @@ void khugepaged_enter_exec_vma(struct vm_area_struct *vma,
 out:
 	spin_unlock(&khugepaged_mm_lock);
 }
+
+void khugepaged_enter_adapt_vma(struct vm_area_struct *vma,
+				unsigned long vm_flags)
+{
+	struct mm_slot *mm_slot;
+	struct mm_struct *mm = vma->vm_mm;
+	unsigned long hstart, hend;
+	int nr_adapt = 0;
+
+	spin_lock(&khugepaged_mm_lock);
+	lockdep_assert_held(&mm->mmap_lock);
+
+	mm_slot = get_mm_slot(mm);
+	if (!mm_slot || mm_slot->nr_adapt_vma >= MAX_EXEC_VMA)
+		goto out;
+
+	hstart = (vma->vm_start + ~HPAGE_PMD_MASK) & HPAGE_PMD_MASK;
+	hend = vma->vm_end & HPAGE_PMD_MASK;
+
+	if (adapt_hugetext_selected(vma, mm_slot, false))
+		goto out;
+
+	nr_adapt = mm_slot->nr_adapt_vma;
+	/* Handle adapt hugetext vma in next khugepaged round */
+	mm_slot->adapt_vmas[nr_adapt].vm_hstart = hstart;
+	mm_slot->adapt_vmas[nr_adapt].vm_hend = hend;
+	mm_slot->nr_adapt_vma = nr_adapt + 1;
+
+out:
+	spin_unlock(&khugepaged_mm_lock);
+}
 #endif
 
 int __khugepaged_enter(struct mm_struct *mm)
@@ -538,6 +875,13 @@ int __khugepaged_enter(struct mm_struct *mm)
 	}
 
 	spin_lock(&khugepaged_mm_lock);
+#ifdef CONFIG_HUGETEXT
+	/* initialize state and work structures */
+	mm_slot->evict_timestamp = jiffies;
+	atomic_set(&mm_slot->state, AD_HUGETEXT_SCAN_IDLE);
+	INIT_DELAYED_WORK(&mm_slot->work, khugepaged_gather_refs_work);
+	xa_init_flags(&mm_slot->adaptive_regions, XA_FLAGS_LOCK_IRQ);
+#endif
 	insert_to_mm_slots_hash(mm, mm_slot);
 	/*
 	 * Insert just behind the scanning cursor, to let the area settle
@@ -593,6 +937,12 @@ void __khugepaged_exit(struct mm_struct *mm)
 	spin_unlock(&khugepaged_mm_lock);
 
 	if (free) {
+#ifdef CONFIG_HUGETEXT
+		/* free resource of adaptive hugetext */
+		cancel_delayed_work_sync(&mm_slot->work);
+		/* free adaptive_regions */
+		adapt_hugetext_free_entry(mm_slot);
+#endif
 		clear_bit(MMF_VM_HUGEPAGE, &mm->flags);
 		free_mm_slot(mm_slot);
 		mmdrop(mm);
@@ -1451,6 +1801,18 @@ static void collect_mm_slot(struct mm_slot *mm_slot)
 		hash_del(&mm_slot->hash);
 		list_del(&mm_slot->mm_node);
 
+#ifdef CONFIG_HUGETEXT
+		/*
+		 * Free resource of adaptive hugetext. And here unlocking
+		 * khugepaged to avoid sleeping in atomic context.
+		 */
+		spin_unlock(&khugepaged_mm_lock);
+		cancel_delayed_work_sync(&mm_slot->work);
+		spin_lock(&khugepaged_mm_lock);
+
+		/* free adaptive_regions */
+		adapt_hugetext_free_entry(mm_slot);
+#endif
 		/*
 		 * Not strictly needed because the mm exited already.
 		 *
@@ -2180,6 +2542,27 @@ static unsigned int khugepaged_scan_mm_slot(unsigned int pages,
 			progress++;
 			break;
 		}
+#ifdef CONFIG_HUGETEXT
+		if (__khugepaged_max_nr_hugetext() &&
+		    hugetext_vma_enabled(vma, vma->vm_flags) &&
+		    mm_slot->nr_adapt_vma < MAX_EXEC_VMA &&
+		    !shmem_file(vma->vm_file)) {
+			if (adapt_hugetext_suitable(vma)) {
+				int nr;
+
+				if (adapt_hugetext_selected(vma, mm_slot, true))
+					continue;
+				nr = mm_slot->nr_adapt_vma;
+				hstart = (vma->vm_start + ~HPAGE_PMD_MASK) & HPAGE_PMD_MASK;
+				hend = vma->vm_end & HPAGE_PMD_MASK;
+				mm_slot->adapt_vmas[nr].vm_hstart = hstart;
+				mm_slot->adapt_vmas[nr].vm_hend = hend;
+				adapt_hugetext_add_entry(mm_slot, vma, hstart, hend);
+				mm_slot->nr_adapt_vma = nr + 1;
+				continue;
+			}
+		}
+#endif
 		if (!hugepage_vma_check(vma, vma->vm_flags)) {
 skip:
 			progress++;
@@ -2196,7 +2579,6 @@ skip:
 		VM_BUG_ON(khugepaged_scan.address & ~HPAGE_PMD_MASK);
 		if (shmem_file(vma->vm_file) && !shmem_huge_enabled(vma))
 			goto skip;
-
 		while (khugepaged_scan.address < hend) {
 			int ret;
 			cond_resched();
@@ -2263,6 +2645,414 @@ breakouterloop_mmap_lock:
 }
 
 #ifdef CONFIG_HUGETEXT
+static int ref_cmp(const void *a, const void *b)
+{
+	struct ref_pair {
+		unsigned long start;
+		unsigned long refcount;
+	};
+	struct ref_pair *ref_a = (struct ref_pair *)a;
+	struct ref_pair *ref_b = (struct ref_pair *)b;
+
+	if (ref_a->refcount < ref_b->refcount)
+		return 1;
+	else if (ref_a->refcount > ref_b->refcount)
+		return -1;
+
+	return 0;
+}
+
+static void khugepaged_gather_refs_work(struct work_struct *work)
+{
+	struct mm_slot *mm_slot = container_of(work, struct mm_slot, work.work);
+	struct mm_struct *mm = mm_slot->mm;
+	unsigned int i;
+	struct region_entry *entry;
+
+	if (unlikely(!mmap_read_trylock(mm)))
+		goto mmap_lock;
+
+	if (unlikely(khugepaged_test_exit(mm)))
+		goto mmap_exit;
+
+	for (i = 0; i < mm_slot->nr_adapt_vma; i++) {
+		unsigned long vm_hstart = mm_slot->adapt_vmas[i].vm_hstart;
+		unsigned long vm_hend = mm_slot->adapt_vmas[i].vm_hend;
+		struct vm_area_struct *vma;
+
+		XA_STATE_ORDER(xas, &mm_slot->adaptive_regions,
+			       vm_hstart, HPAGE_PMD_ORDER);
+
+		cond_resched();
+		if (unlikely(khugepaged_test_exit(mm)))
+			goto mmap_exit;
+
+		vma = find_vma(mm, vm_hstart);
+		if (!vma || !hugepage_vma_check(vma, vma->vm_flags))
+			continue;
+		xas_lock(&xas);
+		xas_for_each(&xas, entry, vm_hend - 1) {
+			unsigned long refcount = 0;
+
+			if (xas_retry(&xas, entry))
+				continue;
+			if (entry->status)
+				continue;
+			refcount = gather_refs_vma_range(vma, entry->start,
+							 entry->end);
+			entry->refcount = refcount / PAGE_SIZE;
+		}
+		xas_unlock(&xas);
+	}
+
+	mmap_read_unlock(mm);
+	atomic_set(&mm_slot->state, AD_HUGETEXT_SCAN_SAMPLE_COMPLETE);
+	return;
+
+mmap_exit:
+	mmap_read_unlock(mm);
+mmap_lock:
+	/*
+	 * If fail to require mmap_lock, try to sample
+	 * again. That case hardly happens.
+	 */
+	atomic_set(&mm_slot->state, AD_HUGETEXT_SCAN_IDLE);
+}
+
+static int adapt_hugetext_behavior(struct mm_slot *mm_slot, void *arg,
+				   int behavior)
+{
+	int i, ret = 0;
+	struct region_entry *entry;
+	struct ref_pair {
+		unsigned long start;
+		unsigned long refcount;
+	};
+	struct mm_struct *mm = mm_slot->mm;
+	unsigned int index = 0;
+
+	for (i = 0; i < mm_slot->nr_adapt_vma; i++) {
+		unsigned long vm_hstart = mm_slot->adapt_vmas[i].vm_hstart;
+		unsigned long vm_hend = mm_slot->adapt_vmas[i].vm_hend;
+		struct vm_area_struct *vma;
+
+		XA_STATE_ORDER(xas, &mm_slot->adaptive_regions,
+			       vm_hstart, HPAGE_PMD_ORDER);
+
+		if (behavior != AD_HUGETEXT_CLEAR)
+			cond_resched();
+		if (unlikely(khugepaged_test_exit(mm))) {
+			ret = -1;
+			break;
+		}
+
+		vma = find_vma(mm, vm_hstart);
+		if (!vma)
+			continue;
+		/*
+		 * For CLEAR action, try to allocate entries before
+		 * actually clearing pte reference.
+		 */
+		if (behavior == AD_HUGETEXT_CLEAR) {
+			adapt_hugetext_add_entry(mm_slot, vma, vm_hstart, vm_hend);
+			/* Back early if it's not recheck_hugetext mode */
+			if (mm_slot->nr_hugetext >= khugepaged_max_nr_hugetext &&
+			    !mm_slot->recheck_hugetext)
+				return -1;
+		}
+
+		xas_lock(&xas);
+		xas_for_each(&xas, entry, vm_hend - 1) {
+			if (xas_retry(&xas, entry))
+				continue;
+
+			if (behavior == AD_HUGETEXT_CLEAR) {
+				unsigned long *total_count = (unsigned long *)arg;
+
+				if (entry->status)
+					continue;
+				clear_refs_vma_range(vma, entry->start, entry->end);
+				*total_count += 1;
+			} else if (behavior == AD_HUGETEXT_COUNT) {
+				unsigned long *sort_count = (unsigned long *)arg;
+
+				if (entry->status &&
+				    (!mm_slot->recheck_hugetext || vma->vm_file))
+					continue;
+				*sort_count += 1;
+			} else if (behavior == AD_HUGETEXT_STAT) {
+				struct ref_pair *region_refs = (struct ref_pair *)arg;
+
+				if (entry->status &&
+				    (!mm_slot->recheck_hugetext || vma->vm_file))
+					continue;
+				region_refs[index].start = entry->start;
+				region_refs[index].refcount = entry->refcount;
+				if (!entry->status)
+					entry->refcount = 0; /* clear record */
+				index++;
+			}
+		}
+		xas_unlock(&xas);
+	}
+
+	return ret;
+}
+
+static void split_adaptive_hugetext(struct mm_slot *mm_slot, void *sort_buffer,
+				    unsigned int sort_count)
+{
+	struct region_entry *entry;
+	struct mm_struct *mm = mm_slot->mm;
+	struct ref_pair {
+		unsigned long start;
+		unsigned long refcount;
+	};
+	struct ref_pair *region_refs = (struct ref_pair *)sort_buffer;
+	int i;
+
+	for (i = khugepaged_max_nr_hugetext; i < sort_count; i++) {
+		struct ref_pair *pair = &region_refs[i];
+		struct vm_area_struct *vma;
+		bool split = 0;
+
+		XA_STATE_ORDER(xas, &mm_slot->adaptive_regions,
+			       pair->start, HPAGE_PMD_ORDER);
+
+		cond_resched();
+		if (!mm_slot->nr_hugetext)
+			break;
+
+		xas_lock(&xas);
+		entry = xas_load(&xas);
+		if (entry && entry->status) {
+			entry->status = 0;
+			entry->refcount = 0;
+			mm_slot->nr_hugetext--;
+			split = true;
+		}
+		xas_unlock(&xas);
+		/* Split huge pmd here to avoid sleeping in atomic context */
+		vma = find_vma(mm, pair->start);
+		if (split && vma && pair->start >= vma->vm_start)
+			split_huge_pmd_address(vma, pair->start, false, NULL);
+	}
+}
+
+/*
+ * If hugetext_enabled and khugepaged_max_nr_hugetext both have a non-zero
+ * value, the rwxp vmas and executable vmas are packed into mm_slot->adapt_vmas[]
+ * and handled here.
+ */
+static unsigned int khugepaged_scan_adapt_vma(struct page **hpage)
+	__releases(&khugepaged_mm_lock)
+	__acquires(&khugepaged_mm_lock)
+{
+	struct mm_slot *mm_slot;
+	struct mm_struct *mm;
+	int progress = 0;
+	int i, ret;
+	struct ref_pair {
+		unsigned long start;
+		unsigned long refcount;
+	};
+	unsigned int state;
+	struct region_entry *entry;
+
+	lockdep_assert_held(&khugepaged_mm_lock);
+
+	if (khugepaged_scan.ex_slot)
+		mm_slot = khugepaged_scan.ex_slot;
+	else {
+		mm_slot = list_entry(khugepaged_scan.mm_head.next,
+				     struct mm_slot, mm_node);
+		khugepaged_scan.ex_slot = mm_slot;
+	}
+	spin_unlock(&khugepaged_mm_lock);
+
+	/* NOTE mm is used after label breakouterloop_mmap_lock */
+	mm = mm_slot->mm;
+
+	/* Back early when no candidate */
+	if (!mm_slot->nr_adapt_vma)
+		goto breakouterloop_mmap_lock;
+
+	state = atomic_read(&mm_slot->state);
+	if (state == AD_HUGETEXT_SCAN_IDLE) {
+		/*
+		 * Pick out vmas that are pte mapping (status = 0), and
+		 * then sampling them.
+		 */
+		unsigned long total_count = 0;
+		unsigned long timestamp_gap;
+		int recheck_hugetext = 0;
+
+		timestamp_gap = jiffies_to_msecs(jiffies - mm_slot->evict_timestamp);
+		if (khugepaged_max_nr_hugetext &&
+		    timestamp_gap >= khugepaged_sample_period_millisecs) {
+			if (unlikely(!mmap_read_trylock(mm)))
+				goto breakouterloop_mmap_lock;
+
+			if (unlikely(khugepaged_test_exit(mm)))
+				goto breakouterloop;
+
+			mm_slot->evict_timestamp = jiffies;
+			adapt_hugetext_evict_entry(mm_slot, true);
+			if (mm_slot->nr_hugetext == khugepaged_max_nr_hugetext)
+				recheck_hugetext = 1;
+
+			mmap_read_unlock(mm);
+		}
+
+		if (!mm_slot->nr_adapt_vma ||
+		    (recheck_hugetext && mm_slot->nr_hugetext >= khugepaged_max_nr_hugetext))
+			goto breakouterloop_mmap_lock;
+
+		/* Hold write lock for clearing refs */
+		if (unlikely(!mmap_write_trylock(mm)))
+			goto breakouterloop_mmap_lock;
+
+		if (unlikely(khugepaged_test_exit(mm))) {
+			mmap_write_unlock(mm);
+			goto breakouterloop_mmap_lock;
+		}
+
+		mm_slot->recheck_hugetext = recheck_hugetext;
+		ret = adapt_hugetext_behavior(mm_slot, &total_count,
+					      AD_HUGETEXT_CLEAR);
+		if (!total_count || ret < 0) {
+			mm_slot->recheck_hugetext = 0;
+			mmap_write_unlock(mm);
+			goto breakouterloop_mmap_lock; /* No candidate to stat */
+		}
+
+		atomic_set(&mm_slot->state, AD_HUGETEXT_SCAN_SAMPLE);
+		schedule_delayed_work(&mm_slot->work,
+				      msecs_to_jiffies(HUGETEXT_SAMPLE_PERIOD));
+		mmap_write_unlock(mm);
+		goto breakouterloop_mmap_lock;
+	} else if (state == AD_HUGETEXT_SCAN_SAMPLE_COMPLETE) {
+		/* Sort and collapse thp candidate */
+		struct ref_pair *sort_buffer = NULL;
+		unsigned int sort_count = 0;
+		int recheck_hugetext = mm_slot->recheck_hugetext;
+
+		if (unlikely(!mmap_read_trylock(mm)))
+			goto breakouterloop_mmap_lock;
+
+		if (unlikely(khugepaged_test_exit(mm)))
+			goto breakouterloop;
+
+		ret = adapt_hugetext_behavior(mm_slot, &sort_count,
+					      AD_HUGETEXT_COUNT);
+		if (ret < 0)
+			goto breakouterloop;
+
+		sort_buffer = kcalloc(sort_count, sizeof(struct ref_pair),
+				      GFP_KERNEL);
+		if (!sort_buffer)
+			goto breakouterloop;
+
+		ret = adapt_hugetext_behavior(mm_slot, sort_buffer,
+					      AD_HUGETEXT_STAT);
+		if (ret < 0) {
+			kfree(sort_buffer);
+			goto breakouterloop;
+		}
+
+		sort(sort_buffer, sort_count, sizeof(struct ref_pair),
+		     ref_cmp, NULL);
+		if (recheck_hugetext) {
+			/* Split cold THP in recheck_hugetext mode */
+			split_adaptive_hugetext(mm_slot, sort_buffer, sort_count);
+			mm_slot->recheck_hugetext = 0;
+			/* Stop collapsing if file THP is present only */
+			if (mm_slot->nr_hugetext == khugepaged_max_nr_hugetext) {
+				kfree(sort_buffer);
+				atomic_set(&mm_slot->state, AD_HUGETEXT_SCAN_IDLE);
+				goto breakouterloop;
+			}
+		}
+
+		for (i = 0; i < sort_count; i++) {
+			struct ref_pair *pair = &sort_buffer[i];
+			struct vm_area_struct *vma;
+			unsigned int orig_thp = khugepaged_pages_collapsed;
+
+			XA_STATE_ORDER(xas, &mm_slot->adaptive_regions,
+				       pair->start, HPAGE_PMD_ORDER);
+
+			if (!pair->refcount)
+				break;
+
+			cond_resched();
+			if (unlikely(khugepaged_test_exit(mm)))
+				goto breakouterloop;
+
+			ret = 0;
+			vma = find_vma(mm, pair->start);
+			if (!vma)
+				continue;
+			xas_lock(&xas);
+			entry = xas_load(&xas);
+			if (xas_retry(&xas, entry) || (entry && entry->status)) {
+				xas_unlock(&xas);
+				continue;
+			}
+			xas_unlock(&xas);
+
+			if (vma->vm_file) {
+				struct file *file = get_file(vma->vm_file);
+				pgoff_t pgoff = linear_page_index(vma, pair->start);
+
+				mmap_read_unlock(mm);
+				ret = 1;
+				khugepaged_scan_file(mm, file, pgoff, hpage);
+				fput(file);
+			} else {
+				ret = khugepaged_scan_pmd(mm, vma, pair->start, hpage);
+			}
+			progress += HPAGE_PMD_NR;
+
+			if (orig_thp < khugepaged_pages_collapsed) {
+				mm_slot->nr_hugetext++;
+				/* Set collapsed status */
+				xas_lock(&xas);
+				entry = xas_load(&xas);
+				entry->refcount = pair->refcount;
+				entry->status = 1;
+				xas_unlock(&xas);
+			}
+
+			/* The mmap_lock released in khugepaged_scan_{pmd, file} */
+			if (likely(ret))
+				mmap_read_lock(mm);
+
+			if (mm_slot->nr_hugetext >= khugepaged_max_nr_hugetext)
+				break;
+		}
+		kfree(sort_buffer);
+
+		atomic_set(&mm_slot->state, AD_HUGETEXT_SCAN_IDLE);
+	} else
+		goto breakouterloop_mmap_lock;
+
+breakouterloop:
+	mmap_read_unlock(mm); /* exit_mmap will destroy ptes after this */
+breakouterloop_mmap_lock:
+	spin_lock(&khugepaged_mm_lock);
+	VM_BUG_ON(khugepaged_scan.ex_slot != mm_slot);
+
+	if (mm_slot->mm_node.next != &khugepaged_scan.mm_head) {
+		khugepaged_scan.ex_slot = list_entry(mm_slot->mm_node.next,
+						     struct mm_slot, mm_node);
+	} else
+		khugepaged_scan.ex_slot = NULL;
+	collect_mm_slot(mm_slot);
+
+	return progress;
+}
+
 static unsigned int khugepaged_scan_exec_vma(unsigned int pages,
 					     struct page **hpage)
 	__releases(&khugepaged_mm_lock)
@@ -2390,6 +3180,18 @@ breakouterloop_mmap_lock:
 	return progress;
 }
 #else
+static inline int khugepaged_gather_refs_work(struct work_struct *work)
+{
+	BUILD_BUG();
+	return 0;
+}
+
+static inline unsigned int khugepaged_scan_adapt_vma(struct page **hpage)
+{
+	BUILD_BUG();
+	return 0;
+}
+
 static inline unsigned int khugepaged_scan_exec_vma(unsigned int pages,
 						    struct page **hpage)
 {
@@ -2418,6 +3220,7 @@ static void khugepaged_do_scan(void)
 	bool wait = true;
 #ifdef CONFIG_HUGETEXT
 	unsigned int exec_pass_through_head = 0;
+	unsigned int adapt_pass_through_head = 0;
 #endif
 
 	barrier(); /* write khugepaged_pages_to_scan to local stack */
@@ -2448,6 +3251,30 @@ static void khugepaged_do_scan(void)
 			    exec_pass_through_head < 2)
 				progress += khugepaged_scan_exec_vma(
 						pages - progress, &hpage);
+			spin_unlock(&khugepaged_mm_lock);
+			continue;
+		}
+
+		/* Whether to skip adapt_vmas scan */
+		if (!hugetext_enabled() || !khugepaged_max_nr_hugetext)
+			goto next;
+
+		/*
+		 * For reusing ex_slot during the processing of adaptive
+		 * vma, we have to ensure khugepaged_scan.ex_slot = NULL
+		 * in two cases:
+		 *
+		 * 1): Entering here for the first time in one khugepaged round;
+		 * 2): when adapt_pass_through_head = 2;
+		 */
+		if (adapt_pass_through_head < 2) {
+			if (!khugepaged_scan.ex_slot)
+				adapt_pass_through_head++;
+			if (khugepaged_has_work() && adapt_pass_through_head < 2)
+				progress += khugepaged_scan_adapt_vma(&hpage);
+			/* Avoid disturbing exec_vma */
+			if (progress >= pages)
+				khugepaged_scan.ex_slot = NULL;
 			spin_unlock(&khugepaged_mm_lock);
 			continue;
 		}

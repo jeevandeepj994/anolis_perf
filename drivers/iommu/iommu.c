@@ -24,6 +24,9 @@
 #include <linux/fsl/mc.h>
 #include <linux/module.h>
 #include <trace/events/iommu.h>
+#ifdef CONFIG_ARCH_PHYTIUM
+#include <asm/machine_types.h>
+#endif
 
 static struct kset *iommu_group_kset;
 static DEFINE_IDA(iommu_group_ida);
@@ -160,7 +163,12 @@ static int __init iommu_subsys_init(void)
 			iommu_set_default_translated(false);
 		}
 	}
-
+#ifdef CONFIG_ARCH_PHYTIUM
+	if (typeof_ft2000plus() || typeof_s2500()) {
+		iommu_set_default_passthrough(false);
+		pr_info("Note: SMMU will be passthrough on FT2000 & FT2500 machines due to hardware limitation\n");
+	}
+#endif
 	pr_info("Default domain type: %s %s\n",
 		iommu_domain_type_str(iommu_def_domain_type),
 		cmd_line ? "(set via kernel command line)" : "");

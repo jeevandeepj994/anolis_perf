@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-2.0 or BSD-3-Clause
+// SPDX-License-Identifier: GPL-2.0 OR BSD-3-Clause
 
 /* Authors: Cheng Xu <chengyou@linux.alibaba.com> */
 /*          Kai Shen <kaishen@linux.alibaba.com> */
@@ -10,23 +10,9 @@
 /* Copyright (c) 2008-2019, IBM Corporation */
 /* Copyright (c) 2017, Open Grid Computing, Inc. */
 
-#include <linux/errno.h>
-#include <linux/inetdevice.h>
-#include <linux/net.h>
-#include <linux/inetdevice.h>
-#include <net/addrconf.h>
-#include <linux/tcp.h>
-#include <linux/types.h>
 #include <linux/workqueue.h>
-#include <net/sock.h>
-
-#include <rdma/iw_cm.h>
-#include <rdma/ib_smi.h>
-#include <rdma/ib_user_verbs.h>
-#include <rdma/ib_verbs.h>
 
 #include "erdma.h"
-#include "erdma_debug.h"
 #include "erdma_cm.h"
 #include "erdma_verbs.h"
 
@@ -320,11 +306,9 @@ void erdma_qp_cm_drop(struct erdma_qp *qp)
 			erdma_cm_upcall(cep, IW_CM_EVENT_CONNECT_REPLY,
 					-EINVAL);
 			break;
-
 		case ERDMA_EPSTATE_RDMA_MODE:
 			erdma_cm_upcall(cep, IW_CM_EVENT_CLOSE, 0);
 			break;
-
 		case ERDMA_EPSTATE_IDLE:
 		case ERDMA_EPSTATE_LISTENING:
 		case ERDMA_EPSTATE_CONNECTING:
@@ -360,7 +344,6 @@ void erdma_cep_put(struct erdma_cep *cep)
 	       kref_read(&cep->ref) - 1);
 
 	WARN_ON(kref_read(&cep->ref) < 1);
-
 	kref_put(&cep->ref, __erdma_cep_dealloc);
 }
 

@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-2.0 or BSD-3-Clause */
+/* SPDX-License-Identifier: GPL-2.0 OR BSD-3-Clause */
 
 /* Authors: Cheng Xu <chengyou@linux.alibaba.com> */
 /*          Kai Shen <kaishen@linux.alibaba.com> */
@@ -12,9 +12,8 @@
 #ifndef __ERDMA_CM_H__
 #define __ERDMA_CM_H__
 
-#include <net/sock.h>
 #include <linux/tcp.h>
-
+#include <net/sock.h>
 #include <rdma/iw_cm.h>
 
 /* iWarp MPA protocol defs */

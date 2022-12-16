@@ -40,7 +40,7 @@ module_param(xsk_num_max,       int, 0644);
 module_param(xsk_num_percent,   int, 0644);
 module_param(xsk_budget,        int, 0644);
 
-static bool csum = true, gso = true, napi_tx, force_xdp;
+static bool csum = true, gso = true, napi_tx = true, force_xdp;
 static bool lro;
 module_param(csum, bool, 0444);
 module_param(gso, bool, 0444);

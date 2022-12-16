@@ -147,6 +147,9 @@ __setup("norandmaps", disable_randmaps);
 unsigned long zero_pfn __read_mostly;
 EXPORT_SYMBOL(zero_pfn);
 
+struct page *my_zero_page;
+EXPORT_SYMBOL(my_zero_page);
+
 unsigned long highest_memmap_pfn __read_mostly;
 
 /*
@@ -154,6 +157,7 @@ unsigned long highest_memmap_pfn __read_mostly;
  */
 static int __init init_zero_pfn(void)
 {
+	my_zero_page = ZERO_PAGE(0);
 	zero_pfn = page_to_pfn(ZERO_PAGE(0));
 	return 0;
 }
@@ -1259,12 +1263,23 @@ again:
 				if (details->check_mapping &&
 				    details->check_mapping != page_rmapping(page))
 					continue;
+
+				/*
+				 * unmap_mapping_zeropages() only unmaps zero
+				 * pages filled in the VMA. Page cache should
+				 * not be unmapped.
+				 */
+				if (unlikely(details->flags & ZAP_ZEROPAGE))
+					continue;
 			}
 			ptent = ptep_get_and_clear_full(mm, addr, pte,
 							tlb->fullmm);
 			tlb_remove_tlb_entry(tlb, pte, addr);
-			if (unlikely(!page))
+			if (unlikely(!page)) {
+				if (unlikely(details && (details->flags & ZAP_ZEROPAGE)))
+					force_flush = 1;
 				continue;
+			}
 
 			if (!PageAnon(page)) {
 				if (pte_dirty(ptent)) {
@@ -3307,6 +3322,30 @@ void unmap_mapping_pages(struct address_space *mapping, pgoff_t start,
 }
 
 /**
+ * unmap_mapping_zeropages() - Unmap zeropages from processes.
+ * @mapping: The address space containing pages to be unmapped.
+ * @start: Index of first page to be unmapped.
+ * @nr: Number of pages to be unmapped.  0 to unmap to end of file.
+ *
+ * Unmap the zero pages in this address space from any userspace process which
+ * has them mmaped.
+ */
+void unmap_mapping_zeropages(struct address_space *mapping)
+{
+	struct zap_details details = { };
+
+	details.check_mapping = mapping;
+	details.first_index = 0;
+	details.last_index = ULONG_MAX;
+	details.flags = ZAP_ZEROPAGE;
+
+	i_mmap_lock_write(mapping);
+	if (unlikely(!RB_EMPTY_ROOT(&mapping->i_mmap.rb_root)))
+		unmap_mapping_range_tree(&mapping->i_mmap, &details);
+	i_mmap_unlock_write(mapping);
+}
+
+/**
  * unmap_mapping_range - unmap the portion of all mmaps in the specified
  * address_space corresponding to the specified byte range in the underlying
  * file.
@@ -3742,6 +3781,10 @@ static vm_fault_t __do_fault(struct vm_fault *vmf)
 		return poisonret;
 	}
 
+	/* Do not lock the zero page */
+	if (unlikely(is_zero_page(vmf->page)))
+		return ret;
+
 	if (unlikely(!(ret & VM_FAULT_LOCKED)))
 		lock_page(vmf->page);
 	else
@@ -3931,6 +3974,38 @@ vm_fault_t alloc_set_pte(struct vm_fault *vmf, struct page *page)
 
 	flush_icache_page(vma, page);
 	entry = mk_pte(page, vma->vm_page_prot);
+
+	/*
+	 * If it's zero page, vmf->ptl should be held to avoid other VMAs that share
+	 * the same xarray do the same page fault simultaneously, which may
+	 * leads to wrong semantic of MMAP_PRIVATE.
+	 *
+	 * E.g:
+	 *          MMAP_PRIVATE                         MMAP_SHARED
+	 *          do_read_fault
+	 *						do_shared_fault
+	 *	    check pagecache
+	 *						   alloc_page
+	 *						add_to_pagecache
+	 *					      try_to_unmap_zeropage
+	 *		set_pte
+	 *
+	 * In this scenario, zero page can not be unmapped.
+	 */
+	if (unlikely(is_zero_page(page))) {
+		/*
+		 * If found the page cache entry here, corresponding page cache
+		 * has been set. Thus retry it to get the valid page cache not
+		 * the zero page.
+		 */
+		struct page *new_page = find_get_entry(vma->vm_file->f_mapping,
+						       vmf->pgoff);
+		if (new_page)
+			return VM_FAULT_RETRY;
+
+		entry = pte_mkspecial(entry);
+	}
+
 	entry = pte_sw_mkyoung(entry);
 	if (write)
 		entry = maybe_mkwrite(pte_mkdirty(entry), vma);
@@ -3939,7 +4014,7 @@ vm_fault_t alloc_set_pte(struct vm_fault *vmf, struct page *page)
 		inc_mm_counter_fast(vma->vm_mm, MM_ANONPAGES);
 		page_add_new_anon_rmap(page, vma, vmf->address, false);
 		lru_cache_add_inactive_or_unevictable(page, vma);
-	} else {
+	} else if (likely(!is_zero_page(page))) {
 		inc_mm_counter_fast(vma->vm_mm, mm_counter_file(page));
 		page_add_file_rmap(page, false);
 	}
@@ -4148,7 +4223,8 @@ static vm_fault_t do_read_fault(struct vm_fault *vmf)
 #endif
 
 	ret |= finish_fault(vmf);
-	unlock_page(vmf->page);
+	if (likely(!is_zero_page(vmf->page)))
+		unlock_page(vmf->page);
 #ifdef CONFIG_DUPTEXT
 	if (vmf->dup_page)
 		put_page(vmf->page);
@@ -4190,7 +4266,8 @@ static vm_fault_t do_cow_fault(struct vm_fault *vmf)
 	__SetPageUptodate(vmf->cow_page);
 
 	ret |= finish_fault(vmf);
-	unlock_page(vmf->page);
+	if (likely(!is_zero_page(vmf->page)))
+		unlock_page(vmf->page);
 	put_page(vmf->page);
 	if (unlikely(ret & (VM_FAULT_ERROR | VM_FAULT_NOPAGE | VM_FAULT_RETRY)))
 		goto uncharge_out;

@@ -33,11 +33,30 @@ enum TDX_HOST_OPTION {
 	TDX_HOST_ON,
 };
 
-static struct seamldr_info p_seamldr_info __initdata;
+static struct seamldr_info p_seamldr_info;
 
 static enum TDX_HOST_OPTION tdx_host __initdata;
 
 static char tdx_npseamldr_name[128] = "intel-seam/np-seamldr.acm";
+
+/*
+ * TDX module status during initialization
+ */
+enum tdx_module_status_t {
+	/* P-SEAMDLR status is unknown */
+	TDX_SEAMLDR_UNKNOWN,
+	/* P-SEAMDLR is loaded */
+	TDX_SEAMLDR_READY,
+	/* TDX module is loaded, but not initialized */
+	TDX_MODULE_LOADED,
+	/* TDX module is fully initialized */
+	TDX_MODULE_INITIALIZED,
+	/* TDX module is shutdown due to error during initialization */
+	TDX_MODULE_SHUTDOWN,
+};
+
+enum tdx_module_status_t tdx_module_status;
+EXPORT_SYMBOL_GPL(tdx_module_status);
 
 static int __init setup_tdx_npseamldr(char *str)
 {
@@ -196,57 +215,43 @@ static bool __init tdx_get_firmware(struct cpio_data *blob, const char *name)
 	return false;
 }
 
-void __init tdh_seam_init(void)
+int __init p_seamldr_get_info(void)
 {
-	struct cpio_data seamldr;
-	int ret;
-	unsigned long vmcs;
+	int ret = 0;
+	struct vmcs *vmcs = NULL;
+	int vmxoff_err = 0;
 
-	/* Avoid TDX overhead when opt-in is not present. */
-	if (tdx_host != TDX_HOST_ON)
-		return;
-
-	if (!platform_has_tdx())
-		return;
-
-	if (!tdx_get_firmware(&seamldr, tdx_npseamldr_name)) {
-		pr_err("Cannot found np-seamldr:%s\n", tdx_npseamldr_name);
-		goto error;
-	}
-
-	ret = seam_load_module(seamldr.data, seamldr.size);
-	if (ret) {
-		pr_err("Failed to launch seamldr %d\n", ret);
-		goto error;
-	}
-
-	vmcs = (unsigned long)memblock_alloc(PAGE_SIZE, PAGE_SIZE);
+	vmcs = (struct vmcs *)get_zeroed_page(GFP_KERNEL);
 	if (!vmcs) {
 		pr_err("Failed to alloc vmcs\n");
-		goto error;
+		return -ENOMEM;
 	}
 
-	ret = tdx_init_vmxon_vmcs((void *)vmcs);
+	ret = tdx_init_vmxon_vmcs(vmcs);
 	if (ret) {
 		pr_err("Failed to init vmcs\n");
-		memblock_free(__pa(vmcs), PAGE_SIZE);
-		goto error;
+		goto out;
 	}
 
 	WARN_ON(__read_cr4() & X86_CR4_VMXE);
 	ret = cpu_vmxon(__pa(vmcs));
 	if (ret)
-		goto error;
+		goto out;
 
 	ret = seamldr_info(__pa(&p_seamldr_info));
 
-	cpu_vmxoff();
-	memblock_free(__pa(vmcs), PAGE_SIZE);
+	vmxoff_err = cpu_vmxoff();
+	if (!ret && vmxoff_err)
+		ret = vmxoff_err;
+	if (ret)
+		goto out;
 
-	if (ret) {
-		pr_err("Failed to get seamldr info %d\n", ret);
-		goto error;
+	if (!p_seamldr_info.p_seamldr_ready) {
+		pr_err("p_seamldr_ready is not set, it seems buggy P-SEAMLDR\n");
+		ret = -EINVAL;
+		goto out;
 	}
+
 	pr_info("TDX P-SEAMLDR: "
 			"attributes 0x%0x vendor_id 0x%x "
 			"build_date %d build_num 0x%x "
@@ -257,11 +262,57 @@ void __init tdh_seam_init(void)
 			p_seamldr_info.build_num,
 			p_seamldr_info.minor_version,
 			p_seamldr_info.major_version);
-	return;
+out:
+	free_page((unsigned long)vmcs);
+	return ret;
+}
+
+int __init tdh_seam_init(void)
+{
+	struct cpio_data seamldr;
+	int ret;
+
+	/* Avoid TDX overhead when opt-in is not present. */
+	if (tdx_host != TDX_HOST_ON)
+		return 0;
+
+	if (!platform_has_tdx())
+		return 0;
+
+	tdx_module_status = TDX_SEAMLDR_UNKNOWN;
+	ret = p_seamldr_get_info();
+	if (ret == -EIO) {
+		pr_err("No P-SEAMLDR loaded by BIOS.\n");
+
+		if (!tdx_get_firmware(&seamldr, tdx_npseamldr_name)) {
+			pr_err("Cannot found np-seamldr:%s\n", tdx_npseamldr_name);
+			goto error;
+		}
+
+		ret = seam_load_module(&seamldr);
+		if (ret) {
+			pr_err("Failed to launch seamldr %d\n", ret);
+			goto error;
+		}
+		ret = p_seamldr_get_info();
+		if (ret) {
+			pr_err("Get P-SEAMLDR failed with %d\n", ret);
+			goto error;
+		}
+	} else if (ret) {
+		pr_err("Get P-SEAMLDR failed with %d\n", ret);
+		goto error;
+	}
+	tdx_module_status = TDX_SEAMLDR_READY;
+	setup_force_cpu_cap(X86_FEATURE_TDX);
+	return 0;
 
 error:
 	pr_err("can't load/init TDX-SEAM.\n");
+	setup_clear_cpu_cap(X86_FEATURE_TDX);
+	return ret;
 }
+early_initcall(tdh_seam_init);
 
 static bool tdx_keyid_sufficient(void)
 {

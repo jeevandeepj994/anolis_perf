@@ -615,13 +615,6 @@ struct io_async_rw {
 	struct wait_page_queue		wpq;
 };
 
-struct io_ioctl {
-	struct file                     *file;
-	unsigned int                    fd;
-	unsigned int                    cmd;
-	unsigned long                   arg;
-};
-
 enum {
 	REQ_F_FIXED_FILE_BIT	= IOSQE_FIXED_FILE_BIT,
 	REQ_F_IO_DRAIN_BIT	= IOSQE_IO_DRAIN_BIT,
@@ -732,7 +725,6 @@ struct io_kiocb {
 		struct io_statx		statx;
 		/* use only after cleaning per-op data, see io_clean_op() */
 		struct io_completion	compl;
-		struct io_ioctl         ioctl;
 	};
 
 	/* opcode allocated if it needs to store data for async defer */
@@ -977,9 +969,6 @@ static const struct io_op_def io_op_defs[] = {
 		.needs_file		= 1,
 		.hash_reg_file		= 1,
 		.unbound_nonreg_file	= 1,
-	},
-	[IORING_OP_IOCTL] = {
-		.work_flags		= IO_WQ_WORK_FILES | IO_WQ_WORK_MM
 	},
 };
 
@@ -1797,18 +1786,22 @@ static bool __io_cqring_overflow_flush(struct io_ring_ctx *ctx, bool force,
 	return cqe != NULL;
 }
 
-static void io_cqring_overflow_flush(struct io_ring_ctx *ctx, bool force,
+static bool io_cqring_overflow_flush(struct io_ring_ctx *ctx, bool force,
 				     struct task_struct *tsk,
 				     struct files_struct *files)
 {
+	bool ret = true;
+
 	if (test_bit(0, &ctx->cq_check_overflow)) {
 		/* iopoll syncs against uring_lock, not completion_lock */
 		if (ctx->flags & IORING_SETUP_IOPOLL)
 			mutex_lock(&ctx->uring_lock);
-		__io_cqring_overflow_flush(ctx, force, tsk, files);
+		ret = __io_cqring_overflow_flush(ctx, force, tsk, files);
 		if (ctx->flags & IORING_SETUP_IOPOLL)
 			mutex_unlock(&ctx->uring_lock);
 	}
+
+	return ret;
 }
 
 static void __io_cqring_fill_event(struct io_kiocb *req, long res,
@@ -5074,61 +5067,6 @@ static int io_connect(struct io_kiocb *req, unsigned int issue_flags)
 }
 #endif /* CONFIG_NET */
 
-static int io_ioctl_prep(struct io_kiocb *req,
-			 const struct io_uring_sqe *sqe)
-{
-	if (unlikely(sqe->ioprio || sqe->buf_index || sqe->rw_flags))
-		return -EINVAL;
-
-	req->ioctl.fd = READ_ONCE(sqe->fd);
-	req->ioctl.cmd = READ_ONCE(sqe->len);
-	req->ioctl.arg = READ_ONCE(sqe->addr);
-	return 0;
-}
-
-static int io_ioctl(struct io_kiocb *req, unsigned int issue_flags)
-{
-	int ret;
-	unsigned int fd;
-	unsigned int cmd;
-	unsigned long arg;
-	struct fd f;
-
-	cmd = req->ioctl.cmd;
-	/*
-	 * currently we just support BLKDISCARD operation
-	 */
-	if (cmd != BLKDISCARD)
-		return -EINVAL;
-
-	if (issue_flags & IO_URING_F_NONBLOCK)
-		return -EAGAIN;
-
-	fd = req->ioctl.fd;
-	arg = req->ioctl.arg;
-
-	f = fdget(fd);
-	if (!f.file)
-		return -EBADF;
-
-	ret = security_file_ioctl(f.file, cmd, arg);
-	if (ret)
-		goto out;
-
-	ret = do_vfs_ioctl(f.file, fd, cmd, arg);
-	if (ret == -ENOIOCTLCMD)
-		ret = vfs_ioctl(f.file, cmd, arg);
-
-out:
-	fdput(f);
-
-	if (ret < 0)
-		req_set_fail_links(req);
-	io_req_complete(req, ret);
-	return 0;
-
-}
-
 struct io_poll_table {
 	struct poll_table_struct pt;
 	struct io_kiocb *req;
@@ -6074,8 +6012,6 @@ static int io_req_prep(struct io_kiocb *req, const struct io_uring_sqe *sqe)
 		return io_remove_buffers_prep(req, sqe);
 	case IORING_OP_TEE:
 		return io_tee_prep(req, sqe);
-	case IORING_OP_IOCTL:
-		return io_ioctl_prep(req, sqe);
 	}
 
 	printk_once(KERN_WARNING "io_uring: unhandled opcode %d\n",
@@ -6317,9 +6253,6 @@ static int io_issue_sqe(struct io_kiocb *req, unsigned int issue_flags)
 		break;
 	case IORING_OP_TEE:
 		ret = io_tee(req, issue_flags);
-		break;
-	case IORING_OP_IOCTL:
-		ret = io_ioctl(req, issue_flags);
 		break;
 	default:
 		ret = -EINVAL;
@@ -7044,6 +6977,7 @@ static void io_sqd_init_new(struct io_sq_data *sqd)
 	io_sqd_update_thread_idle(sqd);
 }
 
+#ifdef CONFIG_CGROUP_CPUACCT
 struct cgrp_migr_info {
 	pid_t pid;
 	char *path;
@@ -7129,6 +7063,7 @@ out:
 		kfree(buf);
 	return ret;
 }
+#endif /* CONFIG_CGROUP_CPUACCT */
 
 static int io_sq_thread(void *data)
 {
@@ -7201,11 +7136,11 @@ static int io_sq_thread(void *data)
 			continue;
 		}
 
-		if (kthread_should_park())
-			continue;
-
 		needs_sched = true;
 		prepare_to_wait(&sqd->wait, &wait, TASK_INTERRUPTIBLE);
+		list_for_each_entry(ctx, &sqd->ctx_list, sqd_list)
+			io_ring_set_wakeup_flag(ctx);
+
 		list_for_each_entry(ctx, &sqd->ctx_list, sqd_list) {
 			if ((ctx->flags & IORING_SETUP_IOPOLL) &&
 			    !list_empty_careful(&ctx->iopoll_list)) {
@@ -7218,14 +7153,11 @@ static int io_sq_thread(void *data)
 			}
 		}
 
-		if (needs_sched) {
-			list_for_each_entry(ctx, &sqd->ctx_list, sqd_list)
-				io_ring_set_wakeup_flag(ctx);
-
+		if (needs_sched && !kthread_should_park())
 			schedule();
-			list_for_each_entry(ctx, &sqd->ctx_list, sqd_list)
-				io_ring_clear_wakeup_flag(ctx);
-		}
+
+		list_for_each_entry(ctx, &sqd->ctx_list, sqd_list)
+			io_ring_clear_wakeup_flag(ctx);
 
 		finish_wait(&sqd->wait, &wait);
 		timeout = io_current_time(sqd->idle_mode_us) + sqd->sq_thread_idle;
@@ -7300,6 +7232,26 @@ static int io_run_task_work_sig(void)
 	return -EINTR;
 }
 
+/* when returns >0, the caller should retry */
+static inline int io_cqring_wait_schedule(struct io_ring_ctx *ctx,
+					  struct io_wait_queue *iowq,
+					  ktime_t timeout)
+{
+	int ret;
+
+	/* make sure we run task_work before checking for signals */
+	ret = io_run_task_work_sig();
+	if (ret || io_should_wake(iowq))
+		return ret;
+	/* let the caller flush overflows, retry */
+	if (test_bit(0, &ctx->cq_check_overflow))
+		return 1;
+
+	if (!schedule_hrtimeout(&timeout, HRTIMER_MODE_ABS))
+		return -ETIME;
+	return 1;
+}
+
 /*
  * Wait until events become available, if we don't already have some. The
  * application must reap them itself, as they reside on the shared cq ring.
@@ -7318,9 +7270,8 @@ static int io_cqring_wait(struct io_ring_ctx *ctx, int min_events,
 		.to_wait	= min_events,
 	};
 	struct io_rings *rings = ctx->rings;
-	struct timespec64 ts;
-	signed long timeout = 0;
-	int ret = 0;
+	ktime_t timeout = KTIME_MAX;
+	int ret;
 
 	do {
 		io_cqring_overflow_flush(ctx, false, NULL, NULL);
@@ -7344,42 +7295,27 @@ static int io_cqring_wait(struct io_ring_ctx *ctx, int min_events,
 	}
 
 	if (uts) {
+		struct timespec64 ts;
+
 		if (get_timespec64(&ts, uts))
 			return -EFAULT;
-		timeout = timespec64_to_jiffies(&ts);
+		timeout = ktime_add_ns(timespec64_to_ktime(ts), ktime_get_ns());
 	}
 
 	iowq.nr_timeouts = atomic_read(&ctx->cq_timeouts);
 	trace_io_uring_cqring_wait(ctx, min_events);
 	do {
-		io_cqring_overflow_flush(ctx, false, NULL, NULL);
+		/* if we can't even flush overflow, don't wait for more */
+		if (!io_cqring_overflow_flush(ctx, false, NULL, NULL)) {
+			ret = -EBUSY;
+			break;
+		}
 		prepare_to_wait_exclusive(&ctx->wait, &iowq.wq,
 						TASK_INTERRUPTIBLE);
-		/* make sure we run task_work before checking for signals */
-		ret = io_run_task_work_sig();
-		if (ret > 0) {
-			finish_wait(&ctx->wait, &iowq.wq);
-			continue;
-		}
-		else if (ret < 0)
-			break;
-		if (io_should_wake(&iowq))
-			break;
-		if (test_bit(0, &ctx->cq_check_overflow)) {
-			finish_wait(&ctx->wait, &iowq.wq);
-			continue;
-		}
-		if (uts) {
-			timeout = schedule_timeout(timeout);
-			if (timeout == 0) {
-				ret = -ETIME;
-				break;
-			}
-		} else {
-			schedule();
-		}
-	} while (1);
-	finish_wait(&ctx->wait, &iowq.wq);
+		ret = io_cqring_wait_schedule(ctx, &iowq, timeout);
+		finish_wait(&ctx->wait, &iowq.wq);
+		cond_resched();
+	} while (ret > 0);
 
 	restore_saved_sigmask_unless(ret == -EINTR);
 
@@ -7648,7 +7584,8 @@ static void io_sq_thread_stop(struct io_ring_ctx *ctx)
 			 * without being waked up, thus wake it up now to make
 			 * sure the wait will complete.
 			 */
-			wake_up_process(sqd->thread);
+			io_sq_thread_park(sqd);
+			io_sq_thread_unpark(sqd);
 			wait_for_completion(&ctx->sq_thread_comp);
 
 			io_sq_thread_park(sqd);
@@ -9982,6 +9919,7 @@ static int io_uring_create(unsigned entries, struct io_uring_params *p,
 	if (!(p->flags & IORING_SETUP_R_DISABLED))
 		io_sq_offload_start(ctx);
 
+#ifdef CONFIG_CGROUP_CPUACCT
 	if ((p->flags & IORING_SETUP_SQ_AFF) &&
 	    (ctx->flags & IORING_SETUP_SQPOLL_PERCPU) && percpu_sqd) {
 		int cpu = p->sq_thread_cpu;
@@ -9998,6 +9936,7 @@ static int io_uring_create(unsigned entries, struct io_uring_params *p,
 		if (ret < 0)
 			goto err;
 	}
+#endif /* CONFIG_CGROUP_CPUACCT */
 
 	memset(&p->sq_off, 0, sizeof(p->sq_off));
 	p->sq_off.head = offsetof(struct io_rings, sq.head);

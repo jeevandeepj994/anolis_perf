@@ -9,49 +9,49 @@
 #include <linux/seq_file.h>
 #include <linux/debugfs.h>
 
-#include "ycc_dev.h"
-#include "ycc_ring.h"
-#include "ycc_uio.h"
+#include "alicc_dev.h"
+#include "alicc_ring.h"
+#include "alicc_uio.h"
 
-#define YCC_CMD_DESC_SIZE	64
-#define YCC_RESP_DESC_SIZE	16
-#define YCC_RING_CSR_STRIDE	0x1000
+#define ALICC_CMD_DESC_SIZE	64
+#define ALICC_RESP_DESC_SIZE	16
+#define ALICC_RING_CSR_STRIDE	0x1000
 
-extern struct list_head ycc_table;
-extern struct mutex ycc_mutex;
+extern struct list_head alicc_table;
+extern struct mutex alicc_mutex;
 
-extern void ycc_resp_work_process(struct work_struct *work);
+extern void alicc_resp_work_process(struct work_struct *work);
 
 /*
  * Show the status of specified ring's command queue and
  * response queue.
  */
-static int ycc_ring_debugfs_status_show(struct seq_file *s, void *p)
+static int alicc_ring_debugfs_status_show(struct seq_file *s, void *p)
 {
-	struct ycc_ring *ring = (struct ycc_ring *)s->private;
+	struct alicc_ring *ring = (struct alicc_ring *)s->private;
 
 	seq_printf(s, "Ring ID: %d\n", ring->ring_id);
 	seq_printf(s, "Desscriptor Entry Size: %d, CMD Descriptor Size: %d, RESP Descriptor Size :%d\n",
-		   ring->max_desc, YCC_CMD_DESC_SIZE, YCC_RESP_DESC_SIZE);
+		   ring->max_desc, ALICC_CMD_DESC_SIZE, ALICC_RESP_DESC_SIZE);
 	seq_printf(s, "CMD base addr:%llx, RESP base addr:%llx\n",
 		   ring->cmd_base_paddr, ring->resp_base_paddr);
 	seq_printf(s, "CMD wr ptr:%d, CMD rd ptr: %d\n",
-		   YCC_CSR_RD(ring->csr_vaddr, REG_RING_CMD_WR_PTR),
-		   YCC_CSR_RD(ring->csr_vaddr, REG_RING_CMD_RD_PTR));
+		   ALICC_CSR_RD(ring->csr_vaddr, REG_RING_CMD_WR_PTR),
+		   ALICC_CSR_RD(ring->csr_vaddr, REG_RING_CMD_RD_PTR));
 	seq_printf(s, "RESP rd ptr:%d, RESP wr ptr: %d\n",
-		   YCC_CSR_RD(ring->csr_vaddr, REG_RING_RSP_RD_PTR),
-		   YCC_CSR_RD(ring->csr_vaddr, REG_RING_RSP_WR_PTR));
+		   ALICC_CSR_RD(ring->csr_vaddr, REG_RING_RSP_RD_PTR),
+		   ALICC_CSR_RD(ring->csr_vaddr, REG_RING_RSP_WR_PTR));
 
 	return 0;
 }
 
-static int ycc_ring_debugfs_status_open(struct inode *inode, struct file *filp)
+static int alicc_ring_debugfs_status_open(struct inode *inode, struct file *filp)
 {
-	return single_open(filp, ycc_ring_debugfs_status_show, inode->i_private);
+	return single_open(filp, alicc_ring_debugfs_status_show, inode->i_private);
 }
 
-static const struct file_operations ycc_ring_status_fops = {
-	.open		= ycc_ring_debugfs_status_open,
+static const struct file_operations alicc_ring_status_fops = {
+	.open		= alicc_ring_debugfs_status_open,
 	.read		= seq_read,
 	.llseek		= seq_lseek,
 	.release	= single_release,
@@ -62,28 +62,28 @@ static const struct file_operations ycc_ring_status_fops = {
  * Dump the raw content of specified ring's command queue and
  * response queue.
  */
-static int ycc_ring_debugfs_dump_show(struct seq_file *s, void *p)
+static int alicc_ring_debugfs_dump_show(struct seq_file *s, void *p)
 {
-	struct ycc_ring *ring = (struct ycc_ring *)s->private;
+	struct alicc_ring *ring = (struct alicc_ring *)s->private;
 
 	seq_printf(s, "Ring ID: %d\n", ring->ring_id);
 	seq_puts(s, "-------- Ring CMD Descriptors --------\n");
 	seq_hex_dump(s, "", DUMP_PREFIX_ADDRESS, 32, 4, ring->cmd_base_vaddr,
-		     YCC_CMD_DESC_SIZE * ring->max_desc, false);
+		     ALICC_CMD_DESC_SIZE * ring->max_desc, false);
 	seq_puts(s, "-------- Ring RESP Descriptors --------\n");
 	seq_hex_dump(s, "", DUMP_PREFIX_ADDRESS, 32, 4, ring->resp_base_vaddr,
-		     YCC_RESP_DESC_SIZE * ring->max_desc, false);
+		     ALICC_RESP_DESC_SIZE * ring->max_desc, false);
 
 	return 0;
 }
 
-static int ycc_ring_debugfs_dump_open(struct inode *inode, struct file *filp)
+static int alicc_ring_debugfs_dump_open(struct inode *inode, struct file *filp)
 {
-	return single_open(filp, ycc_ring_debugfs_dump_show, inode->i_private);
+	return single_open(filp, alicc_ring_debugfs_dump_show, inode->i_private);
 }
 
-static const struct file_operations ycc_ring_dump_fops = {
-	.open		= ycc_ring_debugfs_dump_open,
+static const struct file_operations alicc_ring_dump_fops = {
+	.open		= alicc_ring_debugfs_dump_open,
 	.read		= seq_read,
 	.llseek		= seq_lseek,
 	.release	= single_release,
@@ -92,9 +92,9 @@ static const struct file_operations ycc_ring_dump_fops = {
 
 /*
  * Create debugfs for rings, only for KERN_RING
- * "/sys/kernel/debugfs/ycc_b:d.f/ring${x}"
+ * "/sys/kernel/debugfs/alicc_b:d.f/ring${x}"
  */
-static int ycc_create_ring_debugfs(struct ycc_ring *ring)
+static int alicc_create_ring_debugfs(struct alicc_ring *ring)
 {
 	struct dentry *debugfs;
 	char name[8];
@@ -110,12 +110,12 @@ static int ycc_create_ring_debugfs(struct ycc_ring *ring)
 	ring->debug_dir = debugfs;
 
 	debugfs = debugfs_create_file("status", 0400, ring->debug_dir,
-				      (void *)ring, &ycc_ring_status_fops);
+				      (void *)ring, &alicc_ring_status_fops);
 	if (IS_ERR_OR_NULL(debugfs))
 		goto remove_debugfs;
 
 	debugfs = debugfs_create_file("dump", 0400, ring->debug_dir,
-				      (void *)ring, &ycc_ring_dump_fops);
+				      (void *)ring, &alicc_ring_dump_fops);
 	if (IS_ERR_OR_NULL(debugfs))
 		goto remove_debugfs;
 
@@ -128,7 +128,7 @@ out:
 	return PTR_ERR(debugfs);
 }
 
-static void ycc_remove_ring_debugfs(struct ycc_ring *ring)
+static void alicc_remove_ring_debugfs(struct alicc_ring *ring)
 {
 	debugfs_remove_recursive(ring->debug_dir);
 }
@@ -138,15 +138,15 @@ static void ycc_remove_ring_debugfs(struct ycc_ring *ring)
  * right means that the ring has the lowest reference
  * count.
  */
-static struct ycc_ring *base_r;
+static struct alicc_ring *base_r;
 
 /*
  * Allocate memory for rings and initiate basic fields
  */
-static int ycc_alloc_rings(struct ycc_dev *ydev)
+static int alicc_alloc_rings(struct alicc_dev *ydev)
 {
-	int num = YCC_RINGPAIR_NUM;
-	struct ycc_bar *abar;
+	int num = ALICC_RINGPAIR_NUM;
+	struct alicc_bar *abar;
 	u32 i;
 
 	if (ydev->rings)
@@ -154,14 +154,14 @@ static int ycc_alloc_rings(struct ycc_dev *ydev)
 
 	if (ydev->is_vf) {
 		num = 1;
-		abar = &ydev->ycc_bars[0];
+		abar = &ydev->alicc_bars[0];
 	} else if (ydev->sec) {
-		abar = &ydev->ycc_bars[YCC_SEC_Q_BAR];
+		abar = &ydev->alicc_bars[ALICC_SEC_Q_BAR];
 	} else {
-		abar = &ydev->ycc_bars[YCC_NSEC_Q_BAR];
+		abar = &ydev->alicc_bars[ALICC_NSEC_Q_BAR];
 	}
 
-	ydev->rings = kzalloc_node(num * sizeof(struct ycc_ring),
+	ydev->rings = kzalloc_node(num * sizeof(struct alicc_ring),
 				   GFP_KERNEL, ydev->node);
 	if (!ydev->rings)
 		return -ENOMEM;
@@ -169,8 +169,8 @@ static int ycc_alloc_rings(struct ycc_dev *ydev)
 	for (i = 0; i < num; i++) {
 		ydev->rings[i].ring_id = i;
 		ydev->rings[i].ydev = ydev;
-		ydev->rings[i].csr_vaddr = abar->vaddr + i * YCC_RING_CSR_STRIDE;
-		ydev->rings[i].csr_paddr = abar->paddr + i * YCC_RING_CSR_STRIDE;
+		ydev->rings[i].csr_vaddr = abar->vaddr + i * ALICC_RING_CSR_STRIDE;
+		ydev->rings[i].csr_paddr = abar->paddr + i * ALICC_RING_CSR_STRIDE;
 		ydev->rings[i].cmd_wr_ptr = 0;
 		ydev->rings[i].cmd_rd_ptr = 0;
 		ydev->rings[i].resp_wr_ptr = 0;
@@ -183,7 +183,7 @@ static int ycc_alloc_rings(struct ycc_dev *ydev)
 /*
  * Free memory for rings
  */
-static void ycc_free_rings(struct ycc_dev *ydev)
+static void alicc_free_rings(struct alicc_dev *ydev)
 {
 	kfree(ydev->rings);
 	ydev->rings = NULL;
@@ -193,9 +193,9 @@ static void ycc_free_rings(struct ycc_dev *ydev)
 /*
  * Initiate ring and create command queue and response queue.
  */
-static int ycc_init_ring(struct ycc_ring *ring, u32 max_desc)
+static int alicc_init_ring(struct alicc_ring *ring, u32 max_desc)
 {
-	struct ycc_dev *ydev = ring->ydev;
+	struct alicc_dev *ydev = ring->ydev;
 	u32 cmd_ring_size, resp_ring_size;
 	int order = 0;
 	u32 val = 0;
@@ -204,8 +204,8 @@ static int ycc_init_ring(struct ycc_ring *ring, u32 max_desc)
 	ring->type = KERN_RING;
 	ring->max_desc = max_desc;
 
-	cmd_ring_size = ring->max_desc * YCC_CMD_DESC_SIZE;
-	resp_ring_size = ring->max_desc * YCC_RESP_DESC_SIZE;
+	cmd_ring_size = ring->max_desc * ALICC_CMD_DESC_SIZE;
+	resp_ring_size = ring->max_desc * ALICC_RESP_DESC_SIZE;
 
 	ring->cmd_base_vaddr = dma_alloc_coherent(&ydev->pdev->dev,
 						  cmd_ring_size,
@@ -246,18 +246,18 @@ static int ycc_init_ring(struct ycc_ring *ring, u32 max_desc)
 	/* Ring interrupt threshold */
 	val |= (ydev->is_polling ? 1 : 0xFFFF) << 16;
 
-	YCC_CSR_WR(ring->csr_vaddr, REG_RING_CFG, val);
-	YCC_CSR_WR(ring->csr_vaddr, REG_RING_RSP_AFULL_TH, 0);
-	YCC_CSR_WR(ring->csr_vaddr, REG_RING_CMD_BASE_ADDR_LO,
+	ALICC_CSR_WR(ring->csr_vaddr, REG_RING_CFG, val);
+	ALICC_CSR_WR(ring->csr_vaddr, REG_RING_RSP_AFULL_TH, 0);
+	ALICC_CSR_WR(ring->csr_vaddr, REG_RING_CMD_BASE_ADDR_LO,
 					(u32)ring->cmd_base_paddr & 0xffffffff);
-	YCC_CSR_WR(ring->csr_vaddr, REG_RING_CMD_BASE_ADDR_HI,
+	ALICC_CSR_WR(ring->csr_vaddr, REG_RING_CMD_BASE_ADDR_HI,
 					((u64)ring->cmd_base_paddr >> 32) & 0xffffffff);
-	YCC_CSR_WR(ring->csr_vaddr, REG_RING_RSP_BASE_ADDR_LO,
+	ALICC_CSR_WR(ring->csr_vaddr, REG_RING_RSP_BASE_ADDR_LO,
 					(u32)ring->resp_base_paddr & 0xffffffff);
-	YCC_CSR_WR(ring->csr_vaddr, REG_RING_RSP_BASE_ADDR_HI,
+	ALICC_CSR_WR(ring->csr_vaddr, REG_RING_RSP_BASE_ADDR_HI,
 					((u64)ring->resp_base_paddr >> 32) & 0xffffffff);
 
-	if (ycc_create_ring_debugfs(ring))
+	if (alicc_create_ring_debugfs(ring))
 		pr_warn("Failed to create debugfs entry for ring:%d\n", ring->ring_id);
 
 	atomic_set(&ring->ref_cnt, 0);
@@ -268,41 +268,41 @@ static int ycc_init_ring(struct ycc_ring *ring, u32 max_desc)
 /*
  * Release dma memory for command queue and response queue.
  */
-static void ycc_release_ring(struct ycc_ring *ring)
+static void alicc_release_ring(struct alicc_ring *ring)
 {
 	u32 ring_size;
 
 	BUG_ON(atomic_read(&ring->ref_cnt));
 
 	if (ring->cmd_base_vaddr) {
-		ring_size = ring->max_desc * YCC_CMD_DESC_SIZE;
+		ring_size = ring->max_desc * ALICC_CMD_DESC_SIZE;
 		dma_free_coherent(&ring->ydev->pdev->dev, ring_size,
 				  ring->cmd_base_vaddr,
 				  ring->cmd_base_paddr);
 		ring->cmd_base_vaddr = NULL;
 	}
 	if (ring->resp_base_vaddr) {
-		ring_size = ring->max_desc * YCC_RESP_DESC_SIZE;
+		ring_size = ring->max_desc * ALICC_RESP_DESC_SIZE;
 		dma_free_coherent(&ring->ydev->pdev->dev, ring_size,
 				  ring->resp_base_vaddr,
 				  ring->resp_base_paddr);
 		ring->resp_base_vaddr = NULL;
 	}
 
-	ycc_remove_ring_debugfs(ring);
+	alicc_remove_ring_debugfs(ring);
 	ring->type = FREE_RING;
 }
 
-int ycc_dev_rings_init(struct ycc_dev *ydev, u32 max_desc, int user_rings)
+int alicc_dev_rings_init(struct alicc_dev *ydev, u32 max_desc, int user_rings)
 {
-	int kern_rings = YCC_RINGPAIR_NUM - user_rings;
+	int kern_rings = ALICC_RINGPAIR_NUM - user_rings;
 	struct pci_dev *pdev = ydev->pdev;
-	struct ycc_ring *ring;
+	struct alicc_ring *ring;
 	int kern_cnt, user_cnt;
 	int ret = 0;
 	int i;
 
-	ret = ycc_alloc_rings(ydev);
+	ret = alicc_alloc_rings(ydev);
 	if (ret) {
 		dev_err(&pdev->dev, "Probe failed when allocating rings\n");
 		return ret;
@@ -310,18 +310,18 @@ int ycc_dev_rings_init(struct ycc_dev *ydev, u32 max_desc, int user_rings)
 
 	for (i = 0; i < kern_rings; i++) {
 		ring = &ydev->rings[i];
-		ret = ycc_init_ring(ring, max_desc);
+		ret = alicc_init_ring(ring, max_desc);
 		if (ret) {
 			kern_cnt = i;
 			goto free_kern_rings;
 		}
-		INIT_WORK(&ring->work, ycc_resp_work_process);
+		INIT_WORK(&ring->work, alicc_resp_work_process);
 	}
 	kern_cnt = kern_rings;
 
-	for (i = kern_rings; i < YCC_RINGPAIR_NUM; i++) {
+	for (i = kern_rings; i < ALICC_RINGPAIR_NUM; i++) {
 		ring = &ydev->rings[i];
-		ret = ycc_uio_register(ring);
+		ret = alicc_uio_register(ring);
 		if (ret) {
 			user_cnt = i - kern_rings;
 			goto free_user_rings;
@@ -333,42 +333,42 @@ int ycc_dev_rings_init(struct ycc_dev *ydev, u32 max_desc, int user_rings)
 free_user_rings:
 	for (i = 0; i < user_cnt; i++) {
 		ring = &ydev->rings[i + kern_rings];
-		ycc_uio_unregister(ring);
+		alicc_uio_unregister(ring);
 	}
 
 free_kern_rings:
 	for (i = 0; i < kern_cnt; i++) {
 		ring = &ydev->rings[i];
-		ycc_release_ring(ring);
+		alicc_release_ring(ring);
 	}
 
-	ycc_free_rings(ydev);
+	alicc_free_rings(ydev);
 	return ret;
 }
 
-void ycc_dev_rings_release(struct ycc_dev *ydev, int user_rings)
+void alicc_dev_rings_release(struct alicc_dev *ydev, int user_rings)
 {
-	int kern_rings = YCC_RINGPAIR_NUM - user_rings;
-	struct ycc_ring *ring;
+	int kern_rings = ALICC_RINGPAIR_NUM - user_rings;
+	struct alicc_ring *ring;
 	int i;
 
 	for (i = 0; i < kern_rings; i++) {
 		ring = &ydev->rings[i];
-		ycc_release_ring(ring);
+		alicc_release_ring(ring);
 	}
 
 	for (i = 0; i < user_rings; i++) {
 		ring = &ydev->rings[i + kern_rings];
-		ycc_uio_unregister(ring);
+		alicc_uio_unregister(ring);
 	}
 
-	ycc_free_rings(ydev);
+	alicc_free_rings(ydev);
 }
 
 /*
  * Check if the command queue is full.
  */
-static inline bool ycc_ring_full(struct ycc_ring *ring)
+static inline bool alicc_ring_full(struct alicc_ring *ring)
 {
 	return ring->cmd_rd_ptr == (ring->cmd_wr_ptr + 1) % ring->max_desc;
 }
@@ -376,28 +376,28 @@ static inline bool ycc_ring_full(struct ycc_ring *ring)
 /*
  * Check if the response queue is empty
  */
-static inline bool ycc_ring_empty(struct ycc_ring *ring)
+static inline bool alicc_ring_empty(struct alicc_ring *ring)
 {
 	return ring->resp_rd_ptr == ring->resp_wr_ptr;
 }
 
-static struct ycc_ring *ycc_select_ring(void)
+static struct alicc_ring *alicc_select_ring(void)
 {
-	struct ycc_ring *cur_r;
+	struct alicc_ring *cur_r;
 	struct list_head *itr;
-	struct ycc_dev *ydev;
+	struct alicc_dev *ydev;
 	int i;
 
-	if (list_empty(&ycc_table))
+	if (list_empty(&alicc_table))
 		return NULL;
 
-	list_for_each(itr, &ycc_table) {
-		ydev = list_entry(itr, struct ycc_dev, list);
-		if (ydev->type != YCC_RCIEP ||
+	list_for_each(itr, &alicc_table) {
+		ydev = list_entry(itr, struct alicc_dev, list);
+		if (ydev->type != ALICC_RCIEP ||
 		    !test_bit(YDEV_STATUS_READY, &ydev->status))
 			continue;
 
-		for (i = 0; i < YCC_RINGPAIR_NUM; i++) {
+		for (i = 0; i < ALICC_RINGPAIR_NUM; i++) {
 			cur_r = ydev->rings + i;
 
 			/* Ring is not for kernel */
@@ -405,27 +405,27 @@ static struct ycc_ring *ycc_select_ring(void)
 				continue;
 
 			if (!base_r) {
-				/* It means ycc is first used */
+				/* It means alicc is first used */
 				base_r = cur_r;
-				ycc_ring_get(cur_r);
+				alicc_ring_get(cur_r);
 				return cur_r;
 			}
 			/* Compare to base ring */
 			if (!atomic_read(&base_r->ref_cnt) ||
 			    (atomic_read(&base_r->ref_cnt) <
 			     atomic_read(&cur_r->ref_cnt))) {
-				ycc_ring_get(base_r);
+				alicc_ring_get(base_r);
 				return base_r;
 			} else if (atomic_read(&base_r->ref_cnt) >
 				   atomic_read(&cur_r->ref_cnt)) {
-				ycc_ring_get(cur_r);
+				alicc_ring_get(cur_r);
 				return cur_r;
 			}
 		}
 	}
 
 	if (base_r)
-		ycc_ring_get(base_r);
+		alicc_ring_get(base_r);
 
 	return base_r;
 }
@@ -433,26 +433,26 @@ static struct ycc_ring *ycc_select_ring(void)
 /*
  * Bind the ring to crypto
  */
-struct ycc_ring *ycc_crypto_get_ring(void)
+struct alicc_ring *alicc_crypto_get_ring(void)
 {
-	struct ycc_ring *ring = NULL;
+	struct alicc_ring *ring = NULL;
 
-	mutex_lock(&ycc_mutex);
+	mutex_lock(&alicc_mutex);
 
-	ring = ycc_select_ring();
+	ring = alicc_select_ring();
 	if (!ring)
 		goto out;
 
-	ycc_dev_get(ring->ydev);
+	alicc_dev_get(ring->ydev);
 	if (ring->ydev->is_polling && atomic_read(&ring->ref_cnt) == 1)
 		schedule_work(&ring->work);
 
 out:
-	mutex_unlock(&ycc_mutex);
+	mutex_unlock(&alicc_mutex);
 	return ring;
 }
 
-void ycc_crypto_free_ring(struct ycc_ring *ring)
+void alicc_crypto_free_ring(struct alicc_ring *ring)
 {
 	if (!ring)
 		return;
@@ -461,19 +461,19 @@ void ycc_crypto_free_ring(struct ycc_ring *ring)
 	 * will be added to protect ring->work to not be
 	 * canceled when another process just schedule it.
 	 */
-	mutex_lock(&ycc_mutex);
+	mutex_lock(&alicc_mutex);
 	if (atomic_dec_and_test(&ring->ref_cnt))
 		cancel_work_sync(&ring->work);
 
-	mutex_unlock(&ycc_mutex);
+	mutex_unlock(&alicc_mutex);
 
-	ycc_dev_put(ring->ydev);
+	alicc_dev_put(ring->ydev);
 }
 
 /*
  * Submit command to ring's command queue.
  */
-int ycc_enqueue(struct ycc_ring *ring, void *cmd)
+int alicc_enqueue(struct alicc_ring *ring, void *cmd)
 {
 	int ret = 0;
 
@@ -481,101 +481,101 @@ int ycc_enqueue(struct ycc_ring *ring, void *cmd)
 		return -EINVAL;
 
 	spin_lock_bh(&ring->lock);
-	if (!test_bit(YDEV_STATUS_READY, &ring->ydev->status) || ycc_ring_stopped(ring)) {
-		pr_debug("YCC: equeue error, device status: %ld, ring stopped: %d\n",
-			 ring->ydev->status, ycc_ring_stopped(ring));
+	if (!test_bit(YDEV_STATUS_READY, &ring->ydev->status) || alicc_ring_stopped(ring)) {
+		pr_debug("ALICC: equeue error, device status: %ld, ring stopped: %d\n",
+			 ring->ydev->status, alicc_ring_stopped(ring));
 
 		/* Fallback to software */
 		ret = -EAGAIN;
 		goto out;
 	}
 
-	ring->cmd_rd_ptr = YCC_CSR_RD(ring->csr_vaddr, REG_RING_CMD_RD_PTR);
-	if (ycc_ring_full(ring)) {
+	ring->cmd_rd_ptr = ALICC_CSR_RD(ring->csr_vaddr, REG_RING_CMD_RD_PTR);
+	if (alicc_ring_full(ring)) {
 		pr_debug("Failed to enqueue cmd on ring:%d, due to ring full\n", ring->ring_id);
 		ret = -EAGAIN;
 		goto out;
 	}
 
-	memcpy(ring->cmd_base_vaddr + ring->cmd_wr_ptr * YCC_CMD_DESC_SIZE, cmd,
-	       YCC_CMD_DESC_SIZE);
+	memcpy(ring->cmd_base_vaddr + ring->cmd_wr_ptr * ALICC_CMD_DESC_SIZE, cmd,
+	       ALICC_CMD_DESC_SIZE);
 
 	/* Ensure that cmd_wr_ptr update after memcpy */
 	dma_wmb();
 	if (++ring->cmd_wr_ptr == ring->max_desc)
 		ring->cmd_wr_ptr = 0;
-	YCC_CSR_WR(ring->csr_vaddr, REG_RING_CMD_WR_PTR, ring->cmd_wr_ptr);
+	ALICC_CSR_WR(ring->csr_vaddr, REG_RING_CMD_WR_PTR, ring->cmd_wr_ptr);
 
 out:
 	spin_unlock_bh(&ring->lock);
 	return ret;
 }
 
-static void ycc_cancel_cmd(struct ycc_ring *ring,
-		struct ycc_cmd_desc *desc)
+static void alicc_cancel_cmd(struct alicc_ring *ring,
+		struct alicc_cmd_desc *desc)
 {
-	struct ycc_flags *aflag;
+	struct alicc_flags *aflag;
 
 	dma_rmb();
 
-	aflag = (struct ycc_flags *)desc->private_ptr;
+	aflag = (struct alicc_flags *)desc->private_ptr;
 	if (!aflag || (u64)aflag == CMD_INVALID_CONTENT_U64) {
-		pr_debug("YCC: Invalid aflag\n");
+		pr_debug("ALICC: Invalid aflag\n");
 		return;
 	}
 
-	aflag->ycc_done_callback(aflag->ptr, CMD_CANCELLED);
+	aflag->alicc_done_callback(aflag->ptr, CMD_CANCELLED);
 
 	memset(desc, CMD_INVALID_CONTENT_U8, sizeof(*desc));
 	kfree(aflag);
 }
 
-static inline void ycc_check_cmd_state(u16 state)
+static inline void alicc_check_cmd_state(u16 state)
 {
 	switch (state) {
 	case CMD_SUCCESS:
 		break;
 	case CMD_ILLEGAL:
-		pr_debug("YCC response: Illegal cmd\n");
+		pr_debug("ALICC response: Illegal cmd\n");
 		break;
 	case CMD_UNDERATTACK:
-		pr_debug("YCC response: Attack is detected\n");
+		pr_debug("ALICC response: Attack is detected\n");
 		break;
 	case CMD_INVALID:
-		pr_debug("YCC response: Invalid cmd\n");
+		pr_debug("ALICC response: Invalid cmd\n");
 		break;
 	case CMD_ERROR:
-		pr_debug("YCC response: Cmd error\n");
+		pr_debug("ALICC response: Cmd error\n");
 		break;
 	case CMD_EXCESS:
-		pr_debug("YCC response: Excess permission\n");
+		pr_debug("ALICC response: Excess permission\n");
 		break;
 	case CMD_KEY_ERROR:
-		pr_debug("YCC response: Invalid internal key\n");
+		pr_debug("ALICC response: Invalid internal key\n");
 		break;
 	case CMD_VERIFY_ERROR:
-		pr_debug("YCC response: Mac/tag verify failed\n");
+		pr_debug("ALICC response: Mac/tag verify failed\n");
 		break;
 	default:
-		pr_debug("YCC response: Unknown error\n");
+		pr_debug("ALICC response: Unknown error\n");
 		break;
 	}
 }
 
-void ycc_handle_resp(struct ycc_ring *ring, struct ycc_resp_desc *desc)
+void alicc_handle_resp(struct alicc_ring *ring, struct alicc_resp_desc *desc)
 {
-	struct ycc_flags *aflag;
+	struct alicc_flags *aflag;
 
 	dma_rmb();
 
-	aflag = (struct ycc_flags *)desc->private_ptr;
+	aflag = (struct alicc_flags *)desc->private_ptr;
 	if (!aflag || (u64)aflag == CMD_INVALID_CONTENT_U64) {
-		pr_debug("YCC: Invalid aflag\n");
+		pr_debug("ALICC: Invalid aflag\n");
 		return;
 	}
 
-	ycc_check_cmd_state(desc->state);
-	aflag->ycc_done_callback(aflag->ptr, desc->state);
+	alicc_check_cmd_state(desc->state);
+	aflag->alicc_done_callback(aflag->ptr, desc->state);
 
 	memset(desc, CMD_INVALID_CONTENT_U8, sizeof(*desc));
 	kfree(aflag);
@@ -584,19 +584,19 @@ void ycc_handle_resp(struct ycc_ring *ring, struct ycc_resp_desc *desc)
 /*
  * dequeue, read response descriptor
  */
-void ycc_dequeue(struct ycc_ring *ring)
+void alicc_dequeue(struct alicc_ring *ring)
 {
-	struct ycc_resp_desc *resp;
+	struct alicc_resp_desc *resp;
 	int cnt = 0;
 
-	if (!test_bit(YDEV_STATUS_READY, &ring->ydev->status) || ycc_ring_stopped(ring))
+	if (!test_bit(YDEV_STATUS_READY, &ring->ydev->status) || alicc_ring_stopped(ring))
 		return;
 
-	ring->resp_wr_ptr = YCC_CSR_RD(ring->csr_vaddr, REG_RING_RSP_WR_PTR);
-	while (!ycc_ring_empty(ring)) {
-		resp = (struct ycc_resp_desc *)ring->resp_base_vaddr +
+	ring->resp_wr_ptr = ALICC_CSR_RD(ring->csr_vaddr, REG_RING_RSP_WR_PTR);
+	while (!alicc_ring_empty(ring)) {
+		resp = (struct alicc_resp_desc *)ring->resp_base_vaddr +
 			ring->resp_rd_ptr;
-		ycc_handle_resp(ring, resp);
+		alicc_handle_resp(ring, resp);
 
 		cnt++;
 		if (++ring->resp_rd_ptr == ring->max_desc)
@@ -604,42 +604,42 @@ void ycc_dequeue(struct ycc_ring *ring)
 	}
 
 	if (cnt)
-		YCC_CSR_WR(ring->csr_vaddr, REG_RING_RSP_RD_PTR, ring->resp_rd_ptr);
+		ALICC_CSR_WR(ring->csr_vaddr, REG_RING_RSP_RD_PTR, ring->resp_rd_ptr);
 }
 
 /*
  * Clear incompletion cmds in command queue while rollback cmd_wr_ptr.
  *
- * Note: Make sure been invoked when error occurs in YCC internal and
- * YCC status is not ready.
+ * Note: Make sure been invoked when error occurs in ALICC internal and
+ * ALICC status is not ready.
  */
-void ycc_clear_cmd_ring(struct ycc_ring *ring)
+void alicc_clear_cmd_ring(struct alicc_ring *ring)
 {
-	struct ycc_cmd_desc *desc = NULL;
+	struct alicc_cmd_desc *desc = NULL;
 
-	ring->cmd_rd_ptr = YCC_CSR_RD(ring->csr_vaddr, REG_RING_CMD_RD_PTR);
-	ring->cmd_wr_ptr = YCC_CSR_RD(ring->csr_vaddr, REG_RING_CMD_WR_PTR);
+	ring->cmd_rd_ptr = ALICC_CSR_RD(ring->csr_vaddr, REG_RING_CMD_RD_PTR);
+	ring->cmd_wr_ptr = ALICC_CSR_RD(ring->csr_vaddr, REG_RING_CMD_WR_PTR);
 
 	while (ring->cmd_rd_ptr != ring->cmd_wr_ptr) {
-		desc = (struct ycc_cmd_desc *)ring->cmd_base_vaddr + ring->cmd_rd_ptr;
-		ycc_cancel_cmd(ring, desc);
+		desc = (struct alicc_cmd_desc *)ring->cmd_base_vaddr + ring->cmd_rd_ptr;
+		alicc_cancel_cmd(ring, desc);
 
 		if (--ring->cmd_wr_ptr == 0)
 			ring->cmd_wr_ptr = ring->max_desc;
 	}
 
-	YCC_CSR_WR(ring->csr_vaddr, REG_RING_CMD_WR_PTR, ring->cmd_wr_ptr);
+	ALICC_CSR_WR(ring->csr_vaddr, REG_RING_CMD_WR_PTR, ring->cmd_wr_ptr);
 }
 
 /*
  * Clear response queue
  *
- * Note: Make sure been invoked when error occurs in YCC internal and
- * YCC status is not ready.
+ * Note: Make sure been invoked when error occurs in ALICC internal and
+ * ALICC status is not ready.
  */
-void ycc_clear_resp_ring(struct ycc_ring *ring)
+void alicc_clear_resp_ring(struct alicc_ring *ring)
 {
-	struct ycc_resp_desc *resp;
+	struct alicc_resp_desc *resp;
 	int retry;
 	u32 pending_cmd;
 
@@ -648,28 +648,28 @@ void ycc_clear_resp_ring(struct ycc_ring *ring)
 	 * new transactions, No need to wait for pending_cmds
 	 * been processed under this condition.
 	 */
-	retry = ycc_ring_stopped(ring) ? 0 : MAX_ERROR_RETRY;
-	pending_cmd = YCC_CSR_RD(ring->csr_vaddr, REG_RING_PENDING_CMD);
+	retry = alicc_ring_stopped(ring) ? 0 : MAX_ERROR_RETRY;
+	pending_cmd = ALICC_CSR_RD(ring->csr_vaddr, REG_RING_PENDING_CMD);
 
-	ring->resp_wr_ptr = YCC_CSR_RD(ring->csr_vaddr, REG_RING_RSP_WR_PTR);
-	while (!ycc_ring_empty(ring) || (retry && pending_cmd)) {
-		if (!ycc_ring_empty(ring)) {
-			resp = (struct ycc_resp_desc *)ring->resp_base_vaddr +
+	ring->resp_wr_ptr = ALICC_CSR_RD(ring->csr_vaddr, REG_RING_RSP_WR_PTR);
+	while (!alicc_ring_empty(ring) || (retry && pending_cmd)) {
+		if (!alicc_ring_empty(ring)) {
+			resp = (struct alicc_resp_desc *)ring->resp_base_vaddr +
 				ring->resp_rd_ptr;
 			resp->state = CMD_CANCELLED;
-			ycc_handle_resp(ring, resp);
+			alicc_handle_resp(ring, resp);
 
 			if (++ring->resp_rd_ptr == ring->max_desc)
 				ring->resp_rd_ptr = 0;
 
-			YCC_CSR_WR(ring->csr_vaddr, REG_RING_RSP_RD_PTR, ring->resp_rd_ptr);
+			ALICC_CSR_WR(ring->csr_vaddr, REG_RING_RSP_RD_PTR, ring->resp_rd_ptr);
 		} else {
 			udelay(MAX_SLEEP_US_PER_CHECK);
 			retry--;
 		}
 
-		pending_cmd = YCC_CSR_RD(ring->csr_vaddr, REG_RING_PENDING_CMD);
-		ring->resp_wr_ptr = YCC_CSR_RD(ring->csr_vaddr, REG_RING_RSP_WR_PTR);
+		pending_cmd = ALICC_CSR_RD(ring->csr_vaddr, REG_RING_PENDING_CMD);
+		ring->resp_wr_ptr = ALICC_CSR_RD(ring->csr_vaddr, REG_RING_RSP_WR_PTR);
 	}
 
 	if (!retry && pending_cmd)
