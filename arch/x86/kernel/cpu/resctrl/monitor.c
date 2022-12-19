@@ -22,6 +22,7 @@
 
 #include <asm/cpu_device_id.h>
 #include <asm/resctrl.h>
+#include <asm/intel-family.h>
 
 #include "internal.h"
 
@@ -253,14 +254,30 @@ int __init rdt_get_mon_l3_config(struct rdt_resource *r)
 	else if (mbm_offset > MBM_CNTR_WIDTH_OFFSET_MAX)
 		pr_warn("Ignoring impossible MBM counter offset\n");
 
-	/*
-	 * A reasonable upper limit on the max threshold is the number
-	 * of lines tagged per RMID if all RMIDs have the same number of
-	 * lines tagged in the LLC.
-	 *
-	 * For a 35MB LLC and 56 RMIDs, this is ~1.8% of the LLC.
-	 */
-	threshold = resctrl_rmid_realloc_limit / r->num_rmid;
+	if (boot_cpu_data.x86_model == INTEL_FAM6_SKYLAKE_X &&
+	    boot_cpu_data.x86_stepping <= 4) {
+		/*
+		 * Due to tests on Skylake server, in some cases the
+		 * RMIDs are always marked busy because the occupancy values never drop
+		 * to less than cache occupancy threshold. This may lead to unexpected
+		 * out of RMIDs.
+		 *
+		 * Workaround: set default cache occupancy threshold as cache size on
+		 * Skylake server. When a RMID is freed, the RMID entry added to limbo
+		 * list will never be marked busy. It will be moved to free list
+		 * immediately.
+		 */
+		threshold = resctrl_rmid_realloc_limit;
+	} else {
+		/*
+		 * A reasonable upper limit on the max threshold is the number
+		 * of lines tagged per RMID if all RMIDs have the same number of
+		 * lines tagged in the LLC.
+		 *
+		 * For a 35MB LLC and 56 RMIDs, this is ~1.8% of the LLC.
+		 */
+		threshold = resctrl_rmid_realloc_limit / r->num_rmid;
+	}
 
 	/*
 	 * Because num_rmid may not be a power of two, round the value
