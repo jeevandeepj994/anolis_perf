@@ -542,7 +542,12 @@ static void __init reserve_crashkernel(void)
 
 	/* NOTE: Only reserve extra memory under 4G and without @offset */
 	if (sev_active() || sme_active())
-		swiotlb_sz = ALIGN(swiotlb_size_or_default(), SZ_1M);
+		/*
+		 * 256M is enough for kdump kernel, if not,
+		 * user should use crashkernel to reserve more memory
+		 */
+		swiotlb_sz = ALIGN(min(swiotlb_size_or_default(), 256UL << 20),
+				   SZ_1M);
 
 	/* 0 means: find the address automatically */
 	if (!crash_base) {
