@@ -518,6 +518,7 @@ static int __init reserve_crashkernel_low(void)
 static void __init reserve_crashkernel(void)
 {
 	unsigned long long crash_size, crash_base, total_mem;
+	unsigned long long swiotlb_sz = 0;
 	bool high = false;
 	int ret;
 
@@ -539,14 +540,14 @@ static void __init reserve_crashkernel(void)
 		return;
 	}
 
-	if (sev_active() || sme_active()) {
-		unsigned long long swiotlb_sz;
-
-		swiotlb_sz = ALIGN(swiotlb_size_or_default(), SZ_1M);
-		crash_size += swiotlb_sz;
-		pr_info("Reserving %ldMB of extra memory for crashkernel\n",
-			(unsigned long)swiotlb_sz >> 20);
-	}
+	/* NOTE: Only reserve extra memory under 4G and without @offset */
+	if (sev_active() || sme_active())
+		/*
+		 * 256M is enough for kdump kernel, if not,
+		 * user should use crashkernel to reserve more memory
+		 */
+		swiotlb_sz = ALIGN(min(swiotlb_size_or_default(), 256UL << 20),
+				   SZ_1M);
 
 	/* 0 means: find the address automatically */
 	if (!crash_base) {
@@ -558,14 +559,24 @@ static void __init reserve_crashkernel(void)
 		 * So try low memory first and fall back to high memory
 		 * unless "crashkernel=size[KMG],high" is specified.
 		 */
-		if (!high)
+		if (!high) {
+			crash_size += swiotlb_sz;
 			crash_base = memblock_phys_alloc_range(crash_size,
 						CRASH_ALIGN, CRASH_ALIGN,
 						CRASH_ADDR_LOW_MAX);
-		if (!crash_base)
+			pr_info("Reserving %ldMB of extra memory for crashkernel\n",
+				(unsigned long)swiotlb_sz >> 20);
+		}
+		if (!crash_base) {
+			/*
+			 * Failed to reserve under 4G then try high,
+			 * so crash_size needs to fall back
+			 */
+			crash_size -= swiotlb_sz;
 			crash_base = memblock_phys_alloc_range(crash_size,
 						CRASH_ALIGN, CRASH_ALIGN,
 						CRASH_ADDR_HIGH_MAX);
+		}
 		if (!crash_base) {
 			pr_info("crashkernel reservation failed - No suitable area found.\n");
 			return;
@@ -581,6 +592,7 @@ static void __init reserve_crashkernel(void)
 		}
 	}
 
+	/* If reserves above 4G, reserve extra mem for DMA & swiotlb under 4G */
 	if (crash_base >= (1ULL << 32) && reserve_crashkernel_low()) {
 		memblock_free(crash_base, crash_size);
 		return;
