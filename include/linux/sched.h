@@ -1493,7 +1493,8 @@ struct task_struct {
 	int				mce_count;
 #endif
 
-	CK_KABI_RESERVE(1)
+	/* PF_IO_WORKER */
+	CK_KABI_USE(1, void *pf_io_worker)
 	CK_KABI_RESERVE(2)
 	CK_KABI_RESERVE(3)
 	CK_KABI_RESERVE(4)
