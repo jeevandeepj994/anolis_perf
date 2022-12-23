@@ -1017,6 +1017,50 @@ static void smcr_copy_dev_info_to_link(struct smc_link *link)
 	link->ndev_ifidx = smcibdev->ndev_ifidx[link->ibport - 1];
 }
 
+int smcr_iw_net_reserve_ports(struct net *net)
+{
+	int ports_base = rsvd_ports_base;
+	struct sockaddr_in laddr;
+	int rc = 0, i, j;
+
+	for (i = 0; i < SMC_IWARP_RSVD_PORTS_NUM; i++) {
+		rc = __sock_create(net, AF_INET, SOCK_STREAM, IPPROTO_TCP,
+				   &net->smc.rsvd_sock[i], 1);
+		if (rc < 0)
+			goto release;
+		memset(&laddr, 0, sizeof(laddr));
+		laddr.sin_port = htons(ports_base + i);
+		/* keep the rsvd ports */
+		rc = kernel_bind(net->smc.rsvd_sock[i], (struct sockaddr *)&laddr,
+				 sizeof(struct sockaddr_in));
+		if (rc) {
+			sock_release(net->smc.rsvd_sock[i]);
+			net->smc.rsvd_sock[i] = NULL;
+			goto release;
+		}
+	}
+	pr_info_ratelimited("smc: netns %pK reserved ports for eRDMA OOB\n", net);
+	return 0;
+
+release:
+	for (j = 0; j < i; j++) {
+		sock_release(net->smc.rsvd_sock[j]);
+		net->smc.rsvd_sock[j] = NULL;
+	}
+	return rc;
+}
+
+void smcr_iw_net_release_ports(struct net *net)
+{
+	int i;
+
+	for (i = 0; i < SMC_IWARP_RSVD_PORTS_NUM; i++) {
+		sock_release(net->smc.rsvd_sock[i]);
+		net->smc.rsvd_sock[i] = NULL;
+	}
+	pr_info_ratelimited("smc: netns %pK released ports used by eRDMA OOB\n", net);
+}
+
 static void smcr_link_iw_extension(struct iw_ext_conn_param *iw_param, struct sock *clcsk)
 {
 	iw_param->sk_addr.family = clcsk->sk_family;
