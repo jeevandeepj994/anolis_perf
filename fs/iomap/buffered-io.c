@@ -925,6 +925,16 @@ static loff_t iomap_zero_range_actor(struct inode *inode, loff_t pos,
 	if (srcmap->type == IOMAP_HOLE || srcmap->type == IOMAP_UNWRITTEN)
 		return length;
 
+
+	/*
+	 * invalidate the pages whose sharing state is to be changed
+	 * because of CoW.
+	 */
+	if (IS_DAX(inode) && iomap->flags & IOMAP_F_SHARED)
+		invalidate_inode_pages2_range(inode->i_mapping,
+					      pos >> PAGE_SHIFT,
+					      (pos + length - 1) >> PAGE_SHIFT);
+
 	do {
 		s64 bytes;
 
