@@ -43,6 +43,24 @@ struct smc_ib_devices smc_ib_devices = {	/* smc-registered ib devices */
 
 u8 local_systemid[SMC_SYSTEMID_LEN];		/* unique system identifier */
 
+static void smc_ib_modify_qp_iw_extension(struct smc_link *lnk)
+{
+	struct iw_ext_conn_param *iw_param = &lnk->iw_conn_param;
+	struct smc_link_group *lgr = lnk->lgr;
+
+	if (lgr->role == SMC_SERV) {
+		iw_param->sk_addr.sport =
+			rsvd_ports_base +
+			(lnk->roce_qp->qp_num % SMC_IWARP_RSVD_PORTS_NUM);
+		iw_param->sk_addr.dport = htons(lnk->peer_qpn);
+	} else {
+		iw_param->sk_addr.sport = lnk->roce_qp->qp_num;
+		iw_param->sk_addr.dport =
+			htons(rsvd_ports_base +
+			(lnk->peer_qpn % SMC_IWARP_RSVD_PORTS_NUM));
+	}
+}
+
 static int smc_ib_modify_qp_init(struct smc_link *lnk)
 {
 	struct ib_qp_attr qp_attr;
@@ -87,6 +105,12 @@ static int smc_ib_modify_qp_rtr(struct smc_link *lnk)
 					 * requests
 					 */
 	qp_attr.min_rnr_timer = SMC_QP_MIN_RNR_TIMER;
+
+	if (reserve_mode &&
+	    smc_ib_is_iwarp(lnk->smcibdev->ibdev, lnk->ibport)) {
+		smc_ib_modify_qp_iw_extension(lnk);
+		qp_attr_mask |= IB_QP_RESERVED1;
+	}
 
 	return ib_modify_qp(lnk->roce_qp, &qp_attr, qp_attr_mask);
 }
