@@ -740,7 +740,11 @@ static ssize_t nvmet_subsys_attr_allow_any_host_store(struct config_item *item,
 		goto out_unlock;
 	}
 
-	subsys->allow_any_host = allow_any_host;
+	if (subsys->allow_any_host != allow_any_host) {
+		subsys->allow_any_host = allow_any_host;
+		nvmet_genctr++;
+	}
+
 out_unlock:
 	up_write(&nvmet_config_sem);
 	return ret ? ret : count;
