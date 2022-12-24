@@ -179,11 +179,13 @@ static int gcm_crypt(struct aead_request *req, struct skcipher_walk *walk,
 
 		kernel_neon_end();
 
-		err = skcipher_walk_done(walk, tail);
-		if (err)
-			return err;
-		if (walk->nbytes)
-			kernel_neon_begin();
+		if (walk->nbytes) {
+			err = skcipher_walk_done(walk, tail);
+			if (err)
+				return err;
+			if (walk->nbytes)
+				kernel_neon_begin();
+		}
 	} while (walk->nbytes > 0);
 
 	return 0;
