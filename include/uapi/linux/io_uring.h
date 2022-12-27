@@ -22,6 +22,7 @@ struct io_uring_sqe {
 	union {
 		__u64	off;	/* offset into file */
 		__u64	addr2;
+		__u32	cmd_op;
 	};
 	union {
 		__u64	addr;	/* pointer to buffer or iovecs */
@@ -44,20 +45,23 @@ struct io_uring_sqe {
 		__u32		splice_flags;
 	};
 	__u64	user_data;	/* data to be passed back at completion time */
+	/* pack this to avoid bogus arm OABI complaints */
 	union {
-		struct {
-			/* pack this to avoid bogus arm OABI complaints */
-			union {
-				/* index into fixed buffers, if used */
-				__u16	buf_index;
-				/* for grouped buffer selection */
-				__u16	buf_group;
-			} __attribute__((packed));
-			/* personality to use, if used */
-			__u16	personality;
-			__s32	splice_fd_in;
-		};
-		__u64	__pad2[3];
+		/* index into fixed buffers, if used */
+		__u16	buf_index;
+		/* for grouped buffer selection */
+		__u16	buf_group;
+	} __attribute__((packed));
+	/* personality to use, if used */
+	__u16	personality;
+	__s32	splice_fd_in;
+	union {
+		__u64	__pad2[2];
+		/*
+		 * If the ring is initialized with IORING_SETUP_SQE128, then
+		 * this field is used for 80 bytes of arbitrary command data
+		 */
+		__u8	cmd[0];
 	};
 };
 
@@ -96,6 +100,7 @@ enum {
 #define IORING_SETUP_CLAMP	(1U << 4)	/* clamp SQ/CQ ring sizes */
 #define IORING_SETUP_ATTACH_WQ	(1U << 5)	/* attach to existing wq */
 #define IORING_SETUP_R_DISABLED	(1U << 6)	/* start with ring disabled */
+#define IORING_SETUP_SQE128		(1U << 10) /* SQEs are 128 byte */
 #define IORING_SETUP_IDLE_US	(1U << 30)	/* unit of thread_idle is macrosecond */
 #define IORING_SETUP_SQPOLL_PERCPU	(1U << 31)	/* use percpu SQ poll thread */
 
@@ -134,6 +139,7 @@ enum {
 	IORING_OP_PROVIDE_BUFFERS,
 	IORING_OP_REMOVE_BUFFERS,
 	IORING_OP_TEE,
+	IORING_OP_URING_CMD,
 
 	/* this goes last, obviously */
 	IORING_OP_LAST,

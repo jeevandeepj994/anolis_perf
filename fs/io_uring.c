@@ -189,11 +189,6 @@ struct io_rings {
 	struct io_uring_cqe	cqes[] ____cacheline_aligned_in_smp;
 };
 
-enum io_uring_cmd_flags {
-	IO_URING_F_NONBLOCK		= 1,
-	IO_URING_F_COMPLETE_DEFER	= 2,
-};
-
 struct io_mapped_ubuf {
 	u64		ubuf;
 	size_t		len;
@@ -725,6 +720,7 @@ struct io_kiocb {
 		struct io_statx		statx;
 		/* use only after cleaning per-op data, see io_clean_op() */
 		struct io_completion	compl;
+		struct io_uring_cmd	uring_cmd;
 	};
 
 	/* opcode allocated if it needs to store data for async defer */
@@ -768,6 +764,14 @@ struct io_defer_entry {
 	struct io_kiocb		*req;
 	u32			seq;
 };
+
+/*
+ * The URING_CMD payload starts at 'cmd' in the first sqe, and continues into
+ * the following sqe if SQE128 is used.
+ */
+#define uring_cmd_pdu_size(is_sqe128)				\
+	((1 + !!(is_sqe128)) * sizeof(struct io_uring_sqe) -	\
+		offsetof(struct io_uring_sqe, cmd))
 
 struct io_op_def {
 	/* needs req->file assigned */
@@ -970,6 +974,11 @@ static const struct io_op_def io_op_defs[] = {
 		.hash_reg_file		= 1,
 		.unbound_nonreg_file	= 1,
 	},
+	[IORING_OP_URING_CMD] = {
+		.needs_file		= 1,
+		.needs_async_data	= 1,
+		.async_size		= uring_cmd_pdu_size(1),
+	},
 };
 
 enum io_mem_account {
@@ -1001,7 +1010,7 @@ static void io_file_put_work(struct work_struct *work);
 
 static ssize_t io_import_iovec(int rw, struct io_kiocb *req,
 			       struct iovec **iovec, struct iov_iter *iter,
-			       bool needs_lock);
+			       unsigned int issue_flags);
 static int io_setup_async_rw(struct io_kiocb *req, const struct iovec *iovec,
 			     const struct iovec *fast_iov,
 			     struct iov_iter *iter, bool force);
@@ -3143,9 +3152,10 @@ static void io_ring_submit_lock(struct io_ring_ctx *ctx, bool needs_lock)
 
 static struct io_buffer *io_buffer_select(struct io_kiocb *req, size_t *len,
 					  int bgid, struct io_buffer *kbuf,
-					  bool needs_lock)
+					  unsigned int issue_flags)
 {
 	struct io_buffer *head;
+	bool needs_lock = !(issue_flags & IO_URING_F_NONBLOCK);
 
 	if (req->flags & REQ_F_BUFFER_SELECTED)
 		return kbuf;
@@ -3176,14 +3186,14 @@ static struct io_buffer *io_buffer_select(struct io_kiocb *req, size_t *len,
 }
 
 static void __user *io_rw_buffer_select(struct io_kiocb *req, size_t *len,
-					bool needs_lock)
+					unsigned int issue_flags)
 {
 	struct io_buffer *kbuf;
 	u16 bgid;
 
 	kbuf = (struct io_buffer *) (unsigned long) req->rw.addr;
 	bgid = req->buf_index;
-	kbuf = io_buffer_select(req, len, bgid, kbuf, needs_lock);
+	kbuf = io_buffer_select(req, len, bgid, kbuf, issue_flags);
 	if (IS_ERR(kbuf))
 		return kbuf;
 	req->rw.addr = (u64) (unsigned long) kbuf;
@@ -3193,7 +3203,7 @@ static void __user *io_rw_buffer_select(struct io_kiocb *req, size_t *len,
 
 #ifdef CONFIG_COMPAT
 static ssize_t io_compat_import(struct io_kiocb *req, struct iovec *iov,
-				bool needs_lock)
+				unsigned int issue_flags)
 {
 	struct compat_iovec __user *uiov;
 	compat_ssize_t clen;
@@ -3209,7 +3219,7 @@ static ssize_t io_compat_import(struct io_kiocb *req, struct iovec *iov,
 		return -EINVAL;
 
 	len = clen;
-	buf = io_rw_buffer_select(req, &len, needs_lock);
+	buf = io_rw_buffer_select(req, &len, issue_flags);
 	if (IS_ERR(buf))
 		return PTR_ERR(buf);
 	iov[0].iov_base = buf;
@@ -3219,7 +3229,7 @@ static ssize_t io_compat_import(struct io_kiocb *req, struct iovec *iov,
 #endif
 
 static ssize_t __io_iov_buffer_select(struct io_kiocb *req, struct iovec *iov,
-				      bool needs_lock)
+				      unsigned int issue_flags)
 {
 	struct iovec __user *uiov = u64_to_user_ptr(req->rw.addr);
 	void __user *buf;
@@ -3231,7 +3241,7 @@ static ssize_t __io_iov_buffer_select(struct io_kiocb *req, struct iovec *iov,
 	len = iov[0].iov_len;
 	if (len < 0)
 		return -EINVAL;
-	buf = io_rw_buffer_select(req, &len, needs_lock);
+	buf = io_rw_buffer_select(req, &len, issue_flags);
 	if (IS_ERR(buf))
 		return PTR_ERR(buf);
 	iov[0].iov_base = buf;
@@ -3240,7 +3250,7 @@ static ssize_t __io_iov_buffer_select(struct io_kiocb *req, struct iovec *iov,
 }
 
 static ssize_t io_iov_buffer_select(struct io_kiocb *req, struct iovec *iov,
-				    bool needs_lock)
+				    unsigned int issue_flags)
 {
 	if (req->flags & REQ_F_BUFFER_SELECTED) {
 		struct io_buffer *kbuf;
@@ -3255,15 +3265,15 @@ static ssize_t io_iov_buffer_select(struct io_kiocb *req, struct iovec *iov,
 
 #ifdef CONFIG_COMPAT
 	if (req->ctx->compat)
-		return io_compat_import(req, iov, needs_lock);
+		return io_compat_import(req, iov, issue_flags);
 #endif
 
-	return __io_iov_buffer_select(req, iov, needs_lock);
+	return __io_iov_buffer_select(req, iov, issue_flags);
 }
 
 static ssize_t __io_import_iovec(int rw, struct io_kiocb *req,
 				 struct iovec **iovec, struct iov_iter *iter,
-				 bool needs_lock)
+				 unsigned int issue_flags)
 {
 	void __user *buf = u64_to_user_ptr(req->rw.addr);
 	size_t sqe_len = req->rw.len;
@@ -3282,7 +3292,7 @@ static ssize_t __io_import_iovec(int rw, struct io_kiocb *req,
 
 	if (opcode == IORING_OP_READ || opcode == IORING_OP_WRITE) {
 		if (req->flags & REQ_F_BUFFER_SELECT) {
-			buf = io_rw_buffer_select(req, &sqe_len, needs_lock);
+			buf = io_rw_buffer_select(req, &sqe_len, issue_flags);
 			if (IS_ERR(buf))
 				return PTR_ERR(buf);
 			req->rw.len = sqe_len;
@@ -3294,7 +3304,7 @@ static ssize_t __io_import_iovec(int rw, struct io_kiocb *req,
 	}
 
 	if (req->flags & REQ_F_BUFFER_SELECT) {
-		ret = io_iov_buffer_select(req, *iovec, needs_lock);
+		ret = io_iov_buffer_select(req, *iovec, issue_flags);
 		if (!ret) {
 			ret = (*iovec)->iov_len;
 			iov_iter_init(iter, rw, *iovec, 1, ret);
@@ -3309,12 +3319,12 @@ static ssize_t __io_import_iovec(int rw, struct io_kiocb *req,
 
 static ssize_t io_import_iovec(int rw, struct io_kiocb *req,
 			       struct iovec **iovec, struct iov_iter *iter,
-			       bool needs_lock)
+			       unsigned int issue_flags)
 {
 	struct io_async_rw *iorw = req->async_data;
 
 	if (!iorw)
-		return __io_import_iovec(rw, req, iovec, iter, needs_lock);
+		return __io_import_iovec(rw, req, iovec, iter, issue_flags);
 	*iovec = NULL;
 	return 0;
 }
@@ -3447,7 +3457,7 @@ static inline int io_rw_prep_async(struct io_kiocb *req, int rw)
 	struct iovec *iov = iorw->fast_iov;
 	ssize_t ret;
 
-	ret = __io_import_iovec(rw, req, &iov, &iorw->iter, false);
+	ret = __io_import_iovec(rw, req, &iov, &iorw->iter, IO_URING_F_NONBLOCK);
 	if (unlikely(ret < 0))
 		return ret;
 
@@ -3579,7 +3589,7 @@ static int io_read(struct io_kiocb *req, unsigned int issue_flags)
 	if (rw)
 		iter = &rw->iter;
 
-	ret = io_import_iovec(READ, req, &iovec, iter, !force_nonblock);
+	ret = io_import_iovec(READ, req, &iovec, iter, issue_flags);
 	if (ret < 0)
 		return ret;
 	iter_cp = *iter;
@@ -3708,7 +3718,7 @@ static int io_write(struct io_kiocb *req, unsigned int issue_flags)
 	if (rw)
 		iter = &rw->iter;
 
-	ret = io_import_iovec(WRITE, req, &iovec, iter, !force_nonblock);
+	ret = io_import_iovec(WRITE, req, &iovec, iter, issue_flags);
 	if (ret < 0)
 		return ret;
 	iter_cp = *iter;
@@ -3882,6 +3892,93 @@ static int io_splice(struct io_kiocb *req, unsigned int issue_flags)
 	if (ret != sp->len)
 		req_set_fail_links(req);
 	io_req_complete(req, ret);
+	return 0;
+}
+
+static void io_uring_cmd_work(struct callback_head *cb)
+{
+	struct io_kiocb *req = container_of(cb, struct io_kiocb, task_work);
+	req->uring_cmd.task_work_cb(&req->uring_cmd);
+}
+
+void io_uring_cmd_complete_in_task(struct io_uring_cmd *ioucmd,
+			void (*task_work_cb)(struct io_uring_cmd *))
+{
+	int ret;
+	struct io_kiocb *req = container_of(ioucmd, struct io_kiocb, uring_cmd);
+
+	req->uring_cmd.task_work_cb = task_work_cb;
+	req->task_work.func = io_uring_cmd_work;
+	ret = io_req_task_work_add(req, !!(req->ctx->flags & IORING_SETUP_SQPOLL));
+	if (unlikely(ret))
+		io_req_task_work_add_fallback(req, io_uring_cmd_work);
+}
+EXPORT_SYMBOL_GPL(io_uring_cmd_complete_in_task);
+
+/*
+ * Called by consumers of io_uring_cmd, if they originally returned
+ * -EIOCBQUEUED upon receiving the command.
+ */
+void io_uring_cmd_done(struct io_uring_cmd *ioucmd, ssize_t ret, ssize_t res2)
+{
+	struct io_kiocb *req = container_of(ioucmd, struct io_kiocb, uring_cmd);
+
+	if (ret < 0)
+		req_set_fail_links(req);
+	io_req_complete(req, ret);
+}
+EXPORT_SYMBOL_GPL(io_uring_cmd_done);
+
+static int io_uring_cmd_prep_async(struct io_kiocb *req)
+{
+	size_t cmd_size;
+
+	cmd_size = uring_cmd_pdu_size(req->ctx->flags & IORING_SETUP_SQE128);
+
+	memcpy(req->async_data, req->uring_cmd.cmd, cmd_size);
+	return 0;
+}
+
+static int io_uring_cmd_prep(struct io_kiocb *req,
+			     const struct io_uring_sqe *sqe)
+{
+	struct io_uring_cmd *ioucmd = &req->uring_cmd;
+
+	if (sqe->rw_flags)
+		return -EINVAL;
+	ioucmd->cmd = sqe->cmd;
+	ioucmd->cmd_op = READ_ONCE(sqe->cmd_op);
+	return 0;
+}
+
+static int io_uring_cmd(struct io_kiocb *req, unsigned int issue_flags)
+{
+	struct io_uring_cmd *ioucmd = &req->uring_cmd;
+	struct io_ring_ctx *ctx = req->ctx;
+	struct file *file = req->file;
+	int ret;
+
+	if (!req->file->f_op->uring_cmd)
+		return -EOPNOTSUPP;
+
+	if (ctx->flags & IORING_SETUP_SQE128)
+		issue_flags |= IO_URING_F_SQE128;
+
+	if (req->async_data)
+		ioucmd->cmd = req->async_data;
+
+	ret = file->f_op->uring_cmd(ioucmd, issue_flags);
+	if (ret == -EAGAIN) {
+		if (!req->async_data) {
+			if (io_alloc_async_data(req))
+				return -ENOMEM;
+			io_uring_cmd_prep_async(req);
+		}
+		return -EAGAIN;
+	}
+
+	if (ret != -EIOCBQUEUED)
+		io_uring_cmd_done(ioucmd, ret, 0);
 	return 0;
 }
 
@@ -4745,12 +4842,12 @@ static int io_recvmsg_copy_hdr(struct io_kiocb *req,
 }
 
 static struct io_buffer *io_recv_buffer_select(struct io_kiocb *req,
-					       bool needs_lock)
+					       unsigned int issue_flags)
 {
 	struct io_sr_msg *sr = &req->sr_msg;
 	struct io_buffer *kbuf;
 
-	kbuf = io_buffer_select(req, &sr->len, sr->bgid, sr->kbuf, needs_lock);
+	kbuf = io_buffer_select(req, &sr->len, sr->bgid, sr->kbuf, issue_flags);
 	if (IS_ERR(kbuf))
 		return kbuf;
 
@@ -4817,7 +4914,7 @@ static int io_recvmsg(struct io_kiocb *req, unsigned int issue_flags)
 	}
 
 	if (req->flags & REQ_F_BUFFER_SELECT) {
-		kbuf = io_recv_buffer_select(req, !force_nonblock);
+		kbuf = io_recv_buffer_select(req, issue_flags);
 		if (IS_ERR(kbuf))
 			return PTR_ERR(kbuf);
 		kmsg->fast_iov[0].iov_base = u64_to_user_ptr(kbuf->addr);
@@ -4872,7 +4969,7 @@ static int io_recv(struct io_kiocb *req, unsigned int issue_flags)
 		return ret;
 
 	if (req->flags & REQ_F_BUFFER_SELECT) {
-		kbuf = io_recv_buffer_select(req, !force_nonblock);
+		kbuf = io_recv_buffer_select(req, issue_flags);
 		if (IS_ERR(kbuf))
 			return PTR_ERR(kbuf);
 		buf = u64_to_user_ptr(kbuf->addr);
@@ -6012,6 +6109,8 @@ static int io_req_prep(struct io_kiocb *req, const struct io_uring_sqe *sqe)
 		return io_remove_buffers_prep(req, sqe);
 	case IORING_OP_TEE:
 		return io_tee_prep(req, sqe);
+	case IORING_OP_URING_CMD:
+		return io_uring_cmd_prep(req, sqe);
 	}
 
 	printk_once(KERN_WARNING "io_uring: unhandled opcode %d\n",
@@ -6253,6 +6352,9 @@ static int io_issue_sqe(struct io_kiocb *req, unsigned int issue_flags)
 		break;
 	case IORING_OP_TEE:
 		ret = io_tee(req, issue_flags);
+		break;
+	case IORING_OP_URING_CMD:
+		ret = io_uring_cmd(req, issue_flags);
 		break;
 	default:
 		ret = -EINVAL;
@@ -6697,8 +6799,12 @@ static const struct io_uring_sqe *io_get_sqe(struct io_ring_ctx *ctx)
 	 *    though the application is the one updating it.
 	 */
 	head = READ_ONCE(sq_array[ctx->cached_sq_head & ctx->sq_mask]);
-	if (likely(head < ctx->sq_entries))
+	if (likely(head < ctx->sq_entries)) {
+		/* double index for 128-byte SQEs, twice as long */
+		if (ctx->flags & IORING_SETUP_SQE128)
+			head <<= 1;
 		return &ctx->sq_sqes[head];
+	}
 
 	/* drop invalid entries */
 	ctx->cached_sq_dropped++;
@@ -8495,14 +8601,19 @@ static unsigned long rings_size(unsigned sq_entries, unsigned cq_entries,
 	return off;
 }
 
-static unsigned long ring_pages(unsigned sq_entries, unsigned cq_entries)
+static unsigned long ring_pages(struct io_ring_ctx *ctx, unsigned sq_entries,
+				  unsigned cq_entries)
 {
 	size_t pages;
 
 	pages = (size_t)1 << get_order(
 		rings_size(sq_entries, cq_entries, NULL));
-	pages += (size_t)1 << get_order(
-		array_size(sizeof(struct io_uring_sqe), sq_entries));
+	if (ctx->flags & IORING_SETUP_SQE128)
+		pages += (size_t)1 << get_order(
+			array_size(2 * sizeof(struct io_uring_sqe), sq_entries));
+	else
+		pages += (size_t)1 << get_order(
+			array_size(sizeof(struct io_uring_sqe), sq_entries));
 
 	return pages;
 }
@@ -8975,7 +9086,7 @@ static void io_ring_ctx_wait_and_kill(struct io_ring_ctx *ctx)
 	 * is closed but resources aren't reaped yet. This can cause
 	 * spurious failure in setting up a new ring.
 	 */
-	io_unaccount_mem(ctx, ring_pages(ctx->sq_entries, ctx->cq_entries),
+	io_unaccount_mem(ctx, ring_pages(ctx, ctx->sq_entries, ctx->cq_entries),
 			 ACCT_LOCKED);
 
 	INIT_WORK(&ctx->exit_work, io_ring_exit_work);
@@ -9730,7 +9841,10 @@ static int io_allocate_scq_urings(struct io_ring_ctx *ctx,
 	ctx->sq_mask = rings->sq_ring_mask;
 	ctx->cq_mask = rings->cq_ring_mask;
 
-	size = array_size(sizeof(struct io_uring_sqe), p->sq_entries);
+	if (p->flags & IORING_SETUP_SQE128)
+		size = array_size(2 * sizeof(struct io_uring_sqe), p->sq_entries);
+	else
+		size = array_size(sizeof(struct io_uring_sqe), p->sq_entries);
 	if (size == SIZE_MAX) {
 		io_mem_free(ctx->rings);
 		ctx->rings = NULL;
@@ -9846,7 +9960,7 @@ static int io_uring_create(unsigned entries, struct io_uring_params *p,
 
 	if (limit_mem) {
 		ret = __io_account_mem(user,
-				ring_pages(p->sq_entries, p->cq_entries));
+				ring_pages(ctx, p->sq_entries, p->cq_entries));
 		if (ret) {
 			free_uid(user);
 			return ret;
@@ -9856,7 +9970,7 @@ static int io_uring_create(unsigned entries, struct io_uring_params *p,
 	ctx = io_ring_ctx_alloc(p);
 	if (!ctx) {
 		if (limit_mem)
-			__io_unaccount_mem(user, ring_pages(p->sq_entries,
+			__io_unaccount_mem(user, ring_pages(ctx, p->sq_entries,
 								p->cq_entries));
 		free_uid(user);
 		return -ENOMEM;
@@ -9904,7 +10018,7 @@ static int io_uring_create(unsigned entries, struct io_uring_params *p,
 	 * do this before hitting the general error path, as ring freeing
 	 * will un-account as well.
 	 */
-	io_account_mem(ctx, ring_pages(p->sq_entries, p->cq_entries),
+	io_account_mem(ctx, ring_pages(ctx, p->sq_entries, p->cq_entries),
 		       ACCT_LOCKED);
 	ctx->limit_mem = limit_mem;
 
@@ -10013,8 +10127,8 @@ static long io_uring_setup(u32 entries, struct io_uring_params __user *params)
 	if (p.flags & ~(IORING_SETUP_IOPOLL | IORING_SETUP_SQPOLL |
 			IORING_SETUP_SQ_AFF | IORING_SETUP_CQSIZE |
 			IORING_SETUP_CLAMP | IORING_SETUP_ATTACH_WQ |
-			IORING_SETUP_R_DISABLED | IORING_SETUP_SQPOLL_PERCPU |
-			IORING_SETUP_IDLE_US))
+			IORING_SETUP_R_DISABLED | IORING_SETUP_SQE128 |
+			IORING_SETUP_SQPOLL_PERCPU | IORING_SETUP_IDLE_US))
 		return -EINVAL;
 
 	return  io_uring_create(entries, &p, params);
