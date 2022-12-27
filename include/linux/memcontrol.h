@@ -454,6 +454,17 @@ struct mem_cgroup {
 	bool allow_duptext;
 #endif
 
+#ifdef CONFIG_TEXT_UNEVICTABLE
+	bool allow_unevictable;
+	unsigned int unevictable_percent;
+	/*
+	 * the unevictable_size is larger than the real unevictable memory
+	 * size, due to there may be multiple tasks sharing the same memory,
+	 * such as binary and dynamic library sharing.
+	 */
+	atomic_long_t unevictable_size;
+#endif
+
 #if IS_ENABLED(CONFIG_RECLAIM_COLDPGS)
 	struct reclaim_coldpgs_control	coldpgs_control;
 	struct reclaim_coldpgs_stats __percpu *coldpgs_stats;
