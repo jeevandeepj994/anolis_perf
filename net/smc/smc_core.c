@@ -2384,7 +2384,8 @@ create:
 		/* smc_lgr_decision_maker_put in first_contact_done() */
 		smc_lgr_decision_maker_hold(ldm);
 		/* keep this clcsock for QP reuse */
-		if (net->smc.sysctl_keep_first_contact_clcsock)
+		if (net->smc.sysctl_keep_first_contact_clcsock &&
+		    !reserve_mode)
 			smc->keep_clcsock = true;
 		rc = smc_lgr_create(smc, ini);
 		if (rc)
