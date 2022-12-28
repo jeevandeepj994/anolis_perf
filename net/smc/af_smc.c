@@ -64,6 +64,10 @@ struct workqueue_struct	*smc_close_wq;	/* wq for close work */
 static void smc_tcp_listen_work(struct work_struct *);
 static void smc_connect_work(struct work_struct *);
 
+bool reserve_mode = true;	/* default use reserve_mode */
+module_param(reserve_mode, bool, 0444);
+MODULE_PARM_DESC(reserve_mode, "reserve mode support and keep-first-contact disable");
+
 static inline int smc_clcsock_enable_fastopen(struct smc_sock *smc, int is_server)
 {
 	int val = 1;
@@ -452,7 +456,8 @@ static int smc_bind(struct socket *sock, struct sockaddr *uaddr,
 		goto out_rel;
 
 	/* use SO_REUSEADDR to keep first contact clcsock  */
-	if (sock_net(sk)->smc.sysctl_keep_first_contact_clcsock)
+	if (sock_net(sk)->smc.sysctl_keep_first_contact_clcsock &&
+	    !reserve_mode)
 		smc->clcsock->sk->sk_reuse = SK_CAN_REUSE;
 	else
 		smc->clcsock->sk->sk_reuse = sk->sk_reuse;

@@ -1134,9 +1134,10 @@ enum ib_qp_create_flags {
 	IB_QP_CREATE_PCI_WRITE_END_PADDING	=
 		IB_UVERBS_QP_CREATE_PCI_WRITE_END_PADDING,
 
-	IB_QP_CREATE_IWARP_WITHOUT_CM		= 1 << 25,
 	/* reserve bits 26-31 for low level drivers' internal use */
 	IB_QP_CREATE_RESERVED_START		= 1 << 26,
+	/* reserve for eRDMA OOB connection establishment */
+	IB_QP_CREATE_IWARP_WITHOUT_CM		= 1 << 27,
 	IB_QP_CREATE_RESERVED_END		= 1 << 31,
 };
 
