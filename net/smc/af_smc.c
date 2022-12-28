@@ -69,6 +69,10 @@ struct workqueue_struct	*smc_close_wq;	/* wq for close work */
 static void smc_tcp_listen_work(struct work_struct *);
 static void smc_connect_work(struct work_struct *);
 
+bool reserve_mode = true;	/* default use reserve_mode */
+module_param(reserve_mode, bool, 0444);
+MODULE_PARM_DESC(reserve_mode, "reserve mode support and keep-first-contact disable");
+
 int smc_nl_dump_hs_limitation(struct sk_buff *skb, struct netlink_callback *cb)
 {
 	struct smc_nl_dmp_ctx *cb_ctx = smc_nl_dmp_ctx(cb);
