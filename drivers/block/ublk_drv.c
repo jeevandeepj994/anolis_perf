@@ -91,6 +91,7 @@ struct ublk_queue {
 	int q_id;
 	int q_depth;
 
+	unsigned long flags;
 	struct task_struct	*ubq_daemon;
 	char *io_cmd_buf;
 
@@ -500,12 +501,10 @@ static void __ublk_fail_req(struct ublk_io *io, struct request *req)
 
 #define UBLK_REQUEUE_DELAY_MS	3
 
-static void ublk_rq_task_work_cb(struct io_uring_cmd *cmd)
+static inline void __ublk_rq_task_work(struct request *req)
 {
-	struct ublk_uring_cmd_pdu *pdu = ublk_get_uring_cmd_pdu(cmd);
-	struct ublk_device *ub = cmd->file->private_data;
-	struct request *req = pdu->req;
 	struct ublk_queue *ubq = req->mq_hctx->driver_data;
+	struct ublk_device *ub = ubq->dev;
 	int tag = req->tag;
 	struct ublk_io *io = &ubq->ios[tag];
 	bool task_exiting = current != ubq->ubq_daemon ||
@@ -555,6 +554,13 @@ static void ublk_rq_task_work_cb(struct io_uring_cmd *cmd)
 
 	/* tell ublksrv one io request is coming */
 	io_uring_cmd_done(io->cmd, UBLK_IO_RES_OK, 0);
+}
+
+static void ublk_rq_task_work_cb(struct io_uring_cmd *cmd)
+{
+	struct ublk_uring_cmd_pdu *pdu = ublk_get_uring_cmd_pdu(cmd);
+
+	__ublk_rq_task_work(pdu->req);
 }
 
 static blk_status_t ublk_queue_rq(struct blk_mq_hw_ctx *hctx,
@@ -912,6 +918,7 @@ static int ublk_init_queue(struct ublk_device *ub, int q_id)
 	void *ptr;
 	int size;
 
+	ubq->flags = ub->dev_info.flags[0];
 	ubq->q_id = q_id;
 	ubq->q_depth = ub->dev_info.queue_depth;
 	size = ublk_queue_cmd_buf_size(ub, q_id);
