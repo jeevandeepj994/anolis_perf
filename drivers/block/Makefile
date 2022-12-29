@@ -49,4 +49,7 @@ endif
 null_blk-$(CONFIG_BLK_DEV_ZONED) += null_blk_zoned.o
 
 skd-y		:= skd_main.o
+
+obj-$(CONFIG_BLK_DEV_UBLK)			+= ublk_drv.o
+
 swim_mod-y	:= swim.o swim_asm.o
