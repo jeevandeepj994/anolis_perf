@@ -43,6 +43,24 @@ struct smc_ib_devices smc_ib_devices = {	/* smc-registered ib devices */
 
 u8 local_systemid[SMC_SYSTEMID_LEN];		/* unique system identifier */
 
+static void smc_ib_modify_qp_iw_extension(struct smc_link *lnk)
+{
+	struct iw_ext_conn_param *iw_param = &lnk->iw_conn_param;
+	struct smc_link_group *lgr = lnk->lgr;
+
+	if (lgr->role == SMC_SERV) {
+		iw_param->sk_addr.sport =
+			rsvd_ports_base +
+			(lnk->roce_qp->qp_num % SMC_IWARP_RSVD_PORTS_NUM);
+		iw_param->sk_addr.dport = htons(lnk->peer_qpn);
+	} else {
+		iw_param->sk_addr.sport = lnk->roce_qp->qp_num;
+		iw_param->sk_addr.dport =
+			htons(rsvd_ports_base +
+			(lnk->peer_qpn % SMC_IWARP_RSVD_PORTS_NUM));
+	}
+}
+
 static int smc_ib_modify_qp_init(struct smc_link *lnk)
 {
 	struct ib_qp_attr qp_attr;
@@ -87,6 +105,12 @@ static int smc_ib_modify_qp_rtr(struct smc_link *lnk)
 					 * requests
 					 */
 	qp_attr.min_rnr_timer = SMC_QP_MIN_RNR_TIMER;
+
+	if (reserve_mode &&
+	    smc_ib_is_iwarp(lnk->smcibdev->ibdev, lnk->ibport)) {
+		smc_ib_modify_qp_iw_extension(lnk);
+		qp_attr_mask |= IB_QP_RESERVED1;
+	}
 
 	return ib_modify_qp(lnk->roce_qp, &qp_attr, qp_attr_mask);
 }
@@ -276,8 +300,8 @@ int smc_ib_determine_gid(struct smc_ib_device *smcibdev, u8 ibport,
 
 		rcu_read_lock();
 		ndev = rdma_read_gid_attr_ndev_rcu(attr);
-		if ((smcibdev->ibdev->port_data[ibport].immutable.core_cap_flags &
-		    RDMA_CORE_CAP_PROT_IWARP) || (!IS_ERR(ndev) &&
+		if (smc_ib_is_iwarp(smcibdev->ibdev, ibport) ||
+		    (!IS_ERR(ndev) &&
 		    ((!vlan_id && !is_vlan_dev(ndev)) ||
 		     (vlan_id && is_vlan_dev(ndev) &&
 		      vlan_dev_vlan_id(ndev) == vlan_id)))) {
@@ -704,11 +728,9 @@ int smc_ib_create_queue_pair(struct smc_link *lnk)
 		.qp_type = IB_QPT_RC,
 	};
 	struct ib_device *ib_dev = lnk->smcibdev->ibdev;
-	struct ib_port_immutable immutable;
 	int rc;
 
-	ib_dev->ops.get_port_immutable(ib_dev, lnk->ibport, &immutable);
-	if (immutable.core_cap_flags & RDMA_CORE_CAP_PROT_IWARP)
+	if (smc_ib_is_iwarp(ib_dev, lnk->ibport))
 		qp_attr.create_flags |= IB_QP_CREATE_IWARP_WITHOUT_CM;
 
 	lnk->roce_qp = ib_create_qp(lnk->roce_pd, &qp_attr);
@@ -1007,12 +1029,91 @@ void smc_ib_ndev_change(struct net_device *ndev, unsigned long event)
 	mutex_unlock(&smc_ib_devices.mutex);
 }
 
+bool smc_ib_is_iwarp(struct ib_device *ibdev, u8 ibport)
+{
+	struct ib_port_immutable immutable;
+
+	ibdev->ops.get_port_immutable(ibdev, ibport, &immutable);
+	return immutable.core_cap_flags & RDMA_CORE_CAP_PROT_IWARP;
+}
+
+/* Reserve socket ports of each net namespace which can be accessed
+ * by eRDMA (iWARP) device for out-bound RC establishment.
+ */
+static int smc_iw_reserve_ports(struct smc_ib_device *smcibdev)
+{
+	struct ib_device *ibdev = smcibdev->ibdev;
+	struct net *net, *_net;
+	int rc;
+
+	if (!reserve_mode)
+		return 0;
+	if (!smc_ib_is_iwarp(ibdev, 1))
+		return 0;
+
+	down_read(&net_rwsem);
+	for_each_net(net) {
+		/* for net can access ibdev */
+		if (!rdma_dev_access_netns(ibdev, net))
+			continue;
+		/* check if already reserved*/
+		if (atomic_inc_return(&net->smc.iwarp_cnt) > 1)
+			continue;
+
+		rc = smcr_iw_net_reserve_ports(net);
+		if (rc) {
+			atomic_dec(&net->smc.iwarp_cnt);
+			goto release;
+		}
+	}
+	up_read(&net_rwsem);
+	return 0;
+
+release:
+	/* release ports and recover */
+	for_each_net(_net) {
+		if (_net == net)
+			break;
+		if (!rdma_dev_access_netns(ibdev, _net))
+			continue;
+		if (!atomic_dec_and_test(&_net->smc.iwarp_cnt))
+			continue;
+		smcr_iw_net_release_ports(_net);
+	}
+	up_read(&net_rwsem);
+	return rc;
+}
+
+static void smc_iw_release_ports(struct smc_ib_device *smcibdev)
+{
+	struct ib_device *ibdev = smcibdev->ibdev;
+	struct net *net;
+
+	if (!reserve_mode)
+		return;
+	if (!smc_ib_is_iwarp(ibdev, 1))
+		return;
+
+	down_read(&net_rwsem);
+	for_each_net(net) {
+		/* for net can access ibdev */
+		if (!rdma_dev_access_netns(ibdev, net))
+			continue;
+		/* check if need release */
+		if (!atomic_dec_and_test(&net->smc.iwarp_cnt))
+			continue;
+
+		smcr_iw_net_release_ports(net);
+	}
+	up_read(&net_rwsem);
+}
+
 /* callback function for ib_register_client() */
 static int smc_ib_add_dev(struct ib_device *ibdev)
 {
 	struct smc_ib_device *smcibdev;
+	int i, rc = 0;
 	u8 port_cnt;
-	int i;
 
 	if (ibdev->node_type != RDMA_NODE_IB_CA &&
 	    ibdev->node_type != RDMA_NODE_RNIC)
@@ -1023,6 +1124,11 @@ static int smc_ib_add_dev(struct ib_device *ibdev)
 		return -ENOMEM;
 
 	smcibdev->ibdev = ibdev;
+	rc = smc_iw_reserve_ports(smcibdev);
+	if (rc) {
+		kfree(smcibdev);
+		return rc;
+	}
 	INIT_WORK(&smcibdev->port_event_work, smc_ib_port_event_work);
 	atomic_set(&smcibdev->lnk_cnt, 0);
 	init_waitqueue_head(&smcibdev->lnks_deleted);
@@ -1071,6 +1177,7 @@ static void smc_ib_remove_dev(struct ib_device *ibdev, void *client_data)
 	pr_warn_ratelimited("smc: removing ib device %s\n",
 			    smcibdev->ibdev->name);
 	smc_smcr_terminate_all(smcibdev);
+	smc_iw_release_ports(smcibdev);
 	smc_ib_cleanup_per_ibdev(smcibdev);
 	ib_unregister_event_handler(&smcibdev->event_handler);
 	cancel_work_sync(&smcibdev->port_event_work);

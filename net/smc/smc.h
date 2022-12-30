@@ -30,6 +30,9 @@
 extern struct proto smc_proto;
 extern struct proto smc_proto6;
 
+extern bool reserve_mode;
+extern u16 rsvd_ports_base;
+
 #ifdef ATOMIC64_INIT
 #define KERNEL_HAS_ATOMIC64
 #endif
