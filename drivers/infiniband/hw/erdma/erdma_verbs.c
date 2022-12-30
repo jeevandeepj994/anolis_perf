@@ -511,6 +511,31 @@ static void free_kernel_qp(struct erdma_qp *qp)
 			      qp->kern_qp.rq_db_info_dma_addr);
 }
 
+static int update_kernel_qp_oob_attr(struct erdma_qp *qp)
+{
+	struct iw_ext_conn_param *param =
+		(struct iw_ext_conn_param *)(qp->ibqp.qp_context);
+
+	if (!qp->attrs.connect_without_cm)
+		return -EINVAL;
+
+	if (param == NULL)
+		return -EINVAL;
+
+	if (param->sk_addr.family != PF_INET) {
+		ibdev_err_ratelimited(
+			&qp->dev->ibdev,
+			"IPv4 address is required for connection without CM.\n");
+		return -EINVAL;
+	}
+	qp->attrs.sip = ntohl(param->sk_addr.saddr_v4);
+	qp->attrs.dip = ntohl(param->sk_addr.daddr_v4);
+	qp->attrs.dport = ntohs(param->sk_addr.dport);
+	qp->attrs.sport = param->sk_addr.sport;
+
+	return 0;
+}
+
 static int init_kernel_qp(struct erdma_dev *dev, struct erdma_qp *qp,
 			  struct ib_qp_init_attr *attrs)
 {
@@ -1535,6 +1560,7 @@ static int ib_qp_state_to_erdma_qp_state[IB_QPS_ERR + 1] = {
 	[IB_QPS_ERR] = ERDMA_QP_STATE_ERROR
 };
 
+#define IB_QP_OOB_CONN_ATTR IB_QP_RESERVED1
 int erdma_modify_qp(struct ib_qp *ibqp, struct ib_qp_attr *attr, int attr_mask,
 		    struct ib_udata *udata)
 {
@@ -1545,6 +1571,11 @@ int erdma_modify_qp(struct ib_qp *ibqp, struct ib_qp_attr *attr, int attr_mask,
 	struct rdma_ah_attr *ah_attr;
 	const struct ib_gid_attr *sgid_attr;
 
+	if (attr_mask & IB_QP_OOB_CONN_ATTR) {
+		ret = update_kernel_qp_oob_attr(qp);
+		if (ret)
+			return ret;
+	}
 
 	if (compat_mode) {
 		dprint(DBG_QP, "attr mask: %x, av: %d, state:%d\n", attr_mask,
