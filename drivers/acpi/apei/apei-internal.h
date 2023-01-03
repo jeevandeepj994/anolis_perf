@@ -137,3 +137,7 @@ int cper_estatus_check(const struct acpi_hest_generic_status *estatus);
 
 int apei_osc_setup(void);
 #endif
+
+#ifdef CONFIG_YITIAN_CPER_RAWDATA
+bool yitian_estatus_check_header(const struct acpi_hest_generic_status *estatus);
+#endif /* CONFIG_YITIAN_CPER_RAWDATA */
