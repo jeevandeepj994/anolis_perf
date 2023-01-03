@@ -4,7 +4,7 @@
 #include <linux/mutex.h>
 #include <linux/percpu.h>
 
-#define SMC_IWARP_RSVD_PORTS_NUM	8
+#define SMC_IWARP_RSVD_PORTS_NUM	16 /* must be 16 */
 
 struct smc_stats_rsn;
 struct smc_stats;
