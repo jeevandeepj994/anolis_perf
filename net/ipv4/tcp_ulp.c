@@ -152,6 +152,10 @@ int tcp_set_ulp(struct sock *sk, const char *name)
 		return -ENOENT;
 	}
 
+	err = -EINVAL;
+	if (!ulp_ops->clone && sk->sk_state == TCP_LISTEN)
+		goto out_err;
+
 	err = ulp_ops->init(sk);
 	if (err) {
 		module_put(ulp_ops->owner);
