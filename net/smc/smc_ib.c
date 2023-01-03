@@ -46,18 +46,42 @@ u8 local_systemid[SMC_SYSTEMID_LEN];		/* unique system identifier */
 static void smc_ib_modify_qp_iw_extension(struct smc_link *lnk)
 {
 	struct iw_ext_conn_param *iw_param = &lnk->iw_conn_param;
-	struct smc_link_group *lgr = lnk->lgr;
+	__be32 saddr_v4, daddr_v4;
+	bool use_rsvd_ports;
 
-	if (lgr->role == SMC_SERV) {
-		iw_param->sk_addr.sport =
-			rsvd_ports_base +
-			(lnk->roce_qp->qp_num % SMC_IWARP_RSVD_PORTS_NUM);
-		iw_param->sk_addr.dport = htons(lnk->peer_qpn);
+	/* IPs are stored as union, treat them as IPv4
+	 * for easy comparison.
+	 */
+	saddr_v4 = iw_param->sk_addr.saddr_v4;
+	daddr_v4 = iw_param->sk_addr.daddr_v4;
+
+	if (saddr_v4 < daddr_v4) {
+		use_rsvd_ports = true;
+	} else if (saddr_v4 > daddr_v4) {
+		use_rsvd_ports = false;
 	} else {
-		iw_param->sk_addr.sport = lnk->roce_qp->qp_num;
-		iw_param->sk_addr.dport =
-			htons(rsvd_ports_base +
-			(lnk->peer_qpn % SMC_IWARP_RSVD_PORTS_NUM));
+		/* if sip == dip, then lqpn must be
+		 * different from rqpn.
+		 */
+		if (lnk->roce_qp->qp_num < lnk->peer_qpn)
+			use_rsvd_ports = true;
+		else
+			use_rsvd_ports = false;
+	}
+
+	/* eRDMA iWARP MAX qp_num is 128K, that is a maximum of 128K
+	 * RC links can be formed. So here we reserve 2^4 ports in
+	 * one side, and with maximum of 2^16 ports in another side
+	 * to form 2^20 different 5-tuples for eRDMA iWARP RC link.
+	 */
+	if (use_rsvd_ports) {
+		iw_param->sk_addr.sport =
+			rsvd_ports_base + ((lnk->peer_qpn >> 16) & 0xF);
+		iw_param->sk_addr.dport = htons(lnk->peer_qpn & 0xFFFF);
+	} else {
+		iw_param->sk_addr.sport = lnk->roce_qp->qp_num & 0xFFFF;
+		iw_param->sk_addr.dport = htons(rsvd_ports_base +
+			      ((lnk->roce_qp->qp_num >> 16) & 0xF));
 	}
 }
 
