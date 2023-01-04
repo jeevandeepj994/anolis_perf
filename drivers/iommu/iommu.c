@@ -3194,7 +3194,7 @@ static int iommu_split_block(struct iommu_domain *domain, unsigned long iova,
 }
 
 int iommu_domain_set_hwdbm(struct iommu_domain *domain, bool enable,
-			   unsigned long iova, size_t size)
+			   unsigned long iova, size_t size, bool pt_split)
 {
 	const struct iommu_ops *ops = domain->ops;
 	int ret = 0;
@@ -3208,10 +3208,12 @@ int iommu_domain_set_hwdbm(struct iommu_domain *domain, bool enable,
 	if (ret)
 		return ret;
 
-	if (enable)
-		ret = iommu_split_block(domain, iova, size);
-	else
-		ret = iommu_merge_pages(domain, iova, size);
+	if (pt_split) {
+		if (enable)
+			ret = iommu_split_block(domain, iova, size);
+		else
+			ret = iommu_merge_pages(domain, iova, size);
+	}
 
 	return ret;
 }
