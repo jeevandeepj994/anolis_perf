@@ -144,12 +144,12 @@ static void _conn_show(struct seq_file *seq, struct smc_sock *smc, int protocol)
 	}
 
 	seq_printf(seq, CONN_SK_FM, fb ? 'Y' : 'N', fb ? smc->fallback_rsn : 0,
-		   sk, clcsock->sk, fb ? clcsock->sk->sk_state : sk->sk_state, sock_i_ino(sk));
+		   sk, clcsock->sk, fb ? clcsock->sk->sk_state : smc_sk_state(sk), sock_i_ino(sk));
 
 	lgr = smc->conn.lgr;
 	lnk = smc->conn.lnk;
 
-	if (!fb && sk->sk_state == SMC_ACTIVE && lgr && lnk) {
+	if (!fb && smc_sk_state(sk) == SMC_ACTIVE && lgr && lnk) {
 		for (i = 0; i < SMC_LGR_ID_SIZE; i++)
 			seq_printf(seq, "%02X", lgr->id[i]);
 
