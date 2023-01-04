@@ -35,6 +35,9 @@ extern struct proto smc_proto6;
 extern bool reserve_mode;
 extern u16 rsvd_ports_base;
 
+#define smc_sk_state(sk)			((sk)->sk_state)
+#define smc_sk_set_state(sk, state)		(smc_sk_state(sk) = (state))
+
 enum smc_state {		/* possible states of an SMC socket */
 	SMC_ACTIVE	= 1,
 	SMC_INIT	= 2,
