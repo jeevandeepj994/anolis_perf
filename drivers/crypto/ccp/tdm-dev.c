@@ -1528,7 +1528,6 @@ static struct miscdevice misc = {
 int tdm_dev_init(void)
 {
 	int ret = 0;
-	struct tdm_version version;
 
 	if (tdm_init_flag)
 		return 0;
