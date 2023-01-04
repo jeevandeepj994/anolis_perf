@@ -3066,7 +3066,7 @@ static void vfio_dma_dirty_log_set(struct vfio_iommu *iommu,
 		if (iommu_support_dirty_log(d->domain))
 			iommu_switch_dirty_log(d->domain, start, dma->iova, dma->size, dma->prot);
 		else
-			iommu_domain_set_hwdbm(d->domain, start, dma->iova, dma->size);
+			iommu_domain_set_hwdbm(d->domain, start, dma->iova, dma->size, false);
 	}
 }
 
