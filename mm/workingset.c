@@ -454,6 +454,7 @@ void workingset_refault(struct page *page, void *shadow)
 	 * is actually experiencing the refault event.
 	 */
 	memcg = page_memcg(page);
+	pgdat = page_pgdat(page);
 	lruvec = mem_cgroup_lruvec(memcg, pgdat);
 
 	inc_lruvec_state(lruvec, WORKINGSET_REFAULT_BASE + file);
@@ -470,7 +471,7 @@ void workingset_refault(struct page *page, void *shadow)
 		workingset_size += lruvec_page_state(eviction_lruvec,
 						     NR_INACTIVE_FILE);
 	}
-	if (mem_cgroup_get_nr_swap_pages(memcg) > 0) {
+	if (mem_cgroup_get_nr_swap_pages(eviction_memcg) > 0) {
 		workingset_size += lruvec_page_state(eviction_lruvec,
 						     NR_ACTIVE_ANON);
 		if (file) {
