@@ -980,7 +980,6 @@ static int csv_ioctl_do_hgsc_import(struct sev_issue_cmd *argp)
 
 	ret = __sev_do_cmd_locked(CSV_CMD_HGSC_CERT_IMPORT, data, &argp->error);
 
-e_free_hgsc:
 	kfree(hgsc_blob);
 e_free_hgscsk:
 	kfree(hgscsk_blob);
@@ -995,6 +994,7 @@ static long sev_ioctl(struct file *file, unsigned int ioctl, unsigned long arg)
 	struct sev_issue_cmd input;
 	int ret = -EFAULT;
 	bool writable = file->f_mode & FMODE_WRITE;
+	int mutex_enabled;
 
 	if (!psp_master || !psp_master->sev_data)
 		return -ENODEV;
@@ -1013,7 +1013,7 @@ static long sev_ioctl(struct file *file, unsigned int ioctl, unsigned long arg)
 			return -EINVAL;
 	}
 
-	int mutex_enabled = READ_ONCE(psp_mutex_enabled);
+	mutex_enabled = READ_ONCE(psp_mutex_enabled);
 
 	if (is_hygon_psp && mutex_enabled) {
 		if (psp_mutex_lock_timeout(&psp_misc->data_pg_aligned->mb_mutex,
