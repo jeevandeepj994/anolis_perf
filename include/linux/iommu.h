@@ -597,7 +597,7 @@ extern int iommu_domain_get_attr(struct iommu_domain *domain, enum iommu_attr,
 extern int iommu_domain_set_attr(struct iommu_domain *domain, enum iommu_attr,
 				 void *data);
 extern int iommu_domain_set_hwdbm(struct iommu_domain *domain, bool enable,
-				  unsigned long iova, size_t size);
+				  unsigned long iova, size_t size, bool pt_split);
 extern bool iommu_support_dirty_log(struct iommu_domain *domain);
 extern int iommu_switch_dirty_log(struct iommu_domain *domain, bool enable,
 				  unsigned long iova, size_t size, int prot);
@@ -1021,7 +1021,8 @@ static inline int iommu_domain_set_attr(struct iommu_domain *domain,
 static inline int iommu_domain_set_hwdbm(struct iommu_domain *domain,
 					 bool enable,
 					 unsigned long iova,
-					 size_t size)
+					 size_t size,
+					 bool pt_split)
 {
 	return -EINVAL;
 }
