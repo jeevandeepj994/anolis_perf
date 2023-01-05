@@ -8601,14 +8601,14 @@ static unsigned long rings_size(unsigned sq_entries, unsigned cq_entries,
 	return off;
 }
 
-static unsigned long ring_pages(struct io_ring_ctx *ctx, unsigned sq_entries,
-				  unsigned cq_entries)
+static unsigned long ring_pages(unsigned sq_entries, unsigned cq_entries,
+				unsigned int flags)
 {
 	size_t pages;
 
 	pages = (size_t)1 << get_order(
 		rings_size(sq_entries, cq_entries, NULL));
-	if (ctx->flags & IORING_SETUP_SQE128)
+	if (flags & IORING_SETUP_SQE128)
 		pages += (size_t)1 << get_order(
 			array_size(2 * sizeof(struct io_uring_sqe), sq_entries));
 	else
@@ -9086,7 +9086,8 @@ static void io_ring_ctx_wait_and_kill(struct io_ring_ctx *ctx)
 	 * is closed but resources aren't reaped yet. This can cause
 	 * spurious failure in setting up a new ring.
 	 */
-	io_unaccount_mem(ctx, ring_pages(ctx, ctx->sq_entries, ctx->cq_entries),
+	io_unaccount_mem(ctx, ring_pages(ctx->sq_entries, ctx->cq_entries,
+					 ctx->flags),
 			 ACCT_LOCKED);
 
 	INIT_WORK(&ctx->exit_work, io_ring_exit_work);
@@ -9959,8 +9960,9 @@ static int io_uring_create(unsigned entries, struct io_uring_params *p,
 	limit_mem = !capable(CAP_IPC_LOCK);
 
 	if (limit_mem) {
-		ret = __io_account_mem(user,
-				ring_pages(ctx, p->sq_entries, p->cq_entries));
+		ret = __io_account_mem(user, ring_pages(p->sq_entries,
+							p->cq_entries,
+							p->flags));
 		if (ret) {
 			free_uid(user);
 			return ret;
@@ -9970,8 +9972,9 @@ static int io_uring_create(unsigned entries, struct io_uring_params *p,
 	ctx = io_ring_ctx_alloc(p);
 	if (!ctx) {
 		if (limit_mem)
-			__io_unaccount_mem(user, ring_pages(ctx, p->sq_entries,
-								p->cq_entries));
+			__io_unaccount_mem(user, ring_pages(p->sq_entries,
+							    p->cq_entries,
+							    p->flags));
 		free_uid(user);
 		return -ENOMEM;
 	}
@@ -10018,7 +10021,7 @@ static int io_uring_create(unsigned entries, struct io_uring_params *p,
 	 * do this before hitting the general error path, as ring freeing
 	 * will un-account as well.
 	 */
-	io_account_mem(ctx, ring_pages(ctx, p->sq_entries, p->cq_entries),
+	io_account_mem(ctx, ring_pages(p->sq_entries, p->cq_entries, p->flags),
 		       ACCT_LOCKED);
 	ctx->limit_mem = limit_mem;
 
