@@ -465,6 +465,11 @@ struct mem_cgroup {
 	atomic_long_t unevictable_size;
 #endif
 
+#ifdef CONFIG_PAGECACHE_LIMIT
+	bool allow_pgcache_limit;
+	unsigned long pgcache_limit_size;
+#endif
+
 #if IS_ENABLED(CONFIG_RECLAIM_COLDPGS)
 	struct reclaim_coldpgs_control	coldpgs_control;
 	struct reclaim_coldpgs_stats __percpu *coldpgs_stats;
