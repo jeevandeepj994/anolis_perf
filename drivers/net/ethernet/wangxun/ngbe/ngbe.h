@@ -25,6 +25,8 @@
 
 #define NGBE_INTR_ALL                  0x1FF
 
+#define NGBE_DEFAULT_FCPAUSE   0xFFFF
+
 /* TX/RX descriptor defines */
 #define NGBE_DEFAULT_TXD               512 /* default ring size */
 #define NGBE_DEFAULT_TX_WORK           256
@@ -542,6 +544,7 @@ struct ngbe_adapter {
 	u32 flags;
 	u32 flags2;
 	unsigned long state;
+	enum ngbe_fc_mode last_lfc_mode;
 
 	unsigned int tx_ring_count;
 	unsigned int rx_ring_count;
