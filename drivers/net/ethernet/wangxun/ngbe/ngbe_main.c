@@ -479,6 +479,15 @@ static int ngbe_sw_init(struct ngbe_adapter *adapter)
 	adapter->flags2 |= NGBE_FLAG2_TEMP_SENSOR_CAPABLE;
 	adapter->flags2 |= NGBE_FLAG2_EEE_CAPABLE;
 
+	/* default flow control settings */
+	hw->fc.requested_mode = ngbe_fc_full;
+	hw->fc.current_mode = ngbe_fc_full; /* init for ethtool output */
+
+	adapter->last_lfc_mode = hw->fc.current_mode;
+	hw->fc.pause_time = NGBE_DEFAULT_FCPAUSE;
+	hw->fc.send_xon = true;
+	hw->fc.disable_fc_autoneg = false;
+
 	/* set default ring sizes */
 	adapter->tx_ring_count = NGBE_DEFAULT_TXD;
 	adapter->rx_ring_count = NGBE_DEFAULT_RXD;
