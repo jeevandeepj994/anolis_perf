@@ -471,6 +471,8 @@ struct mem_cgroup {
 #ifdef CONFIG_PAGECACHE_LIMIT
 	bool allow_pgcache_limit;
 	unsigned long pgcache_limit_size;
+	bool pgcache_limit_sync;
+	struct work_struct pgcache_limit_work;
 #endif
 
 #if IS_ENABLED(CONFIG_RECLAIM_COLDPGS)
