@@ -83,17 +83,24 @@ static int board_added(struct controller *ctrl)
 		goto err_exit;
 	}
 
+	/*
+	 * Some device drivers will change indicators, so move setting
+	 * indicators before configuring device.
+	 */
+	pciehp_set_indicators(ctrl, PCI_EXP_SLTCTL_PWR_IND_ON,
+			      PCI_EXP_SLTCTL_ATTN_IND_OFF);
+
 	retval = pciehp_configure_device(ctrl);
 	if (retval) {
 		if (retval != -EEXIST) {
 			ctrl_err(ctrl, "Cannot add device at %04x:%02x:00\n",
 				 pci_domain_nr(parent), parent->number);
+			pciehp_set_indicators(ctrl, PCI_EXP_SLTCTL_PWR_IND_OFF,
+			      PCI_EXP_SLTCTL_ATTN_IND_OFF);
 			goto err_exit;
 		}
 	}
 
-	pciehp_set_indicators(ctrl, PCI_EXP_SLTCTL_PWR_IND_ON,
-			      PCI_EXP_SLTCTL_ATTN_IND_OFF);
 	return 0;
 
 err_exit:
@@ -108,8 +115,14 @@ err_exit:
  */
 static void remove_board(struct controller *ctrl, bool safe_removal)
 {
-	pciehp_unconfigure_device(ctrl, safe_removal);
+	/*
+	 * Some device drivers will change indicators, so move setting
+	 * indicators before unconfiguring device.
+	 */
+	pciehp_set_indicators(ctrl, PCI_EXP_SLTCTL_PWR_IND_OFF,
+			      INDICATOR_NOOP);
 
+	pciehp_unconfigure_device(ctrl, safe_removal);
 	if (POWER_CTRL(ctrl)) {
 		pciehp_power_off_slot(ctrl);
 
@@ -124,9 +137,6 @@ static void remove_board(struct controller *ctrl, bool safe_removal)
 		atomic_and(~(PCI_EXP_SLTSTA_DLLSC | PCI_EXP_SLTSTA_PDC),
 			   &ctrl->pending_events);
 	}
-
-	pciehp_set_indicators(ctrl, PCI_EXP_SLTCTL_PWR_IND_OFF,
-			      INDICATOR_NOOP);
 }
 
 static int pciehp_enable_slot(struct controller *ctrl);
