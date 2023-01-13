@@ -1032,6 +1032,8 @@ static int rdt_mon_features_show(struct kernfs_open_file *of,
 	list_for_each_entry(mevt, &r->evt_list, list) {
 		if (resctrl_arch_event_is_free_running(mevt->evtid))
 			seq_printf(seq, "%s\n", mevt->name);
+		if (mevt->configurable)
+			seq_printf(seq, "%s_config\n", mevt->name);
 	}
 
 	return 0;

@@ -737,6 +737,11 @@ static void l3_mon_evt_init(struct rdt_resource *r)
 {
 	INIT_LIST_HEAD(&r->evt_list);
 
+	if (resctrl_arch_is_mbm_total_enabled())
+		mbm_total_event.configurable = true;
+	if (resctrl_arch_is_mbm_local_enabled())
+		mbm_local_event.configurable = true;
+
 	if (resctrl_arch_is_llc_occupancy_enabled())
 		list_add_tail(&llc_occupancy_event.list, &r->evt_list);
 /*

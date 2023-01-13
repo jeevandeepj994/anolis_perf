@@ -48,6 +48,8 @@ DEFINE_PER_CPU(struct resctrl_pqr_state, pqr_state);
  */
 bool rdt_alloc_capable;
 
+bool rdt_bmec_capable;
+
 static void
 mba_wrmsr_intel(struct rdt_domain *d, struct msr_param *m,
 		struct rdt_resource *r);
@@ -778,6 +780,9 @@ static __init bool get_rdt_mon_resources(void)
 		rdt_mon_features |= (1 << QOS_L3_MBM_TOTAL_EVENT_ID);
 	if (rdt_cpu_has(X86_FEATURE_CQM_MBM_LOCAL))
 		rdt_mon_features |= (1 << QOS_L3_MBM_LOCAL_EVENT_ID);
+
+	if (rdt_cpu_has(X86_FEATURE_BMEC))
+		rdt_bmec_capable = true;
 
 	if (!rdt_mon_features)
 		return false;
