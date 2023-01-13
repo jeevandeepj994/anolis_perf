@@ -274,6 +274,7 @@ union cpuid_0x10_x_edx {
 
 void rdt_ctrl_update(void *arg);
 int rdt_get_mon_l3_config(struct rdt_resource *r);
+bool __init rdt_cpu_has(int flag);
 void __init intel_rdt_mbm_apply_quirk(void);
 void rdt_domain_reconfigure_cdp(struct rdt_resource *r);
 
