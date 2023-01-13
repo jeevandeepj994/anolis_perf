@@ -108,6 +108,12 @@ static inline bool resctrl_arch_is_mbm_local_configurable(void)
 
 static inline void resctrl_arch_mondata_config_read(void *dom, void *info) { }
 
+static inline int resctrl_arch_mbm_config_write_domain(void *rdt_resource, void *dom,
+						       u32 evtid, u32 val)
+{
+	return 0;
+}
+
 /* reset cached configurations, then all devices */
 void resctrl_arch_reset_resources(void);
 
