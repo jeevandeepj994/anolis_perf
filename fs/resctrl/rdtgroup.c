@@ -332,7 +332,6 @@ static int rdtgroup_cpus_show(struct kernfs_open_file *of,
 static void
 update_closid_rmid(const struct cpumask *cpu_mask, struct rdtgroup *r)
 {
-	int cpu = get_cpu();
 	struct resctrl_cpu_sync defaults;
 	struct resctrl_cpu_sync *defaults_p = NULL;
 
@@ -342,11 +341,7 @@ update_closid_rmid(const struct cpumask *cpu_mask, struct rdtgroup *r)
 		defaults_p = &defaults;
 	}
 
-	if (cpumask_test_cpu(cpu, cpu_mask))
-		resctrl_arch_sync_cpu_defaults(defaults_p);
-	smp_call_function_many(cpu_mask, resctrl_arch_sync_cpu_defaults,
-			       defaults_p, 1);
-	put_cpu();
+	on_each_cpu_mask(cpu_mask, resctrl_arch_sync_cpu_defaults, defaults_p, 1);
 }
 
 static int cpus_mon_write(struct rdtgroup *rdtgrp, cpumask_var_t newmask,
