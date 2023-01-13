@@ -241,6 +241,7 @@ bool resctrl_arch_is_hwdrc_mb_capable(void);
 int resctrl_arch_set_hwdrc_enabled(enum resctrl_res_level l, bool hwdrc_mb);
 
 void resctrl_arch_mondata_config_read(void *d, void *info);
+int resctrl_arch_mbm_config_write_domain(void *rdt_resource, void *dom, u32 evtid, u32 val);
 
 #else
 

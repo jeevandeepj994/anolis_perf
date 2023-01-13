@@ -242,6 +242,65 @@ void resctrl_arch_mondata_config_read(void *dom, void *info)
 	smp_call_function_any(&d->cpu_mask, mon_event_config_read, mon_info, 1);
 }
 
+static void mon_event_config_write(void *info)
+{
+	struct mon_config_info *mon_info = info;
+	unsigned int index;
+
+	index = mon_event_config_index_get(mon_info->evtid);
+	if (index == INVALID_CONFIG_INDEX) {
+		pr_warn_once("Invalid event id %d\n", mon_info->evtid);
+		return;
+	}
+	wrmsr(MSR_IA32_EVT_CFG_BASE + index, mon_info->mon_config, 0);
+}
+
+int resctrl_arch_mbm_config_write_domain(void *rdt_resource, void *dom, u32 evtid, u32 val)
+{
+	struct rdt_resource *r = rdt_resource;
+	struct rdt_domain *d = dom;
+	struct mon_config_info mon_info = {0};
+	int ret = 0;
+
+	/* mon_config cannot be more than the supported set of events */
+	if (val > MAX_EVT_CONFIG_BITS)
+		return -EINVAL;
+
+	/*
+	 * Read the current config value first. If both are the same then
+	 * no need to write it again.
+	 */
+	mon_info.evtid = evtid;
+	resctrl_arch_mondata_config_read(d, &mon_info);
+	if (mon_info.mon_config == val)
+		goto out;
+
+	mon_info.mon_config = val;
+
+	/*
+	 * Update MSR_IA32_EVT_CFG_BASE MSR on one of the CPUs in the
+	 * domain. The MSRs offset from MSR MSR_IA32_EVT_CFG_BASE
+	 * are scoped at the domain level. Writing any of these MSRs
+	 * on one CPU is observed by all the CPUs in the domain.
+	 */
+	smp_call_function_any(&d->cpu_mask, mon_event_config_write,
+			      &mon_info, 1);
+
+	/*
+	 * When an Event Configuration is changed, the bandwidth counters
+	 * for all RMIDs and Events will be cleared by the hardware. The
+	 * hardware also sets MSR_IA32_QM_CTR.Unavailable (bit 62) for
+	 * every RMID on the next read to any event for every RMID.
+	 * Subsequent reads will have MSR_IA32_QM_CTR.Unavailable (bit 62)
+	 * cleared while it is tracked by the hardware. Clear the
+	 * mbm_local and mbm_total counts for all the RMIDs.
+	 */
+	resctrl_arch_reset_rmid_all(r, d);
+
+out:
+	return ret;
+}
+
 static int reset_all_ctrls(struct rdt_resource *r)
 {
 	struct rdt_hw_resource *hw_res = resctrl_to_arch_res(r);
