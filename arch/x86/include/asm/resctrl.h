@@ -39,6 +39,7 @@ DECLARE_PER_CPU(struct resctrl_pqr_state, pqr_state);
 
 extern bool rdt_alloc_capable;
 extern bool rdt_mon_capable;
+extern bool rdt_bmec_capable;
 extern unsigned int rdt_mon_features;
 
 DECLARE_STATIC_KEY_FALSE(rdt_enable_key);
@@ -214,6 +215,16 @@ static inline bool resctrl_arch_is_mbm_local_enabled(void)
 static inline bool resctrl_arch_is_mbm_bps_enabled(void)
 {
 	return false;
+}
+
+static inline bool resctrl_arch_is_mbm_total_configurable(void)
+{
+	return rdt_bmec_capable && resctrl_arch_is_mbm_total_enabled();
+}
+
+static inline bool resctrl_arch_is_mbm_local_configurable(void)
+{
+	return rdt_bmec_capable && resctrl_arch_is_mbm_local_enabled();
 }
 
 u64 resctrl_arch_get_prefetch_disable_bits(void);
