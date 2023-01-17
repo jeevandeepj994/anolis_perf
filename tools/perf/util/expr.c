@@ -17,6 +17,7 @@
 #include <linux/zalloc.h>
 #include <ctype.h>
 #include <math.h>
+#include "pmu.h"
 
 #ifdef PARSER_DEBUG
 extern int expr_debug;
@@ -422,6 +423,10 @@ double expr__get_literal(const char *literal)
 	}
 	if (!strcmp("#num_cores", literal)) {
 		result = topology->core_cpus_lists;
+		goto out;
+	}
+	if (!strcmp("#slots", literal)) {
+		result = perf_pmu__cpu_slots_per_cycle();
 		goto out;
 	}
 
