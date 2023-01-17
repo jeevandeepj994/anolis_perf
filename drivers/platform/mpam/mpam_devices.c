@@ -367,7 +367,7 @@ static int get_cpumask_from_cache_id(u32 cache_id, u32 cache_level,
 {
 	int cpu, err;
 	u32 iter_level;
-	int iter_cache_id;
+	u32 iter_cache_id;
 	struct device_node *iter;
 
 	if (!acpi_disabled)
@@ -391,13 +391,21 @@ static int get_cpumask_from_cache_id(u32 cache_id, u32 cache_level,
 			}
 
 			/*
-			 * get_cpu_cacheinfo_id() isn't ready until sometime
-			 * during device_initcall(). Use cache_of_get_id().
+			 * First check the cache-id property in cache node.
 			 */
-			iter_cache_id = cache_of_get_id(iter);
-			if (cache_id == ~0UL) {
-				of_node_put(iter);
-				continue;
+			err = of_property_read_u32(iter, "cache-id",
+						   &iter_cache_id);
+			if (err) {
+				/*
+				 * get_cpu_cacheinfo_id() isn't ready until
+				 * sometime during device_initcall(). Use
+				 * cache_of_get_id().
+				 */
+				iter_cache_id = cache_of_get_id(iter);
+				if (iter_cache_id == ~0U) {
+					of_node_put(iter);
+					continue;
+				}
 			}
 
 			if (iter_cache_id == cache_id)
@@ -423,10 +431,13 @@ static int get_cpumask_from_cache(struct device_node *cache,
 		return -ENOENT;
 	}
 
-	cache_id = cache_of_get_id(cache);
-	if (cache_id == ~0UL) {
-		pr_err("Failed to calculate cache-id from cache node\n");
-		return -ENOENT;
+	err = of_property_read_u32(cache, "cache-id", &cache_id);
+	if (err) {
+		cache_id = cache_of_get_id(cache);
+		if (cache_id == ~0U) {
+			pr_err("Failed to read cache-id from cache node\n");
+			return -ENOENT;
+		}
 	}
 
 	return get_cpumask_from_cache_id(cache_id, cache_level, affinity);
@@ -1556,7 +1567,7 @@ static int mpam_dt_parse_resource(struct mpam_msc *msc, struct device_node *np,
 {
 	int err = 0;
 	u32 level = 0;
-	unsigned long cache_id;
+	u32 cache_id;
 	struct device_node *cache;
 
 	do {
@@ -1579,10 +1590,13 @@ static int mpam_dt_parse_resource(struct mpam_msc *msc, struct device_node *np,
 			break;
 		}
 
-		cache_id = cache_of_get_id(cache);
-		if (cache_id == ~0UL) {
-			err = -ENOENT;
-			break;
+		err = of_property_read_u32(cache, "cache-id", &cache_id);
+		if (err) {
+			cache_id = cache_of_get_id(cache);
+			if (cache_id == ~0U) {
+				pr_err("Failed to read cache-id\n");
+				break;
+			}
 		}
 
 		err = mpam_ris_create(msc, ris_idx, MPAM_CLASS_CACHE, level,
