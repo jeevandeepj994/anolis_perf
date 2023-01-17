@@ -1567,42 +1567,68 @@ static int mpam_dt_parse_resource(struct mpam_msc *msc, struct device_node *np,
 {
 	int err = 0;
 	u32 level = 0;
-	u32 cache_id;
-	struct device_node *cache;
+	u32 dev_id;
+	enum mpam_class_types type;
+	struct device_node *dev_node;
 
 	do {
+		type = MPAM_CLASS_UNKNOWN;
+
 		if (of_device_is_compatible(np, "arm,mpam-cache")) {
-			cache = of_parse_phandle(np, "arm,mpam-device", 0);
-			if (!cache) {
+			dev_node = of_parse_phandle(np, "arm,mpam-device", 0);
+			if (!dev_node) {
 				pr_err("Failed to read phandle\n");
 				break;
 			}
+			type = MPAM_CLASS_CACHE;
 		} else if (of_device_is_compatible(np->parent, "cache")) {
-			cache = np->parent;
-		} else {
-			pr_err("Not a cache\n");
-			break;
-		}
-
-		err = of_property_read_u32(cache, "cache-level", &level);
-		if (err) {
-			pr_err("Failed to read cache-level\n");
-			break;
-		}
-
-		err = of_property_read_u32(cache, "cache-id", &cache_id);
-		if (err) {
-			cache_id = cache_of_get_id(cache);
-			if (cache_id == ~0) {
-				pr_err("Failed to read cache-id\n");
+			dev_node = np->parent;
+			type = MPAM_CLASS_CACHE;
+		} else if (of_device_is_compatible(np, "arm,mpam-memory")) {
+			dev_node = of_parse_phandle(np, "arm,mpam-device", 0);
+			if (!dev_node) {
+				pr_err("Failed to read phandle\n");
 				break;
 			}
+			type = MPAM_CLASS_MEMORY;
+		} else if (of_device_is_compatible(np->parent, "memory")) {
+			dev_node = np->parent;
+			type = MPAM_CLASS_MEMORY;
+		} else {
+			pr_err("Not a valid device\n");
+			break;
 		}
 
-		err = mpam_ris_create(msc, ris_idx, MPAM_CLASS_CACHE, level,
-				      cache_id);
+		if (type == MPAM_CLASS_CACHE) {
+			err = of_property_read_u32(dev_node, "cache-level", &level);
+			if (err) {
+				pr_err("Failed to read cache-level\n");
+				break;
+			}
+
+			err = of_property_read_u32(dev_node, "cache-id", &dev_id);
+			if (err) {
+				dev_id = cache_of_get_id(dev_node);
+				if (dev_id == ~0) {
+					pr_err("Failed to read cache-id\n");
+					break;
+				}
+			}
+		} else if (type == MPAM_CLASS_MEMORY) {
+			level = 255;
+			err = of_property_read_u32(dev_node, "numa-node-id", &dev_id);
+			if (err) {
+				pr_err("Failed to read memory numa node id\n");
+				break;
+			}
+		} else {
+			pr_err("Not a valid device\n");
+			break;
+		}
+
+		err = mpam_ris_create(msc, ris_idx, type, level, dev_id);
 	} while (0);
-	of_node_put(cache);
+	of_node_put(dev_node);
 
 	return err;
 }
@@ -1662,6 +1688,9 @@ static int get_msc_affinity(struct mpam_msc *msc)
 		if (of_device_is_compatible(parent, "cache")) {
 			err = get_cpumask_from_cache(parent,
 						     &msc->accessibility);
+		} else if (of_node_is_type(parent, "memory")) {
+			cpumask_copy(&msc->accessibility, cpu_possible_mask);
+			err = 0;
 		} else {
 			err = -EINVAL;
 			pr_err("Cannot determine accessibility of MSC: %s\n",
@@ -2289,13 +2318,19 @@ static struct platform_driver mpam_msc_driver = {
 static void mpam_dt_create_foundling_msc(void)
 {
 	int err;
-	struct device_node *cache;
+	struct device_node *cache, *memory;
 
 	for_each_compatible_node(cache, NULL, "cache") {
 		err = of_platform_populate(cache, mpam_of_match, NULL, NULL);
 		if (err) {
 			pr_err("Failed to create MSC devices under caches\n");
 		}
+	}
+
+	for_each_node_by_type(memory, "memory") {
+		err = of_platform_populate(memory, mpam_of_match, NULL, NULL);
+		if (err)
+			pr_err("Failed to create MSC devices under memorys\n");
 	}
 }
 
