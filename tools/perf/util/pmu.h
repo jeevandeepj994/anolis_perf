@@ -133,4 +133,5 @@ int perf_pmu__caps_parse(struct perf_pmu *pmu);
 bool perf_pmu__has_hybrid(void);
 void perf_pmu__warn_invalid_config(struct perf_pmu *pmu, __u64 config,
 				   const char *name);
+double perf_pmu__cpu_slots_per_cycle(void);
 #endif /* __PMU_H */

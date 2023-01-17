@@ -17,6 +17,8 @@
 #include <locale.h>
 #include <regex.h>
 #include <perf/cpumap.h>
+#include <fnmatch.h>
+#include <math.h>
 #include "debug.h"
 #include "evsel.h"
 #include "pmu.h"
@@ -1825,4 +1827,9 @@ void perf_pmu__warn_invalid_config(struct perf_pmu *pmu, __u64 config,
 	pr_warning("WARNING: event '%s' not valid (bits %s of config "
 		   "'%llx' not supported by kernel)!\n",
 		   name ?: "N/A", buf, config);
+}
+
+double __weak perf_pmu__cpu_slots_per_cycle(void)
+{
+	return NAN;
 }
