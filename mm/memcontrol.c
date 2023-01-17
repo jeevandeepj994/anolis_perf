@@ -4863,6 +4863,10 @@ static int memcg_exstat_show(struct seq_file *m, void *v)
 	seq_printf(m, "unevictable_text_size_kb %lu\n",
 		   memcg_exstat_text_unevict_gather(memcg) >> 10);
 #endif
+#ifdef CONFIG_PAGECACHE_LIMIT
+	seq_printf(m, "pagecache_limit_reclaimed_kb %llu\n",
+		   memcg_exstat_gather(memcg, MEMCG_PGCACHE_RECLAIM) * PAGE_SIZE >> 10);
+#endif
 
 	return 0;
 }

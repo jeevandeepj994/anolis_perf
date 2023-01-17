@@ -43,6 +43,9 @@
 #include <linux/ramfs.h>
 #include <linux/page_idle.h>
 #include <linux/page_dup.h>
+#ifdef CONFIG_PAGECACHE_LIMIT
+#include <linux/pagecache_limit.h>
+#endif
 #include "internal.h"
 
 #define CREATE_TRACE_POINTS
@@ -899,6 +902,9 @@ noinline int __add_to_page_cache_locked(struct page *page,
 		if (error)
 			goto error;
 		charged = true;
+#ifdef CONFIG_PAGECACHE_LIMIT
+		memcg_pagecache_shrink(page_memcg(page), gfp);
+#endif
 	}
 
 	gfp &= GFP_RECLAIM_MASK;

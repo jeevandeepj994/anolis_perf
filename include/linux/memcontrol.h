@@ -43,6 +43,9 @@ enum memcg_stat_item {
 enum memcg_exstat_item {
 	MEMCG_WMARK_MIN,
 	MEMCG_WMARK_RECLAIM,
+#ifdef CONFIG_PAGECACHE_LIMIT
+	MEMCG_PGCACHE_RECLAIM,
+#endif
 	MEMCG_NR_EXSTAT,
 };
 
