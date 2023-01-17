@@ -1455,13 +1455,14 @@ static int ublk_ctrl_start_dev(struct io_uring_cmd *cmd)
 		goto out_unlock;
 	}
 
-	disk = alloc_disk_node(UBLK_MINORS, NUMA_NO_NODE);
+	disk = alloc_disk_node(0, NUMA_NO_NODE);
 	if (!disk) {
 		ret = -ENOMEM;
 		goto out_cleanup_queue;
 	}
 	sprintf(disk->disk_name, "ublkb%d", ub->ub_number);
 	disk->fops		= &ub_fops;
+	disk->flags		|= GENHD_FL_EXT_DEVT;
 	disk->private_data	= ub;
 	disk->queue		= ub->ub_queue;
 	ub->dev_info.ublksrv_pid = ublksrv_pid;
