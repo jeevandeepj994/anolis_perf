@@ -464,8 +464,10 @@ static void virtnet_sq_stop_check(struct send_queue *sq, bool in_napi)
 
 	if (sq->vq->num_free < 2 + MAX_SKB_FRAGS) {
 		netif_stop_subqueue(dev, qnum);
-		if (!sq->napi.weight &&
-		    unlikely(!virtqueue_enable_cb_delayed(sq->vq))) {
+		if (sq->napi.weight) {
+			if (unlikely(!virtqueue_enable_cb_delayed(sq->vq)))
+				virtqueue_napi_schedule(&sq->napi, sq->vq);
+		} else if (unlikely(!virtqueue_enable_cb_delayed(sq->vq))) {
 			/* More just got used, free them then recheck. */
 			free_old_xmit_skbs(sq, in_napi);
 			if (sq->vq->num_free >= 2 + MAX_SKB_FRAGS) {
