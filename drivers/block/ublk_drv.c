@@ -1457,13 +1457,14 @@ static int ublk_ctrl_start_dev(struct io_uring_cmd *cmd)
 	}
 	ub->ub_queue->queuedata = ub;
 
-	disk = __alloc_disk_node(UBLK_MINORS, NUMA_NO_NODE);
+	disk = __alloc_disk_node(0, NUMA_NO_NODE);
 	if (!disk) {
 		ret = -ENOMEM;
 		goto out_cleanup_queue;
 	}
 
 	disk->fops		= &ub_fops;
+	disk->flags		|= GENHD_FL_EXT_DEVT;
 	disk->private_data	= ub;
 	disk->queue		= ub->ub_queue;
 	sprintf(disk->disk_name, "ublkb%d", ub->ub_number);
