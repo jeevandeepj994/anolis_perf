@@ -1,8 +1,8 @@
 #ifndef __ASM_LINKAGE_H
 #define __ASM_LINKAGE_H
 
-#define __ALIGN		.align 2
-#define __ALIGN_STR	".align 2"
+#define __ALIGN		.balign CONFIG_FUNCTION_ALIGNMENT
+#define __ALIGN_STR	".balign " #CONFIG_FUNCTION_ALIGNMENT
 
 #if defined(CONFIG_ARM64_BTI_KERNEL) && defined(__aarch64__)
 
