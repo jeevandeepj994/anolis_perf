@@ -43,8 +43,10 @@ EXPORT_SYMBOL(mpam_enabled);
  * mpam_enabled key is enabled these lists are read-only,
  * unless the error interrupt disables the driver.
  */
-static DEFINE_MUTEX(mpam_list_lock);
-static LIST_HEAD(mpam_all_msc);
+DEFINE_MUTEX(mpam_list_lock);
+EXPORT_SYMBOL_GPL(mpam_list_lock);
+LIST_HEAD(mpam_all_msc);
+EXPORT_SYMBOL_GPL(mpam_all_msc);
 
 enum mpam_machine_type mpam_current_machine;
 
@@ -59,11 +61,13 @@ static DEFINE_MUTEX(mpam_cpuhp_state_lock);
  * Generating traffic outside this range will result in screaming interrupts.
  */
 u16 mpam_partid_max;
+EXPORT_SYMBOL_GPL(mpam_partid_max);
 u8 mpam_pmg_max;
 static bool partid_max_init, partid_max_published;
 static u16 mpam_cmdline_partid_max;
 static bool mpam_cmdline_partid_max_overridden;
-static DEFINE_SPINLOCK(partid_max_lock);
+DEFINE_SPINLOCK(partid_max_lock);
+EXPORT_SYMBOL_GPL(partid_max_lock);
 
 /*
  * mpam is enabled once all devices have been probed from CPU online callbacks,
@@ -95,22 +99,6 @@ static DECLARE_WORK(mpam_broken_work, &mpam_disable);
  * index will be unique.
  */
 LIST_HEAD(mpam_classes);
-
-static u32 __mpam_read_reg(struct mpam_msc *msc, u16 reg)
-{
-	WARN_ON_ONCE(reg >= msc->mapped_hwpage_sz);
-	WARN_ON_ONCE(!cpumask_test_cpu(smp_processor_id(), &msc->accessibility));
-
-	return readl_relaxed(msc->mapped_hwpage + reg);
-}
-
-static void __mpam_write_reg(struct mpam_msc *msc, u16 reg, u32 val)
-{
-	WARN_ON_ONCE(reg >= msc->mapped_hwpage_sz);
-	WARN_ON_ONCE(!cpumask_test_cpu(smp_processor_id(), &msc->accessibility));
-
-	writel_relaxed(val, msc->mapped_hwpage + reg);
-}
 
 #define mpam_read_partsel_reg(msc, reg)			\
 ({							\
