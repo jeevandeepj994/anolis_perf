@@ -60,6 +60,9 @@ struct mpam_msc
 	spinlock_t		mon_sel_lock;
 	void __iomem *		mapped_hwpage;
 	size_t			mapped_hwpage_sz;
+
+	/* virtual partids info */
+	u32			vpartid_free_map;
 };
 
 /*
@@ -256,6 +259,22 @@ static inline int mpam_alloc_mbwu_mon(struct mpam_class *class)
 static inline void mpam_free_mbwu_mon(struct mpam_class *class, int mbwu_mon)
 {
 	ida_free(&class->ida_mbwu_mon, mbwu_mon);
+}
+
+static inline u32 __mpam_read_reg(struct mpam_msc *msc, u16 reg)
+{
+	WARN_ON_ONCE(reg >= msc->mapped_hwpage_sz);
+	WARN_ON_ONCE(!cpumask_test_cpu(smp_processor_id(), &msc->accessibility));
+
+	return readl_relaxed(msc->mapped_hwpage + reg);
+}
+
+static inline void __mpam_write_reg(struct mpam_msc *msc, u16 reg, u32 val)
+{
+	WARN_ON_ONCE(reg >= msc->mapped_hwpage_sz);
+	WARN_ON_ONCE(!cpumask_test_cpu(smp_processor_id(), &msc->accessibility));
+
+	writel_relaxed(val, msc->mapped_hwpage + reg);
 }
 
 /* List of all classes */

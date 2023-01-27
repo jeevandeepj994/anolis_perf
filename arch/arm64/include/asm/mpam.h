@@ -84,6 +84,16 @@ static inline void __init __enable_mpam_hcr(void)
 		static_branch_enable(&arm64_mpam_has_hcr);
 }
 
+static inline void enable_mpam_hcr(void)
+{
+	__enable_mpam_hcr();
+}
+
+static inline void disable_mpam_hcr(void)
+{
+	static_branch_disable(&arm64_mpam_has_hcr);
+}
+
 /*
  * The resctrl filesystem writes to the partid/pmg values for threads and CPUs,
  * which may race with reads in __mpam_sched_in(). Ensure only one of the old
