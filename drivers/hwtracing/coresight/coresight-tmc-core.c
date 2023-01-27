@@ -36,7 +36,7 @@ static struct class *tmc_class;
 
 #define TMC_DEV_MAX	(MINORMASK + 1)
 
-void tmc_wait_for_tmcready(struct tmc_drvdata *drvdata)
+int tmc_wait_for_tmcready(struct tmc_drvdata *drvdata)
 {
 	struct coresight_device *csdev = drvdata->csdev;
 	struct csdev_access *csa = &csdev->access;
@@ -45,7 +45,9 @@ void tmc_wait_for_tmcready(struct tmc_drvdata *drvdata)
 	if (coresight_timeout(csa, TMC_STS, TMC_STS_TMCREADY_BIT, 1)) {
 		dev_err(&csdev->dev,
 			"timeout while waiting for TMC to be Ready\n");
+		return -EBUSY;
 	}
+	return 0;
 }
 
 void tmc_flush_and_stop(struct tmc_drvdata *drvdata)
