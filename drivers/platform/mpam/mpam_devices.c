@@ -33,7 +33,8 @@
 
 #include "mpam_internal.h"
 
-extern int ddr_cpufreq;
+int ddr_cpufreq;
+EXPORT_SYMBOL_GPL(ddr_cpufreq);
 
 DEFINE_STATIC_KEY_FALSE(mpam_enabled);
 EXPORT_SYMBOL(mpam_enabled);
@@ -49,6 +50,7 @@ LIST_HEAD(mpam_all_msc);
 EXPORT_SYMBOL_GPL(mpam_all_msc);
 
 enum mpam_machine_type mpam_current_machine;
+EXPORT_SYMBOL_GPL(mpam_current_machine);
 
 /* MPAM isn't available until all the MSC have been probed. */
 static u32 mpam_num_msc;
@@ -950,7 +952,7 @@ static void __ris_impl_msmon_read(void *arg)
 
 	mb_val = MBWU_GET(val);
 
-	mb_val = mb_val * 32 * ddr_cpufreq * 1000000 / cycle; /* B/s */
+	mb_val = mb_val * 32 * READ_ONCE(ddr_cpufreq) * 1000000 / cycle; /* B/s */
 	*(m->val) += mb_val;
 }
 
@@ -1559,6 +1561,11 @@ static int mpam_dt_parse_resource(struct mpam_msc *msc, struct device_node *np,
 			err = of_property_read_u32(dev_node, "numa-node-id", &dev_id);
 			if (err) {
 				pr_err("Failed to read memory numa node id\n");
+				break;
+			}
+			err = of_property_read_u32(dev_node, "ddr-cpufreq", &ddr_cpufreq);
+			if (err) {
+				pr_err("Failed to read memory ddr cpufreq\n");
 				break;
 			}
 		} else {
