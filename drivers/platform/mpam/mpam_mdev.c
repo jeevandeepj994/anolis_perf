@@ -29,6 +29,8 @@ extern struct mutex mpam_list_lock;
 extern u16 mpam_partid_max;
 extern spinlock_t partid_max_lock;
 
+extern int ddr_cpufreq;
+
 #define MPAM_MDEV_NAME "mpam_mdev"
 #define MPAM_MDEV_CLASS_NAME "mpam_mdev"
 
@@ -76,6 +78,8 @@ struct mpam_mdev_state {
 	struct mpam_msc *msc;
 
 	struct mpam_mdev_saved_regs regs;
+
+	u32 custom_reg_base_addr;
 };
 
 static void handle_mmr_write(struct mpam_mdev_state *mpam_mdev_state,
@@ -184,6 +188,17 @@ static void handle_mmr_write(struct mpam_mdev_state *mpam_mdev_state,
 		spin_unlock(&msc->lock);
 		break;
 	default:
+		if (mpam_current_machine == MPAM_YITIAN710 &&
+		    (offset == mpam_mdev_state->custom_reg_base_addr + MPAMF_CUST_WINDW_OFFSET ||
+		     offset == mpam_mdev_state->custom_reg_base_addr + MPAMF_CUST_MBWC_OFFSET)) {
+			spin_lock(&msc->lock);
+			__mpam_write_reg(msc, MPAMCFG_PART_SEL,
+					 mpam_mdev_state->regs.part_sel);
+			__mpam_write_reg(msc, offset, reg32);
+			spin_unlock(&msc->lock);
+			memcpy(buf, &reg32, count);
+			return;
+		}
 		dev_err(mdev_dev(mpam_mdev_state->mdev),
 			"invalid mmr addr 0x%x to write.\n", offset);
 	}
@@ -272,6 +287,17 @@ static void handle_mmr_read(struct mpam_mdev_state *mpam_mdev_state, u16 offset,
 		memcpy(buf, &reg32, count);
 		break;
 	default:
+		if (mpam_current_machine == MPAM_YITIAN710 &&
+		    (offset == mpam_mdev_state->custom_reg_base_addr + MPAMF_CUST_WINDW_OFFSET ||
+		     offset == mpam_mdev_state->custom_reg_base_addr + MPAMF_CUST_MBWC_OFFSET)) {
+			spin_lock(&msc->lock);
+			__mpam_write_reg(msc, MPAMCFG_PART_SEL,
+					 mpam_mdev_state->regs.part_sel);
+			reg32 = __mpam_read_reg(msc, offset);
+			spin_unlock(&msc->lock);
+			memcpy(buf, &reg32, count);
+			return;
+		}
 		spin_lock(&msc->lock);
 		reg32 = __mpam_read_reg(msc, offset);
 		spin_unlock(&msc->lock);
@@ -519,6 +545,7 @@ static void mpam_vpartid_free(struct mpam_msc *msc, int sindex, int type_sz)
 static int mpam_mdev_create(struct mdev_device *mdev)
 {
 	struct mpam_mdev_state *mpam_mdev_state;
+	u32 mpam_impl_idr_val = 0;
 	struct mpam_msc *msc;
 	u16 poffset, voffset;
 
@@ -538,6 +565,8 @@ static int mpam_mdev_create(struct mdev_device *mdev)
 	}
 
 	poffset = physical_partid_offset + voffset;
+
+	mpam_impl_idr_val = __mpam_read_reg(msc, MPAMF_IMPL_IDR);
 
 	spin_unlock(&msc->lock);
 
@@ -559,6 +588,9 @@ static int mpam_mdev_create(struct mdev_device *mdev)
 						    poffset);
 	mpam_mdev_state->regs.mbwu_flt |= FIELD_PREP(MSMON_CFG_MBWU_FLT_PARTID,
 						     poffset);
+
+	if (mpam_current_machine == MPAM_YITIAN710)
+		mpam_mdev_state->custom_reg_base_addr = mpam_impl_idr_val;
 
 	mdev_set_drvdata(mdev, mpam_mdev_state);
 
@@ -677,11 +709,20 @@ vpartid_offset_show(struct device *dev, struct device_attribute *attr,
 }
 static DEVICE_ATTR_RO(vpartid_offset);
 
+static ssize_t
+ddr_cpufreq_show(struct device *dev, struct device_attribute *attr,
+		 char *buf)
+{
+	return sprintf(buf, "%d\n", READ_ONCE(ddr_cpufreq));
+}
+static DEVICE_ATTR_RO(ddr_cpufreq);
+
 static struct attribute *mpam_mdev_dev_attrs[] = {
 	&dev_attr_partids.attr,
 	&dev_attr_class_type.attr,
 	&dev_attr_domain_id.attr,
 	&dev_attr_vpartid_offset.attr,
+	&dev_attr_ddr_cpufreq.attr,
 	NULL,
 };
 
