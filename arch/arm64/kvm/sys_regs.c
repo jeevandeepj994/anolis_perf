@@ -26,6 +26,7 @@
 #include <asm/kvm_mmu.h>
 #include <asm/perf_event.h>
 #include <asm/sysreg.h>
+#include <asm/mpam.h>
 
 #include <trace/events/kvm.h>
 
@@ -87,6 +88,8 @@ static bool __vcpu_read_sys_reg_from_cpu(int reg, u64 *val)
 	case AFSR1_EL1:		*val = read_sysreg_s(SYS_AFSR1_EL12);	break;
 	case FAR_EL1:		*val = read_sysreg_s(SYS_FAR_EL12);	break;
 	case MAIR_EL1:		*val = read_sysreg_s(SYS_MAIR_EL12);	break;
+	case MPAM1_EL1:		*val = read_sysreg_s(SYS_MPAM1_EL12);	break;
+	case MPAM0_EL1:		*val = read_sysreg_s(SYS_MPAM0_EL1);	break;
 	case VBAR_EL1:		*val = read_sysreg_s(SYS_VBAR_EL12);	break;
 	case CONTEXTIDR_EL1:	*val = read_sysreg_s(SYS_CONTEXTIDR_EL12);break;
 	case TPIDR_EL0:		*val = read_sysreg_s(SYS_TPIDR_EL0);	break;
@@ -127,6 +130,8 @@ static bool __vcpu_write_sys_reg_to_cpu(u64 val, int reg)
 	case AFSR1_EL1:		write_sysreg_s(val, SYS_AFSR1_EL12);	break;
 	case FAR_EL1:		write_sysreg_s(val, SYS_FAR_EL12);	break;
 	case MAIR_EL1:		write_sysreg_s(val, SYS_MAIR_EL12);	break;
+	case MPAM1_EL1:		write_sysreg_s(val, SYS_MPAM1_EL12);	break;
+	case MPAM0_EL1:		write_sysreg_s(val, SYS_MPAM0_EL1);	break;
 	case VBAR_EL1:		write_sysreg_s(val, SYS_VBAR_EL12);	break;
 	case CONTEXTIDR_EL1:	write_sysreg_s(val, SYS_CONTEXTIDR_EL12);break;
 	case TPIDR_EL0:		write_sysreg_s(val, SYS_TPIDR_EL0);	break;
@@ -360,13 +365,17 @@ static bool trap_loregion(struct kvm_vcpu *vcpu,
 	return trap_raz_wi(vcpu, p, r);
 }
 
-static bool trap_mpam(struct kvm_vcpu *vcpu,
-		      struct sys_reg_params *p,
-		      const struct sys_reg_desc *r)
+static bool trap_mpamidr(struct kvm_vcpu *vcpu,
+			 struct sys_reg_params *p,
+			 const struct sys_reg_desc *r)
 {
-	kvm_inject_undefined(vcpu);
-
-	return false;
+	if (p->is_write)
+		return ignore_write(vcpu, p);
+	else {
+		p->regval = read_sysreg_s(SYS_MPAMIDR_EL1);
+		p->regval &= ~MPAMIDR_HAS_HCR;
+		return true;
+	}
 }
 
 static bool trap_oslsr_el1(struct kvm_vcpu *vcpu,
@@ -643,6 +652,48 @@ static void reset_amair_el1(struct kvm_vcpu *vcpu, const struct sys_reg_desc *r)
 {
 	u64 amair = read_sysreg(amair_el1);
 	vcpu_write_sys_reg(vcpu, amair, AMAIR_EL1);
+}
+
+static int set_mpam0_el1(struct kvm_vcpu *vcpu, const struct sys_reg_desc *rd,
+		const struct kvm_one_reg *reg, void __user *uaddr)
+{
+	__u64 *r = &vcpu->arch.mpam0_el1;
+
+	if (copy_from_user(r, uaddr, KVM_REG_SIZE(reg->id)) != 0)
+		return -EFAULT;
+
+	r = &__vcpu_sys_reg(vcpu, rd->reg);
+
+	if (copy_from_user(r, uaddr, KVM_REG_SIZE(reg->id)) != 0)
+		return -EFAULT;
+
+	return 0;
+}
+
+static int set_mpam1_el1(struct kvm_vcpu *vcpu, const struct sys_reg_desc *rd,
+		const struct kvm_one_reg *reg, void __user *uaddr)
+{
+	__u64 *r = &vcpu->arch.mpam1_el1;
+
+	if (copy_from_user(r, uaddr, KVM_REG_SIZE(reg->id)) != 0)
+		return -EFAULT;
+
+	r = &__vcpu_sys_reg(vcpu, rd->reg);
+
+	if (copy_from_user(r, uaddr, KVM_REG_SIZE(reg->id)) != 0)
+		return -EFAULT;
+
+	return 0;
+}
+
+static void reset_mpam0_el1(struct kvm_vcpu *vcpu, const struct sys_reg_desc *r)
+{
+	vcpu_write_sys_reg(vcpu, vcpu->arch.mpam0_el1, MPAM0_EL1);
+}
+
+static void reset_mpam1_el1(struct kvm_vcpu *vcpu, const struct sys_reg_desc *r)
+{
+	vcpu_write_sys_reg(vcpu, vcpu->arch.mpam1_el1, MPAM1_EL1);
 }
 
 static void reset_actlr(struct kvm_vcpu *vcpu, const struct sys_reg_desc *r)
@@ -1134,7 +1185,8 @@ static u64 read_id_reg(const struct kvm_vcpu *vcpu,
 			val &= ~(0xfUL << ID_AA64PFR0_SVE_SHIFT);
 		val &= ~(0xfUL << ID_AA64PFR0_AMU_SHIFT);
 		val &= ~(0xfUL << ID_AA64PFR0_CSV2_SHIFT);
-		val &= ~(0xfUL << ID_AA64PFR0_MPAM_SHIFT);
+		if (!has_vhe() || !mpam_cpus_have_mpam_hcr())
+			val &= ~(0xfUL << ID_AA64PFR0_MPAM_SHIFT);
 		val |= ((u64)vcpu->kvm->arch.pfr0_csv2 << ID_AA64PFR0_CSV2_SHIFT);
 	} else if (id == SYS_ID_AA64PFR1_EL1) {
 		val &= ~(0xfUL << ID_AA64PFR1_MTE_SHIFT);
@@ -1591,11 +1643,13 @@ static const struct sys_reg_desc sys_reg_descs[] = {
 	{ SYS_DESC(SYS_LOREA_EL1), trap_loregion },
 	{ SYS_DESC(SYS_LORN_EL1), trap_loregion },
 	{ SYS_DESC(SYS_LORC_EL1), trap_loregion },
-	{ SYS_DESC(SYS_MPAMIDR_EL1), trap_mpam },
+	{ SYS_DESC(SYS_MPAMIDR_EL1), trap_mpamidr },
 	{ SYS_DESC(SYS_LORID_EL1), trap_loregion },
 
-	{ SYS_DESC(SYS_MPAM1_EL1), trap_mpam },
-	{ SYS_DESC(SYS_MPAM0_EL1), trap_mpam },
+	{ SYS_DESC(SYS_MPAM1_EL1), undef_access, reset_mpam1_el1, MPAM1_EL1,
+	  .set_user = set_mpam1_el1 },
+	{ SYS_DESC(SYS_MPAM0_EL1), undef_access, reset_mpam0_el1, MPAM0_EL1,
+	  .set_user = set_mpam0_el1 },
 
 	{ SYS_DESC(SYS_VBAR_EL1), NULL, reset_val, VBAR_EL1, 0 },
 	{ SYS_DESC(SYS_DISR_EL1), NULL, reset_val, DISR_EL1, 0 },
