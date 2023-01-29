@@ -3546,7 +3546,7 @@ int migrate_pages_in_batch(struct list_head *from, new_page_t get_new_page,
 				break;
 			case -ENOMEM:
 				nr_failed++;
-				goto out;
+				break;
 			case -EAGAIN:
 				retry++;
 				break;
@@ -3564,6 +3564,15 @@ int migrate_pages_in_batch(struct list_head *from, new_page_t get_new_page,
 				break;
 			}
 		}
+
+		/*
+		 * unmap_and_move_huge_page returns -ENOMEM when no enough
+		 * hugetlb, however there may be free non-hugetlb pages
+		 * available, so continue to migrate for non-hugetlb pages,
+		 * instead of goto out unconditionally.
+		 */
+		if (rc == -ENOMEM)
+			break;
 	}
 	nr_failed += retry;
 	retry = 1;
