@@ -1081,7 +1081,7 @@ static void process_init_reply(struct fuse_mount *fm, struct fuse_args *args,
 				if (flags & FUSE_HAS_INODE_DAX)
 					fc->inode_dax = 1;
 			}
-			if (arg->flags & FUSE_PASSTHROUGH) {
+			if (flags & FUSE_PASSTHROUGH) {
 				fc->passthrough = 1;
 				fc->passthrough_enabled = true;
 				/* increase s_stack_depth so that further stacking
