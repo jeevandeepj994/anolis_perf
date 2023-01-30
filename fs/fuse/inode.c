@@ -1095,7 +1095,7 @@ static void process_init_reply(struct fuse_mount *fm, struct fuse_args *args,
 				fc->handle_killpriv_v2 = 1;
 				fm->sb->s_flags |= SB_NOSEC;
 			}
-			if (arg->flags & FUSE_PASSTHROUGH) {
+			if (flags & FUSE_PASSTHROUGH) {
 				fc->passthrough = 1;
 				fc->passthrough_enabled = true;
 				/* increase s_stack_depth so that further stacking
