@@ -30,6 +30,12 @@ static int fuse_send_open(struct fuse_conn *fc, u64 nodeid, struct file *file,
 	inarg.flags = file->f_flags & ~(O_CREAT | O_EXCL | O_NOCTTY);
 	if (!fc->atomic_o_trunc)
 		inarg.flags &= ~O_TRUNC;
+
+	if (fc->handle_killpriv_v2 &&
+	    (inarg.flags & O_TRUNC) && !capable(CAP_FSETID)) {
+		inarg.open_flags |= FUSE_OPEN_KILL_SUIDGID;
+	}
+
 	args.in.h.opcode = opcode;
 	args.in.h.nodeid = nodeid;
 	args.in.numargs = 1;
@@ -1053,6 +1059,10 @@ static size_t fuse_send_write_pages(struct fuse_req *req, struct kiocb *iocb,
 	unsigned offset;
 	unsigned i;
 	struct fuse_io_priv io = FUSE_IO_PRIV_SYNC(iocb);
+	struct fuse_file *ff = iocb->ki_filp->private_data;
+
+	if (ff->fc->handle_killpriv_v2 && !capable(CAP_FSETID))
+		req->misc.write.in.write_flags |= FUSE_WRITE_KILL_SUIDGID;
 
 	res = fuse_send_write(req, &io, pos, count, NULL);
 
@@ -1219,17 +1229,24 @@ static ssize_t fuse_cache_write_iter(struct kiocb *iocb, struct iov_iter *from)
 	ssize_t written_buffered = 0;
 	struct inode *inode = mapping->host;
 	ssize_t err;
+	struct fuse_conn *fc = get_fuse_conn(inode);
 	loff_t endbyte = 0;
 
-	if (get_fuse_conn(inode)->writeback_cache) {
+	if (fc->writeback_cache) {
 		/* Update size (EOF optimization) and mode (SUID clearing) */
 		err = fuse_update_attributes(mapping->host, file);
 		if (err)
 			return err;
 
+		if (fc->handle_killpriv_v2 &&
+		    should_remove_suid(file_dentry(file))) {
+			goto writethrough;
+		}
+
 		return generic_file_write_iter(iocb, from);
 	}
 
+writethrough:
 	inode_lock(inode);
 
 	/* We can write back this queue in page reclaim */
@@ -1412,7 +1429,7 @@ ssize_t fuse_direct_io(struct fuse_io_priv *io, struct iov_iter *iter,
 				struct fuse_write_in *inarg;
 
 				inarg = &req->misc.write.in;
-				inarg->write_flags |= FUSE_WRITE_KILL_PRIV;
+				inarg->write_flags |= FUSE_WRITE_KILL_SUIDGID;
 			}
 			nres = fuse_send_write(req, io, pos, nbytes, owner);
 		} else {
