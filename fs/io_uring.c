@@ -978,6 +978,7 @@ static const struct io_op_def io_op_defs[] = {
 		.needs_file		= 1,
 		.needs_async_data	= 1,
 		.async_size		= uring_cmd_pdu_size(1),
+		.work_flags		= IO_WQ_WORK_MM,
 	},
 };
 
