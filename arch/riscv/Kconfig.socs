@@ -50,6 +50,7 @@ config SOC_KENDRYTE_K210_DTB_BUILTIN
 
 config SOC_THEAD
 	bool "T-HEAD SoCs"
+	select SIFIVE_PLIC
 	help
 	  This enables support for T-HEAD SoC platform hardware.
 
