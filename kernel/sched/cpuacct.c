@@ -119,10 +119,10 @@ struct cpuacct {
 	unsigned long avenrun_r[3];
 #endif
 
-	CK_HOTFIX_RESERVE(1)
-	CK_HOTFIX_RESERVE(2)
-	CK_HOTFIX_RESERVE(3)
-	CK_HOTFIX_RESERVE(4)
+	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
+	CK_KABI_RESERVE(3)
+	CK_KABI_RESERVE(4)
 };
 
 static inline struct cpuacct *cgroup_ca(struct cgroup *cgrp)

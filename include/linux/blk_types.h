@@ -11,7 +11,7 @@
 #include <linux/ktime.h>
 #include <linux/sched/clock.h>
 
-#include <linux/ck_hotfix.h>
+#include <linux/ck_kabi.h>
 
 struct bio_set;
 struct bio;
@@ -50,8 +50,8 @@ struct block_device {
 	/* Mutex for freeze */
 	struct mutex		bd_fsfreeze_mutex;
 
-	CK_HOTFIX_RESERVE(1)
-	CK_HOTFIX_RESERVE(2)
+	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
 } __randomize_layout;
 
 /*
@@ -271,8 +271,8 @@ struct bio {
 
 	unsigned long		bi_ext_flags;	/* extend the bi_flags */
 
-	CK_HOTFIX_RESERVE(1)
-	CK_HOTFIX_RESERVE(2)
+	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
 
 	/*
 	 * We can inline a number of vecs at the end of the bio, to avoid

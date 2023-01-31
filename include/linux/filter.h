@@ -560,10 +560,10 @@ struct bpf_prog {
 	unsigned int		(*bpf_func)(const void *ctx,
 					    const struct bpf_insn *insn);
 
-	CK_HOTFIX_RESERVE(1)
-	CK_HOTFIX_RESERVE(2)
-	CK_HOTFIX_RESERVE(3)
-	CK_HOTFIX_RESERVE(4)
+	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
+	CK_KABI_RESERVE(3)
+	CK_KABI_RESERVE(4)
 
 	/* Instructions for interpreter */
 	struct sock_filter	insns[0];

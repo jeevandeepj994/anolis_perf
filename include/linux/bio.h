@@ -710,8 +710,8 @@ struct bio_set {
 	struct work_struct	rescue_work;
 	struct workqueue_struct	*rescue_workqueue;
 
-	CK_HOTFIX_RESERVE(1)
-	CK_HOTFIX_RESERVE(2)
+	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
 };
 
 struct biovec_slab {
