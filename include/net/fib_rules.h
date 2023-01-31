@@ -45,7 +45,7 @@ struct fib_rule {
 	struct fib_rule_port_range	dport_range;
 	struct rcu_head		rcu;
 
-	CK_HOTFIX_RESERVE(1)
+	CK_KABI_RESERVE(1)
 };
 
 struct fib_lookup_arg {

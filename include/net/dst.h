@@ -77,7 +77,7 @@ struct dst_entry {
 	atomic_t		__refcnt;	/* 32-bit offset 64 */
 #endif
 
-	CK_HOTFIX_RESERVE(1)
+	CK_KABI_RESERVE(1)
 };
 
 struct dst_metrics {

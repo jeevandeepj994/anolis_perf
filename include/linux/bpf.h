@@ -175,10 +175,10 @@ struct bpf_map {
 	struct mutex freeze_mutex;
 	atomic64_t writecnt;
 
-	CK_HOTFIX_RESERVE(1)
-	CK_HOTFIX_RESERVE(2)
-	CK_HOTFIX_RESERVE(3)
-	CK_HOTFIX_RESERVE(4)
+	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
+	CK_KABI_RESERVE(3)
+	CK_KABI_RESERVE(4)
 };
 
 static inline bool map_value_has_spin_lock(const struct bpf_map *map)
@@ -915,10 +915,10 @@ struct bpf_prog_aux {
 		struct rcu_head	rcu;
 	};
 
-	CK_HOTFIX_RESERVE(1)
-	CK_HOTFIX_RESERVE(2)
-	CK_HOTFIX_RESERVE(3)
-	CK_HOTFIX_RESERVE(4)
+	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
+	CK_KABI_RESERVE(3)
+	CK_KABI_RESERVE(4)
 };
 
 struct bpf_array_aux {

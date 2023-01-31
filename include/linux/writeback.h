@@ -93,8 +93,8 @@ struct writeback_control {
 	size_t wb_tcand_bytes;		/* bytes written by this candidate */
 #endif
 
-	CK_HOTFIX_RESERVE(1)
-	CK_HOTFIX_RESERVE(2)
+	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
 };
 
 static inline int wbc_to_write_flags(struct writeback_control *wbc)
@@ -189,7 +189,7 @@ static inline void wb_domain_size_changed(struct wb_domain *dom)
 
 /*
  * fs/fs-writeback.c
- */	
+ */
 struct bdi_writeback;
 void writeback_inodes_sb(struct super_block *, enum wb_reason reason);
 void writeback_inodes_sb_nr(struct super_block *, unsigned long nr,
