@@ -3910,7 +3910,7 @@ void io_uring_cmd_complete_in_task(struct io_uring_cmd *ioucmd,
 
 	req->uring_cmd.task_work_cb = task_work_cb;
 	req->task_work.func = io_uring_cmd_work;
-	ret = io_req_task_work_add(req, !!(req->ctx->flags & IORING_SETUP_SQPOLL));
+	ret = io_req_task_work_add(req, true);
 	if (unlikely(ret))
 		io_req_task_work_add_fallback(req, io_uring_cmd_work);
 }
