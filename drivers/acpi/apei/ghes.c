@@ -462,7 +462,7 @@ static bool ghes_do_memory_failure(u64 physical_addr, int flags)
 }
 
 static bool ghes_handle_memory_failure(struct acpi_hest_generic_data *gdata,
-				       int sev)
+				       bool sync, int sev)
 {
 	int flags = -1;
 	int sec_sev = ghes_severity(gdata->error_severity);
@@ -476,7 +476,7 @@ static bool ghes_handle_memory_failure(struct acpi_hest_generic_data *gdata,
 	    (gdata->flags & CPER_SEC_ERROR_THRESHOLD_EXCEEDED))
 		flags = MF_SOFT_OFFLINE;
 	if (sev == GHES_SEV_RECOVERABLE && sec_sev == GHES_SEV_RECOVERABLE)
-		flags = 0;
+		flags = sync ? MF_ACTION_REQUIRED : 0;
 
 	if (flags != -1)
 		return ghes_do_memory_failure(mem_err->physical_addr, flags);
@@ -623,6 +623,33 @@ static void ghes_defer_non_standard_event(struct acpi_hest_generic_data *gdata,
 	schedule_work(&entry->work);
 }
 
+#ifdef CONFIG_YITIAN_CPER_RAWDATA
+/*
+ * Check if the event is synchronous exception by Yitian DDR Raw data
+ * NOTE: only works for Yitian 710 now
+ */
+static bool is_sync_event(const struct acpi_hest_generic_status *estatus)
+{
+	struct yitian_raw_data_header *header;
+	struct yitian_ddr_raw_data *data;
+
+	if (!yitian_estatus_check_header(estatus))
+		return false;
+
+	header = (struct yitian_raw_data_header *)((void *)estatus +
+						   estatus->raw_data_offset);
+	if (header->type != ERR_TYPE_DDR)
+		return false;
+
+	data = (struct yitian_ddr_raw_data *)(header + 1);
+	/* 1 for synchronous exception */
+	if (data->ex_type == 1)
+		return true;
+
+	return false;
+}
+#endif /* CONFIG_YITIAN_CPER_RAWDATA */
+
 static bool ghes_do_proc(struct ghes *ghes,
 			 const struct acpi_hest_generic_status *estatus)
 {
@@ -632,8 +659,13 @@ static bool ghes_do_proc(struct ghes *ghes,
 	const guid_t *fru_id = &guid_null;
 	char *fru_text = "";
 	bool queued = false;
+	bool sync = false;
 
 	sev = ghes_severity(estatus->error_severity);
+#ifdef CONFIG_YITIAN_CPER_RAWDATA
+	if (estatus->raw_data_length)
+		sync = is_sync_event(estatus);
+#endif /* CONFIG_YITIAN_CPER_RAWDATA */
 	apei_estatus_for_each_section(estatus, gdata) {
 		sec_type = (guid_t *)gdata->section_type;
 		sec_sev = ghes_severity(gdata->error_severity);
@@ -649,7 +681,7 @@ static bool ghes_do_proc(struct ghes *ghes,
 			ghes_edac_report_mem_error(sev, mem_err);
 
 			arch_apei_report_mem_error(sev, mem_err);
-			queued = ghes_handle_memory_failure(gdata, sev);
+			queued = ghes_handle_memory_failure(gdata, sync, sev);
 		}
 		else if (guid_equal(sec_type, &CPER_SEC_PCIE)) {
 			ghes_handle_aer(gdata);
