@@ -220,10 +220,10 @@ struct reclaim_coldpgs_control {
 	unsigned long		size;
 	unsigned long		flags;
 
-	CK_HOTFIX_RESERVE(1)
-	CK_HOTFIX_RESERVE(2)
-	CK_HOTFIX_RESERVE(3)
-	CK_HOTFIX_RESERVE(4)
+	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
+	CK_KABI_RESERVE(3)
+	CK_KABI_RESERVE(4)
 };
 
 enum reclaim_coldpgs_stat_item {
@@ -245,8 +245,8 @@ enum reclaim_coldpgs_stat_item {
 struct reclaim_coldpgs_stats {
 	unsigned long		counts[RECLAIM_COLDPGS_STAT_MAX];
 
-	CK_HOTFIX_RESERVE(1)
-	CK_HOTFIX_RESERVE(2)
+	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
 };
 #endif /* CONFIG_RECLAIM_COLDPGS */
 
@@ -474,10 +474,10 @@ struct mem_cgroup {
 	unsigned long fast_copy_mm;
 #endif
 
-	CK_HOTFIX_RESERVE(1)
-	CK_HOTFIX_RESERVE(2)
-	CK_HOTFIX_RESERVE(3)
-	CK_HOTFIX_RESERVE(4)
+	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
+	CK_KABI_RESERVE(3)
+	CK_KABI_RESERVE(4)
 
 	struct mem_cgroup_per_node *nodeinfo[0];
 	/* WARNING: nodeinfo must be the last member here */

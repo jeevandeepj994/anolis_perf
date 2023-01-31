@@ -25,6 +25,7 @@
 #include <linux/kthread.h>
 #include <linux/fs.h>
 #include <linux/blk-mq.h>
+#include <linux/ck_kabi.h>
 
 /* percpu_counter batch for blkg_[rw]stats, per-cpu drift doesn't matter */
 #define BLKG_STAT_CPU_BATCH	(INT_MAX / 2)
@@ -60,10 +61,10 @@ struct blkcg {
 	struct list_head		cgwb_list;
 #endif
 
-	CK_HOTFIX_RESERVE(1)
-	CK_HOTFIX_RESERVE(2)
-	CK_HOTFIX_RESERVE(3)
-	CK_HOTFIX_RESERVE(4)
+	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
+	CK_KABI_RESERVE(3)
+	CK_KABI_RESERVE(4)
 };
 
 struct blkg_iostat {
@@ -176,8 +177,8 @@ struct blkcg_policy {
 	blkcg_pol_reset_pd_stats_fn	*pd_reset_stats_fn;
 	blkcg_pol_stat_pd_fn		*pd_stat_fn;
 
-	CK_HOTFIX_RESERVE_P(1)
-	CK_HOTFIX_RESERVE_P(2)
+	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
 };
 
 extern struct blkcg blkcg_root;

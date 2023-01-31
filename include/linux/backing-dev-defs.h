@@ -163,8 +163,8 @@ struct bdi_writeback {
 	};
 #endif
 
-	CK_HOTFIX_RESERVE(1)
-	CK_HOTFIX_RESERVE(2)
+	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
 };
 
 struct backing_dev_info {
@@ -204,8 +204,8 @@ struct backing_dev_info {
 	struct dentry *debug_dir;
 #endif
 
-	CK_HOTFIX_RESERVE(1)
-	CK_HOTFIX_RESERVE(2)
+	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
 };
 
 enum {

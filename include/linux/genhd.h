@@ -4,7 +4,7 @@
 
 /*
  * 	genhd.h Copyright (C) 1992 Drew Eckhardt
- *	Generic hard disk header file by  
+ *	Generic hard disk header file by
  * 		Drew Eckhardt
  *
  *		<drew@colorado.edu>
@@ -74,8 +74,8 @@ struct hd_struct {
 #endif
 	struct rcu_work rcu_work;
 
-	CK_HOTFIX_RESERVE(1)
-	CK_HOTFIX_RESERVE(2)
+	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
 };
 
 /**
@@ -212,8 +212,8 @@ struct gendisk {
 	struct badblocks *bb;
 	struct lockdep_map lockdep_map;
 
-	CK_HOTFIX_RESERVE(1)
-	CK_HOTFIX_RESERVE(2)
+	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
 };
 
 #if IS_REACHABLE(CONFIG_CDROM)

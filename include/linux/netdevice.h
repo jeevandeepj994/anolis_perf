@@ -49,7 +49,7 @@
 #include <uapi/linux/pkt_cls.h>
 #include <linux/hashtable.h>
 
-#include <linux/ck_hotfix.h>
+#include <linux/ck_kabi.h>
 
 struct netpoll_info;
 struct device;
@@ -1484,8 +1484,8 @@ struct net_device_ops {
 						  struct ip_tunnel_parm *p, int cmd);
 	struct net_device *	(*ndo_get_peer_dev)(struct net_device *dev);
 
-	CK_HOTFIX_RESERVE_P(1)
-	CK_HOTFIX_RESERVE_P(2)
+	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
 };
 
 /**
