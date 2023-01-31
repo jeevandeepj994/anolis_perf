@@ -36,15 +36,16 @@
  * set an LED, enable / disable power, etc.)
  */
 struct hotplug_slot_ops {
-	int (*enable_slot)		(struct hotplug_slot *slot);
-	int (*disable_slot)		(struct hotplug_slot *slot);
-	int (*set_attention_status)	(struct hotplug_slot *slot, u8 value);
-	int (*hardware_test)		(struct hotplug_slot *slot, u32 value);
-	int (*get_power_status)		(struct hotplug_slot *slot, u8 *value);
-	int (*get_attention_status)	(struct hotplug_slot *slot, u8 *value);
-	int (*get_latch_status)		(struct hotplug_slot *slot, u8 *value);
-	int (*get_adapter_status)	(struct hotplug_slot *slot, u8 *value);
-	int (*reset_slot)		(struct hotplug_slot *slot, int probe);
+	int (*enable_slot)(struct hotplug_slot *slot);
+	int (*disable_slot)(struct hotplug_slot *slot);
+	int (*set_attention_status)(struct hotplug_slot *slot, u8 value);
+	int (*hardware_test)(struct hotplug_slot *slot, u32 value);
+	int (*get_power_status)(struct hotplug_slot *slot, u8 *value);
+	int (*get_attention_status)(struct hotplug_slot *slot, u8 *value);
+	int (*get_latch_status)(struct hotplug_slot *slot, u8 *value);
+	int (*get_adapter_status)(struct hotplug_slot *slot, u8 *value);
+	int (*reset_slot)(struct hotplug_slot *slot, int probe);
+	int (*set_power_indicator)(struct hotplug_slot *slot, u8 value);
 };
 
 /**

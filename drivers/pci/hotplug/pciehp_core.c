@@ -46,6 +46,7 @@ static int set_attention_status(struct hotplug_slot *slot, u8 value);
 static int get_power_status(struct hotplug_slot *slot, u8 *value);
 static int get_latch_status(struct hotplug_slot *slot, u8 *value);
 static int get_adapter_status(struct hotplug_slot *slot, u8 *value);
+static int set_power_indicator(struct hotplug_slot *slot, u8 value);
 
 static int init_slot(struct controller *ctrl)
 {
@@ -72,6 +73,9 @@ static int init_slot(struct controller *ctrl)
 		ops->get_attention_status = pciehp_get_raw_indicator_status;
 		ops->set_attention_status = pciehp_set_raw_indicator_status;
 	}
+
+	if (PWR_LED(ctrl))
+		ops->set_power_indicator = set_power_indicator;
 
 	/* register this slot with the hotplug pci core */
 	ctrl->hotplug_slot.ops = ops;
@@ -109,6 +113,35 @@ static int set_attention_status(struct hotplug_slot *hotplug_slot, u8 status)
 
 	pci_config_pm_runtime_get(pdev);
 	pciehp_set_indicators(ctrl, INDICATOR_NOOP, status);
+	pci_config_pm_runtime_put(pdev);
+	return 0;
+}
+
+/*
+ * set_power_indicator - Turns the Power Indicator on, off or blinking
+ */
+static int set_power_indicator(struct hotplug_slot *hotplug_slot, u8 value)
+{
+	struct controller *ctrl = to_ctrl(hotplug_slot);
+	struct pci_dev *pdev = ctrl->pcie->port;
+	int pwr;
+
+	switch (value) {
+	case 0:
+		pwr = PCI_EXP_SLTCTL_PWR_IND_OFF;
+		break;
+	case 1:
+		pwr = PCI_EXP_SLTCTL_PWR_IND_ON;
+		break;
+	case 2:
+		pwr = PCI_EXP_SLTCTL_PWR_IND_BLINK;
+		break;
+	default:
+		return -EINVAL;
+	}
+
+	pci_config_pm_runtime_get(pdev);
+	pciehp_set_indicators(ctrl, pwr, INDICATOR_NOOP);
 	pci_config_pm_runtime_put(pdev);
 	return 0;
 }
