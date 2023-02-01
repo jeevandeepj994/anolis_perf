@@ -3242,7 +3242,7 @@ static void migrate_page_done(struct page *page,
 /* Obtain the lock on page, remove all ptes. */
 static int migrate_page_unmap(new_page_t get_new_page, free_page_t put_new_page,
 			      unsigned long private, struct page *page,
-			      struct page **newpagep, int force,
+			      struct page **newpagep, int force, bool force_lock,
 			      enum migrate_mode mode, enum migrate_reason reason,
 			      struct list_head *ret)
 {
@@ -3297,6 +3297,17 @@ static int migrate_page_unmap(new_page_t get_new_page, free_page_t put_new_page,
 		 */
 		if (current->flags & PF_MEMALLOC)
 			goto out;
+
+		/*
+		 * We have locked some pages, to avoid deadlock, we cannot
+		 * lock the page synchronously.  Go out to process (and
+		 * unlock) all the locked pages.  Then we can lock the page
+		 * synchronously.
+		 */
+		if (!force_lock) {
+			rc = -EDEADLOCK;
+			goto out;
+		}
 
 		lock_page(page);
 	}
@@ -3401,7 +3412,8 @@ out:
 	 * A page that has not been migrated will have kept its
 	 * references and be restored.
 	 */
-	if (rc == -EAGAIN)
+	/* restore the page to right list. */
+	if (rc == -EAGAIN || rc == -EDEADLOCK)
 		ret = NULL;
 	migrate_page_undo_page(page, page_was_mapped, anon_vma, locked, ret);
 	if (newpage)
@@ -3509,11 +3521,12 @@ int migrate_pages_in_batch(struct list_head *from, new_page_t get_new_page,
 	struct page *page, *page2;
 	struct page *newpage, *newpage2;
 	int swapwrite = current->flags & PF_SWAPWRITE;
-	int rc, nr_subpages;
+	int rc, rc_saved, nr_subpages;
 	LIST_HEAD(ret_pages);
 	LIST_HEAD(unmap_pages);
 	LIST_HEAD(new_pages);
 	bool nosplit = (reason == MR_NUMA_MISPLACED);
+	bool force_lock;
 
 	if (!swapwrite)
 		current->flags |= PF_SWAPWRITE;
@@ -3546,7 +3559,7 @@ int migrate_pages_in_batch(struct list_head *from, new_page_t get_new_page,
 				break;
 			case -ENOMEM:
 				nr_failed++;
-				goto out;
+				break;
 			case -EAGAIN:
 				retry++;
 				break;
@@ -3564,8 +3577,21 @@ int migrate_pages_in_batch(struct list_head *from, new_page_t get_new_page,
 				break;
 			}
 		}
+
+		/*
+		 * unmap_and_move_huge_page returns -ENOMEM when no enough
+		 * hugetlb, however there may be free non-hugetlb pages
+		 * available, so continue to migrate for non-hugetlb pages,
+		 * instead of goto out unconditionally.
+		 */
+		if (rc == -ENOMEM)
+			break;
 	}
 	nr_failed += retry;
+
+again:
+	rc_saved = 0;
+	force_lock = true;
 	retry = 1;
 	for (pass = 0; pass < 10 && (retry || thp_retry); pass++) {
 		retry = 0;
@@ -3587,14 +3613,15 @@ retry:
 
 			newpage = NULL;
 			rc = migrate_page_unmap(get_new_page, put_new_page, private,
-						page, &newpage, pass > 2, mode,
-						reason, &ret_pages);
+						page, &newpage, pass > 2, force_lock,
+						mode, reason, &ret_pages);
 			/*
 			 * The rules are:
 			 *	Success: page will be freed
 			 *	Unmap: page will be put on unmap_pages list,
 			 *	       new page put on new_pages list
 			 *	-EAGAIN: stay on the from list
+			 *	-EDEADLOCK: stay on the from list
 			 *	-ENOMEM: stay on the from list
 			 *	Other errno: put on ret_pages list then splice to
 			 *		     from list
@@ -3645,6 +3672,14 @@ retry:
 					goto out;
 				else
 					goto move;
+			case -EDEADLOCK:
+				/*
+				 * The page cannot be locked for potential deadlock.
+				 * Go move (and unlock) all locked pages.  Then we can
+				 * try again.
+				 */
+				rc_saved = rc;
+				goto move;
 			case -EAGAIN:
 				if (is_thp) {
 					thp_retry++;
@@ -3661,6 +3696,11 @@ retry:
 				nr_succeeded++;
 				break;
 			case MIGRATEPAGE_UNMAP:
+				/*
+				 * We have locked some pages, don't force lock
+				 * to avoid deadlock.
+				 */
+				force_lock = false;
 				list_move_tail(&page->lru, &unmap_pages);
 				list_add_tail(&newpage->lru, &new_pages);
 				break;
@@ -3757,7 +3797,11 @@ move:
 	}
 	nr_failed += retry + thp_retry;
 	nr_thp_failed += thp_retry;
-	rc = nr_failed;
+
+	if (rc_saved)
+		rc = rc_saved;
+	else
+		rc = nr_failed;
 out:
 	/* Cleanup remaining pages */
 	newpage = list_first_entry(&new_pages, struct page, lru);
@@ -3774,6 +3818,13 @@ out:
 		newpage = newpage2;
 		newpage2 = list_next_entry(newpage, lru);
 	}
+
+	/*
+	 * We have unlocked all locked pages, so we can force lock now, let's
+	 * try again.
+	 */
+	if (rc == -EDEADLOCK)
+		goto again;
 
 	/*
 	 * Put the permanent failure page back to migration list, they
