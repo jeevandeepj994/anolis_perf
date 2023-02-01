@@ -2470,23 +2470,23 @@ xfs_defer_agfl_block(
 	struct xfs_owner_info		*oinfo)
 {
 	struct xfs_mount		*mp = tp->t_mountp;
-	struct xfs_extent_free_item	*new;		/* new element */
+	struct xfs_extent_free_item	*xefi;
 
 	ASSERT(xfs_extfree_item_cache != NULL);
 	ASSERT(oinfo != NULL);
 
-	new = kmem_cache_zalloc(xfs_extfree_item_cache,
+	xefi = kmem_cache_zalloc(xfs_extfree_item_cache,
 			       GFP_KERNEL | __GFP_NOFAIL);
-	new->xefi_startblock = XFS_AGB_TO_FSB(mp, agno, agbno);
-	new->xefi_blockcount = 1;
-	new->xefi_owner = oinfo->oi_owner;
+	xefi->xefi_startblock = XFS_AGB_TO_FSB(mp, agno, agbno);
+	xefi->xefi_blockcount = 1;
+	xefi->xefi_owner = oinfo->oi_owner;
 
-	if (XFS_IS_CORRUPT(mp, !xfs_verify_fsbno(mp, new->xefi_startblock)))
+	if (XFS_IS_CORRUPT(mp, !xfs_verify_fsbno(mp, xefi->xefi_startblock)))
 		return -EFSCORRUPTED;
 
 	trace_xfs_agfl_free_defer(mp, agno, 0, agbno, 1);
 
-	xfs_defer_add(tp, XFS_DEFER_OPS_TYPE_AGFL_FREE, &new->xefi_list);
+	xfs_defer_add(tp, XFS_DEFER_OPS_TYPE_AGFL_FREE, &xefi->xefi_list);
 	return 0;
 }
 
@@ -2502,7 +2502,7 @@ __xfs_free_extent_later(
 	const struct xfs_owner_info	*oinfo,
 	bool				skip_discard)
 {
-	struct xfs_extent_free_item	*new;		/* new element */
+	struct xfs_extent_free_item	*xefi;
 	struct xfs_mount		*mp = tp->t_mountp;
 #ifdef DEBUG
 	xfs_agnumber_t			agno;
@@ -2524,27 +2524,27 @@ __xfs_free_extent_later(
 	if (XFS_IS_CORRUPT(mp, !xfs_verify_fsbext(mp, bno, len)))
 		return -EFSCORRUPTED;
 
-	new = kmem_cache_zalloc(xfs_extfree_item_cache,
+	xefi = kmem_cache_zalloc(xfs_extfree_item_cache,
 			       GFP_KERNEL | __GFP_NOFAIL);
-	new->xefi_startblock = bno;
-	new->xefi_blockcount = (xfs_extlen_t)len;
+	xefi->xefi_startblock = bno;
+	xefi->xefi_blockcount = (xfs_extlen_t)len;
 	if (skip_discard)
-		new->xefi_flags |= XFS_EFI_SKIP_DISCARD;
+		xefi->xefi_flags |= XFS_EFI_SKIP_DISCARD;
 	if (oinfo) {
 		ASSERT(oinfo->oi_offset == 0);
 
 		if (oinfo->oi_flags & XFS_OWNER_INFO_ATTR_FORK)
-			new->xefi_flags |= XFS_EFI_ATTR_FORK;
+			xefi->xefi_flags |= XFS_EFI_ATTR_FORK;
 		if (oinfo->oi_flags & XFS_OWNER_INFO_BMBT_BLOCK)
-			new->xefi_flags |= XFS_EFI_BMBT_BLOCK;
-		new->xefi_owner = oinfo->oi_owner;
+			xefi->xefi_flags |= XFS_EFI_BMBT_BLOCK;
+		xefi->xefi_owner = oinfo->oi_owner;
 	} else {
-		new->xefi_owner = XFS_RMAP_OWN_NULL;
+		xefi->xefi_owner = XFS_RMAP_OWN_NULL;
 	}
 	trace_xfs_bmap_free_defer(tp->t_mountp,
 			XFS_FSB_TO_AGNO(tp->t_mountp, bno), 0,
 			XFS_FSB_TO_AGBNO(tp->t_mountp, bno), len);
-	xfs_defer_add(tp, XFS_DEFER_OPS_TYPE_FREE, &new->xefi_list);
+	xfs_defer_add(tp, XFS_DEFER_OPS_TYPE_FREE, &xefi->xefi_list);
 	return 0;
 }
 
