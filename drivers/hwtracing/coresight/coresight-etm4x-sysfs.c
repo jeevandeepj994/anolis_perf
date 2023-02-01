@@ -9,6 +9,7 @@
 #include <linux/sysfs.h>
 #include "coresight-etm4x.h"
 #include "coresight-priv.h"
+#include "coresight-syscfg.h"
 
 static int etm4_set_mode_exclude(struct etmv4_drvdata *drvdata, bool exclude)
 {
@@ -268,6 +269,8 @@ static ssize_t reset_store(struct device *dev,
 	drvdata->trcid = drvdata->cpu + 1;
 
 	spin_unlock(&drvdata->spinlock);
+
+	cscfg_csdev_reset_feats(to_coresight_device(dev));
 
 	return size;
 }
@@ -2112,7 +2115,16 @@ static ssize_t vmid_val_show(struct device *dev,
 	struct etmv4_drvdata *drvdata = dev_get_drvdata(dev->parent);
 	struct etmv4_config *config = &drvdata->config;
 
+	/*
+	 * Don't use virtual contextID tracing if coming from a PID namespace.
+	 * See comment in ctxid_pid_store().
+	 */
+	if (!task_is_in_init_pid_ns(current))
+		return -EINVAL;
+
+	spin_lock(&drvdata->spinlock);
 	val = (unsigned long)config->vmid_val[config->vmid_idx];
+	spin_unlock(&drvdata->spinlock);
 	return scnprintf(buf, PAGE_SIZE, "%#lx\n", val);
 }
 
@@ -2123,6 +2135,13 @@ static ssize_t vmid_val_store(struct device *dev,
 	unsigned long val;
 	struct etmv4_drvdata *drvdata = dev_get_drvdata(dev->parent);
 	struct etmv4_config *config = &drvdata->config;
+
+	/*
+	 * Don't use virtual contextID tracing if coming from a PID namespace.
+	 * See comment in ctxid_pid_store().
+	 */
+	if (!task_is_in_init_pid_ns(current))
+		return -EINVAL;
 
 	/*
 	 * only implemented when vmid tracing is enabled, i.e. at least one
@@ -2147,6 +2166,13 @@ static ssize_t vmid_masks_show(struct device *dev,
 	struct etmv4_drvdata *drvdata = dev_get_drvdata(dev->parent);
 	struct etmv4_config *config = &drvdata->config;
 
+	/*
+	 * Don't use virtual contextID tracing if coming from a PID namespace.
+	 * See comment in ctxid_pid_store().
+	 */
+	if (!task_is_in_init_pid_ns(current))
+		return -EINVAL;
+
 	spin_lock(&drvdata->spinlock);
 	val1 = config->vmid_mask0;
 	val2 = config->vmid_mask1;
@@ -2163,6 +2189,13 @@ static ssize_t vmid_masks_store(struct device *dev,
 	struct etmv4_drvdata *drvdata = dev_get_drvdata(dev->parent);
 	struct etmv4_config *config = &drvdata->config;
 	int nr_inputs;
+
+	/*
+	 * Don't use virtual contextID tracing if coming from a PID namespace.
+	 * See comment in ctxid_pid_store().
+	 */
+	if (!task_is_in_init_pid_ns(current))
+		return -EINVAL;
 
 	/*
 	 * only implemented when vmid tracing is enabled, i.e. at least one

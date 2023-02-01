@@ -21,9 +21,10 @@
 
 #include "coresight-etm-perf.h"
 #include "coresight-priv.h"
+#include "coresight-syscfg.h"
 
 static DEFINE_MUTEX(coresight_mutex);
-DEFINE_PER_CPU(struct coresight_device *, csdev_sink);
+static DEFINE_PER_CPU(struct coresight_device *, csdev_sink);
 
 /**
  * struct coresight_node - elements of a path, from source to sink
@@ -99,7 +100,7 @@ static int coresight_id_match(struct device *dev, void *data)
 	    i_csdev->type != CORESIGHT_DEV_TYPE_SOURCE)
 		return 0;
 
-	/* Get the source ID for both compoment */
+	/* Get the source ID for both components */
 	trace_id = source_ops(csdev)->trace_id(csdev);
 	i_trace_id = source_ops(i_csdev)->trace_id(i_csdev);
 
@@ -723,7 +724,7 @@ static inline void coresight_put_ref(struct coresight_device *csdev)
  * coresight_grab_device - Power up this device and any of the helper
  * devices connected to it for trace operation. Since the helper devices
  * don't appear on the trace path, they should be handled along with the
- * the master device.
+ * master device.
  */
 static int coresight_grab_device(struct coresight_device *csdev)
 {
@@ -880,7 +881,6 @@ void coresight_release_path(struct list_head *path)
 	}
 
 	kfree(path);
-	path = NULL;
 }
 
 /* return true if the device is a suitable type for a default sink */
@@ -1769,13 +1769,22 @@ static int __init coresight_init(void)
 
 	ret = etm_perf_init();
 	if (ret)
-		bus_unregister(&coresight_bustype);
+		goto exit_bus_unregister;
 
+	/* initialise the coresight syscfg API */
+	ret = cscfg_init();
+	if (!ret)
+		return 0;
+
+	etm_perf_exit();
+exit_bus_unregister:
+	bus_unregister(&coresight_bustype);
 	return ret;
 }
 
 static void __exit coresight_exit(void)
 {
+	cscfg_exit();
 	etm_perf_exit();
 	bus_unregister(&coresight_bustype);
 }
