@@ -1758,14 +1758,18 @@ static ssize_t resctrl_group_tasks_write(struct kernfs_open_file *of,
 static void show_resctrl_tasks(struct rdtgroup *r, struct seq_file *s)
 {
 	struct task_struct *p, *t;
+	pid_t pid;
 
 	rcu_read_lock();
 	for_each_process_thread(p, t) {
 		if ((r->type == RDTMON_GROUP &&
 			t->rmid == resctrl_navie_rmid(r->mon.rmid)) ||
 			(r->type == RDTCTRL_GROUP &&
-			t->closid == resctrl_navie_closid(r->closid)))
-			seq_printf(s, "%d\n", t->pid);
+			t->closid == resctrl_navie_closid(r->closid))) {
+			pid = task_pid_vnr(t);
+			if (pid)
+				seq_printf(s, "%d\n", pid);
+		}
 	}
 	rcu_read_unlock();
 }

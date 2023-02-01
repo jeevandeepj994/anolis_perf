@@ -367,7 +367,7 @@ static int get_cpumask_from_cache_id(u32 cache_id, u32 cache_level,
 {
 	int cpu, err;
 	u32 iter_level;
-	int iter_cache_id;
+	u32 iter_cache_id;
 	struct device_node *iter;
 
 	if (!acpi_disabled)
@@ -391,13 +391,21 @@ static int get_cpumask_from_cache_id(u32 cache_id, u32 cache_level,
 			}
 
 			/*
-			 * get_cpu_cacheinfo_id() isn't ready until sometime
-			 * during device_initcall(). Use cache_of_get_id().
+			 * First check the cache-id property in cache node.
 			 */
-			iter_cache_id = cache_of_get_id(iter);
-			if (cache_id == ~0UL) {
-				of_node_put(iter);
-				continue;
+			err = of_property_read_u32(iter, "cache-id",
+						   &iter_cache_id);
+			if (err) {
+				/*
+				 * get_cpu_cacheinfo_id() isn't ready until
+				 * sometime during device_initcall(). Use
+				 * cache_of_get_id().
+				 */
+				iter_cache_id = cache_of_get_id(iter);
+				if (iter_cache_id == ~0U) {
+					of_node_put(iter);
+					continue;
+				}
 			}
 
 			if (iter_cache_id == cache_id)
@@ -423,10 +431,13 @@ static int get_cpumask_from_cache(struct device_node *cache,
 		return -ENOENT;
 	}
 
-	cache_id = cache_of_get_id(cache);
-	if (cache_id == ~0UL) {
-		pr_err("Failed to calculate cache-id from cache node\n");
-		return -ENOENT;
+	err = of_property_read_u32(cache, "cache-id", &cache_id);
+	if (err) {
+		cache_id = cache_of_get_id(cache);
+		if (cache_id == ~0U) {
+			pr_err("Failed to read cache-id from cache node\n");
+			return -ENOENT;
+		}
 	}
 
 	return get_cpumask_from_cache_id(cache_id, cache_level, affinity);
@@ -1246,7 +1257,7 @@ static int mpam_reprogram_ris(void *_arg)
 	spin_lock(&partid_max_lock);
 	partid_max = mpam_partid_max;
 	spin_unlock(&partid_max_lock);
-	for (partid = 0; partid < partid_max; partid++)
+	for (partid = 0; partid <= partid_max; partid++)
 		mpam_reprogram_ris_partid(ris, partid, cfg);
 
 	return 0;
@@ -1377,7 +1388,7 @@ static void mpam_reprogram_msc(struct mpam_msc *msc)
 		}
 
 		reset = true;
-		for (partid = 0; partid < mpam_partid_max; partid++) {
+		for (partid = 0; partid <= mpam_partid_max; partid++) {
 			cfg = &ris->comp->cfg[partid];
 			if (cfg->features)
 				reset = false;
@@ -1556,7 +1567,7 @@ static int mpam_dt_parse_resource(struct mpam_msc *msc, struct device_node *np,
 {
 	int err = 0;
 	u32 level = 0;
-	unsigned long cache_id;
+	u32 cache_id;
 	struct device_node *cache;
 
 	do {
@@ -1579,10 +1590,13 @@ static int mpam_dt_parse_resource(struct mpam_msc *msc, struct device_node *np,
 			break;
 		}
 
-		cache_id = cache_of_get_id(cache);
-		if (cache_id == ~0UL) {
-			err = -ENOENT;
-			break;
+		err = of_property_read_u32(cache, "cache-id", &cache_id);
+		if (err) {
+			cache_id = cache_of_get_id(cache);
+			if (cache_id == ~0U) {
+				pr_err("Failed to read cache-id\n");
+				break;
+			}
 		}
 
 		err = mpam_ris_create(msc, ris_idx, MPAM_CLASS_CACHE, level,
@@ -2031,7 +2045,7 @@ static int __allocate_component_cfg(struct mpam_component *comp)
 	if (comp->cfg)
 		return 0;
 
-	comp->cfg = kcalloc(mpam_partid_max, sizeof(*comp->cfg), GFP_KERNEL);
+	comp->cfg = kcalloc(mpam_partid_max + 1, sizeof(*comp->cfg), GFP_KERNEL);
 	if (!comp->cfg)
 		return -ENOMEM;
 
@@ -2133,7 +2147,7 @@ static void mpam_enable_once(void)
 	mpam_register_cpuhp_callbacks(mpam_cpu_online);
 
 	pr_info("MPAM enabled with %u partid and %u pmg\n",
-		READ_ONCE(mpam_partid_max) + 1, mpam_pmg_max + 1);
+		READ_ONCE(mpam_partid_max) + 1, READ_ONCE(mpam_pmg_max) + 1);
 }
 
 void mpam_reset_class(struct mpam_class *class)
@@ -2143,7 +2157,7 @@ void mpam_reset_class(struct mpam_class *class)
 
 	rcu_read_lock();
 	list_for_each_entry_rcu(comp, &class->components, class_list) {
-		memset(comp->cfg, 0, (mpam_partid_max * sizeof(*comp->cfg)));
+		memset(comp->cfg, 0, ((mpam_partid_max + 1) * sizeof(*comp->cfg)));
 
 		list_for_each_entry_rcu(ris, &comp->ris, comp_list) {
 			spin_lock(&ris->msc->lock);
