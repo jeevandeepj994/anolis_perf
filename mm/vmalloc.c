@@ -2539,6 +2539,11 @@ static void __vunmap(const void *addr, int deallocate_pages)
 		return;
 	}
 
+	if (unlikely(area->flags & VM_ALLOC_DECOUPLE_MAP)) {
+		WARN(1, "Trying to vfree() nonstandard vm area\n");
+		return;
+	}
+
 	debug_check_no_locks_freed(area->addr, get_vm_area_size(area));
 	debug_check_no_obj_freed(area->addr, get_vm_area_size(area));
 
@@ -2682,6 +2687,8 @@ void *vmap(struct page **pages, unsigned int count,
 	if (count > totalram_pages())
 		return NULL;
 
+	/* Ignore this flag in vmap() */
+	flags &= ~VM_ALLOC_DECOUPLE_MAP;
 	size = (unsigned long)count << PAGE_SHIFT;
 	area = get_vm_area_caller(size, flags, __builtin_return_address(0));
 	if (!area)
@@ -2701,6 +2708,236 @@ void *vmap(struct page **pages, unsigned int count,
 	return area->addr;
 }
 EXPORT_SYMBOL(vmap);
+
+/*
+ * valloc_area - only allocate a range of vm area and mark VM_ALLOC_DECOUPLE_MAP,
+ * similar to call get_vm_area_caller() without other operations. For areas with
+ * VM_ALLOC_DECOUPLE_MAP, only can be operated by {vmap,vunmap}_area() and
+ * {valloc,vfree}_area_range().
+ *
+ * THIS IS A CUSTOM INTERFACE FOR SPECIAL DRIVERS.
+ */
+void *valloc_area(unsigned long size)
+{
+	struct vm_struct *area;
+
+	if (WARN_ON_ONCE(!size))
+		return NULL;
+
+	if ((size >> PAGE_SHIFT) > totalram_pages()) {
+		pr_warn("reserve_va error: size %lu, exceeds total pages", size);
+		return NULL;
+	}
+
+	area = get_vm_area(size, VM_MAP);
+	if (!area)
+		return NULL;
+
+	area->flags |= VM_ALLOC_DECOUPLE_MAP;
+
+	return area->addr;
+}
+EXPORT_SYMBOL(valloc_area);
+
+/*
+ * vfree_area - only free vm area that allocated by valloc_area.
+ *
+ * THIS IS A CUSTOM INTERFACE FOR SPECIAL DRIVERS.
+ */
+void vfree_area(const void *addr)
+{
+	struct vmap_area *va;
+	struct vm_struct *area;
+	unsigned long vaddr = (unsigned long)addr;
+
+	if (!addr)
+		return;
+
+	if (!PAGE_ALIGNED(vaddr)) {
+		WARN(1, "Trying to %s bad address (%lx)\n", __func__, vaddr);
+		return;
+	}
+
+	va = find_vmap_area(vaddr);
+	if (unlikely(!va)) {
+		WARN(1, "Trying to %s nonexistent vm area (%lx)\n", __func__,
+		     vaddr);
+		return;
+	}
+	area = va->vm;
+	if (!(area->flags & VM_ALLOC_DECOUPLE_MAP)) {
+		WARN(1, "Trying to call %s on standard area (%lx)\n", __func__,
+		     vaddr);
+		return;
+	}
+
+	/* make sure vm area has no pages mapped */
+	if (area->nr_pages) {
+		WARN(1, "Trying to %s vm area with mapped pages\n", __func__);
+		return;
+	}
+
+	if (vaddr != va->va_start) {
+		WARN(1, "Trying to free mismatch vm area (%lx %lx): %lx\n",
+		     va->va_start, va->va_end, vaddr);
+		return;
+	}
+	vm_remove_mappings(area, 0);
+	kfree(area);
+}
+EXPORT_SYMBOL(vfree_area);
+
+/**
+ * vmap_area_range - map an array of pages into specified and virtually contiguous space
+ * @pages: array of page pointers
+ * @count: number of pages to map
+ * @flags: vm_area->flags
+ * @prot: page protection for the mapping
+ * @addr: specified virtual address
+ * @check: whether to check this area has already mapped or not
+ *
+ * Return: true or false on failure
+ *
+ * THIS IS A CUSTOM INTERFACE FOR SPECIAL DRIVERS.
+ */
+bool __vmap_area_range(struct page **pages, unsigned int count,
+		     unsigned long flag, pgprot_t prot, const void *addr, bool check)
+{
+	struct vmap_area *va;
+	struct vm_struct *area;
+	unsigned long vaddr = (unsigned long)addr;
+	unsigned long size;
+
+	va = find_vmap_area(vaddr);
+	if (unlikely(!va)) {
+		WARN(1, "Trying to map nonexistent vm area (%p)\n", addr);
+		return false;
+	}
+
+	size = (unsigned long)count << PAGE_SHIFT;
+	/* make sure map with valid parameters */
+	if (!size || (vaddr + size) > va->va_end) {
+		WARN(1, "Trying to map vm area with invalid values\n");
+		return false;
+	}
+	area = va->vm;
+	if (!(area->flags & VM_ALLOC_DECOUPLE_MAP)) {
+		WARN(1, "Trying to call vmap_area_range() on standard area (%lx)\n",
+		     vaddr);
+		return false;
+	}
+
+	/* Make sure no pages mapped at this address */
+	if (check) {
+		struct page *p;
+		unsigned long kaddr;
+
+		for (kaddr = vaddr; kaddr < vaddr + size; kaddr += PAGE_SIZE) {
+			p = vmalloc_to_page((void *)kaddr);
+			if (p) {
+				WARN(1, "Trying to remap vm area (%lx)\n", kaddr);
+				return false;
+			}
+		}
+	}
+
+	if (vmap_pages_range(vaddr, vaddr + size, pgprot_nx(prot),
+			     pages, PAGE_SHIFT) < 0) {
+		pr_warn("vmap_area_range error: addr %lu, size %lu", vaddr, size);
+		return false;
+	}
+	/*
+	 * Here VM_MAP_PUT_PAGES is ignored, that's because of the callers
+	 * will use {vmap, vunmap}_area_range() on sub area, and overlapping
+	 * area->pages if VM_MAP_PUT_PAGES is aware. It's different with
+	 * standard vmap() and vunmap().
+	 */
+	area->nr_pages += count;
+
+	return true;
+}
+EXPORT_SYMBOL(__vmap_area_range);
+
+bool vmap_area_range(struct page **pages, unsigned int count,
+		     unsigned long flag, pgprot_t prot, const void *addr)
+{
+	return __vmap_area_range(pages, count, flag, prot, addr, false);
+}
+EXPORT_SYMBOL(vmap_area_range);
+
+/**
+ * vunmap_area_range - unmap pages for a range of virtual address
+ * @addr: memory base address
+ * @len: length to unmap
+ * @check: whether to check this area has already unmapped or not
+ *
+ * unmap pages mapping at @addr for vm area, which was created
+ * from the page array passed to vmap_area_range().
+ *
+ * THIS IS A CUSTOM INTERFACE FOR SPECIAL DRIVERS.
+ */
+void __vunmap_area_range(const void *addr, unsigned long len, bool check)
+{
+	struct vmap_area *va;
+	struct vm_struct *area;
+	unsigned long vaddr = (unsigned long)addr;
+
+	if (!vaddr)
+		return;
+
+	if (!PAGE_ALIGNED(vaddr)) {
+		WARN(1, "Trying to vunmap_area_range() bad address (%lx)\n", vaddr);
+		return;
+	}
+
+	va = find_vmap_area(vaddr);
+	if (unlikely(!va)) {
+		WARN(1, "Trying to vunmap_area_range() nonexistent vm area (%lx)\n", vaddr);
+		return;
+	}
+	area = va->vm;
+	if (!(area->flags & VM_ALLOC_DECOUPLE_MAP)) {
+		WARN(1, "Trying to call vunmap_area_range() on standard area (%lx)\n",
+		     vaddr);
+		return;
+	}
+
+	if ((vaddr + len) > va->va_end) {
+		WARN(1, "Trying to vunmap_area_range() exceed vm area range (%lx %lx) (%lx %lx)\n",
+		     vaddr, len, va->va_start, va->va_end);
+		return;
+	}
+
+	if ((len >> PAGE_SHIFT) > area->nr_pages) {
+		WARN(1, "Trying to unmap vm area but not map (%lx %lx) (%lx %lx)\n",
+		     vaddr, len, va->va_start, va->va_end);
+		return;
+	}
+
+	/* Make sure this area is not unmapped repeatedly */
+	if (check) {
+		struct page *p;
+		unsigned long kaddr;
+
+		for (kaddr = vaddr; kaddr < vaddr + len; kaddr += PAGE_SIZE) {
+			p = vmalloc_to_page((void *)kaddr);
+			if (!p) {
+				WARN(1, "Trying to re-unmap this area (%lx)\n", kaddr);
+				return;
+			}
+		}
+	}
+
+	vunmap_range(vaddr, vaddr + len);
+	area->nr_pages -= len >> PAGE_SHIFT;
+}
+EXPORT_SYMBOL(__vunmap_area_range);
+
+void vunmap_area_range(const void *addr, unsigned long len)
+{
+	__vunmap_area_range(addr, len, false);
+}
+EXPORT_SYMBOL(vunmap_area_range);
 
 #ifdef CONFIG_VMAP_PFN
 struct vmap_pfn_data {
