@@ -35,6 +35,8 @@ struct notifier_block;		/* in notifier.h */
 #define VM_DEFER_KMEMLEAK	0
 #endif
 
+#define VM_ALLOC_DECOUPLE_MAP	0x00001000	/* allocate vm area but not map pages */
+
 /*
  * VM_KASAN is used slighly differently depending on CONFIG_KASAN_VMALLOC.
  *
@@ -152,6 +154,17 @@ extern void *vmap(struct page **pages, unsigned int count,
 			unsigned long flags, pgprot_t prot);
 void *vmap_pfn(unsigned long *pfns, unsigned int count, pgprot_t prot);
 extern void vunmap(const void *addr);
+
+/* THESE ARE CUSTOM INTERFACES FOR SPECIAL DRIVERS. */
+extern void *valloc_area(unsigned long size);
+extern void vfree_area(const void *addr);
+extern bool __vmap_area_range(struct page **pages, unsigned int count,
+			    unsigned long flag, pgprot_t prot, const void *addr,
+			    bool check);
+extern bool vmap_area_range(struct page **pages, unsigned int count,
+			    unsigned long flag, pgprot_t prot, const void *addr);
+extern void __vunmap_area_range(const void *addr, unsigned long len, bool check);
+extern void vunmap_area_range(const void *addr, unsigned long len);
 
 extern int remap_vmalloc_range_partial(struct vm_area_struct *vma,
 				       unsigned long uaddr, void *kaddr,
