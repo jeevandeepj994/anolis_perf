@@ -3433,8 +3433,11 @@ static int migrate_page_move(free_page_t put_new_page, unsigned long private,
 	int page_was_mapped = 0;
 	struct anon_vma *anon_vma = NULL;
 	bool is_lru = !__PageMovable(page);
+	struct list_head *prev;
 
 	__migrate_page_extract(newpage, &page_was_mapped, &anon_vma);
+	prev = newpage->lru.prev;
+	list_del(&newpage->lru);
 
 	rc = move_to_new_page(newpage, page, mode);
 	if (rc)
@@ -3451,8 +3454,6 @@ static int migrate_page_move(free_page_t put_new_page, unsigned long private,
 	 */
 	if (page_was_mapped)
 		remove_migration_ptes(page, newpage, false);
-	/* NOTE newpage should not on any list, since get_new_page() */
-	list_del(&newpage->lru);
 	unlock_page(newpage);
 	if (unlikely(!is_lru))
 		put_page(newpage);
@@ -3472,12 +3473,12 @@ static int migrate_page_move(free_page_t put_new_page, unsigned long private,
 
 out:
 	if (rc == -EAGAIN) {
+		list_add(&newpage->lru, prev);
 		__migrate_page_record(newpage, page_was_mapped, anon_vma);
 		return rc;
 	}
 
 	migrate_page_undo_page(page, page_was_mapped, anon_vma, true, ret);
-	list_del(&newpage->lru);
 	migrate_page_undo_newpage(newpage, true, put_new_page, private);
 
 	return rc;
