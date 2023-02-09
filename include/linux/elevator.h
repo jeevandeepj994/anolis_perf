@@ -2,6 +2,7 @@
 #ifndef _LINUX_ELEVATOR_H
 #define _LINUX_ELEVATOR_H
 
+#include <linux/ck_kabi.h>
 #include <linux/percpu.h>
 #include <linux/hashtable.h>
 
@@ -53,6 +54,12 @@ struct elevator_mq_ops {
 
 	CK_KABI_RESERVE(1)
 	CK_KABI_RESERVE(2)
+	CK_KABI_RESERVE(3)
+	CK_KABI_RESERVE(4)
+	CK_KABI_RESERVE(5)
+	CK_KABI_RESERVE(6)
+	CK_KABI_RESERVE(7)
+	CK_KABI_RESERVE(8)
 };
 
 #define ELV_NAME_MAX	(16)
@@ -89,6 +96,11 @@ struct elevator_type
 	/* managed by elevator core */
 	char icq_cache_name[ELV_NAME_MAX + 6];	/* elvname + "_io_cq" */
 	struct list_head list;
+
+	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
+	CK_KABI_RESERVE(3)
+	CK_KABI_RESERVE(4)
 };
 
 #define ELV_HASH_BITS 6

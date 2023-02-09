@@ -7,6 +7,7 @@
 #ifndef _ARM_PROBES_H
 #define _ARM_PROBES_H
 
+#include <linux/ck_kabi.h>
 #include <asm/insn.h>
 
 typedef u32 probe_opcode_t;
@@ -24,6 +25,9 @@ struct arch_probe_insn {
 typedef u32 kprobe_opcode_t;
 struct arch_specific_insn {
 	struct arch_probe_insn api;
+
+	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
 };
 #endif
 

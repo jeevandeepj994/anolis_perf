@@ -9,6 +9,7 @@
  * See arch/x86/kernel/kprobes.c for x86 kprobes history.
  */
 
+#include <linux/ck_kabi.h>
 #include <asm-generic/kprobes.h>
 
 #ifdef CONFIG_KPROBES
@@ -68,6 +69,9 @@ struct arch_specific_insn {
 	bool if_modifier;
 	/* Number of bytes of text poked */
 	int tp_len;
+
+	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
 };
 
 struct arch_optimized_insn {

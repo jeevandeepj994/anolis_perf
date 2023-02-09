@@ -14,6 +14,7 @@
 #ifndef _SNMP_H
 #define _SNMP_H
 
+#include <linux/ck_kabi.h>
 #include <linux/cache.h>
 #include <linux/snmp.h>
 #include <linux/smp.h>
@@ -91,6 +92,8 @@ struct icmpv6msg_mib_device {
 #define TCP_MIB_MAX	__TCP_MIB_MAX
 struct tcp_mib {
 	unsigned long	mibs[TCP_MIB_MAX];
+
+	CK_KABI_RESERVE(1)
 };
 
 /* UDP */

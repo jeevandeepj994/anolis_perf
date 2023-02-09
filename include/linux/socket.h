@@ -3,6 +3,7 @@
 #define _LINUX_SOCKET_H
 
 
+#include <linux/ck_kabi.h>
 #include <asm/socket.h>			/* arch-dependent defines	*/
 #include <linux/sockios.h>		/* the SIOCxxx I/O controls	*/
 #include <linux/uio.h>			/* iovec support		*/
@@ -75,6 +76,8 @@ struct user_msghdr {
 	void		__user *msg_control;	/* ancillary data */
 	__kernel_size_t	msg_controllen;		/* ancillary data buffer length */
 	unsigned int	msg_flags;		/* flags on received message */
+
+	CK_KABI_RESERVE(1)
 };
 
 /* For recvmmsg/sendmmsg */

@@ -13,6 +13,7 @@
 #ifndef _NF_CONNTRACK_H
 #define _NF_CONNTRACK_H
 
+#include <linux/ck_kabi.h>
 #include <linux/bitops.h>
 #include <linux/compiler.h>
 
@@ -105,6 +106,9 @@ struct nf_conn {
 
 	/* Storage reserved for other modules, must be the last member */
 	union nf_conntrack_proto proto;
+
+	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
 };
 
 static inline struct nf_conn *

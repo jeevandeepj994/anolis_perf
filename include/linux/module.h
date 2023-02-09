@@ -9,6 +9,7 @@
 #ifndef _LINUX_MODULE_H
 #define _LINUX_MODULE_H
 
+#include <linux/ck_kabi.h>
 #include <linux/list.h>
 #include <linux/stat.h>
 #include <linux/compiler.h>
@@ -534,6 +535,11 @@ struct module {
 	struct error_injection_entry *ei_funcs;
 	unsigned int num_ei_funcs;
 #endif
+
+	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
+	CK_KABI_RESERVE(3)
+	CK_KABI_RESERVE(4)
 } ____cacheline_aligned __randomize_layout;
 #ifndef MODULE_ARCH_INIT
 #define MODULE_ARCH_INIT {}

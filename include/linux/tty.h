@@ -2,6 +2,7 @@
 #ifndef _LINUX_TTY_H
 #define _LINUX_TTY_H
 
+#include <linux/ck_kabi.h>
 #include <linux/fs.h>
 #include <linux/major.h>
 #include <linux/termios.h>
@@ -223,6 +224,8 @@ struct tty_port_operations {
 struct tty_port_client_operations {
 	int (*receive_buf)(struct tty_port *port, const unsigned char *, const unsigned char *, size_t);
 	void (*write_wakeup)(struct tty_port *port);
+
+	CK_KABI_RESERVE(1)
 };
 
 extern const struct tty_port_client_operations tty_port_default_client_ops;
@@ -252,6 +255,10 @@ struct tty_port {
 						   set to size of fifo */
 	struct kref		kref;		/* Ref counter */
 	void 			*client_data;
+
+	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
+	CK_KABI_RESERVE(3)
 };
 
 /* tty_port::iflags bits -- use atomic bit ops */

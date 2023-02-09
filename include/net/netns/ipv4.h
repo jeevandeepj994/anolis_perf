@@ -6,6 +6,7 @@
 #ifndef __NETNS_IPV4_H__
 #define __NETNS_IPV4_H__
 
+#include <linux/ck_kabi.h>
 #include <linux/uidgid.h>
 #include <net/inet_frag.h>
 #include <linux/rcupdate.h>
@@ -235,5 +236,10 @@ struct netns_ipv4 {
 
 	atomic_t	rt_genid;
 	siphash_key_t	ip_id_key;
+
+	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
+	CK_KABI_RESERVE(3)
+	CK_KABI_RESERVE(4)
 };
 #endif

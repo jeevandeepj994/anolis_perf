@@ -12,6 +12,7 @@
 #ifndef _LINUX_PM_QOS_H
 #define _LINUX_PM_QOS_H
 
+#include <linux/ck_kabi.h>
 #include <linux/plist.h>
 #include <linux/notifier.h>
 #include <linux/device.h>
@@ -112,6 +113,9 @@ struct dev_pm_qos_request {
 		struct freq_qos_request freq;
 	} data;
 	struct device *dev;
+
+	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
 };
 
 struct dev_pm_qos {
@@ -122,6 +126,9 @@ struct dev_pm_qos {
 	struct dev_pm_qos_request *resume_latency_req;
 	struct dev_pm_qos_request *latency_tolerance_req;
 	struct dev_pm_qos_request *flags_req;
+
+	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
 };
 
 /* Action requested to pm_qos_update_target */

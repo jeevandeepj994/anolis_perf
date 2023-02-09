@@ -52,6 +52,8 @@ struct block_device {
 
 	CK_KABI_RESERVE(1)
 	CK_KABI_RESERVE(2)
+	CK_KABI_RESERVE(3)
+	CK_KABI_RESERVE(4)
 } __randomize_layout;
 
 /*
@@ -273,6 +275,8 @@ struct bio {
 
 	CK_KABI_RESERVE(1)
 	CK_KABI_RESERVE(2)
+	CK_KABI_RESERVE(3)
+	CK_KABI_RESERVE(4)
 
 	/*
 	 * We can inline a number of vecs at the end of the bio, to avoid

@@ -7,6 +7,7 @@
 #ifndef _NET_L3MDEV_H_
 #define _NET_L3MDEV_H_
 
+#include <linux/ck_kabi.h>
 #include <net/dst.h>
 #include <net/fib_rules.h>
 
@@ -43,6 +44,11 @@ struct l3mdev_ops {
 	/* IPv6 ops */
 	struct dst_entry * (*l3mdev_link_scope_lookup)(const struct net_device *dev,
 						 struct flowi6 *fl6);
+
+	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
+	CK_KABI_RESERVE(3)
+	CK_KABI_RESERVE(4)
 };
 
 #ifdef CONFIG_NET_L3_MASTER_DEV

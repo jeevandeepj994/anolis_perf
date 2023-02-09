@@ -3,6 +3,7 @@
 #ifndef _DRM_CLIENT_H_
 #define _DRM_CLIENT_H_
 
+#include <linux/ck_kabi.h>
 #include <linux/lockdep.h>
 #include <linux/mutex.h>
 #include <linux/types.h>
@@ -149,6 +150,8 @@ struct drm_client_buffer {
 	 * @fb: DRM framebuffer
 	 */
 	struct drm_framebuffer *fb;
+
+	CK_KABI_RESERVE(1)
 };
 
 struct drm_client_buffer *

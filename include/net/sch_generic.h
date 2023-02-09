@@ -2,6 +2,7 @@
 #ifndef __NET_SCHED_GENERIC_H
 #define __NET_SCHED_GENERIC_H
 
+#include <linux/ck_kabi.h>
 #include <linux/netdevice.h>
 #include <linux/types.h>
 #include <linux/rcupdate.h>
@@ -113,6 +114,15 @@ struct Qdisc {
 	/* for NOLOCK qdisc, true if there are no enqueued skbs */
 	bool			empty;
 	struct rcu_head		rcu;
+
+	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
+	CK_KABI_RESERVE(3)
+	CK_KABI_RESERVE(4)
+	CK_KABI_RESERVE(5)
+	CK_KABI_RESERVE(6)
+	CK_KABI_RESERVE(7)
+	CK_KABI_RESERVE(8)
 
 	/* private data */
 	long privdata[] ____cacheline_aligned;
@@ -257,6 +267,8 @@ struct Qdisc_class_ops {
 					struct sk_buff *skb, struct tcmsg*);
 	int			(*dump_stats)(struct Qdisc *, unsigned long,
 					struct gnet_dump *);
+
+	CK_KABI_RESERVE(1)
 };
 
 /* Qdisc_class_ops flag values */
@@ -302,6 +314,8 @@ struct Qdisc_ops {
 	u32			(*egress_block_get)(struct Qdisc *sch);
 
 	struct module		*owner;
+
+	CK_KABI_RESERVE(1)
 };
 
 

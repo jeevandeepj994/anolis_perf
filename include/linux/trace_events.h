@@ -3,6 +3,7 @@
 #ifndef _LINUX_TRACE_EVENT_H
 #define _LINUX_TRACE_EVENT_H
 
+#include <linux/ck_kabi.h>
 #include <linux/ring_buffer.h>
 #include <linux/trace_seq.h>
 #include <linux/percpu.h>
@@ -109,6 +110,8 @@ struct trace_iterator {
 	long			idx;
 
 	/* All new field here will be zeroed out in pipe_read */
+	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
 };
 
 enum trace_iter_flags {

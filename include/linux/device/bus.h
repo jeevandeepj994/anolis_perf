@@ -14,6 +14,7 @@
 #ifndef _DEVICE_BUS_H_
 #define _DEVICE_BUS_H_
 
+#include <linux/ck_kabi.h>
 #include <linux/kobject.h>
 #include <linux/klist.h>
 #include <linux/pm.h>
@@ -112,6 +113,9 @@ struct bus_type {
 	struct lock_class_key lock_key;
 
 	bool need_parent_lock;
+
+	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
 };
 
 extern int __must_check bus_register(struct bus_type *bus);

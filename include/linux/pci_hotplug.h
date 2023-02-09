@@ -14,6 +14,8 @@
 #ifndef _PCI_HOTPLUG_H
 #define _PCI_HOTPLUG_H
 
+#include <linux/ck_kabi.h>
+
 /**
  * struct hotplug_slot_ops -the callbacks that the hotplug pci core can use
  * @enable_slot: Called when the user wants to enable a specific pci slot
@@ -46,6 +48,15 @@ struct hotplug_slot_ops {
 	int (*get_adapter_status)(struct hotplug_slot *slot, u8 *value);
 	int (*reset_slot)(struct hotplug_slot *slot, int probe);
 	int (*set_power_indicator)(struct hotplug_slot *slot, u8 value);
+
+	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
+	CK_KABI_RESERVE(3)
+	CK_KABI_RESERVE(4)
+	CK_KABI_RESERVE(5)
+	CK_KABI_RESERVE(6)
+	CK_KABI_RESERVE(7)
+	CK_KABI_RESERVE(8)
 };
 
 /**
@@ -62,6 +73,15 @@ struct hotplug_slot {
 	struct pci_slot			*pci_slot;
 	struct module			*owner;
 	const char			*mod_name;
+
+	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
+	CK_KABI_RESERVE(3)
+	CK_KABI_RESERVE(4)
+	CK_KABI_RESERVE(5)
+	CK_KABI_RESERVE(6)
+	CK_KABI_RESERVE(7)
+	CK_KABI_RESERVE(8)
 };
 
 static inline const char *hotplug_slot_name(const struct hotplug_slot *slot)

@@ -29,6 +29,7 @@
 #ifndef __DRM_MODESET_HELPER_VTABLES_H__
 #define __DRM_MODESET_HELPER_VTABLES_H__
 
+#include <linux/ck_kabi.h>
 #include <drm/drm_crtc.h>
 #include <drm/drm_encoder.h>
 
@@ -1406,6 +1407,8 @@ struct drm_mode_config_helper_funcs {
 	 * drm_atomic_helper_commit_tail().
 	 */
 	void (*atomic_commit_tail)(struct drm_atomic_state *state);
+
+	CK_KABI_RESERVE(1)
 };
 
 #endif

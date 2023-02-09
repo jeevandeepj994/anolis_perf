@@ -9,6 +9,7 @@
 #ifndef _LINUX_PM_WAKEUP_H
 #define _LINUX_PM_WAKEUP_H
 
+#include <linux/ck_kabi.h>
 #ifndef _DEVICE_H_
 # error "please don't include this file directly"
 #endif
@@ -61,6 +62,9 @@ struct wakeup_source {
 	struct device		*dev;
 	bool			active:1;
 	bool			autosleep_enabled:1;
+
+	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
 };
 
 #define for_each_wakeup_source(ws) \

@@ -2,6 +2,7 @@
 #ifndef _LINUX_FB_H
 #define _LINUX_FB_H
 
+#include <linux/ck_kabi.h>
 #include <linux/kgdb.h>
 #include <uapi/linux/fb.h>
 
@@ -208,6 +209,8 @@ struct fb_deferred_io {
 	/* callback */
 	void (*first_io)(struct fb_info *info);
 	void (*deferred_io)(struct fb_info *info, struct list_head *pagelist);
+
+	CK_KABI_RESERVE(1)
 };
 #endif
 

@@ -5,6 +5,7 @@
 
 */
 
+#include <linux/ck_kabi.h>
 #define INCLUDE_VERMAGIC
 
 #include <linux/export.h>
@@ -1546,6 +1547,8 @@ static inline bool sect_empty(const Elf_Shdr *sect)
 struct module_sect_attr {
 	struct bin_attribute battr;
 	unsigned long address;
+
+	CK_KABI_RESERVE(1)
 };
 
 struct module_sect_attrs {

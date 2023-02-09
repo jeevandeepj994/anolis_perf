@@ -2,6 +2,7 @@
 #ifndef __NET_NETLINK_H
 #define __NET_NETLINK_H
 
+#include <linux/ck_kabi.h>
 #include <linux/types.h>
 #include <linux/netlink.h>
 #include <linux/jiffies.h>
@@ -348,6 +349,11 @@ struct nla_policy {
 		 */
 		u16 strict_start_type;
 	};
+
+	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
+	CK_KABI_RESERVE(3)
+	CK_KABI_RESERVE(4)
 };
 
 #define NLA_POLICY_ETH_ADDR		NLA_POLICY_EXACT_LEN(ETH_ALEN)

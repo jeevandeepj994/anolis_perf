@@ -5,6 +5,7 @@
  * Declarations for Reverse Mapping functions in mm/rmap.c
  */
 
+#include <linux/ck_kabi.h>
 #include <linux/list.h>
 #include <linux/slab.h>
 #include <linux/mm.h>

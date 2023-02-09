@@ -11,6 +11,7 @@
 
 #ifndef __DRM_WRITEBACK_H__
 #define __DRM_WRITEBACK_H__
+#include <linux/ck_kabi.h>
 #include <drm/drm_connector.h>
 #include <drm/drm_encoder.h>
 #include <linux/workqueue.h>
@@ -82,6 +83,19 @@ struct drm_writeback_connector {
 	 * The name of the connector's fence timeline.
 	 */
 	char timeline_name[32];
+
+	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
+	CK_KABI_RESERVE(3)
+	CK_KABI_RESERVE(4)
+	CK_KABI_RESERVE(5)
+	CK_KABI_RESERVE(6)
+	CK_KABI_RESERVE(7)
+	CK_KABI_RESERVE(8)
+	CK_KABI_RESERVE(9)
+	CK_KABI_RESERVE(10)
+	CK_KABI_RESERVE(11)
+	CK_KABI_RESERVE(12)
 };
 
 /**

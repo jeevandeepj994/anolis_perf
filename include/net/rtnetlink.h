@@ -2,6 +2,7 @@
 #ifndef __NET_RTNETLINK_H
 #define __NET_RTNETLINK_H
 
+#include <linux/ck_kabi.h>
 #include <linux/rtnetlink.h>
 #include <net/netlink.h>
 
@@ -112,6 +113,15 @@ struct rtnl_link_ops {
 	int			(*fill_linkxstats)(struct sk_buff *skb,
 						   const struct net_device *dev,
 						   int *prividx, int attr);
+
+	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
+	CK_KABI_RESERVE(3)
+	CK_KABI_RESERVE(4)
+	CK_KABI_RESERVE(5)
+	CK_KABI_RESERVE(6)
+	CK_KABI_RESERVE(7)
+	CK_KABI_RESERVE(8)
 };
 
 int __rtnl_link_register(struct rtnl_link_ops *ops);

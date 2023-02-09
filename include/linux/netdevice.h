@@ -226,6 +226,8 @@ struct netdev_hw_addr {
 struct netdev_hw_addr_list {
 	struct list_head	list;
 	int			count;
+
+	CK_KABI_RESERVE(1)
 };
 
 #define netdev_hw_addr_list_count(l) ((l)->count)
@@ -280,6 +282,9 @@ struct header_ops {
 				const unsigned char *haddr);
 	bool	(*validate)(const char *ll_header, unsigned int len);
 	__be16	(*parse_protocol)(const struct sk_buff *skb);
+
+	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
 };
 
 /* These flag bits are private to the generic network queueing
@@ -349,6 +354,11 @@ struct napi_struct {
 	struct list_head	dev_list;
 	struct hlist_node	napi_hash_node;
 	unsigned int		napi_id;
+
+	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
+	CK_KABI_RESERVE(3)
+	CK_KABI_RESERVE(4)
 };
 
 enum {
@@ -617,6 +627,15 @@ struct netdev_queue {
 #ifdef CONFIG_BQL
 	struct dql		dql;
 #endif
+
+	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
+	CK_KABI_RESERVE(3)
+	CK_KABI_RESERVE(4)
+	CK_KABI_RESERVE(5)
+	CK_KABI_RESERVE(6)
+	CK_KABI_RESERVE(7)
+	CK_KABI_RESERVE(8)
 } ____cacheline_aligned_in_smp;
 
 extern int sysctl_fb_tunnels_only_for_init_net;
@@ -740,6 +759,15 @@ struct netdev_rx_queue {
 #ifdef CONFIG_XDP_SOCKETS
 	struct xsk_buff_pool            *pool;
 #endif
+
+	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
+	CK_KABI_RESERVE(3)
+	CK_KABI_RESERVE(4)
+	CK_KABI_RESERVE(5)
+	CK_KABI_RESERVE(6)
+	CK_KABI_RESERVE(7)
+	CK_KABI_RESERVE(8)
 } ____cacheline_aligned_in_smp;
 
 /*
@@ -772,6 +800,9 @@ struct xps_map {
  */
 struct xps_dev_maps {
 	struct rcu_head rcu;
+
+	CK_KABI_RESERVE(1)
+
 	struct xps_map __rcu *attr_map[]; /* Either CPUs map or RXQs map */
 };
 
@@ -920,6 +951,11 @@ struct xfrmdev_ops {
 	bool	(*xdo_dev_offload_ok) (struct sk_buff *skb,
 				       struct xfrm_state *x);
 	void	(*xdo_dev_state_advance_esn) (struct xfrm_state *x);
+
+	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
+	CK_KABI_RESERVE(3)
+	CK_KABI_RESERVE(4)
 };
 #endif
 
@@ -1486,6 +1522,20 @@ struct net_device_ops {
 
 	CK_KABI_RESERVE(1)
 	CK_KABI_RESERVE(2)
+	CK_KABI_RESERVE(3)
+	CK_KABI_RESERVE(4)
+	CK_KABI_RESERVE(5)
+	CK_KABI_RESERVE(6)
+	CK_KABI_RESERVE(7)
+	CK_KABI_RESERVE(8)
+	CK_KABI_RESERVE(9)
+	CK_KABI_RESERVE(10)
+	CK_KABI_RESERVE(11)
+	CK_KABI_RESERVE(12)
+	CK_KABI_RESERVE(13)
+	CK_KABI_RESERVE(14)
+	CK_KABI_RESERVE(15)
+	CK_KABI_RESERVE(16)
 };
 
 /**
@@ -2172,6 +2222,22 @@ struct net_device {
 
 	/* protected by rtnl_lock */
 	struct bpf_xdp_entity	xdp_state[__MAX_XDP_MODE];
+
+	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
+	CK_KABI_RESERVE(3)
+	CK_KABI_RESERVE(4)
+	CK_KABI_RESERVE(5)
+	CK_KABI_RESERVE(6)
+	CK_KABI_RESERVE(7)
+	CK_KABI_RESERVE(8)
+	CK_KABI_RESERVE(9)
+	CK_KABI_RESERVE(10)
+	CK_KABI_RESERVE(11)
+	CK_KABI_RESERVE(13)
+	CK_KABI_RESERVE(14)
+	CK_KABI_RESERVE(15)
+	CK_KABI_RESERVE(16)
 };
 #define to_net_dev(d) container_of(d, struct net_device, dev)
 
@@ -2545,6 +2611,11 @@ struct packet_type {
 	struct net		*af_packet_net;
 	void			*af_packet_priv;
 	struct list_head	list;
+
+	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
+	CK_KABI_RESERVE(3)
+	CK_KABI_RESERVE(4)
 };
 
 struct offload_callbacks {

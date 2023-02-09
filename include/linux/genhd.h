@@ -10,6 +10,7 @@
  *		<drew@colorado.edu>
  */
 
+#include <linux/ck_kabi.h>
 #include <linux/types.h>
 #include <linux/kdev_t.h>
 #include <linux/rcupdate.h>
@@ -76,6 +77,8 @@ struct hd_struct {
 
 	CK_KABI_RESERVE(1)
 	CK_KABI_RESERVE(2)
+	CK_KABI_RESERVE(3)
+	CK_KABI_RESERVE(4)
 };
 
 /**
@@ -165,6 +168,9 @@ struct blk_integrity {
 	unsigned char				tuple_size;
 	unsigned char				interval_exp;
 	unsigned char				tag_size;
+
+	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
 };
 
 struct gendisk {
@@ -214,6 +220,8 @@ struct gendisk {
 
 	CK_KABI_RESERVE(1)
 	CK_KABI_RESERVE(2)
+	CK_KABI_RESERVE(3)
+	CK_KABI_RESERVE(4)
 };
 
 #if IS_REACHABLE(CONFIG_CDROM)

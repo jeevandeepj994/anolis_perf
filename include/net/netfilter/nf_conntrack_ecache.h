@@ -5,6 +5,7 @@
 
 #ifndef _NF_CONNTRACK_ECACHE_H
 #define _NF_CONNTRACK_ECACHE_H
+#include <linux/ck_kabi.h>
 #include <net/netfilter/nf_conntrack.h>
 
 #include <net/net_namespace.h>
@@ -74,6 +75,7 @@ struct nf_ct_event {
 
 struct nf_ct_event_notifier {
 	int (*fcn)(unsigned int events, struct nf_ct_event *item);
+	CK_KABI_RESERVE(1)
 };
 
 int nf_conntrack_register_notifier(struct net *net,

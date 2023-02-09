@@ -14,6 +14,7 @@
 #ifndef _LINUX_PERF_EVENT_H
 #define _LINUX_PERF_EVENT_H
 
+#include <linux/ck_kabi.h>
 #include <uapi/linux/perf_event.h>
 #include <uapi/linux/bpf_perf_event.h>
 
@@ -513,6 +514,11 @@ struct pmu {
 	 * Check period value for PERF_EVENT_IOC_PERIOD ioctl.
 	 */
 	int (*check_period)		(struct perf_event *event, u64 value); /* optional */
+
+	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
+	CK_KABI_RESERVE(3)
+	CK_KABI_RESERVE(4)
 };
 
 enum perf_addr_filter_action_t {
@@ -837,6 +843,8 @@ struct perf_event_context {
 #endif
 	void				*task_ctx_data; /* pmu specific data */
 	struct rcu_head			rcu_head;
+
+	CK_KABI_RESERVE(1)
 };
 
 /*
@@ -875,6 +883,8 @@ struct perf_cpu_context {
 	int				heap_size;
 	struct perf_event		**heap;
 	struct perf_event		*heap_default[2];
+
+	CK_KABI_RESERVE(1)
 };
 
 struct perf_output_handle {

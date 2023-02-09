@@ -3,6 +3,7 @@
 #ifndef _LINUX_INTERRUPT_H
 #define _LINUX_INTERRUPT_H
 
+#include <linux/ck_kabi.h>
 #include <linux/kernel.h>
 #include <linux/bitops.h>
 #include <linux/cpumask.h>
@@ -298,6 +299,8 @@ struct irq_affinity {
 	unsigned int	set_size[IRQ_AFFINITY_MAX_SETS];
 	void		(*calc_sets)(struct irq_affinity *, unsigned int nvecs);
 	void		*priv;
+
+	CK_KABI_RESERVE(1)
 };
 
 /**
@@ -717,7 +720,7 @@ extern void tasklet_setup(struct tasklet_struct *t,
  * if more than one irq occurred.
  */
 
-#if !defined(CONFIG_GENERIC_IRQ_PROBE) 
+#if !defined(CONFIG_GENERIC_IRQ_PROBE)
 static inline unsigned long probe_irq_on(void)
 {
 	return 0;

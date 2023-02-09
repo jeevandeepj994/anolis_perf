@@ -16,6 +16,7 @@
  *		<jkenisto@us.ibm.com>  and Prasanna S Panchamukhi
  *		<prasanna@in.ibm.com> added function-return probes.
  */
+#include <linux/ck_kabi.h>
 #include <linux/compiler.h>
 #include <linux/linkage.h>
 #include <linux/list.h>
@@ -98,6 +99,8 @@ struct kprobe {
 	 * Protected by kprobe_mutex after this kprobe is registered.
 	 */
 	u32 flags;
+
+	CK_KABI_RESERVE(1)
 };
 
 /* Kprobe status flags */

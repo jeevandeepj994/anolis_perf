@@ -6,6 +6,7 @@
  * Copyright 2005 IBM Corporation
  */
 
+#include <linux/ck_kabi.h>
 #include <linux/fs.h>
 #include <linux/audit.h>
 #include <linux/skbuff.h>
@@ -198,6 +199,8 @@ struct audit_context {
 	};
 	int fds[2];
 	struct audit_proctitle proctitle;
+
+	CK_KABI_RESERVE(1)
 };
 
 extern bool audit_ever_enabled;
