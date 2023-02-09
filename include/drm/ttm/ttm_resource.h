@@ -25,6 +25,7 @@
 #ifndef _TTM_RESOURCE_H_
 #define _TTM_RESOURCE_H_
 
+#include <linux/ck_kabi.h>
 #include <linux/types.h>
 #include <linux/mutex.h>
 #include <linux/dma-fence.h>
@@ -136,6 +137,9 @@ struct ttm_resource_manager {
 	 * Protected by @move_lock.
 	 */
 	struct dma_fence *move;
+
+	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
 };
 
 /**

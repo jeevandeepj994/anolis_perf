@@ -8,6 +8,7 @@
 #ifndef __ASM_THREAD_INFO_H
 #define __ASM_THREAD_INFO_H
 
+#include <linux/ck_kabi.h>
 #include <linux/compiler.h>
 
 #ifndef __ASSEMBLY__
@@ -45,6 +46,9 @@ struct thread_info {
 #ifdef CONFIG_ARM64_MPAM
 	u64			mpam_partid_pmg;
 #endif
+
+	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
 };
 
 #define thread_saved_pc(tsk)	\

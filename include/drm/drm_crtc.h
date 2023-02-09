@@ -25,6 +25,7 @@
 #ifndef __DRM_CRTC_H__
 #define __DRM_CRTC_H__
 
+#include <linux/ck_kabi.h>
 #include <linux/i2c.h>
 #include <linux/spinlock.h>
 #include <linux/types.h>
@@ -392,6 +393,8 @@ struct drm_crtc_state {
 
 	/** @state: backpointer to global drm_atomic_state */
 	struct drm_atomic_state *state;
+
+	CK_KABI_RESERVE(1)
 };
 
 /**
@@ -1172,6 +1175,8 @@ struct drm_crtc {
 	 * Initialized via drm_self_refresh_helper_init().
 	 */
 	struct drm_self_refresh_data *self_refresh_data;
+
+	CK_KABI_RESERVE(1)
 };
 
 /**

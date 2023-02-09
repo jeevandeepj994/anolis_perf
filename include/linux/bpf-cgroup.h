@@ -2,6 +2,7 @@
 #ifndef _BPF_CGROUP_H
 #define _BPF_CGROUP_H
 
+#include <linux/ck_kabi.h>
 #include <linux/bpf.h>
 #include <linux/errno.h>
 #include <linux/jump_label.h>
@@ -101,6 +102,9 @@ struct cgroup_bpf {
 
 	/* cgroup_bpf is released using a work queue */
 	struct work_struct release_work;
+
+	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
 };
 
 int cgroup_bpf_inherit(struct cgroup *cgrp);

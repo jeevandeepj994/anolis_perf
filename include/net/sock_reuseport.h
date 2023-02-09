@@ -2,6 +2,7 @@
 #ifndef _SOCK_REUSEPORT_H
 #define _SOCK_REUSEPORT_H
 
+#include <linux/ck_kabi.h>
 #include <linux/filter.h>
 #include <linux/skbuff.h>
 #include <linux/types.h>
@@ -24,6 +25,9 @@ struct sock_reuseport {
 	unsigned int		bind_inany:1;
 	unsigned int		has_conns:1;
 	struct bpf_prog __rcu	*prog;		/* optional BPF sock selector */
+
+	CK_KABI_RESERVE(1)
+
 	struct sock		*socks[];	/* array of sock pointers */
 };
 

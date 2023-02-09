@@ -11,6 +11,7 @@
  * Updates for SPARC64 by David S. Miller
  * Derived from PowerPC and Sparc prom.h files by Stephen Rothwell, IBM Corp.
  */
+#include <linux/ck_kabi.h>
 #include <linux/types.h>
 #include <linux/bitops.h>
 #include <linux/errno.h>
@@ -68,6 +69,13 @@ struct device_node {
 	unsigned int unique_id;
 	struct of_irq_controller *irq_trans;
 #endif
+
+	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
+	CK_KABI_RESERVE(3)
+	CK_KABI_RESERVE(4)
+	CK_KABI_RESERVE(5)
+	CK_KABI_RESERVE(6)
 };
 
 #define MAX_PHANDLE_ARGS 16

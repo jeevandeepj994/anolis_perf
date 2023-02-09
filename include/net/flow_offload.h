@@ -1,6 +1,7 @@
 #ifndef _NET_FLOW_OFFLOAD_H
 #define _NET_FLOW_OFFLOAD_H
 
+#include <linux/ck_kabi.h>
 #include <linux/kernel.h>
 #include <linux/list.h>
 #include <linux/netlink.h>
@@ -273,6 +274,11 @@ struct flow_action_entry {
 		} gate;
 	};
 	struct flow_action_cookie *cookie; /* user defined action cookie */
+
+	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
+	CK_KABI_RESERVE(3)
+	CK_KABI_RESERVE(4)
 };
 
 struct flow_action {

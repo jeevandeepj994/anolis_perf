@@ -11,6 +11,7 @@
 #ifndef _LINUX_SRCU_TREE_H
 #define _LINUX_SRCU_TREE_H
 
+#include <linux/ck_kabi.h>
 #include <linux/rcu_node_tree.h>
 #include <linux/completion.h>
 
@@ -40,6 +41,15 @@ struct srcu_data {
 						/*  ->srcu_data_have_cbs[]. */
 	int cpu;
 	struct srcu_struct *ssp;
+
+	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
+	CK_KABI_RESERVE(3)
+	CK_KABI_RESERVE(4)
+	CK_KABI_RESERVE(5)
+	CK_KABI_RESERVE(6)
+	CK_KABI_RESERVE(7)
+	CK_KABI_RESERVE(8)
 };
 
 /*

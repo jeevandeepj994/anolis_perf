@@ -28,6 +28,7 @@
 #ifndef DRM_ATOMIC_H_
 #define DRM_ATOMIC_H_
 
+#include <linux/ck_kabi.h>
 #include <drm/drm_crtc.h>
 #include <drm/drm_util.h>
 
@@ -225,6 +226,8 @@ struct drm_private_state_funcs {
 	 */
 	void (*atomic_destroy_state)(struct drm_private_obj *obj,
 				     struct drm_private_state *state);
+
+	CK_KABI_RESERVE(1)
 };
 
 /**
@@ -297,6 +300,8 @@ struct drm_private_obj {
  */
 struct drm_private_state {
 	struct drm_atomic_state *state;
+
+	CK_KABI_RESERVE(1)
 };
 
 struct __drm_private_objs_state {

@@ -6,6 +6,7 @@
 #ifndef __NETNS_CAN_H__
 #define __NETNS_CAN_H__
 
+#include <linux/ck_kabi.h>
 #include <linux/spinlock.h>
 
 struct can_dev_rcv_lists;
@@ -35,6 +36,8 @@ struct netns_can {
 
 	/* CAN GW per-net gateway jobs */
 	struct hlist_head cgw_list;
+
+	CK_KABI_RESERVE(1)
 };
 
 #endif /* __NETNS_CAN_H__ */

@@ -14,6 +14,7 @@
 #ifndef _TCP_H
 #define _TCP_H
 
+#include <linux/ck_kabi.h>
 #define FASTRETRANS_DEBUG 1
 
 #include <linux/list.h>
@@ -1057,6 +1058,8 @@ struct rate_sample {
 	bool is_app_limited;	/* is sample from packet with bubble in pipe? */
 	bool is_retrans;	/* is sample from retransmission? */
 	bool is_ack_delayed;	/* is this (likely) a delayed ACK? */
+
+	CK_KABI_RESERVE(1)
 };
 
 struct tcp_congestion_ops {
@@ -1097,6 +1100,11 @@ struct tcp_congestion_ops {
 
 	char 		name[TCP_CA_NAME_MAX];
 	struct module 	*owner;
+
+	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
+	CK_KABI_RESERVE(3)
+	CK_KABI_RESERVE(4)
 };
 
 int tcp_register_congestion_control(struct tcp_congestion_ops *type);

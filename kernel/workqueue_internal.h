@@ -8,6 +8,7 @@
 #ifndef _KERNEL_WORKQUEUE_INTERNAL_H
 #define _KERNEL_WORKQUEUE_INTERNAL_H
 
+#include <linux/ck_kabi.h>
 #include <linux/workqueue.h>
 #include <linux/kthread.h>
 #include <linux/preempt.h>
@@ -57,6 +58,11 @@ struct worker {
 
 	/* used by the scheduler to determine a worker's last known identity */
 	work_func_t		last_func;
+
+	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
+	CK_KABI_RESERVE(3)
+	CK_KABI_RESERVE(4)
 };
 
 /**

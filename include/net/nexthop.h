@@ -9,6 +9,7 @@
 #ifndef __LINUX_NEXTHOP_H
 #define __LINUX_NEXTHOP_H
 
+#include <linux/ck_kabi.h>
 #include <linux/netdevice.h>
 #include <linux/notifier.h>
 #include <linux/route.h>
@@ -70,6 +71,10 @@ struct nh_grp_entry {
 
 	struct list_head nh_list;
 	struct nexthop	*nh_parent;  /* nexthop of group with this entry */
+
+	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
+	CK_KABI_RESERVE(3)
 };
 
 struct nh_group {
@@ -78,6 +83,9 @@ struct nh_group {
 	bool			mpath;
 	bool			fdb_nh;
 	bool			has_v4;
+
+	CK_KABI_RESERVE(1)
+
 	struct nh_grp_entry	nh_entries[];
 };
 

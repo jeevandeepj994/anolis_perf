@@ -5,6 +5,7 @@
 /*
  * Copyright 1995 Linus Torvalds
  */
+#include <linux/ck_kabi.h>
 #include <linux/mm.h>
 #include <linux/fs.h>
 #include <linux/list.h>
@@ -836,6 +837,8 @@ struct readahead_control {
 	pgoff_t _index;
 	unsigned int _nr_pages;
 	unsigned int _batch_count;
+
+	CK_KABI_RESERVE(1)
 };
 
 #define DEFINE_READAHEAD(rac, f, m, i)					\

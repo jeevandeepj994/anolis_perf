@@ -24,6 +24,7 @@
 #ifndef DRM_MODESET_LOCK_H_
 #define DRM_MODESET_LOCK_H_
 
+#include <linux/ck_kabi.h>
 #include <linux/ww_mutex.h>
 
 struct drm_modeset_lock;
@@ -63,6 +64,8 @@ struct drm_modeset_acquire_ctx {
 
 	/* Perform interruptible waits on this context. */
 	bool interruptible;
+
+	CK_KABI_RESERVE(1)
 };
 
 /**

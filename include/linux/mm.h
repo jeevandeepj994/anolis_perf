@@ -31,6 +31,7 @@
 #include <linux/sizes.h>
 #include <linux/sched.h>
 #include <linux/pgtable.h>
+#include <linux/ck_kabi.h>
 
 struct mempolicy;
 struct anon_vma;
@@ -545,6 +546,8 @@ struct vm_fault {
 					 * page table to avoid allocation from
 					 * atomic context.
 					 */
+
+	CK_KABI_RESERVE(1)
 };
 
 /* page entry size for vm->huge_fault() */
@@ -629,6 +632,8 @@ struct vm_operations_struct {
 
 	CK_KABI_RESERVE(1)
 	CK_KABI_RESERVE(2)
+	CK_KABI_RESERVE(3)
+	CK_KABI_RESERVE(4)
 };
 
 static inline void vma_init(struct vm_area_struct *vma, struct mm_struct *mm)

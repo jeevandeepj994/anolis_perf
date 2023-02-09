@@ -2,6 +2,7 @@
 #ifndef LINUX_MSI_H
 #define LINUX_MSI_H
 
+#include <linux/ck_kabi.h>
 #include <linux/kobject.h>
 #include <linux/list.h>
 #include <asm/msi.h>
@@ -179,6 +180,9 @@ struct msi_desc {
 		struct ti_sci_inta_msi_desc inta;
 		struct device_msi_desc device_msi;
 	};
+
+	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
 };
 
 /* Helpers to hide struct msi_desc implementation details */

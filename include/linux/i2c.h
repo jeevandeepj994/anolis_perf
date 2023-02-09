@@ -10,6 +10,7 @@
 #ifndef _LINUX_I2C_H
 #define _LINUX_I2C_H
 
+#include <linux/ck_kabi.h>
 #include <linux/acpi.h>		/* for acpi_handle */
 #include <linux/mod_devicetable.h>
 #include <linux/device.h>	/* for struct device */
@@ -544,6 +545,9 @@ struct i2c_algorithm {
 	int (*reg_slave)(struct i2c_client *client);
 	int (*unreg_slave)(struct i2c_client *client);
 #endif
+
+	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
 };
 
 /**
@@ -633,6 +637,9 @@ struct i2c_bus_recovery_info {
 	struct pinctrl *pinctrl;
 	struct pinctrl_state *pins_default;
 	struct pinctrl_state *pins_gpio;
+
+	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
 };
 
 int i2c_recover_bus(struct i2c_adapter *adap);
@@ -723,6 +730,9 @@ struct i2c_adapter {
 	const struct i2c_adapter_quirks *quirks;
 
 	struct irq_domain *host_notify_domain;
+
+	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
 };
 #define to_i2c_adapter(d) container_of(d, struct i2c_adapter, dev)
 

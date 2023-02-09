@@ -7,6 +7,7 @@
 #ifndef _PTP_PRIVATE_H_
 #define _PTP_PRIVATE_H_
 
+#include <linux/ck_kabi.h>
 #include <linux/cdev.h>
 #include <linux/device.h>
 #include <linux/kthread.h>
@@ -46,6 +47,11 @@ struct ptp_clock {
 	const struct attribute_group *pin_attr_groups[2];
 	struct kthread_worker *kworker;
 	struct kthread_delayed_work aux_work;
+
+	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
+	CK_KABI_RESERVE(3)
+	CK_KABI_RESERVE(4)
 };
 
 /*

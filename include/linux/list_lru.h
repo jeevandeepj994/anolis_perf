@@ -8,6 +8,7 @@
 #ifndef _LRU_LIST_H
 #define _LRU_LIST_H
 
+#include <linux/ck_kabi.h>
 #include <linux/list.h>
 #include <linux/nodemask.h>
 #include <linux/shrinker.h>
@@ -59,6 +60,9 @@ struct list_lru {
 	int			shrinker_id;
 	bool			memcg_aware;
 #endif
+
+	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
 };
 
 void list_lru_destroy(struct list_lru *lru);

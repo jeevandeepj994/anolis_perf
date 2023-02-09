@@ -85,6 +85,7 @@
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 
+#include <linux/ck_kabi.h>
 #include <asm/unaligned.h>
 #include <linux/capability.h>
 #include <linux/errno.h>
@@ -3312,6 +3313,7 @@ void sk_get_meminfo(const struct sock *sk, u32 *mem)
 #define PROTO_INUSE_NR	64	/* should be enough for the first time */
 struct prot_inuse {
 	int val[PROTO_INUSE_NR];
+	CK_KABI_RESERVE(1)
 };
 
 static DECLARE_BITMAP(proto_inuse_idx, PROTO_INUSE_NR);

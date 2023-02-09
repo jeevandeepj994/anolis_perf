@@ -2,6 +2,7 @@
 #ifndef __NETNS_NETFILTER_H
 #define __NETNS_NETFILTER_H
 
+#include <linux/ck_kabi.h>
 #include <linux/netfilter_defs.h>
 
 struct proc_dir_entry;
@@ -34,5 +35,7 @@ struct netns_nf {
 #if IS_ENABLED(CONFIG_NF_DEFRAG_IPV6)
 	bool			defrag_ipv6;
 #endif
+
+	CK_KABI_RESERVE(1)
 };
 #endif

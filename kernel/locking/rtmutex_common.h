@@ -13,6 +13,7 @@
 #ifndef __KERNEL_RTMUTEX_COMMON_H
 #define __KERNEL_RTMUTEX_COMMON_H
 
+#include <linux/ck_kabi.h>
 #include <linux/rtmutex.h>
 #include <linux/sched/wake_q.h>
 
@@ -36,6 +37,8 @@ struct rt_mutex_waiter {
 #endif
 	int prio;
 	u64 deadline;
+
+	CK_KABI_RESERVE(1)
 };
 
 /*

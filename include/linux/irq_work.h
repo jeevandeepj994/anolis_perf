@@ -2,6 +2,7 @@
 #ifndef _LINUX_IRQ_WORK_H
 #define _LINUX_IRQ_WORK_H
 
+#include <linux/ck_kabi.h>
 #include <linux/smp_types.h>
 
 /*
@@ -22,6 +23,8 @@ struct irq_work {
 		};
 	};
 	void (*func)(struct irq_work *);
+
+	CK_KABI_RESERVE(1)
 };
 
 static inline

@@ -4,6 +4,7 @@
 #ifndef _LINUX_BPF_VERIFIER_H
 #define _LINUX_BPF_VERIFIER_H 1
 
+#include <linux/ck_kabi.h>
 #include <linux/bpf.h> /* for enum bpf_reg_type */
 #include <linux/filter.h> /* for MAX_BPF_STACK */
 #include <linux/tnum.h>
@@ -199,6 +200,8 @@ struct bpf_func_state {
 	struct bpf_reference_state *refs;
 	int allocated_stack;
 	struct bpf_stack_state *stack;
+
+	CK_KABI_RESERVE(1)
 };
 
 struct bpf_idx_pair {
@@ -336,6 +339,9 @@ struct bpf_insn_aux_data {
 	/* below fields are initialized once */
 	unsigned int orig_idx; /* original instruction index */
 	bool prune_point;
+
+	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
 };
 
 #define MAX_USED_MAPS 64 /* max number of maps accessed by one eBPF program */
@@ -445,6 +451,11 @@ struct bpf_verifier_env {
 	u32 longest_mark_read_walk;
 	/* buffer used in reg_type_str() to generate reg_type string */
 	char type_str_buf[TYPE_STR_BUF_LEN];
+
+	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
+	CK_KABI_RESERVE(3)
+	CK_KABI_RESERVE(4)
 };
 
 __printf(2, 0) void bpf_verifier_vlog(struct bpf_verifier_log *log,

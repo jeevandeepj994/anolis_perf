@@ -13,6 +13,8 @@
 #include <linux/compiler.h>
 #include <linux/types.h>
 #include <linux/bits.h>
+#include <linux/ck_kabi.h>
+
 /*
  * Resources are tree-like, allowing
  * nesting etc..
@@ -24,6 +26,11 @@ struct resource {
 	unsigned long flags;
 	unsigned long desc;
 	struct resource *parent, *sibling, *child;
+
+	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
+	CK_KABI_RESERVE(3)
+	CK_KABI_RESERVE(4)
 };
 
 /*

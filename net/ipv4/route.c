@@ -60,6 +60,7 @@
 
 #define pr_fmt(fmt) "IPv4: " fmt
 
+#include <linux/ck_kabi.h>
 #include <linux/module.h>
 #include <linux/uaccess.h>
 #include <linux/bitops.h>
@@ -1543,6 +1544,9 @@ static bool rt_cache_route(struct fib_nh_common *nhc, struct rtable *rt)
 struct uncached_list {
 	spinlock_t		lock;
 	struct list_head	head;
+
+	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
 };
 
 static DEFINE_PER_CPU_ALIGNED(struct uncached_list, rt_uncached_list);

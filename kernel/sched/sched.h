@@ -65,6 +65,7 @@
 #include <linux/syscalls.h>
 #include <linux/task_work.h>
 #include <linux/tsacct_kern.h>
+#include <linux/ck_kabi.h>
 
 #include <asm/tlb.h>
 #include <asm-generic/vmlinux.lds.h>

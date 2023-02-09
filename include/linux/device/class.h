@@ -14,6 +14,7 @@
 #ifndef _DEVICE_CLASS_H_
 #define _DEVICE_CLASS_H_
 
+#include <linux/ck_kabi.h>
 #include <linux/kobject.h>
 #include <linux/klist.h>
 #include <linux/pm.h>
@@ -75,6 +76,11 @@ struct class {
 	const struct dev_pm_ops *pm;
 
 	struct subsys_private *p;
+
+	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
+	CK_KABI_RESERVE(3)
+	CK_KABI_RESERVE(4)
 };
 
 struct class_dev_iter {

@@ -8,6 +8,7 @@
 #ifndef _LINUX_CGROUP_DEFS_H
 #define _LINUX_CGROUP_DEFS_H
 
+#include <linux/ck_kabi.h>
 #include <linux/limits.h>
 #include <linux/list.h>
 #include <linux/idr.h>
@@ -144,6 +145,9 @@ struct cgroup_file {
 	struct kernfs_node *kn;
 	unsigned long notified_at;
 	struct timer_list notify_timer;
+
+	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
 };
 
 /*
@@ -201,6 +205,8 @@ struct cgroup_subsys_state {
 
 	CK_KABI_RESERVE(1)
 	CK_KABI_RESERVE(2)
+	CK_KABI_RESERVE(3)
+	CK_KABI_RESERVE(4)
 
 	/*
 	 * PI: the parent css.	Placed here for cache proximity to following
@@ -307,6 +313,8 @@ struct css_set {
 
 	CK_KABI_RESERVE(1)
 	CK_KABI_RESERVE(2)
+	CK_KABI_RESERVE(3)
+	CK_KABI_RESERVE(4)
 };
 
 struct cgroup_base_stat {
@@ -519,6 +527,11 @@ struct cgroup {
 	struct kernfs_root *hidden_place; /* tree to hide cgroup in pool. */
 	struct delayed_work supply_pool_work;
 
+	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
+	CK_KABI_RESERVE(3)
+	CK_KABI_RESERVE(4)
+
 	/* ids of the ancestors at each level including self */
 	u64 ancestor_ids[];
 };
@@ -554,6 +567,8 @@ struct cgroup_root {
 
 	CK_KABI_RESERVE(1)
 	CK_KABI_RESERVE(2)
+	CK_KABI_RESERVE(3)
+	CK_KABI_RESERVE(4)
 
 	/* The path to use for release notifications. */
 	char release_agent_path[PATH_MAX];
@@ -652,6 +667,8 @@ struct cftype {
 #ifdef CONFIG_DEBUG_LOCK_ALLOC
 	struct lock_class_key	lockdep_key;
 #endif
+
+	CK_KABI_RESERVE(1)
 };
 
 /*
@@ -683,6 +700,8 @@ struct cgroup_subsys {
 
 	CK_KABI_RESERVE(1)
 	CK_KABI_RESERVE(2)
+	CK_KABI_RESERVE(3)
+	CK_KABI_RESERVE(4)
 
 	bool early_init:1;
 
@@ -852,6 +871,8 @@ struct sock_cgroup_data {
 #endif
 		u64		val;
 	};
+
+	CK_KABI_RESERVE(1)
 };
 
 /*

@@ -4,6 +4,7 @@
 #ifndef XSK_BUFF_POOL_H_
 #define XSK_BUFF_POOL_H_
 
+#include <linux/ck_kabi.h>
 #include <linux/if_xdp.h>
 #include <linux/types.h>
 #include <linux/dma-mapping.h>
@@ -78,6 +79,10 @@ struct xsk_buff_pool {
 	 * sockets share a single cq when the same netdev and queue id is shared.
 	 */
 	spinlock_t cq_lock;
+
+	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
+
 	struct xdp_buff_xsk *free_heads[];
 };
 

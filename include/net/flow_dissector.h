@@ -2,6 +2,7 @@
 #ifndef _NET_FLOW_DISSECTOR_H
 #define _NET_FLOW_DISSECTOR_H
 
+#include <linux/ck_kabi.h>
 #include <linux/types.h>
 #include <linux/in6.h>
 #include <linux/siphash.h>
@@ -299,6 +300,8 @@ struct flow_dissector_key {
 struct flow_dissector {
 	unsigned int used_keys; /* each bit repesents presence of one key id */
 	unsigned short int offset[FLOW_DISSECTOR_KEY_MAX];
+
+	CK_KABI_RESERVE(1)
 };
 
 struct flow_keys_basic {

@@ -2,6 +2,7 @@
 #ifndef __NETNS_SCTP_H__
 #define __NETNS_SCTP_H__
 
+#include <linux/ck_kabi.h>
 struct sock;
 struct proc_dir_entry;
 struct sctp_mib;
@@ -161,6 +162,9 @@ struct netns_sctp {
 
 	/* Threshold for autoclose timeout, in seconds. */
 	unsigned long max_autoclose;
+
+	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
 };
 
 #endif /* __NETNS_SCTP_H__ */

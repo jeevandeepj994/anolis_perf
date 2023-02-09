@@ -30,6 +30,7 @@
 #ifndef _LINUX_IRQDOMAIN_H
 #define _LINUX_IRQDOMAIN_H
 
+#include <linux/ck_kabi.h>
 #include <linux/types.h>
 #include <linux/irqhandler.h>
 #include <linux/of.h>
@@ -185,6 +186,12 @@ struct irq_domain {
 	unsigned int revmap_size;
 	struct radix_tree_root revmap_tree;
 	struct mutex revmap_tree_mutex;
+
+	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
+	CK_KABI_RESERVE(3)
+	CK_KABI_RESERVE(4)
+
 	unsigned int linear_revmap[];
 };
 

@@ -21,6 +21,7 @@
 #include <linux/kallsyms.h>
 #include <linux/capability.h>
 #include <linux/percpu-refcount.h>
+#include <linux/ck_kabi.h>
 
 struct bpf_verifier_env;
 struct bpf_verifier_log;
@@ -132,6 +133,11 @@ struct bpf_map_ops {
 
 	/* bpf_iter info used to open a seq_file */
 	const struct bpf_iter_seq_info *iter_seq_info;
+
+	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
+	CK_KABI_RESERVE(3)
+	CK_KABI_RESERVE(4)
 };
 
 struct bpf_map_memory {
@@ -481,6 +487,9 @@ struct bpf_insn_access_aux {
 		u32 btf_id;
 	};
 	struct bpf_verifier_log *log; /* for verbose logs */
+
+	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
 };
 
 static inline void
@@ -564,6 +573,9 @@ struct bpf_prog_stats {
 	u64 cnt;
 	u64 nsecs;
 	struct u64_stats_sync syncp;
+
+	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
 } __aligned(2 * sizeof(u64));
 
 struct btf_func_model {
@@ -684,6 +696,9 @@ struct bpf_trampoline {
 	/* Executable image of trampoline */
 	struct bpf_tramp_image *cur_image;
 	u64 selector;
+
+	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
 };
 
 struct bpf_attach_target_info {

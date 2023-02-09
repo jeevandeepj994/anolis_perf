@@ -44,6 +44,7 @@
  * ifindexes. The setup and packet enqueue/send code is shared between the two
  * types of devmap; only the lookup and insertion is different.
  */
+#include <linux/ck_kabi.h>
 #include <linux/bpf.h>
 #include <net/xdp.h>
 #include <linux/filter.h>
@@ -58,6 +59,8 @@ struct xdp_dev_bulk_queue {
 	struct net_device *dev;
 	struct net_device *dev_rx;
 	unsigned int count;
+
+	CK_KABI_RESERVE(1)
 };
 
 struct bpf_dtab_netdev {

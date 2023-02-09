@@ -141,6 +141,8 @@ struct blkcg_gq {
 	int				last_use;
 
 	struct rcu_head			rcu_head;
+
+	CK_KABI_RESERVE(1)
 };
 
 typedef struct blkcg_policy_data *(blkcg_pol_alloc_cpd_fn)(gfp_t gfp);

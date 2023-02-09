@@ -10,6 +10,7 @@
 #ifndef _LINUX_KEY_H
 #define _LINUX_KEY_H
 
+#include <linux/ck_kabi.h>
 #include <linux/types.h>
 #include <linux/list.h>
 #include <linux/rbtree.h>
@@ -272,6 +273,9 @@ struct key {
 	 * restriction.
 	 */
 	struct key_restriction *restrict_link;
+
+	CK_KABI_RESERVE(1)
+
 };
 
 extern struct key *key_alloc(struct key_type *type,

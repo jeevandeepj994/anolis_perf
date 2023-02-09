@@ -2,6 +2,7 @@
 #ifndef __NETNS_XFRM_H
 #define __NETNS_XFRM_H
 
+#include <linux/ck_kabi.h>
 #include <linux/list.h>
 #include <linux/wait.h>
 #include <linux/workqueue.h>
@@ -81,6 +82,8 @@ struct netns_xfrm {
 
 	spinlock_t xfrm_policy_lock;
 	struct mutex xfrm_cfg_mutex;
+
+	CK_KABI_RESERVE(1)
 };
 
 #endif

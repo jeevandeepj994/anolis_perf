@@ -11,6 +11,7 @@
 #ifndef _LINUX_CPUIDLE_H
 #define _LINUX_CPUIDLE_H
 
+#include <linux/ck_kabi.h>
 #include <linux/percpu.h>
 #include <linux/list.h>
 #include <linux/hrtimer.h>
@@ -43,6 +44,11 @@ struct cpuidle_state_usage {
 	unsigned long long	s2idle_usage;
 	unsigned long long	s2idle_time; /* in US */
 #endif
+
+	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
+	CK_KABI_RESERVE(3)
+	CK_KABI_RESERVE(4)
 };
 
 struct cpuidle_state {
@@ -73,6 +79,11 @@ struct cpuidle_state {
 	int (*enter_s2idle)(struct cpuidle_device *dev,
 			    struct cpuidle_driver *drv,
 			    int index);
+
+	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
+	CK_KABI_RESERVE(3)
+	CK_KABI_RESERVE(4)
 };
 
 /* Idle State Flags */
@@ -110,6 +121,11 @@ struct cpuidle_device {
 	cpumask_t		coupled_cpus;
 	struct cpuidle_coupled	*coupled;
 #endif
+
+	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
+	CK_KABI_RESERVE(3)
+	CK_KABI_RESERVE(4)
 };
 
 DECLARE_PER_CPU(struct cpuidle_device *, cpuidle_devices);
@@ -135,6 +151,9 @@ struct cpuidle_driver {
 
 	/* preferred governor to switch at register time */
 	const char		*governor;
+
+	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
 };
 
 #ifdef CONFIG_CPU_IDLE

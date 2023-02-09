@@ -3,6 +3,7 @@
  * ipv6 in net namespaces
  */
 
+#include <linux/ck_kabi.h>
 #include <net/inet_frag.h>
 
 #ifndef __NETNS_IPV6_H__
@@ -116,6 +117,8 @@ struct netns_ipv6 {
 		spinlock_t	lock;
 		u32		seq;
 	} ip6addrlbl_table;
+
+	CK_KABI_RESERVE(1)
 };
 
 #if IS_ENABLED(CONFIG_NF_DEFRAG_IPV6)

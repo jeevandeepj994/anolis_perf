@@ -8,6 +8,7 @@
 #ifndef _ASM_X86_THREAD_INFO_H
 #define _ASM_X86_THREAD_INFO_H
 
+#include <linux/ck_kabi.h>
 #include <linux/compiler.h>
 #include <asm/page.h>
 #include <asm/percpu.h>
@@ -56,6 +57,9 @@ struct task_struct;
 struct thread_info {
 	unsigned long		flags;		/* low level flags */
 	u32			status;		/* thread synchronous flags */
+
+	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
 };
 
 #define INIT_THREAD_INFO(tsk)			\
