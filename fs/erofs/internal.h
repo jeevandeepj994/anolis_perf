@@ -431,11 +431,7 @@ struct erofs_map_blocks {
 	unsigned int m_flags;
 };
 
-/* Flags used by erofs_map_blocks_flatmode() */
-#define EROFS_GET_BLOCKS_RAW    0x0001
-
-int erofs_map_blocks(struct inode *inode,
-		     struct erofs_map_blocks *map, int flags);
+int erofs_map_blocks(struct inode *inode, struct erofs_map_blocks *map);
 
 /* zmap.c */
 #ifdef CONFIG_EROFS_FS_ZIP

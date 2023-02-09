@@ -470,7 +470,7 @@ static ssize_t rafs_v6_file_read_iter(struct kiocb *iocb, struct iov_iter *to)
 			int err;
 
 			map.m_la = pos;
-			err = erofs_map_blocks(inode, &map, EROFS_GET_BLOCKS_RAW);
+			err = erofs_map_blocks(inode, &map);
 			if (err)
 				return err;
 			if (map.m_la >= inode->i_size)
@@ -517,7 +517,7 @@ static vm_fault_t rafs_v6_filemap_fault(struct vm_fault *vmf)
 	/* TODO: check if chunk is available for us to read. */
 	map.m_la = orig_pgoff << PAGE_SHIFT;
 	pos = map.m_la;
-	err = erofs_map_blocks(inode, &map, EROFS_GET_BLOCKS_RAW);
+	err = erofs_map_blocks(inode, &map);
 	if (err)
 		return vmf_error(err);
 
@@ -632,7 +632,7 @@ static int rafs_v6_readpage(struct file *file, struct page *page)
 	struct iov_iter iter;
 	int err;
 
-	err = erofs_map_blocks(inode, &map, EROFS_GET_BLOCKS_RAW);
+	err = erofs_map_blocks(inode, &map);
 	if (err)
 		goto err_out;
 
