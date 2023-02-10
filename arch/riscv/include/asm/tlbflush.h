@@ -50,14 +50,7 @@ static inline void flush_tlb_range(struct vm_area_struct *vma,
 static inline void flush_tlb_kernel_range(unsigned long start,
 	unsigned long end)
 {
-	start &= PAGE_MASK;
-	end   += PAGE_SIZE - 1;
-	end   &= PAGE_MASK;
-
-	while (start < end) {
-		__asm__ __volatile__ ("sfence.vma %0" : : "r" (start) : "memory");
-		start += PAGE_SIZE;
-	}
+	flush_tlb_all();
 }
 
 #endif /* _ASM_RISCV_TLBFLUSH_H */
