@@ -126,8 +126,7 @@ static ssize_t arm_spe_pmu_cap_show(struct device *dev,
 		container_of(attr, struct dev_ext_attribute, attr);
 	int cap = (long)ea->var;
 
-	return snprintf(buf, PAGE_SIZE, "%u\n",
-		arm_spe_pmu_cap_get(spe_pmu, cap));
+	return sysfs_emit(buf, "%u\n", arm_spe_pmu_cap_get(spe_pmu, cap));
 }
 
 #define SPE_EXT_ATTR_ENTRY(_name, _func, _var)				\
@@ -146,7 +145,7 @@ static struct attribute *arm_spe_pmu_cap_attr[] = {
 	NULL,
 };
 
-static struct attribute_group arm_spe_pmu_cap_group = {
+static const struct attribute_group arm_spe_pmu_cap_group = {
 	.name	= "caps",
 	.attrs	= arm_spe_pmu_cap_attr,
 };
@@ -227,7 +226,7 @@ static struct attribute *arm_spe_pmu_formats_attr[] = {
 	NULL,
 };
 
-static struct attribute_group arm_spe_pmu_format_group = {
+static const struct attribute_group arm_spe_pmu_format_group = {
 	.name	= "format",
 	.attrs	= arm_spe_pmu_formats_attr,
 };
@@ -247,7 +246,7 @@ static struct attribute *arm_spe_pmu_attrs[] = {
 	NULL,
 };
 
-static struct attribute_group arm_spe_pmu_group = {
+static const struct attribute_group arm_spe_pmu_group = {
 	.attrs	= arm_spe_pmu_attrs,
 };
 
