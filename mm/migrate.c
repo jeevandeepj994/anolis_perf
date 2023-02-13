@@ -1133,9 +1133,6 @@ static int migrate_page_unmap(new_page_t get_new_page, free_page_t put_new_page,
 	bool locked = false;
 	bool dst_locked = false;
 
-	if (!thp_migration_supported() && PageTransHuge(src))
-		return -ENOSYS;
-
 	if (page_count(src) == 1) {
 		/* page was freed from under us. So we are done. */
 		ClearPageActive(src);
@@ -1404,16 +1401,6 @@ static int unmap_and_move_huge_page(new_page_t get_new_page,
 	struct anon_vma *anon_vma = NULL;
 	struct address_space *mapping = NULL;
 
-	/*
-	 * Migratability of hugepages depends on architectures and their size.
-	 * This check is necessary because some callers of hugepage migration
-	 * like soft offline and memory hotremove don't walk through page
-	 * tables or check whether the hugepage is pmd-based or not before
-	 * kicking migration.
-	 */
-	if (!hugepage_migration_supported(page_hstate(hpage)))
-		return -ENOSYS;
-
 	new_hpage = get_new_page(hpage, private);
 	if (!new_hpage)
 		return -ENOMEM;
@@ -1575,6 +1562,20 @@ static int migrate_hugetlbs(struct list_head *from, new_page_t get_new_page,
 
 			cond_resched();
 
+			/*
+			 * Migratability of hugepages depends on architectures and
+			 * their size.  This check is necessary because some callers
+			 * of hugepage migration like soft offline and memory
+			 * hotremove don't walk through page tables or check whether
+			 * the hugepage is pmd-based or not before kicking migration.
+			 */
+			if (!hugepage_migration_supported(page_hstate(page))) {
+				nr_failed++;
+				stats->nr_failed_pages += nr_pages;
+				list_move_tail(&page->lru, ret_pages);
+				continue;
+			}
+
 			rc = unmap_and_move_huge_page(get_new_page,
 						      put_new_page, private, page,
 						      pass > 2, mode, reason, ret_pages);
@@ -1583,16 +1584,9 @@ static int migrate_hugetlbs(struct list_head *from, new_page_t get_new_page,
 			 *	Success: hugetlb page will be put back
 			 *	-EAGAIN: stay on the from list
 			 *	-ENOMEM: stay on the from list
-			 *	-ENOSYS: stay on the from list
 			 *	Other errno: put on ret_pages list
 			 */
 			switch(rc) {
-			case -ENOSYS:
-				/* Hugetlb migration is unsupported */
-				nr_failed++;
-				stats->nr_failed_pages += nr_pages;
-				list_move_tail(&page->lru, ret_pages);
-				break;
 			case -ENOMEM:
 				/*
 				 * When memory is low, don't bother to try to migrate
@@ -1677,6 +1671,27 @@ retry:
 			nr_pages = compound_nr(page);
 			cond_resched();
 
+			/*
+			 * THP migration might be unsupported or the
+			 * allocation could've failed so we should
+			 * retry on the same page with the THP split
+			 * to base pages.
+			 *
+			 * Sub-pages are put in thp_split_pages, and
+			 * we will migrate them after the rest of the
+			 * list is processed.
+			 */
+			if (!thp_migration_supported() && is_thp) {
+				stats->nr_thp_failed++;
+				if (!try_split_thp(page, &thp_split_pages)) {
+					stats->nr_thp_split++;
+					continue;
+				}
+				stats->nr_failed_pages += nr_pages;
+				list_move_tail(&page->lru, ret_pages);
+				continue;
+			}
+
 			rc = migrate_page_unmap(get_new_page, put_new_page, private,
 						page, &dst, pass > 2, avoid_force_lock,
 						mode, reason, ret_pages);
@@ -1688,36 +1703,9 @@ retry:
 			 *	-EAGAIN: stay on the from list
 			 *	-EDEADLOCK: stay on the from list
 			 *	-ENOMEM: stay on the from list
-			 *	-ENOSYS: stay on the from list
 			 *	Other errno: put on ret_pages list
 			 */
 			switch(rc) {
-			/*
-			 * THP migration might be unsupported or the
-			 * allocation could've failed so we should
-			 * retry on the same page with the THP split
-			 * to base pages.
-			 *
-			 * Sub-pages are put in thp_split_pages, and
-			 * we will migrate them after the rest of the
-			 * list is processed.
-			 */
-			case -ENOSYS:
-				/* THP migration is unsupported */
-				if (is_thp) {
-					stats->nr_thp_failed++;
-					if (!try_split_thp(page, &thp_split_pages)) {
-						stats->nr_thp_split++;
-						break;
-					}
-				/* Hugetlb migration is unsupported */
-				} else if (!no_subpage_counting) {
-					nr_failed++;
-				}
-
-				stats->nr_failed_pages += nr_pages;
-				list_move_tail(&page->lru, ret_pages);
-				break;
 			case -ENOMEM:
 				/*
 				 * When memory is low, don't bother to try to migrate
