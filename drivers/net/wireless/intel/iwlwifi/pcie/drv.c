@@ -1456,7 +1456,7 @@ iwl_pci_find_dev_info(u16 device, u16 subsystem_device,
 	if (!num_devices)
 		return NULL;
 
-	for (i = num_devices - 1; i >= 0; i--) {
+	for (i = 0; i < num_devices; i++) {
 		const struct iwl_dev_info *dev_info = &iwl_dev_info_table[i];
 
 		if (dev_info->device != (u16)IWL_CFG_ANY &&
