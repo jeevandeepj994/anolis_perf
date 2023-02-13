@@ -1431,6 +1431,16 @@ static inline int try_split_thp(struct page *page, struct list_head *split_pages
 	return rc;
 }
 
+struct migrate_pages_stats {
+	int nr_succeeded;	/* Normal and large pages migrated successfully, in
+				   units of base pages */
+	int nr_failed_pages;	/* Normal and large pages failed to be migrated, in
+				   units of base pages.  Untried pages aren't counted */
+	int nr_thp_succeeded;	/* THP migrated successfully */
+	int nr_thp_failed;	/* THP failed to be migrated */
+	int nr_thp_split;	/* THP split before migrating */
+};
+
 /*
  * migrate_pages - migrate the pages specified in a list, to the free pages
  *		   supplied as the target for the page migration
@@ -1463,26 +1473,23 @@ int migrate_pages(struct list_head *from, new_page_t get_new_page,
 	int retry = 1;
 	int thp_retry = 1;
 	int nr_failed = 0;
-	int nr_failed_pages = 0;
 	int nr_retry_pages = 0;
-	int nr_succeeded = 0;
-	int nr_thp_succeeded = 0;
-	int nr_thp_failed = 0;
-	int nr_thp_split = 0;
 	int pass = 0;
 	bool is_thp = false;
 	struct page *page;
 	struct page *page2;
 	int swapwrite = current->flags & PF_SWAPWRITE;
-	int rc, nr_subpages;
+	int rc, nr_pages;
 	LIST_HEAD(ret_pages);
 	LIST_HEAD(thp_split_pages);
 	bool nosplit = (reason == MR_NUMA_MISPLACED);
 	bool no_subpage_counting = false;
+	struct migrate_pages_stats stats;
 
 	if (!swapwrite)
 		current->flags |= PF_SWAPWRITE;
 
+	memset(&stats, 0, sizeof(stats));
 thp_subpage_migration:
 	for (pass = 0; pass < 10 && (retry || thp_retry); pass++) {
 		retry = 0;
@@ -1496,7 +1503,7 @@ thp_subpage_migration:
 			 * during migration.
 			 */
 			is_thp = PageTransHuge(page) && !PageHuge(page);
-			nr_subpages = compound_nr(page);
+			nr_pages = compound_nr(page);
 			cond_resched();
 
 			if (PageHuge(page))
@@ -1532,9 +1539,9 @@ thp_subpage_migration:
 			case -ENOSYS:
 				/* THP migration is unsupported */
 				if (is_thp) {
-					nr_thp_failed++;
+					stats.nr_thp_failed++;
 					if (!try_split_thp(page, &thp_split_pages)) {
-						nr_thp_split++;
+						stats.nr_thp_split++;
 						break;
 					}
 				/* Hugetlb migration is unsupported */
@@ -1542,7 +1549,7 @@ thp_subpage_migration:
 					nr_failed++;
 				}
 
-				nr_failed_pages += nr_subpages;
+				stats.nr_failed_pages += nr_pages;
 				list_move_tail(&page->lru, &ret_pages);
 				break;
 			case -ENOMEM:
@@ -1551,17 +1558,17 @@ thp_subpage_migration:
 				 * other pages, just exit.
 				 */
 				if (is_thp) {
-					nr_thp_failed++;
+					stats.nr_thp_failed++;
 					/* THP NUMA faulting doesn't split THP to retry. */
 					if (!nosplit && !try_split_thp(page, &thp_split_pages)) {
-						nr_thp_split++;
+						stats.nr_thp_split++;
 						break;
 					}
 				} else if (!no_subpage_counting) {
 					nr_failed++;
 				}
 
-				nr_failed_pages += nr_subpages + nr_retry_pages;
+				stats.nr_failed_pages += nr_pages + nr_retry_pages;
 				/*
 				 * There might be some subpages of fail-to-migrate THPs
 				 * left in thp_split_pages list. Move them back to migration
@@ -1570,19 +1577,19 @@ thp_subpage_migration:
 				 */
 				list_splice_init(&thp_split_pages, from);
 				/* nr_failed isn't updated for not used */
-				nr_thp_failed += thp_retry;
+				stats.nr_thp_failed += thp_retry;
 				goto out;
 			case -EAGAIN:
 				if (is_thp)
 					thp_retry++;
 				else if (!no_subpage_counting)
 					retry++;
-				nr_retry_pages += nr_subpages;
+				nr_retry_pages += nr_pages;
 				break;
 			case MIGRATEPAGE_SUCCESS:
-				nr_succeeded += nr_subpages;
+				stats.nr_succeeded += nr_pages;
 				if (is_thp)
-					nr_thp_succeeded++;
+					stats.nr_thp_succeeded++;
 				break;
 			default:
 				/*
@@ -1592,18 +1599,18 @@ thp_subpage_migration:
 				 * retried in the next outer loop.
 				 */
 				if (is_thp)
-					nr_thp_failed++;
+					stats.nr_thp_failed++;
 				else if (!no_subpage_counting)
 					nr_failed++;
 
-				nr_failed_pages += nr_subpages;
+				stats.nr_failed_pages += nr_pages;
 				break;
 			}
 		}
 	}
 	nr_failed += retry;
-	nr_thp_failed += thp_retry;
-	nr_failed_pages += nr_retry_pages;
+	stats.nr_thp_failed += thp_retry;
+	stats.nr_failed_pages += nr_retry_pages;
 	/*
 	 * Try to migrate subpages of fail-to-migrate THPs, no nr_failed
 	 * counting in this round, since all subpages of a THP is counted
@@ -1621,7 +1628,7 @@ thp_subpage_migration:
 		goto thp_subpage_migration;
 	}
 
-	rc = nr_failed + nr_thp_failed;
+	rc = nr_failed + stats.nr_thp_failed;
 out:
 	/*
 	 * Put the permanent failure page back to migration list, they
@@ -1636,19 +1643,20 @@ out:
 	if (list_empty(from))
 		rc = 0;
 
-	count_vm_events(PGMIGRATE_SUCCESS, nr_succeeded);
-	count_vm_events(PGMIGRATE_FAIL, nr_failed_pages);
-	count_vm_events(THP_MIGRATION_SUCCESS, nr_thp_succeeded);
-	count_vm_events(THP_MIGRATION_FAIL, nr_thp_failed);
-	count_vm_events(THP_MIGRATION_SPLIT, nr_thp_split);
-	trace_mm_migrate_pages(nr_succeeded, nr_failed_pages, nr_thp_succeeded,
-			       nr_thp_failed, nr_thp_split, mode, reason);
+	count_vm_events(PGMIGRATE_SUCCESS, stats.nr_succeeded);
+	count_vm_events(PGMIGRATE_FAIL, stats.nr_failed_pages);
+	count_vm_events(THP_MIGRATION_SUCCESS, stats.nr_thp_succeeded);
+	count_vm_events(THP_MIGRATION_FAIL, stats.nr_thp_failed);
+	count_vm_events(THP_MIGRATION_SPLIT, stats.nr_thp_split);
+	trace_mm_migrate_pages(stats.nr_succeeded, stats.nr_failed_pages,
+			       stats.nr_thp_succeeded, stats.nr_thp_failed,
+			       stats.nr_thp_split, mode, reason);
 
 	if (!swapwrite)
 		current->flags &= ~PF_SWAPWRITE;
 
 	if (ret_succeeded)
-		*ret_succeeded = nr_succeeded;
+		*ret_succeeded = stats.nr_succeeded;
 
 	return rc;
 }
