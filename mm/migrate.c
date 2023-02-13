@@ -1431,6 +1431,11 @@ static inline int try_split_thp(struct page *page, struct list_head *split_pages
 	return rc;
 }
 
+#ifdef CONFIG_TRANSPARENT_HUGEPAGE
+#define NR_MAX_BATCHED_MIGRATION	HPAGE_PMD_NR
+#else
+#define NR_MAX_BATCHED_MIGRATION	512
+#endif
 #define NR_MAX_MIGRATE_PAGES_RETRY	10
 
 struct migrate_pages_stats {
@@ -1531,6 +1536,160 @@ static int migrate_hugetlbs(struct list_head *from, new_page_t get_new_page,
 	return nr_failed;
 }
 
+int migrate_pages_batch(struct list_head *from, new_page_t get_new_page,
+		free_page_t put_new_page, unsigned long private,
+		enum migrate_mode mode, int reason, struct list_head *ret_pages,
+		struct migrate_pages_stats *stats)
+{
+	int retry = 1;
+	int thp_retry = 1;
+	int nr_failed = 0;
+	int nr_retry_pages = 0;
+	int pass = 0;
+	bool is_thp = false;
+	struct page *page, *page2;
+	int rc, nr_pages;
+	LIST_HEAD(thp_split_pages);
+	bool nosplit = (reason == MR_NUMA_MISPLACED);
+	bool no_subpage_counting = false;
+
+thp_subpage_migration:
+	for (pass = 0;
+	     pass < NR_MAX_MIGRATE_PAGES_RETRY && (retry || thp_retry);
+	     pass++) {
+		retry = 0;
+		thp_retry = 0;
+		nr_retry_pages = 0;
+
+		list_for_each_entry_safe(page, page2, from, lru) {
+			/*
+			 * THP statistics is based on the source huge page.
+			 * Capture required information that might get lost
+			 * during migration.
+			 */
+			is_thp = PageTransHuge(page) && !PageHuge(page);
+			nr_pages = compound_nr(page);
+			cond_resched();
+
+			rc = unmap_and_move(get_new_page, put_new_page,
+					    private, page, pass > 2, mode,
+					    reason, ret_pages);
+			/*
+			 * The rules are:
+			 *	Success: page will be freed
+			 *	-EAGAIN: stay on the from list
+			 *	-ENOMEM: stay on the from list
+			 *	-ENOSYS: stay on the from list
+			 *	Other errno: put on ret_pages list
+			 */
+			switch(rc) {
+			/*
+			 * THP migration might be unsupported or the
+			 * allocation could've failed so we should
+			 * retry on the same page with the THP split
+			 * to base pages.
+			 *
+			 * Sub-pages are put in thp_split_pages, and
+			 * we will migrate them after the rest of the
+			 * list is processed.
+			 */
+			case -ENOSYS:
+				/* THP migration is unsupported */
+				if (is_thp) {
+					stats->nr_thp_failed++;
+					if (!try_split_thp(page, &thp_split_pages)) {
+						stats->nr_thp_split++;
+						break;
+					}
+				/* Hugetlb migration is unsupported */
+				} else if (!no_subpage_counting) {
+					nr_failed++;
+				}
+
+				stats->nr_failed_pages += nr_pages;
+				list_move_tail(&page->lru, ret_pages);
+				break;
+			case -ENOMEM:
+				/*
+				 * When memory is low, don't bother to try to migrate
+				 * other pages, just exit.
+				 */
+				if (is_thp) {
+					stats->nr_thp_failed++;
+					/* THP NUMA faulting doesn't split THP to retry. */
+					if (!nosplit && !try_split_thp(page, &thp_split_pages)) {
+						stats->nr_thp_split++;
+						break;
+					}
+				} else if (!no_subpage_counting) {
+					nr_failed++;
+				}
+
+				stats->nr_failed_pages += nr_pages + nr_retry_pages;
+				/*
+				 * There might be some subpages of fail-to-migrate THPs
+				 * left in thp_split_pages list. Move them back to migration
+				 * list so that they could be put back to the right list by
+				 * the caller otherwise the page refcnt will be leaked.
+				 */
+				list_splice_init(&thp_split_pages, ret_pages);
+				/* nr_failed isn't updated for not used */
+				stats->nr_thp_failed += thp_retry;
+				goto out;
+			case -EAGAIN:
+				if (is_thp)
+					thp_retry++;
+				else if (!no_subpage_counting)
+					retry++;
+				nr_retry_pages += nr_pages;
+				break;
+			case MIGRATEPAGE_SUCCESS:
+				stats->nr_succeeded += nr_pages;
+				if (is_thp)
+					stats->nr_thp_succeeded++;
+				break;
+			default:
+				/*
+				 * Permanent failure (-EBUSY, etc.):
+				 * unlike -EAGAIN case, the failed page is
+				 * removed from migration page list and not
+				 * retried in the next outer loop.
+				 */
+				if (is_thp)
+					stats->nr_thp_failed++;
+				else if (!no_subpage_counting)
+					nr_failed++;
+
+				stats->nr_failed_pages += nr_pages;
+				break;
+			}
+		}
+	}
+	nr_failed += retry;
+	stats->nr_thp_failed += thp_retry;
+	stats->nr_failed_pages += nr_retry_pages;
+	/*
+	 * Try to migrate subpages of fail-to-migrate THPs, no nr_failed
+	 * counting in this round, since all subpages of a THP is counted
+	 * as 1 failure in the first round.
+	 */
+	if (!list_empty(&thp_split_pages)) {
+		/*
+		 * Move non-migrated pages (after NR_MAX_MIGRATE_PAGES_RETRY
+		 * retries) to ret_pages to avoid migrating them again.
+		 */
+		list_splice_init(from, ret_pages);
+		list_splice_init(&thp_split_pages, from);
+		no_subpage_counting = true;
+		retry = 1;
+		goto thp_subpage_migration;
+	}
+
+	rc = nr_failed + stats->nr_thp_failed;
+out:
+	return rc;
+}
+
 /*
  * migrate_pages - migrate the pages specified in a list, to the free pages
  *		   supplied as the target for the page migration
@@ -1560,172 +1719,50 @@ int migrate_pages(struct list_head *from, new_page_t get_new_page,
 		free_page_t put_new_page, unsigned long private,
 		enum migrate_mode mode, int reason, unsigned int *ret_succeeded)
 {
-	int retry = 1;
-	int thp_retry = 1;
-	int nr_failed;
-	int nr_retry_pages = 0;
-	int pass = 0;
-	bool is_thp = false;
+	int rc, rc_gather;
+	int nr_pages;
 	struct page *page;
 	struct page *page2;
 	int swapwrite = current->flags & PF_SWAPWRITE;
-	int rc, nr_pages;
+	LIST_HEAD(pages);
 	LIST_HEAD(ret_pages);
-	LIST_HEAD(thp_split_pages);
-	bool nosplit = (reason == MR_NUMA_MISPLACED);
-	bool no_subpage_counting = false;
 	struct migrate_pages_stats stats;
 
 	if (!swapwrite)
 		current->flags |= PF_SWAPWRITE;
 
 	memset(&stats, 0, sizeof(stats));
-	rc = migrate_hugetlbs(from, get_new_page, put_new_page, private, mode, reason,
+	rc_gather = migrate_hugetlbs(from, get_new_page, put_new_page, private, mode, reason,
 			      &stats, &ret_pages);
-	if (rc < 0)
+	if (rc_gather < 0)
 		goto out;
-	nr_failed = rc;
-
-thp_subpage_migration:
-	for (pass = 0;
-	     pass < NR_MAX_MIGRATE_PAGES_RETRY && (retry || thp_retry);
-	     pass++) {
-		retry = 0;
-		thp_retry = 0;
-		nr_retry_pages = 0;
-
-		list_for_each_entry_safe(page, page2, from, lru) {
-			/* Retried hugetlb pages will be kept in list */
-			if (PageHuge(page)) {
-				list_move_tail(&page->lru, &ret_pages);
-				continue;
-			}
-
-			/*
-			 * THP statistics is based on the source huge page.
-			 * Capture required information that might get lost
-			 * during migration.
-			 */
-			is_thp = PageTransHuge(page) && !PageHuge(page);
-			nr_pages = compound_nr(page);
-			cond_resched();
-
-			rc = unmap_and_move(get_new_page, put_new_page,
-					    private, page, pass > 2, mode,
-					    reason, &ret_pages);
-			/*
-			 * The rules are:
-			 *	Success: page will be freed
-			 *	-EAGAIN: stay on the from list
-			 *	-ENOMEM: stay on the from list
-			 *	-ENOSYS: stay on the from list
-			 *	Other errno: put on ret_pages list then splice to
-			 *		     from list
-			 */
-			switch(rc) {
-			/*
-			 * THP migration might be unsupported or the
-			 * allocation could've failed so we should
-			 * retry on the same page with the THP split
-			 * to base pages.
-			 *
-			 * Sub-pages are put in thp_split_pages, and
-			 * we will migrate them after the rest of the
-			 * list is processed.
-			 */
-			case -ENOSYS:
-				/* THP migration is unsupported */
-				if (is_thp) {
-					stats.nr_thp_failed++;
-					if (!try_split_thp(page, &thp_split_pages)) {
-						stats.nr_thp_split++;
-						break;
-					}
-				/* Hugetlb migration is unsupported */
-				} else if (!no_subpage_counting) {
-					nr_failed++;
-				}
-
-				stats.nr_failed_pages += nr_pages;
-				list_move_tail(&page->lru, &ret_pages);
-				break;
-			case -ENOMEM:
-				/*
-				 * When memory is low, don't bother to try to migrate
-				 * other pages, just exit.
-				 */
-				if (is_thp) {
-					stats.nr_thp_failed++;
-					/* THP NUMA faulting doesn't split THP to retry. */
-					if (!nosplit && !try_split_thp(page, &thp_split_pages)) {
-						stats.nr_thp_split++;
-						break;
-					}
-				} else if (!no_subpage_counting) {
-					nr_failed++;
-				}
-
-				stats.nr_failed_pages += nr_pages + nr_retry_pages;
-				/*
-				 * There might be some subpages of fail-to-migrate THPs
-				 * left in thp_split_pages list. Move them back to migration
-				 * list so that they could be put back to the right list by
-				 * the caller otherwise the page refcnt will be leaked.
-				 */
-				list_splice_init(&thp_split_pages, from);
-				/* nr_failed isn't updated for not used */
-				stats.nr_thp_failed += thp_retry;
-				goto out;
-			case -EAGAIN:
-				if (is_thp)
-					thp_retry++;
-				else if (!no_subpage_counting)
-					retry++;
-				nr_retry_pages += nr_pages;
-				break;
-			case MIGRATEPAGE_SUCCESS:
-				stats.nr_succeeded += nr_pages;
-				if (is_thp)
-					stats.nr_thp_succeeded++;
-				break;
-			default:
-				/*
-				 * Permanent failure (-EBUSY, etc.):
-				 * unlike -EAGAIN case, the failed page is
-				 * removed from migration page list and not
-				 * retried in the next outer loop.
-				 */
-				if (is_thp)
-					stats.nr_thp_failed++;
-				else if (!no_subpage_counting)
-					nr_failed++;
-
-				stats.nr_failed_pages += nr_pages;
-				break;
-			}
+again:
+	nr_pages = 0;
+	list_for_each_entry_safe(page, page2, from, lru) {
+		/* Retried hugetlb pages will be kept in list  */
+		if (PageHuge(page)) {
+			list_move_tail(&page->lru, &ret_pages);
+			continue;
 		}
-	}
-	nr_failed += retry;
-	stats.nr_thp_failed += thp_retry;
-	stats.nr_failed_pages += nr_retry_pages;
-	/*
-	 * Try to migrate subpages of fail-to-migrate THPs, no nr_failed
-	 * counting in this round, since all subpages of a THP is counted
-	 * as 1 failure in the first round.
-	 */
-	if (!list_empty(&thp_split_pages)) {
-		/*
-		 * Move non-migrated pages (after NR_MAX_MIGRATE_PAGES_RETRY
-		 * retries) to ret_pages to avoid migrating them again.
-		 */
-		list_splice_init(from, &ret_pages);
-		list_splice_init(&thp_split_pages, from);
-		no_subpage_counting = true;
-		retry = 1;
-		goto thp_subpage_migration;
-	}
 
-	rc = nr_failed + stats.nr_thp_failed;
+		nr_pages += compound_nr(page);
+		if (nr_pages > NR_MAX_BATCHED_MIGRATION)
+			break;
+	}
+	if (nr_pages > NR_MAX_BATCHED_MIGRATION)
+		list_cut_before(&pages, from, &page->lru);
+	else
+		list_splice_init(from, &pages);
+	rc = migrate_pages_batch(&pages, get_new_page, put_new_page, private,
+				 mode, reason, &ret_pages, &stats);
+	list_splice_tail_init(&pages, &ret_pages);
+	if (rc < 0) {
+		rc_gather = rc;
+		goto out;
+	}
+	rc_gather += rc;
+	if (!list_empty(from))
+		goto again;
 out:
 	/*
 	 * Put the permanent failure page back to migration list, they
@@ -1738,7 +1775,7 @@ out:
 	 * migrated successfully.
 	 */
 	if (list_empty(from))
-		rc = 0;
+		rc_gather = 0;
 
 	count_vm_events(PGMIGRATE_SUCCESS, stats.nr_succeeded);
 	count_vm_events(PGMIGRATE_FAIL, stats.nr_failed_pages);
@@ -1755,7 +1792,7 @@ out:
 	if (ret_succeeded)
 		*ret_succeeded = stats.nr_succeeded;
 
-	return rc;
+	return rc_gather;
 }
 
 struct page *alloc_migration_target(struct page *page, unsigned long private)
