@@ -1264,59 +1264,6 @@ out:
 	return rc;
 }
 
-static int __migrate_page_move(struct page *src, struct page *dst,
-				enum migrate_mode mode)
-{
-	int rc;
-	int page_was_mapped = 0;
-	struct anon_vma *anon_vma = NULL;
-	bool is_lru = !__PageMovable(src);
-	struct list_head *prev;
-
-	__migrate_page_extract(dst, &page_was_mapped, &anon_vma);
-	prev = dst->lru.prev;
-	list_del(&dst->lru);
-
-	rc = move_to_new_page(dst, src, mode);
-
-	if (rc == -EAGAIN) {
-		list_add(&dst->lru, prev);
-		__migrate_page_record(dst, page_was_mapped, anon_vma);
-		return rc;
-	}
-
-	if (unlikely(!is_lru))
-		goto out_unlock_both;
-
-	if (page_was_mapped)
-		remove_migration_ptes(src,
-			rc == MIGRATEPAGE_SUCCESS ? dst : src, false);
-
-out_unlock_both:
-	unlock_page(dst);
-	/* Drop an anon_vma reference if we took one */
-	if (anon_vma)
-		put_anon_vma(anon_vma);
-	unlock_page(src);
-	/*
-	 * If migration is successful, decrease refcount of the dst
-	 * which will not free the page because new page owner increased
-	 * refcounter. As well, if it is LRU page, add the page to LRU
-	 * list in here. Use the old state of the isolated source page to
-	 * determine if we migrated a LRU page. dst was already unlocked
-	 * and possibly modified by its owner - don't rely on the page
-	 * state.
-	 */
-	if (rc == MIGRATEPAGE_SUCCESS) {
-		if (unlikely(!is_lru))
-			put_page(dst);
-		else
-			putback_lru_page(dst);
-	}
-
-	return rc;
-}
-
 /* Obtain the lock on page, remove all ptes. */
 static int migrate_page_unmap(new_page_t get_new_page, free_page_t put_new_page,
 			      unsigned long private, struct page *src,
@@ -1366,6 +1313,59 @@ static int migrate_page_unmap(new_page_t get_new_page, free_page_t put_new_page,
 		put_new_page(dst, private);
 	else
 		put_page(dst);
+
+	return rc;
+}
+
+static int __migrate_page_move(struct page *src, struct page *dst,
+				enum migrate_mode mode)
+{
+	int rc;
+	int page_was_mapped = 0;
+	struct anon_vma *anon_vma = NULL;
+	bool is_lru = !__PageMovable(src);
+	struct list_head *prev;
+
+	__migrate_page_extract(dst, &page_was_mapped, &anon_vma);
+	prev = dst->lru.prev;
+	list_del(&dst->lru);
+
+	rc = move_to_new_page(dst, src, mode);
+
+	if (rc == -EAGAIN) {
+		list_add(&dst->lru, prev);
+		__migrate_page_record(dst, page_was_mapped, anon_vma);
+		return rc;
+	}
+
+	if (unlikely(!is_lru))
+		goto out_unlock_both;
+
+	if (page_was_mapped)
+		remove_migration_ptes(src,
+			rc == MIGRATEPAGE_SUCCESS ? dst : src, false);
+
+out_unlock_both:
+	unlock_page(dst);
+	/* Drop an anon_vma reference if we took one */
+	if (anon_vma)
+		put_anon_vma(anon_vma);
+	unlock_page(src);
+	/*
+	 * If migration is successful, decrease refcount of the dst
+	 * which will not free the page because new page owner increased
+	 * refcounter. As well, if it is LRU page, add the page to LRU
+	 * list in here. Use the old state of the isolated source page to
+	 * determine if we migrated a LRU page. dst was already unlocked
+	 * and possibly modified by its owner - don't rely on the page
+	 * state.
+	 */
+	if (rc == MIGRATEPAGE_SUCCESS) {
+		if (unlikely(!is_lru))
+			put_page(dst);
+		else
+			putback_lru_page(dst);
+	}
 
 	return rc;
 }
