@@ -1431,6 +1431,8 @@ static inline int try_split_thp(struct page *page, struct list_head *split_pages
 	return rc;
 }
 
+#define NR_MAX_MIGRATE_PAGES_RETRY	10
+
 struct migrate_pages_stats {
 	int nr_succeeded;	/* Normal and large pages migrated successfully, in
 				   units of base pages */
@@ -1440,6 +1442,94 @@ struct migrate_pages_stats {
 	int nr_thp_failed;	/* THP failed to be migrated */
 	int nr_thp_split;	/* THP split before migrating */
 };
+
+/*
+ * Returns the number of hugetlb pages that were not migrated, or an error code
+ * after NR_MAX_MIGRATE_PAGES_RETRY attempts or if no hugetlb pages are movable
+ * any more because the list has become empty or no retryable hugetlb pages
+ * exist any more. It is caller's responsibility to call putback_movable_pages()
+ * only if ret != 0.
+ */
+static int migrate_hugetlbs(struct list_head *from, new_page_t get_new_page,
+			    free_page_t put_new_page, unsigned long private,
+			    enum migrate_mode mode, int reason,
+			    struct migrate_pages_stats *stats,
+			    struct list_head *ret_pages)
+{
+	int retry = 1;
+	int nr_failed = 0;
+	int nr_retry_pages = 0;
+	int pass = 0;
+	struct page *page, *page2;
+	int rc, nr_pages;
+
+	for (pass = 0; pass < NR_MAX_MIGRATE_PAGES_RETRY && retry; pass++) {
+		retry = 0;
+		nr_retry_pages = 0;
+
+		list_for_each_entry_safe(page, page2, from, lru) {
+			if (!PageHuge(page))
+				continue;
+
+			nr_pages = compound_nr(page);
+
+			cond_resched();
+
+			rc = unmap_and_move_huge_page(get_new_page,
+						      put_new_page, private, page,
+						      pass > 2, mode, reason, ret_pages);
+			/*
+			 * The rules are:
+			 *	Success: hugetlb page will be put back
+			 *	-EAGAIN: stay on the from list
+			 *	-ENOMEM: stay on the from list
+			 *	-ENOSYS: stay on the from list
+			 *	Other errno: put on ret_pages list
+			 */
+			switch(rc) {
+			case -ENOSYS:
+				/* Hugetlb migration is unsupported */
+				nr_failed++;
+				stats->nr_failed_pages += nr_pages;
+				list_move_tail(&page->lru, ret_pages);
+				break;
+			case -ENOMEM:
+				/*
+				 * When memory is low, don't bother to try to migrate
+				 * other pages, just exit.
+				 */
+				stats->nr_failed_pages += nr_pages + nr_retry_pages;
+				return -ENOMEM;
+			case -EAGAIN:
+				retry++;
+				nr_retry_pages += nr_pages;
+				break;
+			case MIGRATEPAGE_SUCCESS:
+				stats->nr_succeeded += nr_pages;
+				break;
+			default:
+				/*
+				 * Permanent failure (-EBUSY, etc.):
+				 * unlike -EAGAIN case, the failed page is
+				 * removed from migration page list and not
+				 * retried in the next outer loop.
+				 */
+				nr_failed++;
+				stats->nr_failed_pages += nr_pages;
+				break;
+			}
+		}
+	}
+	/*
+	 * nr_failed is number of hugetlb pages failed to be migrated.  After
+	 * NR_MAX_MIGRATE_PAGES_RETRY attempts, give up and count retried hugetlb
+	 * pages as failed.
+	 */
+	nr_failed += retry;
+	stats->nr_failed_pages += nr_retry_pages;
+
+	return nr_failed;
+}
 
 /*
  * migrate_pages - migrate the pages specified in a list, to the free pages
@@ -1457,10 +1547,10 @@ struct migrate_pages_stats {
  * @ret_succeeded:	Set to the number of normal pages migrated successfully if
  *			the caller passes a non-NULL pointer.
  *
- * The function returns after 10 attempts or if no pages are movable any more
- * because the list has become empty or no retryable pages exist any more.
- * It is caller's responsibility to call putback_movable_pages() to return pages
- * to the LRU or free list only if ret != 0.
+ * The function returns after NR_MAX_MIGRATE_PAGES_RETRY attempts or if no pages
+ * are movable any more because the list has become empty or no retryable pages
+ * exist any more. It is caller's responsibility to call putback_movable_pages()
+ * only if ret != 0.
  *
  * Returns the number of {normal page, THP, hugetlb} that were not migrated, or
  * an error code. The number of THP splits will be considered as the number of
@@ -1472,7 +1562,7 @@ int migrate_pages(struct list_head *from, new_page_t get_new_page,
 {
 	int retry = 1;
 	int thp_retry = 1;
-	int nr_failed = 0;
+	int nr_failed;
 	int nr_retry_pages = 0;
 	int pass = 0;
 	bool is_thp = false;
@@ -1490,13 +1580,27 @@ int migrate_pages(struct list_head *from, new_page_t get_new_page,
 		current->flags |= PF_SWAPWRITE;
 
 	memset(&stats, 0, sizeof(stats));
+	rc = migrate_hugetlbs(from, get_new_page, put_new_page, private, mode, reason,
+			      &stats, &ret_pages);
+	if (rc < 0)
+		goto out;
+	nr_failed = rc;
+
 thp_subpage_migration:
-	for (pass = 0; pass < 10 && (retry || thp_retry); pass++) {
+	for (pass = 0;
+	     pass < NR_MAX_MIGRATE_PAGES_RETRY && (retry || thp_retry);
+	     pass++) {
 		retry = 0;
 		thp_retry = 0;
 		nr_retry_pages = 0;
 
 		list_for_each_entry_safe(page, page2, from, lru) {
+			/* Retried hugetlb pages will be kept in list */
+			if (PageHuge(page)) {
+				list_move_tail(&page->lru, &ret_pages);
+				continue;
+			}
+
 			/*
 			 * THP statistics is based on the source huge page.
 			 * Capture required information that might get lost
@@ -1506,19 +1610,12 @@ thp_subpage_migration:
 			nr_pages = compound_nr(page);
 			cond_resched();
 
-			if (PageHuge(page))
-				rc = unmap_and_move_huge_page(get_new_page,
-						put_new_page, private, page,
-						pass > 2, mode, reason,
-						&ret_pages);
-			else
-				rc = unmap_and_move(get_new_page, put_new_page,
-						private, page, pass > 2, mode,
-						reason, &ret_pages);
+			rc = unmap_and_move(get_new_page, put_new_page,
+					    private, page, pass > 2, mode,
+					    reason, &ret_pages);
 			/*
 			 * The rules are:
-			 *	Success: non hugetlb page will be freed, hugetlb
-			 *		 page will be put back
+			 *	Success: page will be freed
 			 *	-EAGAIN: stay on the from list
 			 *	-ENOMEM: stay on the from list
 			 *	-ENOSYS: stay on the from list
@@ -1618,8 +1715,8 @@ thp_subpage_migration:
 	 */
 	if (!list_empty(&thp_split_pages)) {
 		/*
-		 * Move non-migrated pages (after 10 retries) to ret_pages
-		 * to avoid migrating them again.
+		 * Move non-migrated pages (after NR_MAX_MIGRATE_PAGES_RETRY
+		 * retries) to ret_pages to avoid migrating them again.
 		 */
 		list_splice_init(from, &ret_pages);
 		list_splice_init(&thp_split_pages, from);
