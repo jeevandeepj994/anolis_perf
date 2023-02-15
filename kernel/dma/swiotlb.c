@@ -508,7 +508,7 @@ static int swiotlb_do_find_slots(struct io_tlb_mem *mem,
 	unsigned int iotlb_align_mask =
 		dma_get_min_align_mask(dev) & ~(IO_TLB_SIZE - 1);
 	unsigned int nslots = nr_slots(alloc_size), stride;
-	unsigned int index, wrap, count = 0, i;
+	unsigned int index, index_nowrap = 0, wrap, count = 0, i;
 	unsigned long flags;
 	unsigned int slot_base;
 	unsigned int slot_index;
@@ -536,6 +536,7 @@ static int swiotlb_do_find_slots(struct io_tlb_mem *mem,
 		if ((slot_addr(tbl_dma_addr, slot_index) & iotlb_align_mask) !=
 		    (orig_addr & iotlb_align_mask)) {
 			index = wrap_area_index(mem, index + 1);
+			index_nowrap++;
 			continue;
 		}
 
@@ -551,7 +552,8 @@ static int swiotlb_do_find_slots(struct io_tlb_mem *mem,
 				goto found;
 		}
 		index = wrap_area_index(mem, index + stride);
-	} while (index != wrap);
+		index_nowrap += stride;
+	} while (index_nowrap < mem->area_nslabs);
 
 not_found:
 	spin_unlock_irqrestore(&area->lock, flags);
