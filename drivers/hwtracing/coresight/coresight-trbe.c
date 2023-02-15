@@ -16,6 +16,7 @@
 #define pr_fmt(fmt) DRVNAME ": " fmt
 
 #include <asm/barrier.h>
+#include "coresight-self-hosted-trace.h"
 #include "coresight-trbe.h"
 
 #define PERF_IDX2OFF(idx, buf) ((idx) % ((buf)->nr_pages << PAGE_SHIFT))
@@ -120,6 +121,25 @@ static void trbe_reset_local(void)
 	write_sysreg_s(0, SYS_TRBSR_EL1);
 }
 
+static void trbe_report_wrap_event(struct perf_output_handle *handle)
+{
+	/*
+	 * Mark the buffer to indicate that there was a WRAP event by
+	 * setting the COLLISION flag. This indicates to the user that
+	 * the TRBE trace collection was stopped without stopping the
+	 * ETE and thus there might be some amount of trace that was
+	 * lost between the time the WRAP was detected and the IRQ
+	 * was consumed by the CPU.
+	 *
+	 * Setting the TRUNCATED flag would move the event to STOPPED
+	 * state unnecessarily, even when there is space left in the
+	 * ring buffer. Using the COLLISION flag doesn't have this side
+	 * effect. We only set TRUNCATED flag when there is no space
+	 * left in the ring buffer.
+	 */
+	perf_aux_output_flag(handle, PERF_AUX_FLAG_COLLISION);
+}
+
 static void trbe_stop_and_truncate_event(struct perf_output_handle *handle)
 {
 	struct trbe_buf *buf = etm_perf_sink_config(handle);
@@ -133,6 +153,7 @@ static void trbe_stop_and_truncate_event(struct perf_output_handle *handle)
 	 */
 	trbe_drain_and_disable_local();
 	perf_aux_output_flag(handle, PERF_AUX_FLAG_TRUNCATED);
+	perf_aux_output_end(handle, 0);
 	*this_cpu_ptr(buf->cpudata->drvdata->handle) = NULL;
 }
 
@@ -252,13 +273,9 @@ static unsigned long __trbe_normal_offset(struct perf_output_handle *handle)
 	 * trbe_base				trbe_base + nr_pages
 	 *
 	 * Perf aux buffer does not have any space for the driver to write into.
-	 * Just communicate trace truncation event to the user space by marking
-	 * it with PERF_AUX_FLAG_TRUNCATED.
 	 */
-	if (!handle->size) {
-		perf_aux_output_flag(handle, PERF_AUX_FLAG_TRUNCATED);
+	if (!handle->size)
 		return 0;
-	}
 
 	/* Compute the tail and wakeup indices now that we've aligned head */
 	tail = PERF_IDX2OFF(handle->head + handle->size, buf);
@@ -360,7 +377,6 @@ static unsigned long __trbe_normal_offset(struct perf_output_handle *handle)
 		return limit;
 
 	trbe_pad_buf(handle, handle->size);
-	perf_aux_output_flag(handle, PERF_AUX_FLAG_TRUNCATED);
 	return 0;
 }
 
@@ -554,8 +570,6 @@ static unsigned long arm_trbe_update_buffer(struct coresight_device *csdev,
 	if (cpudata->mode != CS_MODE_PERF)
 		return 0;
 
-	perf_aux_output_flag(handle, PERF_AUX_FLAG_CORESIGHT_FORMAT_RAW);
-
 	/*
 	 * We are about to disable the TRBE. And this could in turn
 	 * fill up the buffer triggering, an IRQ. This could be consumed
@@ -619,7 +633,7 @@ static unsigned long arm_trbe_update_buffer(struct coresight_device *csdev,
 		 * for correct size. Also, mark the buffer truncated.
 		 */
 		write = get_trbe_limit_pointer();
-		perf_aux_output_flag(handle, PERF_AUX_FLAG_TRUNCATED);
+		trbe_report_wrap_event(handle);
 	}
 
 	offset = write - base;
@@ -636,6 +650,21 @@ done:
 	return size;
 }
 
+static int __arm_trbe_enable(struct trbe_buf *buf,
+			     struct perf_output_handle *handle)
+{
+	perf_aux_output_flag(handle, PERF_AUX_FLAG_CORESIGHT_FORMAT_RAW);
+	buf->trbe_limit = compute_trbe_buffer_limit(handle);
+	buf->trbe_write = buf->trbe_base + PERF_IDX2OFF(handle->head, buf);
+	if (buf->trbe_limit == buf->trbe_base) {
+		trbe_stop_and_truncate_event(handle);
+		return -ENOSPC;
+	}
+	*this_cpu_ptr(buf->cpudata->drvdata->handle) = handle;
+	trbe_enable_hw(buf);
+	return 0;
+}
+
 static int arm_trbe_enable(struct coresight_device *csdev, u32 mode, void *data)
 {
 	struct trbe_drvdata *drvdata = dev_get_drvdata(csdev->dev.parent);
@@ -648,18 +677,11 @@ static int arm_trbe_enable(struct coresight_device *csdev, u32 mode, void *data)
 	if (mode != CS_MODE_PERF)
 		return -EINVAL;
 
-	*this_cpu_ptr(drvdata->handle) = handle;
 	cpudata->buf = buf;
 	cpudata->mode = mode;
 	buf->cpudata = cpudata;
-	buf->trbe_limit = compute_trbe_buffer_limit(handle);
-	buf->trbe_write = buf->trbe_base + PERF_IDX2OFF(handle->head, buf);
-	if (buf->trbe_limit == buf->trbe_base) {
-		trbe_stop_and_truncate_event(handle);
-		return 0;
-	}
-	trbe_enable_hw(buf);
-	return 0;
+
+	return __arm_trbe_enable(buf, handle);
 }
 
 static int arm_trbe_disable(struct coresight_device *csdev)
@@ -683,18 +705,19 @@ static int arm_trbe_disable(struct coresight_device *csdev)
 
 static void trbe_handle_spurious(struct perf_output_handle *handle)
 {
-	struct trbe_buf *buf = etm_perf_sink_config(handle);
+	u64 limitr = read_sysreg_s(SYS_TRBLIMITR_EL1);
 
-	buf->trbe_limit = compute_trbe_buffer_limit(handle);
-	buf->trbe_write = buf->trbe_base + PERF_IDX2OFF(handle->head, buf);
-	if (buf->trbe_limit == buf->trbe_base) {
-		trbe_drain_and_disable_local();
-		return;
-	}
-	trbe_enable_hw(buf);
+	/*
+	 * If the IRQ was spurious, simply re-enable the TRBE
+	 * back without modifying the buffer parameters to
+	 * retain the trace collected so far.
+	 */
+	limitr |= TRBLIMITR_ENABLE;
+	write_sysreg_s(limitr, SYS_TRBLIMITR_EL1);
+	isb();
 }
 
-static void trbe_handle_overflow(struct perf_output_handle *handle)
+static int trbe_handle_overflow(struct perf_output_handle *handle)
 {
 	struct perf_event *event = handle->event;
 	struct trbe_buf *buf = etm_perf_sink_config(handle);
@@ -706,12 +729,7 @@ static void trbe_handle_overflow(struct perf_output_handle *handle)
 	if (buf->snapshot)
 		handle->head += size;
 
-	/*
-	 * Mark the buffer as truncated, as we have stopped the trace
-	 * collection upon the WRAP event, without stopping the source.
-	 */
-	perf_aux_output_flag(handle, PERF_AUX_FLAG_CORESIGHT_FORMAT_RAW |
-				     PERF_AUX_FLAG_TRUNCATED);
+	trbe_report_wrap_event(handle);
 	perf_aux_output_end(handle, size);
 	event_data = perf_aux_output_begin(handle, event);
 	if (!event_data) {
@@ -723,16 +741,10 @@ static void trbe_handle_overflow(struct perf_output_handle *handle)
 		 */
 		trbe_drain_and_disable_local();
 		*this_cpu_ptr(buf->cpudata->drvdata->handle) = NULL;
-		return;
+		return -EINVAL;
 	}
-	buf->trbe_limit = compute_trbe_buffer_limit(handle);
-	buf->trbe_write = buf->trbe_base + PERF_IDX2OFF(handle->head, buf);
-	if (buf->trbe_limit == buf->trbe_base) {
-		trbe_stop_and_truncate_event(handle);
-		return;
-	}
-	*this_cpu_ptr(buf->cpudata->drvdata->handle) = handle;
-	trbe_enable_hw(buf);
+
+	return __arm_trbe_enable(buf, handle);
 }
 
 static bool is_perf_trbe(struct perf_output_handle *handle)
@@ -763,13 +775,10 @@ static irqreturn_t arm_trbe_irq_handler(int irq, void *dev)
 	struct perf_output_handle *handle = *handle_ptr;
 	enum trbe_fault_action act;
 	u64 status;
+	bool truncated = false;
+	u64 trfcr;
 
-	/*
-	 * Ensure the trace is visible to the CPUs and
-	 * any external aborts have been resolved.
-	 */
-	trbe_drain_and_disable_local();
-
+	/* Reads to TRBSR_EL1 is fine when TRBE is active */
 	status = read_sysreg_s(SYS_TRBSR_EL1);
 	/*
 	 * If the pending IRQ was handled by update_buffer callback
@@ -778,6 +787,13 @@ static irqreturn_t arm_trbe_irq_handler(int irq, void *dev)
 	if (!is_trbe_irq(status))
 		return IRQ_NONE;
 
+	/* Prohibit the CPU from tracing before we disable the TRBE */
+	trfcr = cpu_prohibit_trace();
+	/*
+	 * Ensure the trace is visible to the CPUs and
+	 * any external aborts have been resolved.
+	 */
+	trbe_drain_and_disable_local();
 	clr_trbe_irq();
 	isb();
 
@@ -787,24 +803,32 @@ static irqreturn_t arm_trbe_irq_handler(int irq, void *dev)
 	if (!is_perf_trbe(handle))
 		return IRQ_NONE;
 
-	/*
-	 * Ensure perf callbacks have completed, which may disable
-	 * the trace buffer in response to a TRUNCATION flag.
-	 */
-	irq_work_run();
-
 	act = trbe_get_fault_act(status);
 	switch (act) {
 	case TRBE_FAULT_ACT_WRAP:
-		trbe_handle_overflow(handle);
+		truncated = !!trbe_handle_overflow(handle);
 		break;
 	case TRBE_FAULT_ACT_SPURIOUS:
 		trbe_handle_spurious(handle);
 		break;
 	case TRBE_FAULT_ACT_FATAL:
 		trbe_stop_and_truncate_event(handle);
+		truncated = true;
 		break;
 	}
+
+	/*
+	 * If the buffer was truncated, ensure perf callbacks
+	 * have completed, which will disable the event.
+	 *
+	 * Otherwise, restore the trace filter controls to
+	 * allow the tracing.
+	 */
+	if (truncated)
+		irq_work_run();
+	else
+		write_trfcr(trfcr);
+
 	return IRQ_HANDLED;
 }
 
