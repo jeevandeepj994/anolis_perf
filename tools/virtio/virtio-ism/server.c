@@ -142,7 +142,8 @@ static void *pp_server(void *shmp, int fd, struct conf *conf)
 
 		WRITE_ONCE(*valp, READ_ONCE(*valp) + 1);
 
-		commit(fd);
+		if (conf->bilateral)
+			commit(fd);
 	}
 
 	return 0;

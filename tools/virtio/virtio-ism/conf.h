@@ -33,6 +33,7 @@ struct conf {
 	int (*handle)(void);
 	u64 token;
 
+	bool bilateral;
 	int num;
 	int nthread;
 	int debug;

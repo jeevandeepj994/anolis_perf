@@ -314,7 +314,12 @@ static u64 pp_client(void *shmp, int fd)
 		if (conf.debug)
 			llog("commit val: origin %lu %lu\n", o, READ_ONCE(*valp));
 
-		poll(&pfd, 1, 99999999);
+		if (conf.bilateral)
+			poll(&pfd, 1, 99999999);
+		else {
+			while (READ_ONCE(*valp) != o)
+				;
+		}
 
 		if (READ_ONCE(*valp) != o + 1) {
 			llog("pp-client recv error val %d\n", READ_ONCE(*valp));
@@ -451,6 +456,28 @@ static int get_stats(void)
 	return 0;
 }
 
+static void check_unilateral(void)
+{
+	const char *path = "/sys/module/virtio_ism/parameters/unilateral";
+	int fd, n;
+	char v;
+
+	fd = open(path, O_RDONLY);
+	if (fd < 0) {
+		printf("check unilateral fail\n");
+		exit(-1);
+	}
+
+	n = read(fd, &v, 1);
+	if (n != 1) {
+		printf("check unilateral fail\n");
+		exit(-1);
+	}
+
+	if (v == 'N')
+		conf.bilateral = true;
+}
+
 static void parse_token(char *p)
 {
 	u64 token = 0;
@@ -469,6 +496,8 @@ int main(int argc, char *argv[])
 {
 	int i;
 	char *opt, *val;
+
+	check_unilateral();
 
 	conf.num = 10000;
 	conf.devpath = "/dev/virtio-ism/vism0";
