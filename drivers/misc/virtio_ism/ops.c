@@ -7,6 +7,9 @@
 
 #include "ism.h"
 
+static bool unilateral = true;
+module_param(unilateral, bool, 0444);
+
 /* Since one interrupt needs to manage multiple regions, we have to add
  * proxy between regions and interrupt.
  */
@@ -108,6 +111,8 @@ static void virtio_ism_irq_ctx_unbind(struct virtio_ism_region *r)
 	unsigned long flags;
 
 	ctx = r->ctx;
+	if (!ctx)
+		return;
 
 	/* delete region from irq handler */
 	spin_lock_irqsave(&ctx->lock, flags);
@@ -242,7 +247,7 @@ static struct virtio_ism_region *virtio_ism_region_get(struct virtio_ism *ism, u
 
 static void *virtio_ism_region_init(struct virtio_ism *ism, u64 offset, u64 token,
 				    virtio_ism_callback callback,
-				    void *notify_data)
+				    void *notify_data, bool alloc)
 {
 	struct virtio_ism_irq_ctx *ctx;
 	struct virtio_ism_region *r;
@@ -266,7 +271,7 @@ static void *virtio_ism_region_init(struct virtio_ism *ism, u64 offset, u64 toke
 	if (!vaddr)
 		return ERR_PTR(-ENOMEM);
 
-	r = kmalloc(sizeof(*r), GFP_KERNEL);
+	r = kzalloc(sizeof(*r), GFP_KERNEL);
 	if (!r) {
 		err = -ENOMEM;
 		goto err_alloc;
@@ -279,18 +284,20 @@ static void *virtio_ism_region_init(struct virtio_ism *ism, u64 offset, u64 toke
 	r->notify_data = notify_data;
 	r->vaddr       = vaddr;
 
-	ctx = virtio_ism_irq_ctx_find(ism);
-	if (IS_ERR(ctx)) {
-		err = PTR_ERR(ctx);
-		goto err_ctx;
+	if (alloc || !unilateral) {
+		ctx = virtio_ism_irq_ctx_find(ism);
+		if (IS_ERR(ctx)) {
+			err = PTR_ERR(ctx);
+			goto err_ctx;
+		}
+
+		virtio_ism_irq_ctx_bind(ctx, r);
+
+		vector = irq_ctx_2_vector(ism, ctx);
+		err = dev_inform_vector(ism, token, vector);
+		if (err)
+			goto err;
 	}
-
-	virtio_ism_irq_ctx_bind(ctx, r);
-
-	vector = irq_ctx_2_vector(ism, ctx);
-	err = dev_inform_vector(ism, token, vector);
-	if (err)
-		goto err;
 
 	++ism->stats.region_active;
 	rb_add(&r->rb_node, &ism->rbtree, __region_less);
@@ -367,7 +374,7 @@ static void *__alloc(struct virtio_ism *ism, bool alloc, u64 *token,
 	if (err)
 		goto err_cmd;
 
-	p = virtio_ism_region_init(ism, offset, *token, cb, notify_data);
+	p = virtio_ism_region_init(ism, offset, *token, cb, notify_data, alloc);
 	if (IS_ERR(p))
 		goto err_irq;
 
