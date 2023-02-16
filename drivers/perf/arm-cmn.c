@@ -2206,7 +2206,7 @@ static int arm_cmn_discover(struct arm_cmn *cmn, unsigned int rgn_offset)
 	return 0;
 }
 
-static int arm_cmn600_acpi_probe(struct platform_device *pdev, struct arm_cmn *cmn)
+static int arm_cmn_acpi_probe(struct platform_device *pdev, struct arm_cmn *cmn)
 {
 	struct resource *cfg, *root;
 
@@ -2214,12 +2214,21 @@ static int arm_cmn600_acpi_probe(struct platform_device *pdev, struct arm_cmn *c
 	if (!cfg)
 		return -EINVAL;
 
-	root = platform_get_resource(pdev, IORESOURCE_MEM, 1);
-	if (!root)
-		return -EINVAL;
+	/* If ACPI defines more than one resource, such as cmn-600, then there may be
+	 * a deviation between ROOTNODEBASE and PERIPHBASE, and ROOTNODEBASE can
+	 * be obtained from the second resource. Otherwise, it can be considered that
+	 * ROOT NODE BASE is PERIPHBASE. This is compatible with cmn-600 and cmn-any.
+	 */
+	if (pdev->num_resources > 1) {
+		root = platform_get_resource(pdev, IORESOURCE_MEM, 1);
+		if (!root)
+			return -EINVAL;
 
-	if (!resource_contains(cfg, root))
-		swap(cfg, root);
+		if (!resource_contains(cfg, root))
+			swap(cfg, root);
+	} else {
+		root = cfg;
+	}
 	/*
 	 * Note that devm_ioremap_resource() is dumb and won't let the platform
 	 * device claim cfg when the ACPI companion device has already claimed
@@ -2227,17 +2236,30 @@ static int arm_cmn600_acpi_probe(struct platform_device *pdev, struct arm_cmn *c
 	 * appropriate name, we don't really need to do it again here anyway.
 	 */
 	cmn->base = devm_ioremap(cmn->dev, cfg->start, resource_size(cfg));
-	if (!cmn->base)
-		return -ENOMEM;
+	if (IS_ERR(cmn->base))
+		return PTR_ERR(cmn->base);
 
 	return root->start - cfg->start;
 }
 
-static int arm_cmn600_of_probe(struct device_node *np)
+static int arm_cmn_of_probe(struct platform_device *pdev, struct arm_cmn *cmn)
 {
 	u32 rootnode;
+	int ret;
 
-	return of_property_read_u32(np, "arm,root-node", &rootnode) ?: rootnode;
+	cmn->base = devm_platform_ioremap_resource(pdev, 0);
+	if (IS_ERR(cmn->base))
+		return PTR_ERR(cmn->base);
+
+	/* If of_property_read_u32() return EINVAL, it means that device tree has
+	 * not define root-node, and root-node will return 0, which is compatible
+	 * with cmn-600 and cmn-any.
+	 */
+	ret = of_property_read_u32(pdev->dev.of_node, "arm,root-node", &rootnode);
+	if (ret == -EINVAL)
+		return 0;
+
+	return rootnode;
 }
 
 static int arm_cmn_probe(struct platform_device *pdev)
@@ -2255,16 +2277,11 @@ static int arm_cmn_probe(struct platform_device *pdev)
 	cmn->model = (unsigned long)device_get_match_data(cmn->dev);
 	platform_set_drvdata(pdev, cmn);
 
-	if (cmn->model == CMN600 && has_acpi_companion(cmn->dev)) {
-		rootnode = arm_cmn600_acpi_probe(pdev, cmn);
-	} else {
-		rootnode = 0;
-		cmn->base = devm_platform_ioremap_resource(pdev, 0);
-		if (IS_ERR(cmn->base))
-			return PTR_ERR(cmn->base);
-		if (cmn->model == CMN600)
-			rootnode = arm_cmn600_of_probe(pdev->dev.of_node);
-	}
+	if (has_acpi_companion(cmn->dev))
+		rootnode = arm_cmn_acpi_probe(pdev, cmn);
+	else
+		rootnode = arm_cmn_of_probe(pdev, cmn);
+
 	if (rootnode < 0)
 		return rootnode;
 
