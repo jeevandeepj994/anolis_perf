@@ -817,7 +817,7 @@ static inline unsigned long pmd_page_vaddr(pmd_t pmd)
 
 static inline int pmd_bad(pmd_t pmd)
 {
-#ifdef CONFIG_FAST_COPY_MM
+#ifdef CONFIG_ASYNC_FORK
 	return (pmd_flags(pmd) & ~_PAGE_USER & ~_PAGE_RW) !=
 		(_KERNPG_TABLE & ~_PAGE_RW);
 #else

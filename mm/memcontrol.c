@@ -5373,21 +5373,21 @@ void memcg_check_wmark_min_adj(struct task_struct *curr,
 	}
 }
 
-#ifdef CONFIG_FAST_COPY_MM
-static u64 mem_cgroup_fast_copy_mm_read(struct cgroup_subsys_state *css,
+#ifdef CONFIG_ASYNC_FORK
+static u64 mem_cgroup_async_fork_read(struct cgroup_subsys_state *css,
 					struct cftype *cft)
 {
 	struct mem_cgroup *memcg = mem_cgroup_from_css(css);
 
-	return memcg->fast_copy_mm;
+	return memcg->async_fork;
 }
 
-static int mem_cgroup_fast_copy_mm_write(struct cgroup_subsys_state *css,
+static int mem_cgroup_async_fork_write(struct cgroup_subsys_state *css,
 					 struct cftype *cft, u64 val)
 {
 	struct mem_cgroup *memcg = mem_cgroup_from_css(css);
 
-	memcg->fast_copy_mm = val;
+	memcg->async_fork = val;
 	return 0;
 }
 #endif
@@ -6685,11 +6685,11 @@ static struct cftype mem_cgroup_legacy_files[] = {
 		.write_u64 = mem_cgroup_allow_duptext_write,
 	},
 #endif
-#ifdef CONFIG_FAST_COPY_MM
+#ifdef CONFIG_ASYNC_FORK
 	{
-		.name = "fast_copy_mm",
-		.read_u64 = mem_cgroup_fast_copy_mm_read,
-		.write_u64 = mem_cgroup_fast_copy_mm_write,
+		.name = "async_fork",
+		.read_u64 = mem_cgroup_async_fork_read,
+		.write_u64 = mem_cgroup_async_fork_write,
 	},
 #endif
 #ifdef CONFIG_TEXT_UNEVICTABLE
@@ -6994,8 +6994,8 @@ mem_cgroup_css_alloc(struct cgroup_subsys_state *parent_css)
 #ifdef CONFIG_DUPTEXT
 		memcg->allow_duptext = parent->allow_duptext;
 #endif
-#ifdef CONFIG_FAST_COPY_MM
-		memcg->fast_copy_mm = parent->fast_copy_mm;
+#ifdef CONFIG_ASYNC_FORK
+		memcg->async_fork = parent->async_fork;
 #endif
 #ifdef CONFIG_TEXT_UNEVICTABLE
 		memcg->allow_unevictable = parent->allow_unevictable;
@@ -8310,11 +8310,11 @@ static struct cftype memory_files[] = {
 		.read_u64 = memcg_reap_background_read,
 		.write_u64 = memcg_reap_background_write,
 	},
-#ifdef CONFIG_FAST_COPY_MM
+#ifdef CONFIG_ASYNC_FORK
 	{
-		.name = "fast_copy_mm",
-		.read_u64 = mem_cgroup_fast_copy_mm_read,
-		.write_u64 = mem_cgroup_fast_copy_mm_write,
+		.name = "async_fork",
+		.read_u64 = mem_cgroup_async_fork_read,
+		.write_u64 = mem_cgroup_async_fork_write,
 	},
 #endif
 	{ }	/* terminate */

@@ -380,8 +380,8 @@ struct vm_area_struct {
 #endif
 	struct vm_userfaultfd_ctx vm_userfaultfd_ctx;
 
-#ifdef CONFIG_FAST_COPY_MM
-	struct vm_area_struct *fcm_vma;
+#ifdef CONFIG_ASYNC_FORK
+	struct vm_area_struct *async_fork_vma;
 #endif
 
 	CK_KABI_RESERVE(1)
@@ -594,9 +594,9 @@ struct mm_struct {
 		u32 pasid;
 #endif
 
-#ifdef CONFIG_FAST_COPY_MM
-		struct mm_struct *fcm_mm;
-		unsigned long fcm_flags;
+#ifdef CONFIG_ASYNC_FORK
+		struct mm_struct *async_fork_mm;
+		unsigned long async_fork_flags;
 #endif
 	} __randomize_layout;
 
