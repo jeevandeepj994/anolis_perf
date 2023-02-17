@@ -309,10 +309,21 @@ static int __psp_do_cmd_locked(int cmd, void *data, int *psp_ret)
 static int sev_do_cmd(int cmd, void *data, int *psp_ret)
 {
 	int rc;
+	int mutex_enabled = READ_ONCE(psp_mutex_enabled);
 
-	mutex_lock(&sev_cmd_mutex);
+	if (is_hygon_psp && mutex_enabled) {
+		if (psp_mutex_lock_timeout(&psp_misc->data_pg_aligned->mb_mutex,
+					PSP_MUTEX_TIMEOUT) != 1)
+			return -EBUSY;
+	} else {
+		mutex_lock(&sev_cmd_mutex);
+	}
+
 	rc = __sev_do_cmd_locked(cmd, data, psp_ret);
-	mutex_unlock(&sev_cmd_mutex);
+	if (is_hygon_psp && mutex_enabled)
+		psp_mutex_unlock(&psp_misc->data_pg_aligned->mb_mutex);
+	else
+		mutex_unlock(&sev_cmd_mutex);
 
 	return rc;
 }
