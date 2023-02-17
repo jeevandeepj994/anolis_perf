@@ -43,6 +43,9 @@ enum memcg_stat_item {
 enum memcg_exstat_item {
 	MEMCG_WMARK_MIN,
 	MEMCG_WMARK_RECLAIM,
+#ifdef CONFIG_PAGECACHE_LIMIT
+	MEMCG_PGCACHE_RECLAIM,
+#endif
 	MEMCG_NR_EXSTAT,
 };
 
@@ -463,6 +466,13 @@ struct mem_cgroup {
 	 * such as binary and dynamic library sharing.
 	 */
 	atomic_long_t unevictable_size;
+#endif
+
+#ifdef CONFIG_PAGECACHE_LIMIT
+	bool allow_pgcache_limit;
+	unsigned long pgcache_limit_size;
+	bool pgcache_limit_sync;
+	struct work_struct pgcache_limit_work;
 #endif
 
 #if IS_ENABLED(CONFIG_RECLAIM_COLDPGS)

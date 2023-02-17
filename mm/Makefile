@@ -133,3 +133,4 @@ obj-y += unevictable.o
 obj-$(CONFIG_DUPTEXT) += page_dup.o
 obj-$(CONFIG_FAST_COPY_MM) += fast_copy_mm.o
 obj-$(CONFIG_PAGE_PREZERO) += prezero.o
+obj-$(CONFIG_PAGECACHE_LIMIT) += pagecache_limit.o
