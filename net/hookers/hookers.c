@@ -288,6 +288,7 @@ static void remove_memprotect(unsigned long addr)
 	p4d_t *p4d, p4dd;
 	pud_t *pud, pudd;
 	pmd_t *pmd, pmdd;
+	pte_t *pte, pted;
 	u64 addr_aligned;
 
 	addr_aligned = addr & PAGE_MASK;
@@ -298,14 +299,27 @@ static void remove_memprotect(unsigned long addr)
 	p4d = p4d_offset(pgd, (unsigned long)addr_aligned);
 	p4dd = READ_ONCE(*p4d);
 
+	/**
+	 * The range of the kernel code segment will not exceed 1 GiB, so
+	 * we don't check the use of pud huge page.
+	 */
 	pud = pud_offset(p4d, (unsigned long)addr_aligned);
 	pudd = READ_ONCE(*pud);
 
 	pmd = pmd_offset(pud, (unsigned long)addr_aligned);
 	pmdd = READ_ONCE(*pmd);
 
-	set_pmd(pmd, __pmd(pmd_val(pmdd) & ~PMD_SECT_RDONLY));
-	flush_tlb_kernel_range(addr_aligned, addr_aligned + PAGE_SIZE);
+	/* Check whether used pmd hug page */
+	if (pmd_sect(pmdd)) {
+		set_pmd(pmd, __pmd(pmd_val(pmdd) & ~PMD_SECT_RDONLY));
+		flush_tlb_kernel_range(addr_aligned, addr_aligned + PMD_SIZE);
+	} else {
+		/* TODO: considering cont-pte */
+		pte = pte_offset_kernel(pmd, (unsigned long)addr_aligned);
+		pted = READ_ONCE(*pte);
+		set_pte(pte, __pte(pte_val(pted) & ~PTE_RDONLY));
+		flush_tlb_kernel_range(addr_aligned, addr_aligned + PAGE_SIZE);
+	}
 }
 
 static void set_memprotect(unsigned long addr)
@@ -314,6 +328,7 @@ static void set_memprotect(unsigned long addr)
 	p4d_t *p4d, p4dd;
 	pud_t *pud, pudd;
 	pmd_t *pmd, pmdd;
+	pte_t *pte, pted;
 	u64 addr_aligned;
 
 	addr_aligned = addr & PAGE_MASK;
@@ -324,14 +339,27 @@ static void set_memprotect(unsigned long addr)
 	p4d = p4d_offset(pgd, (unsigned long)addr_aligned);
 	p4dd = READ_ONCE(*p4d);
 
+	/**
+	 * The range of the kernel code segment will not exceed 1 GiB, so
+	 * we don't check the use of pud huge page.
+	 */
 	pud = pud_offset(p4d, (unsigned long)addr_aligned);
 	pudd = READ_ONCE(*pud);
 
 	pmd = pmd_offset(pud, (unsigned long)addr_aligned);
 	pmdd = READ_ONCE(*pmd);
 
-	set_pmd(pmd, __pmd(pmd_val(pmdd) | PMD_SECT_RDONLY));
-	flush_tlb_kernel_range(addr_aligned, addr_aligned + PAGE_SIZE);
+	/* Check whether used pmd hug page */
+	if (pmd_sect(pmdd)) {
+		set_pmd(pmd, __pmd(pmd_val(pmdd) | PMD_SECT_RDONLY));
+		flush_tlb_kernel_range(addr_aligned, addr_aligned + PMD_SIZE);
+	} else {
+		/* TODO: considering cont-pte */
+		pte = pte_offset_kernel(pmd, (unsigned long)addr_aligned);
+		pted = READ_ONCE(*pte);
+		set_pte(pte, __pte(pte_val(pted) | PTE_RDONLY));
+		flush_tlb_kernel_range(addr_aligned, addr_aligned + PAGE_SIZE);
+	}
 }
 #endif
 
