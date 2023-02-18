@@ -136,12 +136,6 @@ static int __smc_diag_dump(struct sock *sk, struct sk_buff *skb,
 			.tx_sent.count = conn->tx_curs_sent.count,
 			.tx_fin.wrap = conn->tx_curs_fin.wrap,
 			.tx_fin.count = conn->tx_curs_fin.count,
-			.rx_cnt	= conn->rx_cnt,
-			.tx_cnt = conn->tx_cnt,
-			.tx_corked_cnt = conn->tx_corked_cnt,
-			.rx_bytes = conn->rx_bytes,
-			.tx_bytes = conn->tx_bytes,
-			.tx_corked_bytes = conn->tx_corked_bytes,
 		};
 
 		if (nla_put(skb, SMC_DIAG_CONNINFO, sizeof(cinfo), &cinfo) < 0)
@@ -202,25 +196,24 @@ static int smc_diag_dump_proto(struct proto *prot, struct sk_buff *skb,
 	int snum = cb_ctx->pos[p_type];
 	struct nlattr *bc = NULL;
 	struct hlist_head *head;
-	int rc = 0, num = 0, slot;
+	int rc = 0, num = 0;
 	struct sock *sk;
 
 	read_lock(&prot->h.smc_hash->lock);
+	head = &prot->h.smc_hash->ht;
+	if (hlist_empty(head))
+		goto out;
 
-	for (slot = 0; slot < SMC_HTABLE_SIZE; slot++) {
-		head = &prot->h.smc_hash->ht[slot];
-
-		sk_for_each(sk, head) {
-			if (!net_eq(sock_net(sk), net))
-				continue;
-			if (num < snum)
-				goto next;
-			rc = __smc_diag_dump(sk, skb, cb, nlmsg_data(cb->nlh), bc);
-			if (rc < 0)
-				goto out;
+	sk_for_each(sk, head) {
+		if (!net_eq(sock_net(sk), net))
+			continue;
+		if (num < snum)
+			goto next;
+		rc = __smc_diag_dump(sk, skb, cb, nlmsg_data(cb->nlh), bc);
+		if (rc < 0)
+			goto out;
 next:
-			num++;
-		}
+		num++;
 	}
 
 out:
