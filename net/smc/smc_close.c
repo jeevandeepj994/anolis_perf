@@ -25,18 +25,15 @@ void smc_clcsock_release(struct smc_sock *smc)
 {
 	struct socket *tcp;
 
-	if (smc->listen_smc && !smc->use_fallback &&
-	    current_work() != &smc->smc_listen_work)
+	if (smc->listen_smc && current_work() != &smc->smc_listen_work)
 		cancel_work_sync(&smc->smc_listen_work);
-	down_write(&smc->clcsock_release_lock);
-	/* don't release clcsock for eRDMA */
+	mutex_lock(&smc->clcsock_release_lock);
 	if (smc->clcsock) {
 		tcp = smc->clcsock;
 		smc->clcsock = NULL;
-		if (!smc->keep_clcsock)
-			sock_release(tcp);
+		sock_release(tcp);
 	}
-	up_write(&smc->clcsock_release_lock);
+	mutex_unlock(&smc->clcsock_release_lock);
 }
 
 static void smc_close_cleanup_listen(struct sock *parent)
@@ -202,7 +199,6 @@ int smc_close_active(struct smc_sock *smc)
 	long timeout;
 	int rc = 0;
 	int rc1 = 0;
-	int i = 0;
 
 	timeout = current->flags & PF_EXITING ?
 		  0 : sock_flag(sk, SOCK_LINGER) ?
@@ -227,8 +223,7 @@ again:
 		}
 		smc_close_cleanup_listen(sk);
 		release_sock(sk);
-		for (i = 0; i < SMC_MAX_TCP_LISTEN_WORKS; i++)
-			flush_work(&smc->tcp_listen_works[i].work);
+		flush_work(&smc->tcp_listen_work);
 		lock_sock(sk);
 		break;
 	case SMC_ACTIVE:
@@ -244,8 +239,7 @@ again:
 			/* actively shutdown clcsock before peer close it,
 			 * prevent peer from entering TIME_WAIT state.
 			 */
-			if (smc->clcsock && smc->clcsock->sk &&
-			    !smc->keep_clcsock) {
+			if (smc->clcsock && smc->clcsock->sk) {
 				rc1 = kernel_sock_shutdown(smc->clcsock,
 							   SHUT_RDWR);
 				rc = rc ? rc : rc1;

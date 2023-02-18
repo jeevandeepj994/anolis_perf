@@ -30,13 +30,22 @@
 
 #include "smc.h"
 #include "smc_wr.h"
-#include "smc_dim.h"
 
 #define SMC_WR_MAX_POLL_CQE 10	/* max. # of compl. queue elements in 1 poll */
 
 #define SMC_WR_RX_HASH_BITS 4
 static DEFINE_HASHTABLE(smc_wr_rx_hash, SMC_WR_RX_HASH_BITS);
 static DEFINE_SPINLOCK(smc_wr_rx_hash_lock);
+
+struct smc_wr_tx_pend {	/* control data for a pending send request */
+	u64			wr_id;		/* work request id sent */
+	smc_wr_tx_handler	handler;
+	enum ib_wc_status	wc_status;	/* CQE status */
+	struct smc_link		*link;
+	u32			idx;
+	struct smc_wr_tx_pend_priv priv;
+	u8			compl_requested;
+};
 
 /******************************** send queue *********************************/
 
@@ -121,8 +130,40 @@ static inline void smc_wr_tx_process_cqe(struct ib_wc *wc)
 	}
 	if (pnd_snd.handler)
 		pnd_snd.handler(&pnd_snd.priv, link, wc->status);
-	if (wq_has_sleeper(&link->wr_tx_wait))
-		wake_up(&link->wr_tx_wait);
+	wake_up(&link->wr_tx_wait);
+}
+
+static void smc_wr_tx_tasklet_fn(struct tasklet_struct *t)
+{
+	struct smc_ib_device *dev = from_tasklet(dev, t, send_tasklet);
+	struct ib_wc wc[SMC_WR_MAX_POLL_CQE];
+	int i = 0, rc;
+	int polled = 0;
+
+again:
+	polled++;
+	do {
+		memset(&wc, 0, sizeof(wc));
+		rc = ib_poll_cq(dev->roce_cq_send, SMC_WR_MAX_POLL_CQE, wc);
+		if (polled == 1) {
+			ib_req_notify_cq(dev->roce_cq_send,
+					 IB_CQ_NEXT_COMP |
+					 IB_CQ_REPORT_MISSED_EVENTS);
+		}
+		if (!rc)
+			break;
+		for (i = 0; i < rc; i++)
+			smc_wr_tx_process_cqe(&wc[i]);
+	} while (rc > 0);
+	if (polled == 1)
+		goto again;
+}
+
+void smc_wr_tx_cq_handler(struct ib_cq *ib_cq, void *cq_context)
+{
+	struct smc_ib_device *dev = (struct smc_ib_device *)cq_context;
+
+	tasklet_schedule(&dev->send_tasklet);
 }
 
 /*---------------------------- request submission ---------------------------*/
@@ -132,16 +173,11 @@ static inline int smc_wr_tx_get_free_slot_index(struct smc_link *link, u32 *idx)
 	*idx = link->wr_tx_cnt;
 	if (!smc_link_sendable(link))
 		return -ENOLINK;
-
-	if (!smc_wr_tx_get_credit(link))
-		return -EBUSY;
-
 	for_each_clear_bit(*idx, link->wr_tx_mask, link->wr_tx_cnt) {
 		if (!test_and_set_bit(*idx, link->wr_tx_mask))
 			return 0;
 	}
 	*idx = link->wr_tx_cnt;
-	smc_wr_tx_put_credits(link, 1, false);
 	return -EBUSY;
 }
 
@@ -247,7 +283,7 @@ int smc_wr_tx_put_slot(struct smc_link *link,
 		memset(&link->wr_tx_bufs[idx], 0,
 		       sizeof(link->wr_tx_bufs[idx]));
 		test_and_clear_bit(idx, link->wr_tx_mask);
-		smc_wr_tx_put_credits(link, 1, true);
+		wake_up(&link->wr_tx_wait);
 		return 1;
 	} else if (link->lgr->smc_version == SMC_V2 &&
 		   pend->idx == link->wr_tx_cnt) {
@@ -270,6 +306,8 @@ int smc_wr_tx_send(struct smc_link *link, struct smc_wr_tx_pend_priv *priv)
 	struct smc_wr_tx_pend *pend;
 	int rc;
 
+	ib_req_notify_cq(link->smcibdev->roce_cq_send,
+			 IB_CQ_NEXT_COMP | IB_CQ_REPORT_MISSED_EVENTS);
 	pend = container_of(priv, struct smc_wr_tx_pend, priv);
 	rc = ib_post_send(link->roce_qp, &link->wr_tx_ibs[pend->idx], NULL);
 	if (rc) {
@@ -285,6 +323,8 @@ int smc_wr_tx_v2_send(struct smc_link *link, struct smc_wr_tx_pend_priv *priv,
 	int rc;
 
 	link->wr_tx_v2_ib->sg_list[0].length = len;
+	ib_req_notify_cq(link->smcibdev->roce_cq_send,
+			 IB_CQ_NEXT_COMP | IB_CQ_REPORT_MISSED_EVENTS);
 	rc = ib_post_send(link->roce_qp, link->wr_tx_v2_ib, NULL);
 	if (rc) {
 		smc_wr_tx_put_slot(link, priv);
@@ -327,6 +367,8 @@ int smc_wr_reg_send(struct smc_link *link, struct ib_mr *mr)
 {
 	int rc;
 
+	ib_req_notify_cq(link->smcibdev->roce_cq_send,
+			 IB_CQ_NEXT_COMP | IB_CQ_REPORT_MISSED_EVENTS);
 	link->wr_reg_state = POSTED;
 	link->wr_reg.wr.wr_id = (u64)(uintptr_t)mr;
 	link->wr_reg.mr = mr;
@@ -389,8 +431,6 @@ out_unlock:
 static inline void smc_wr_rx_demultiplex(struct ib_wc *wc)
 {
 	struct smc_link *link = (struct smc_link *)wc->qp->qp_context;
-	int rx_buf_size = (link->lgr->smc_version == SMC_V2) ?
-			  SMC_WR_BUF_V2_SIZE : SMC_WR_BUF_SIZE;
 	struct smc_wr_rx_handler *handler;
 	struct smc_wr_rx_hdr *wr_rx;
 	u64 temp_wr_id;
@@ -398,42 +438,72 @@ static inline void smc_wr_rx_demultiplex(struct ib_wc *wc)
 
 	if (wc->byte_len < sizeof(*wr_rx))
 		return; /* short message */
-	temp_wr_id = wc->wr_id / 2;
+	temp_wr_id = wc->wr_id;
 	index = do_div(temp_wr_id, link->wr_rx_cnt);
-	wr_rx = (struct smc_wr_rx_hdr *)((u8 *)link->wr_rx_bufs + index * rx_buf_size);
+	wr_rx = (struct smc_wr_rx_hdr *)&link->wr_rx_bufs[index];
 	hash_for_each_possible(smc_wr_rx_hash, handler, list, wr_rx->type) {
 		if (handler->type == wr_rx->type)
 			handler->handler(wc, wr_rx);
 	}
 }
 
-static inline void smc_wr_rx_process_cqe(struct ib_wc *wc)
+static inline void smc_wr_rx_process_cqes(struct ib_wc wc[], int num)
 {
-	struct smc_link *link = wc->qp->qp_context;
+	struct smc_link *link;
+	int i;
 
-	if (wc->status == IB_WC_SUCCESS) {
-		link->wr_rx_tstamp = jiffies;
-		smc_wr_rx_demultiplex(wc);
-		smc_wr_rx_post(link); /* refill WR RX */
-	} else {
-		/* handle status errors */
-		switch (wc->status) {
-		case IB_WC_RETRY_EXC_ERR:
-		case IB_WC_RNR_RETRY_EXC_ERR:
-		case IB_WC_WR_FLUSH_ERR:
-			smcr_link_down_cond_sched(link);
-			break;
-		default:
+	for (i = 0; i < num; i++) {
+		link = wc[i].qp->qp_context;
+		if (wc[i].status == IB_WC_SUCCESS) {
+			link->wr_rx_tstamp = jiffies;
+			smc_wr_rx_demultiplex(&wc[i]);
 			smc_wr_rx_post(link); /* refill WR RX */
-			break;
+		} else {
+			/* handle status errors */
+			switch (wc[i].status) {
+			case IB_WC_RETRY_EXC_ERR:
+			case IB_WC_RNR_RETRY_EXC_ERR:
+			case IB_WC_WR_FLUSH_ERR:
+				smcr_link_down_cond_sched(link);
+				break;
+			default:
+				smc_wr_rx_post(link); /* refill WR RX */
+				break;
+			}
 		}
 	}
+}
 
-	if (smc_wr_rx_credits_need_announce(link) &&
-	    !test_bit(SMC_LINKFLAG_ANNOUNCE_PENDING, &link->flags)) {
-		set_bit(SMC_LINKFLAG_ANNOUNCE_PENDING, &link->flags);
-		schedule_work(&link->credits_announce_work);
-	}
+static void smc_wr_rx_tasklet_fn(struct tasklet_struct *t)
+{
+	struct smc_ib_device *dev = from_tasklet(dev, t, recv_tasklet);
+	struct ib_wc wc[SMC_WR_MAX_POLL_CQE];
+	int polled = 0;
+	int rc;
+
+again:
+	polled++;
+	do {
+		memset(&wc, 0, sizeof(wc));
+		rc = ib_poll_cq(dev->roce_cq_recv, SMC_WR_MAX_POLL_CQE, wc);
+		if (polled == 1) {
+			ib_req_notify_cq(dev->roce_cq_recv,
+					 IB_CQ_SOLICITED_MASK
+					 | IB_CQ_REPORT_MISSED_EVENTS);
+		}
+		if (!rc)
+			break;
+		smc_wr_rx_process_cqes(&wc[0], rc);
+	} while (rc > 0);
+	if (polled == 1)
+		goto again;
+}
+
+void smc_wr_rx_cq_handler(struct ib_cq *ib_cq, void *cq_context)
+{
+	struct smc_ib_device *dev = (struct smc_ib_device *)cq_context;
+
+	tasklet_schedule(&dev->recv_tasklet);
 }
 
 int smc_wr_rx_post_init(struct smc_link *link)
@@ -443,50 +513,7 @@ int smc_wr_rx_post_init(struct smc_link *link)
 
 	for (i = 0; i < link->wr_rx_cnt; i++)
 		rc = smc_wr_rx_post(link);
-	// credits have already been announced to peer
-	atomic_set(&link->local_rq_credits, 0);
 	return rc;
-}
-
-static void smc_wr_tasklet_fn(struct tasklet_struct *t)
-{
-	struct smc_ib_cq *smcibcq = from_tasklet(smcibcq, t, tasklet);
-	struct ib_wc wc[SMC_WR_MAX_POLL_CQE];
-	int i, rc, completed = 0;
-
-again:
-	do {
-		memset(&wc, 0, sizeof(wc));
-		rc = ib_poll_cq(smcibcq->ib_cq, SMC_WR_MAX_POLL_CQE, wc);
-		for (i = 0; i < rc; i++) {
-			if (smc_wr_id_is_rx(wc[i].wr_id))
-				smc_wr_rx_process_cqe(&wc[i]);
-			else
-				smc_wr_tx_process_cqe(&wc[i]);
-		}
-
-		if (rc > 0)
-			completed += rc;
-	} while (rc > 0);
-
-	/* With IB_CQ_REPORT_MISSED_EVENTS, if ib_req_notify_cq() returns 0,
-	 * then it is safe to wait for the next event; else we must poll the
-	 * CQ again to make sure we won't miss any event.
-	 */
-	if (ib_req_notify_cq(smcibcq->ib_cq,
-			     IB_CQ_NEXT_COMP |
-			     IB_CQ_REPORT_MISSED_EVENTS) > 0)
-		goto again;
-
-	if (smcibcq->ib_cq->dim)
-		smc_dim(smcibcq->ib_cq->dim, completed);
-}
-
-void smc_wr_cq_handler(struct ib_cq *ib_cq, void *cq_context)
-{
-	struct smc_ib_cq *smcibcq = (struct smc_ib_cq *)cq_context;
-
-	tasklet_schedule(&smcibcq->tasklet);
 }
 
 /***************************** init, exit, misc ******************************/
@@ -520,12 +547,13 @@ void smc_wr_remember_qp_attr(struct smc_link *lnk)
 
 	lnk->wr_tx_cnt = min_t(size_t, SMC_WR_BUF_CNT,
 			       lnk->qp_attr.cap.max_send_wr);
-	lnk->wr_rx_cnt = min_t(size_t, SMC_WR_BUF_CNT,
+	lnk->wr_rx_cnt = min_t(size_t, SMC_WR_BUF_CNT * 3,
 			       lnk->qp_attr.cap.max_recv_wr);
 }
 
 static void smc_wr_init_sge(struct smc_link *lnk)
 {
+	int sges_per_buf = (lnk->lgr->smc_version == SMC_V2) ? 2 : 1;
 	bool send_inline = (lnk->qp_attr.cap.max_inline_data > SMC_WR_TX_SIZE);
 	u32 i;
 
@@ -546,7 +574,8 @@ static void smc_wr_init_sge(struct smc_link *lnk)
 		lnk->wr_tx_ibs[i].sg_list = &lnk->wr_tx_sges[i];
 		lnk->wr_tx_ibs[i].num_sge = 1;
 		lnk->wr_tx_ibs[i].opcode = IB_WR_SEND;
-		lnk->wr_tx_ibs[i].send_flags = IB_SEND_SIGNALED;
+		lnk->wr_tx_ibs[i].send_flags =
+			IB_SEND_SIGNALED | IB_SEND_SOLICITED;
 		if (send_inline)
 			lnk->wr_tx_ibs[i].send_flags |= IB_SEND_INLINE;
 		lnk->wr_tx_rdmas[i].wr_tx_rdma[0].wr.opcode = IB_WR_RDMA_WRITE;
@@ -566,7 +595,8 @@ static void smc_wr_init_sge(struct smc_link *lnk)
 		lnk->wr_tx_v2_ib->sg_list = lnk->wr_tx_v2_sge;
 		lnk->wr_tx_v2_ib->num_sge = 1;
 		lnk->wr_tx_v2_ib->opcode = IB_WR_SEND;
-		lnk->wr_tx_v2_ib->send_flags = IB_SEND_SIGNALED;
+		lnk->wr_tx_v2_ib->send_flags =
+			IB_SEND_SIGNALED | IB_SEND_SOLICITED;
 	}
 
 	/* With SMC-Rv2 there can be messages larger than SMC_WR_TX_SIZE.
@@ -574,27 +604,25 @@ static void smc_wr_init_sge(struct smc_link *lnk)
 	 * and the same buffer for all sges. When a larger message arrived then
 	 * the content of the first small sge is copied to the beginning of
 	 * the larger spillover buffer, allowing easy data mapping.
-	 *
-	 * Noticed that the following is a temporary workaround in eRDMA
-	 * situation:
-	 * wr_rx_bufs is alloced as SMC_WR_BUF_SIZE with SMC-Rv1, and as
-	 * SMC_WR_BUF_V2_SIZE with SMC-Rv2. This will bring extra memory
-	 * consumption in SMC-Rv2 compared to upstream design, and will
-	 * be revert once eRDMA supports max_recv_sge larger than 1.
 	 */
 	for (i = 0; i < lnk->wr_rx_cnt; i++) {
-		int rx_msg_size = (lnk->lgr->smc_version == SMC_V2) ?
-				  SMC_WR_BUF_V2_SIZE : SMC_WR_TX_SIZE;
-		int rx_buf_size = (lnk->lgr->smc_version == SMC_V2) ?
-				  SMC_WR_BUF_V2_SIZE : SMC_WR_BUF_SIZE;
+		int x = i * sges_per_buf;
 
-		lnk->wr_rx_sges[i].addr =
-			lnk->wr_rx_dma_addr + i * rx_buf_size;
-		lnk->wr_rx_sges[i].length = rx_msg_size;
-		lnk->wr_rx_sges[i].lkey = lnk->roce_pd->local_dma_lkey;
+		lnk->wr_rx_sges[x].addr =
+			lnk->wr_rx_dma_addr + i * SMC_WR_BUF_SIZE;
+		lnk->wr_rx_sges[x].length = SMC_WR_TX_SIZE;
+		lnk->wr_rx_sges[x].lkey = lnk->roce_pd->local_dma_lkey;
+		if (lnk->lgr->smc_version == SMC_V2) {
+			lnk->wr_rx_sges[x + 1].addr =
+					lnk->wr_rx_v2_dma_addr + SMC_WR_TX_SIZE;
+			lnk->wr_rx_sges[x + 1].length =
+					SMC_WR_BUF_V2_SIZE - SMC_WR_TX_SIZE;
+			lnk->wr_rx_sges[x + 1].lkey =
+					lnk->roce_pd->local_dma_lkey;
+		}
 		lnk->wr_rx_ibs[i].next = NULL;
-		lnk->wr_rx_ibs[i].sg_list = &lnk->wr_rx_sges[i];
-		lnk->wr_rx_ibs[i].num_sge = 1;
+		lnk->wr_rx_ibs[i].sg_list = &lnk->wr_rx_sges[x];
+		lnk->wr_rx_ibs[i].num_sge = sges_per_buf;
 	}
 	lnk->wr_reg.wr.next = NULL;
 	lnk->wr_reg.wr.num_sge = 0;
@@ -624,6 +652,12 @@ void smc_wr_free_link(struct smc_link *lnk)
 				    DMA_FROM_DEVICE);
 		lnk->wr_rx_dma_addr = 0;
 	}
+	if (lnk->wr_rx_v2_dma_addr) {
+		ib_dma_unmap_single(ibdev, lnk->wr_rx_v2_dma_addr,
+				    SMC_WR_BUF_V2_SIZE,
+				    DMA_FROM_DEVICE);
+		lnk->wr_rx_v2_dma_addr = 0;
+	}
 	if (lnk->wr_tx_dma_addr) {
 		ib_dma_unmap_single(ibdev, lnk->wr_tx_dma_addr,
 				    SMC_WR_BUF_SIZE * lnk->wr_tx_cnt,
@@ -643,6 +677,8 @@ void smc_wr_free_lgr_mem(struct smc_link_group *lgr)
 	if (lgr->smc_version < SMC_V2)
 		return;
 
+	kfree(lgr->wr_rx_buf_v2);
+	lgr->wr_rx_buf_v2 = NULL;
 	kfree(lgr->wr_tx_buf_v2);
 	lgr->wr_tx_buf_v2 = NULL;
 }
@@ -684,22 +720,26 @@ int smc_wr_alloc_lgr_mem(struct smc_link_group *lgr)
 	if (lgr->smc_version < SMC_V2)
 		return 0;
 
-	lgr->wr_tx_buf_v2 = kzalloc(SMC_WR_BUF_V2_SIZE, GFP_KERNEL);
-	if (!lgr->wr_tx_buf_v2)
+	lgr->wr_rx_buf_v2 = kzalloc(SMC_WR_BUF_V2_SIZE, GFP_KERNEL);
+	if (!lgr->wr_rx_buf_v2)
 		return -ENOMEM;
+	lgr->wr_tx_buf_v2 = kzalloc(SMC_WR_BUF_V2_SIZE, GFP_KERNEL);
+	if (!lgr->wr_tx_buf_v2) {
+		kfree(lgr->wr_rx_buf_v2);
+		return -ENOMEM;
+	}
 	return 0;
 }
 
 int smc_wr_alloc_link_mem(struct smc_link *link)
 {
-	int rx_buf_size = (link->lgr->smc_version == SMC_V2) ?
-			  SMC_WR_BUF_V2_SIZE : SMC_WR_BUF_SIZE;
+	int sges_per_buf = link->lgr->smc_version == SMC_V2 ? 2 : 1;
 
 	/* allocate link related memory */
 	link->wr_tx_bufs = kcalloc(SMC_WR_BUF_CNT, SMC_WR_BUF_SIZE, GFP_KERNEL);
 	if (!link->wr_tx_bufs)
 		goto no_mem;
-	link->wr_rx_bufs = kcalloc(SMC_WR_BUF_CNT, rx_buf_size,
+	link->wr_rx_bufs = kcalloc(SMC_WR_BUF_CNT * 3, SMC_WR_BUF_SIZE,
 				   GFP_KERNEL);
 	if (!link->wr_rx_bufs)
 		goto no_mem_wr_tx_bufs;
@@ -707,7 +747,7 @@ int smc_wr_alloc_link_mem(struct smc_link *link)
 				  GFP_KERNEL);
 	if (!link->wr_tx_ibs)
 		goto no_mem_wr_rx_bufs;
-	link->wr_rx_ibs = kcalloc(SMC_WR_BUF_CNT,
+	link->wr_rx_ibs = kcalloc(SMC_WR_BUF_CNT * 3,
 				  sizeof(link->wr_rx_ibs[0]),
 				  GFP_KERNEL);
 	if (!link->wr_rx_ibs)
@@ -726,7 +766,8 @@ int smc_wr_alloc_link_mem(struct smc_link *link)
 				   GFP_KERNEL);
 	if (!link->wr_tx_sges)
 		goto no_mem_wr_tx_rdma_sges;
-	link->wr_rx_sges = kcalloc(SMC_WR_BUF_CNT, sizeof(link->wr_rx_sges[0]),
+	link->wr_rx_sges = kcalloc(SMC_WR_BUF_CNT * 3,
+				   sizeof(link->wr_rx_sges[0]) * sges_per_buf,
 				   GFP_KERNEL);
 	if (!link->wr_rx_sges)
 		goto no_mem_wr_tx_sges;
@@ -792,33 +833,25 @@ no_mem:
 
 void smc_wr_remove_dev(struct smc_ib_device *smcibdev)
 {
-	int i;
-
-	for (i = 0; i < smcibdev->num_cq; i++)
-		tasklet_kill(&smcibdev->smcibcq[i].tasklet);
+	tasklet_kill(&smcibdev->recv_tasklet);
+	tasklet_kill(&smcibdev->send_tasklet);
 }
 
 void smc_wr_add_dev(struct smc_ib_device *smcibdev)
 {
-	int i;
-
-	for (i = 0; i < smcibdev->num_cq; i++) {
-		tasklet_setup(&smcibdev->smcibcq[i].tasklet,
-			      smc_wr_tasklet_fn);
-	}
+	tasklet_setup(&smcibdev->recv_tasklet, smc_wr_rx_tasklet_fn);
+	tasklet_setup(&smcibdev->send_tasklet, smc_wr_tx_tasklet_fn);
 }
 
 int smc_wr_create_link(struct smc_link *lnk)
 {
-	int rx_buf_size = (lnk->lgr->smc_version == SMC_V2) ?
-			  SMC_WR_BUF_V2_SIZE : SMC_WR_BUF_SIZE;
 	struct ib_device *ibdev = lnk->smcibdev->ibdev;
 	int rc = 0;
 
 	smc_wr_tx_set_wr_id(&lnk->wr_tx_id, 0);
-	lnk->wr_rx_id = 1;
+	lnk->wr_rx_id = 0;
 	lnk->wr_rx_dma_addr = ib_dma_map_single(
-		ibdev, lnk->wr_rx_bufs,	rx_buf_size * lnk->wr_rx_cnt,
+		ibdev, lnk->wr_rx_bufs,	SMC_WR_BUF_SIZE * lnk->wr_rx_cnt,
 		DMA_FROM_DEVICE);
 	if (ib_dma_mapping_error(ibdev, lnk->wr_rx_dma_addr)) {
 		lnk->wr_rx_dma_addr = 0;
@@ -826,6 +859,14 @@ int smc_wr_create_link(struct smc_link *lnk)
 		goto out;
 	}
 	if (lnk->lgr->smc_version == SMC_V2) {
+		lnk->wr_rx_v2_dma_addr = ib_dma_map_single(ibdev,
+			lnk->lgr->wr_rx_buf_v2, SMC_WR_BUF_V2_SIZE,
+			DMA_FROM_DEVICE);
+		if (ib_dma_mapping_error(ibdev, lnk->wr_rx_v2_dma_addr)) {
+			lnk->wr_rx_v2_dma_addr = 0;
+			rc = -EIO;
+			goto dma_unmap;
+		}
 		lnk->wr_tx_v2_dma_addr = ib_dma_map_single(ibdev,
 			lnk->lgr->wr_tx_buf_v2, SMC_WR_BUF_V2_SIZE,
 			DMA_TO_DEVICE);
@@ -848,19 +889,15 @@ int smc_wr_create_link(struct smc_link *lnk)
 	atomic_set(&lnk->wr_tx_refcnt, 0);
 	init_waitqueue_head(&lnk->wr_reg_wait);
 	atomic_set(&lnk->wr_reg_refcnt, 0);
-	atomic_set(&lnk->peer_rq_credits, 0);
-	atomic_set(&lnk->local_rq_credits, 0);
-	lnk->flags = 0;
-	lnk->local_cr_watermark_high = max(lnk->wr_rx_cnt / 3, 1U);
-	lnk->peer_cr_watermark_low = 0;
-
-	/* if credits accumlated less than 10% of wr_rx_cnt(at least 5),
-	 * will not be announced by cdc msg.
-	 */
-	lnk->credits_update_limit = max(lnk->wr_rx_cnt / 10, 5U);
 	return rc;
 
 dma_unmap:
+	if (lnk->wr_rx_v2_dma_addr) {
+		ib_dma_unmap_single(ibdev, lnk->wr_rx_v2_dma_addr,
+				    SMC_WR_BUF_V2_SIZE,
+				    DMA_FROM_DEVICE);
+		lnk->wr_rx_v2_dma_addr = 0;
+	}
 	if (lnk->wr_tx_v2_dma_addr) {
 		ib_dma_unmap_single(ibdev, lnk->wr_tx_v2_dma_addr,
 				    SMC_WR_BUF_V2_SIZE,

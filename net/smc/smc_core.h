@@ -15,19 +15,13 @@
 #include <linux/atomic.h>
 #include <linux/smc.h>
 #include <linux/pci.h>
-#include <linux/rhashtable.h>
 #include <rdma/ib_verbs.h>
 #include <net/genetlink.h>
 
 #include "smc.h"
 #include "smc_ib.h"
 
-#define SMC_RMBS_PER_LGR_MAX	32	/* max. # of RMBs per link group. Correspondingly,
-					 * SMC_WR_BUF_CNT should not be less than 2 *
-					 * SMC_RMBS_PER_LGR_MAX, since every connection at
-					 * least has two rq/sq credits in average, otherwise
-					 * may result in waiting for credits in sending process.
-					 */
+#define SMC_RMBS_PER_LGR_MAX	255	/* max. # of RMBs per link group */
 
 struct smc_lgr_list {			/* list of link group definition */
 	struct list_head	list;
@@ -86,8 +80,6 @@ struct smc_rdma_wr {				/* work requests per message
 
 #define SMC_LGR_ID_SIZE		4
 
-#define SMC_LINKFLAG_ANNOUNCE_PENDING	0
-
 struct smc_link {
 	struct iw_ext_conn_param	iw_conn_param;
 	struct smc_ib_device	*smcibdev;	/* ib-device */
@@ -95,7 +87,6 @@ struct smc_link {
 	struct ib_pd		*roce_pd;	/* IB protection domain,
 						 * unique for every RoCE QP
 						 */
-	struct smc_ib_cq	*smcibcq;	/* cq for recv & send */
 	struct ib_qp		*roce_qp;	/* IB queue pair */
 	struct ib_qp_attr	qp_attr;	/* IB queue pair attributes */
 
@@ -117,13 +108,13 @@ struct smc_link {
 	u32			wr_tx_cnt;	/* number of WR send buffers */
 	wait_queue_head_t	wr_tx_wait;	/* wait for free WR send buf */
 	atomic_t		wr_tx_refcnt;	/* tx refs to link */
-	rwlock_t		rtokens_lock;
 
 	struct smc_wr_buf	*wr_rx_bufs;	/* WR recv payload buffers */
 	struct ib_recv_wr	*wr_rx_ibs;	/* WR recv meta data */
 	struct ib_sge		*wr_rx_sges;	/* WR recv scatter meta data */
 	/* above three vectors have wr_rx_cnt elements and use the same index */
 	dma_addr_t		wr_rx_dma_addr;	/* DMA address of wr_rx_bufs */
+	dma_addr_t		wr_rx_v2_dma_addr; /* DMA address of v2 rx buf*/
 	u64			wr_rx_id;	/* seq # of last recv WR */
 	u32			wr_rx_cnt;	/* number of WR recv buffers */
 	unsigned long		wr_rx_tstamp;	/* jiffies when last buf rx */
@@ -132,15 +123,6 @@ struct smc_link {
 	wait_queue_head_t	wr_reg_wait;	/* wait for wr_reg result */
 	atomic_t		wr_reg_refcnt;	/* reg refs to link */
 	enum smc_wr_reg_state	wr_reg_state;	/* state of wr_reg request */
-
-	atomic_t	peer_rq_credits;	/* credits for peer rq flowctrl */
-	atomic_t	local_rq_credits;	/* credits for local rq flowctrl */
-	u8		credits_enable;		/* credits enable flag, set when negotiation */
-	u8		local_cr_watermark_high;	/* local rq credits watermark */
-	u8		peer_cr_watermark_low;	/* peer rq credits watermark */
-	u8		credits_update_limit;	/* credits update limit for cdc msg */
-	struct work_struct	credits_announce_work;	/* work for credits announcement */
-	unsigned long	flags;	/* link flags, SMC_LINKFLAG_ANNOUNCE_PENDING .etc */
 
 	u8			gid[SMC_GID_SIZE];/* gid matching used vlan id*/
 	u8			sgid_index;	/* gid index for vlan id      */
@@ -168,7 +150,6 @@ struct smc_link {
 	struct completion	llc_testlink_resp; /* wait for rx of testlink */
 	int			llc_testlink_time; /* testlink interval */
 	atomic_t		conn_cnt; /* connections on this link */
-	struct socket		*clcsock;	/* keep for eRDMA */
 };
 
 /* For now we just allow one parallel link per link group. The SMC protocol
@@ -260,26 +241,19 @@ struct smc_llc_qentry;
 struct smc_llc_flow {
 	enum smc_llc_flowtype type;
 	struct smc_llc_qentry *qentry;
-	refcount_t	      parallel_refcnt;
 };
-
-struct smc_lgr_decision_maker;
 
 struct smc_link_group {
 	struct list_head	list;
 	struct rb_root		conns_all;	/* connection tree */
 	rwlock_t		conns_lock;	/* protects conns_all */
 	unsigned int		conns_num;	/* current # of connections */
-	atomic_t		rtoken_pendings;/* number of connection that
-						 * lgr assigned but no rtoken got yet
-						 */
 	unsigned short		vlan_id;	/* vlan id of link group */
 
 	struct list_head	sndbufs[SMC_RMBE_SIZES];/* tx buffers */
-	struct rw_semaphore	sndbufs_lock;	/* protects tx buffers */
+	struct mutex		sndbufs_lock;	/* protects tx buffers */
 	struct list_head	rmbs[SMC_RMBE_SIZES];	/* rx buffers */
-	struct rw_semaphore	rmbs_lock;	/* protects rx buffers */
-	u8			first_contact_done; /* if first contact succeed */
+	struct mutex		rmbs_lock;	/* protects rx buffers */
 
 	u8			id[SMC_LGR_ID_SIZE];	/* unique lgr id */
 	struct delayed_work	free_work;	/* delayed freeing of an lgr */
@@ -302,6 +276,8 @@ struct smc_link_group {
 						/* client or server */
 			struct smc_link		lnk[SMC_LINKS_PER_LGR_MAX];
 						/* smc link */
+			struct smc_wr_v2_buf	*wr_rx_buf_v2;
+						/* WR v2 recv payload buffer */
 			struct smc_wr_v2_buf	*wr_tx_buf_v2;
 						/* WR v2 send payload buffer */
 			char			peer_systemid[SMC_SYSTEMID_LEN];
@@ -321,7 +297,7 @@ struct smc_link_group {
 						/* queue for llc events */
 			spinlock_t		llc_event_q_lock;
 						/* protects llc_event_q */
-			struct rw_semaphore	llc_conf_mutex;
+			struct mutex		llc_conf_mutex;
 						/* protects lgr reconfig. */
 			struct work_struct	llc_add_link_work;
 			struct work_struct	llc_del_link_work;
@@ -345,7 +321,6 @@ struct smc_link_group {
 						/* rsn code for termination */
 			u8			nexthop_mac[ETH_ALEN];
 			u8			uses_gateway;
-			bool		disable_multiple_link;
 			__be32			saddr;
 						/* net namespace */
 			struct net		*net;
@@ -359,8 +334,6 @@ struct smc_link_group {
 						/* peer triggered shutdownn */
 		};
 	};
-	struct smc_lgr_decision_maker	*ldm;
-						/* who decides to create this lgr */
 };
 
 struct smc_clc_msg_local;
@@ -399,9 +372,6 @@ struct smc_init_info {
 	unsigned short		vlan_id;
 	u32			rc;
 	u8			negotiated_eid[SMC_MAX_EID_LEN];
-	struct smc_lgr_decision_maker *ldm;
-	u8			advise;
-	void			*private;
 	/* SMC-R */
 	u8			smcr_version;
 	u8			check_smcrv2;
@@ -420,7 +390,6 @@ struct smc_init_info {
 	u8			ism_offered_cnt; /* # of ISM devices offered */
 	u8			ism_selected;    /* index of selected ISM dev*/
 	u8			smcd_version;
-	u8			role;
 };
 
 /* Find the connection associated with the given alert token in the link group.
@@ -584,44 +553,10 @@ struct smc_link *smc_switch_conns(struct smc_link_group *lgr,
 				  struct smc_link *from_lnk, bool is_dev_err);
 void smcr_link_down_cond(struct smc_link *lnk);
 void smcr_link_down_cond_sched(struct smc_link *lnk);
-int smcr_iw_net_reserve_ports(struct net *net);
-void smcr_iw_net_release_ports(struct net *net);
 int smc_nl_get_sys_info(struct sk_buff *skb, struct netlink_callback *cb);
 int smcr_nl_get_lgr(struct sk_buff *skb, struct netlink_callback *cb);
 int smcr_nl_get_link(struct sk_buff *skb, struct netlink_callback *cb);
 int smcd_nl_get_lgr(struct sk_buff *skb, struct netlink_callback *cb);
-
-void smc_lgr_decision_maker_on_first_contact_done(struct smc_init_info *ini, bool success);
-
-static inline void smc_lgr_decision_maker_on_first_contact_success(struct smc_sock *smc,
-								   struct smc_init_info *ini)
-{
-	smc->conn.lgr->first_contact_done = 1;
-	/* make sure first_contact_done can be seen after wakeup */
-	smp_mb();
-	smc_lgr_decision_maker_on_first_contact_done(ini, 1 /* success */);
-}
-
-static inline void smc_lgr_decision_maker_on_first_contact_fail(struct smc_init_info *ini)
-{
-	smc_lgr_decision_maker_on_first_contact_done(ini, 0 /* failed */);
-}
-
-static inline void smc_conn_enter_rtoken_pending(struct smc_sock *smc, struct smc_init_info *ini)
-{
-	struct smc_link_group *lgr = smc->conn.lgr;
-
-	if (lgr && !ini->first_contact_local)
-		atomic_inc(&lgr->rtoken_pendings);
-}
-
-static inline void smc_conn_leave_rtoken_pending(struct smc_sock *smc, struct smc_init_info *ini)
-{
-	struct smc_link_group *lgr = smc->conn.lgr;
-
-	if (lgr && !ini->first_contact_local)
-		atomic_dec(&lgr->rtoken_pendings);
-}
 
 static inline struct smc_link_group *smc_get_lgr(struct smc_link *link)
 {
