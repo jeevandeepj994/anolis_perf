@@ -400,15 +400,13 @@ err_map_notify:
 	return ERR_PTR(err);
 }
 
-static int vp_modern_find_vqs(struct virtio_device *vdev, unsigned nvqs,
-			      struct virtqueue *vqs[],
-			      vq_callback_t *callbacks[],
-			      const char * const names[], const bool *ctx,
-			      struct irq_affinity *desc)
+static int _vp_modern_find_vqs(struct virtio_device *vdev,
+			       struct virtio_vqs_vectors *param)
 {
 	struct virtio_pci_device *vp_dev = to_vp_device(vdev);
 	struct virtqueue *vq;
-	int rc = vp_find_vqs(vdev, nvqs, vqs, callbacks, names, ctx, desc);
+
+	int rc = vp_find_vqs(vdev, param);
 
 	if (rc)
 		return rc;
@@ -422,6 +420,30 @@ static int vp_modern_find_vqs(struct virtio_device *vdev, unsigned nvqs,
 	}
 
 	return 0;
+}
+
+static int vp_modern_find_vqs(struct virtio_device *vdev, unsigned int nvqs,
+			      struct virtqueue *vqs[],
+			      vq_callback_t *callbacks[],
+			      const char * const names[], const bool *ctx,
+			      struct irq_affinity *desc)
+{
+	struct virtio_vqs_vectors param = {};
+
+	param.nvqs = nvqs;
+	param.vqs = vqs;
+	param.callbacks = callbacks;
+	param.names = names;
+	param.ctx = ctx;
+	param.desc = desc;
+
+	return _vp_modern_find_vqs(vdev, &param);
+}
+
+static int vp_modern_find_vqs_vectors(struct virtio_device *vdev,
+				      struct virtio_vqs_vectors *param)
+{
+	return _vp_modern_find_vqs(vdev, param);
 }
 
 static void del_vq(struct virtio_pci_vq_info *info)
@@ -545,6 +567,7 @@ static const struct virtio_config_ops virtio_pci_config_nodev_ops = {
 	.set_status	= vp_set_status,
 	.reset		= vp_reset,
 	.find_vqs	= vp_modern_find_vqs,
+	.find_vqs_vectors = vp_modern_find_vqs_vectors,
 	.del_vqs	= vp_del_vqs,
 	.get_features	= vp_get_features,
 	.finalize_features = vp_finalize_features,
@@ -552,6 +575,7 @@ static const struct virtio_config_ops virtio_pci_config_nodev_ops = {
 	.set_vq_affinity = vp_set_vq_affinity,
 	.get_vq_affinity = vp_get_vq_affinity,
 	.get_shm_region  = vp_get_shm_region,
+	.vector_to_irq  = vp_irq,
 };
 
 static const struct virtio_config_ops virtio_pci_config_ops = {
@@ -562,6 +586,7 @@ static const struct virtio_config_ops virtio_pci_config_ops = {
 	.set_status	= vp_set_status,
 	.reset		= vp_reset,
 	.find_vqs	= vp_modern_find_vqs,
+	.find_vqs_vectors = vp_modern_find_vqs_vectors,
 	.del_vqs	= vp_del_vqs,
 	.get_features	= vp_get_features,
 	.finalize_features = vp_finalize_features,
@@ -569,6 +594,7 @@ static const struct virtio_config_ops virtio_pci_config_ops = {
 	.set_vq_affinity = vp_set_vq_affinity,
 	.get_vq_affinity = vp_get_vq_affinity,
 	.get_shm_region  = vp_get_shm_region,
+	.vector_to_irq  = vp_irq,
 };
 
 /**

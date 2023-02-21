@@ -2231,6 +2231,7 @@ CONFIG_CB710_DEBUG_ASSUMPTIONS=y
 # CONFIG_MISC_RTSX_USB is not set
 # CONFIG_HABANA_AI is not set
 # CONFIG_UACCE is not set
+CONFIG_VIRTIO_ISM=m
 # end of Misc devices
 
 #

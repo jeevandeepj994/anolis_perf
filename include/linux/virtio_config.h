@@ -16,6 +16,20 @@ struct virtio_shm_region {
 	u64 len;
 };
 
+typedef void vq_callback_t(struct virtqueue *);
+struct virtio_vqs_vectors {
+	unsigned int          nvqs;
+	struct virtqueue     **vqs;
+	vq_callback_t        **callbacks;
+	const char           *const *names;
+	const bool           *ctx;
+	struct irq_affinity  *desc;
+
+	int reserve_vectors;
+	u32 vector_start;
+	u32 vector_end;
+};
+
 /**
  * virtio_config_ops - operations for configuring a virtio device
  * Note: Do not assume that a transport implements all of the operations
@@ -73,8 +87,9 @@ struct virtio_shm_region {
  * @set_vq_affinity: set the affinity for a virtqueue (optional).
  * @get_vq_affinity: get the affinity for a virtqueue (optional).
  * @get_shm_region: get a shared memory region based on the index.
+ * @vector_to_irq: get irq num by vector
+ *	vdev: the virtio_device
  */
-typedef void vq_callback_t(struct virtqueue *);
 struct virtio_config_ops {
 	void (*get)(struct virtio_device *vdev, unsigned offset,
 		    void *buf, unsigned len);
@@ -88,6 +103,7 @@ struct virtio_config_ops {
 			struct virtqueue *vqs[], vq_callback_t *callbacks[],
 			const char * const names[], const bool *ctx,
 			struct irq_affinity *desc);
+	int (*find_vqs_vectors)(struct virtio_device *vdev, struct virtio_vqs_vectors *ctx);
 	void (*del_vqs)(struct virtio_device *);
 	u64 (*get_features)(struct virtio_device *vdev);
 	int (*finalize_features)(struct virtio_device *vdev);
@@ -98,6 +114,7 @@ struct virtio_config_ops {
 			int index);
 	bool (*get_shm_region)(struct virtio_device *vdev,
 			       struct virtio_shm_region *region, u8 id);
+	int (*vector_to_irq)(struct virtio_device *vdev, int vector);
 };
 
 /* If driver didn't advertise the feature, it will never appear. */
@@ -215,6 +232,22 @@ int virtio_find_vqs_ctx(struct virtio_device *vdev, unsigned nvqs,
 {
 	return vdev->config->find_vqs(vdev, nvqs, vqs, callbacks, names, ctx,
 				      desc);
+}
+
+static inline
+int virtio_find_vqs_and_vectors(struct virtio_device *vdev, struct virtio_vqs_vectors *param)
+{
+	return vdev->config->find_vqs_vectors(vdev, param);
+}
+
+/**
+ * virtio_vector_to_irq - get irq num by vector
+ * @dev: the virtio device
+ */
+static inline
+int virtio_vector_to_irq(struct virtio_device *vdev, int vec)
+{
+	return vdev->config->vector_to_irq(vdev, vec);
 }
 
 /**
