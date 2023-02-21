@@ -2527,9 +2527,9 @@ static unsigned int khugepaged_scan_mm_slot(unsigned int pages,
 	if (likely(!khugepaged_test_exit(mm)))
 		vma = find_vma(mm, khugepaged_scan.address);
 
-#ifdef CONFIG_FAST_COPY_MM
-	/* Don't scan processes in the state of fcm. */
-	if (mm->fcm_mm)
+#ifdef CONFIG_ASYNC_FORK
+	/* Don't scan processes in the state of async fork. */
+	if (mm->async_fork_mm)
 		vma = NULL;
 #endif
 
