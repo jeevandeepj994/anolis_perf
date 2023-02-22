@@ -285,6 +285,8 @@ static struct map {
 	{ "imx8_ddr", "imx8_ddr" },
 	{ "L3PMC", "amd_l3" },
 	{ "DFPMC", "amd_df" },
+	{ "cpu_core", "cpu_core" },
+	{ "cpu_atom", "cpu_atom" },
 	{}
 };
 
@@ -573,10 +575,12 @@ static int json_events(const char *fn,
 		struct json_event je = {};
 		char *arch_std = NULL;
 		unsigned long long eventcode = 0;
+		unsigned long long configcode = 0;
 		struct msrmap *msr = NULL;
 		jsmntok_t *msrval = NULL;
 		jsmntok_t *precise = NULL;
 		jsmntok_t *obj = tok++;
+		bool configcode_present = false;
 
 		EXPECT(obj->type == JSMN_OBJECT, obj, "expected object");
 		for (j = 0; j < obj->size; j += 2) {
@@ -599,6 +603,12 @@ static int json_events(const char *fn,
 				addfield(map, &code, "", "", val);
 				eventcode |= strtoul(code, NULL, 0);
 				free(code);
+			} else if (json_streq(map, field, "ConfigCode")) {
+				char *code = NULL;
+				addfield(map, &code, "", "", val);
+				configcode |= strtoul(code, NULL, 0);
+				free(code);
+				configcode_present = true;
 			} else if (json_streq(map, field, "ExtSel")) {
 				char *code = NULL;
 				addfield(map, &code, "", "", val);
@@ -680,7 +690,10 @@ static int json_events(const char *fn,
 				addfield(map, &extra_desc, " ",
 						"(Precise event)", NULL);
 		}
-		snprintf(buf, sizeof buf, "event=%#llx", eventcode);
+		if (configcode_present)
+			snprintf(buf, sizeof buf, "config=%#llx", configcode);
+		else
+			snprintf(buf, sizeof buf, "event=%#llx", eventcode);
 		addfield(map, &event, ",", buf, NULL);
 		if (je.desc && extra_desc)
 			addfield(map, &je.desc, " ", extra_desc, NULL);
@@ -812,7 +825,7 @@ static void print_mapping_test_table(FILE *outfp)
 	fprintf(outfp, "\t.cpuid = \"testcpu\",\n");
 	fprintf(outfp, "\t.version = \"v1\",\n");
 	fprintf(outfp, "\t.type = \"core\",\n");
-	fprintf(outfp, "\t.table = pme_test_cpu,\n");
+	fprintf(outfp, "\t.table = pme_test_soc_cpu,\n");
 	fprintf(outfp, "},\n");
 }
 
@@ -834,7 +847,8 @@ static int process_system_event_tables(FILE *outfp)
 	print_system_event_mapping_table_prefix(outfp);
 
 	list_for_each_entry(sys_event_table, &sys_event_tables, list) {
-		fprintf(outfp, "\n\t{\n\t\t.table = %s,\n\t},",
+		fprintf(outfp, "\n\t{\n\t\t.table = %s,\n\t\t.name = \"%s\",\n\t},",
+			sys_event_table->soc_id,
 			sys_event_table->soc_id);
 	}
 
@@ -1121,8 +1135,10 @@ static int process_one_file(const char *fpath, const struct stat *sb,
 			mapfile = strdup(fpath);
 			return 0;
 		}
-
-		pr_info("%s: Ignoring file %s\n", prog, fpath);
+		if (is_json_file(bname))
+			pr_debug("%s: ArchStd json is preprocessed %s\n", prog, fpath);
+		else
+			pr_info("%s: Ignoring file %s\n", prog, fpath);
 		return 0;
 	}
 
@@ -1280,6 +1296,7 @@ int main(int argc, char *argv[])
 	}
 
 	free_arch_std_events();
+	free_sys_event_tables();
 	free(mapfile);
 	return 0;
 
@@ -1301,6 +1318,7 @@ err_close_eventsfp:
 		create_empty_mapping(output_file);
 err_out:
 	free_arch_std_events();
+	free_sys_event_tables();
 	free(mapfile);
 	return ret;
 }

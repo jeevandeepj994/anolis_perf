@@ -2814,9 +2814,14 @@ restart:
 	}
 
 	for (i = 0; i < max; i++, syms++) {
+		/*
+		 * New attr.config still not supported here, the latest
+		 * example was PERF_COUNT_SW_CGROUP_SWITCHES
+		 */
+		if (syms->symbol == NULL)
+			continue;
 
-		if (event_glob != NULL && syms->symbol != NULL &&
-		    !(strglobmatch(syms->symbol, event_glob) ||
+		if (event_glob != NULL && !(strglobmatch(syms->symbol, event_glob) ||
 		      (syms->alias && strglobmatch(syms->alias, event_glob))))
 			continue;
 
@@ -2961,7 +2966,7 @@ int parse_events_term__num(struct parse_events_term **term,
 	struct parse_events_term temp = {
 		.type_val  = PARSE_EVENTS__TERM_TYPE_NUM,
 		.type_term = type_term,
-		.config    = config,
+		.config    = config ? : strdup(config_term_names[type_term]),
 		.no_value  = no_value,
 		.err_term  = loc_term ? loc_term->first_column : 0,
 		.err_val   = loc_val  ? loc_val->first_column  : 0,
