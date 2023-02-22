@@ -1832,6 +1832,7 @@ static void perf_sample__fprint_metric(struct perf_script *script,
 				       struct perf_sample *sample,
 				       FILE *fp)
 {
+	struct evsel *leader = evsel__leader(evsel);
 	struct perf_stat_output_ctx ctx = {
 		.print_metric = script_print_metric,
 		.new_line = script_new_line,
@@ -1847,8 +1848,8 @@ static void perf_sample__fprint_metric(struct perf_script *script,
 	u64 val;
 
 	if (!evsel->stats)
-		perf_evlist__alloc_stats(script->session->evlist, false);
-	if (evsel_script(evsel->leader)->gnum++ == 0)
+		evlist__alloc_stats(script->session->evlist, false);
+	if (evsel_script(leader)->gnum++ == 0)
 		perf_stat__reset_shadow_stats();
 	val = sample->period * evsel->scale;
 	perf_stat__update_shadow_stats(evsel,
@@ -1856,8 +1857,8 @@ static void perf_sample__fprint_metric(struct perf_script *script,
 				       sample->cpu,
 				       &rt_stat);
 	evsel_script(evsel)->val = val;
-	if (evsel_script(evsel->leader)->gnum == evsel->leader->core.nr_members) {
-		for_each_group_member (ev2, evsel->leader) {
+	if (evsel_script(leader)->gnum == leader->core.nr_members) {
+		for_each_group_member(ev2, leader) {
 			perf_stat__print_shadow_stats(&stat_config, ev2,
 						      evsel_script(ev2)->val,
 						      sample->cpu,
@@ -1865,7 +1866,7 @@ static void perf_sample__fprint_metric(struct perf_script *script,
 						      NULL,
 						      &rt_stat);
 		}
-		evsel_script(evsel->leader)->gnum = 0;
+		evsel_script(leader)->gnum = 0;
 	}
 }
 
@@ -3314,7 +3315,7 @@ static int set_maps(struct perf_script *script)
 
 	perf_evlist__set_maps(&evlist->core, script->cpus, script->threads);
 
-	if (perf_evlist__alloc_stats(evlist, true))
+	if (evlist__alloc_stats(evlist, true))
 		return -ENOMEM;
 
 	script->allocated = true;
@@ -3945,7 +3946,7 @@ out_delete:
 		zfree(&script.ptime_range);
 	}
 
-	perf_evlist__free_stats(session->evlist);
+	evlist__free_stats(session->evlist);
 	perf_session__delete(session);
 	perf_script__exit(&script);
 

@@ -1005,7 +1005,7 @@ static PyObject *pyrf_evlist__add(struct pyrf_evlist *pevlist,
 
 	Py_INCREF(pevsel);
 	evsel = &((struct pyrf_evsel *)pevsel)->evsel;
-	evsel->idx = evlist->core.nr_entries;
+	evsel->core.idx = evlist->core.nr_entries;
 	evlist__add(evlist, evsel);
 
 	return Py_BuildValue("i", evlist->core.nr_entries);
@@ -1089,7 +1089,7 @@ static PyObject *pyrf_evlist__open(struct pyrf_evlist *pevlist,
 		return NULL;
 
 	if (group)
-		perf_evlist__set_leader(evlist);
+		evlist__set_leader(evlist);
 
 	if (evlist__open(evlist) < 0) {
 		PyErr_SetFromErrno(PyExc_OSError);

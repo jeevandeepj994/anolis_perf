@@ -112,14 +112,11 @@ int __evlist__add_default_attrs(struct evlist *evlist,
 
 int evlist__add_dummy(struct evlist *evlist);
 
-int perf_evlist__add_sb_event(struct evlist *evlist,
-			      struct perf_event_attr *attr,
-			      evsel__sb_cb_t cb,
-			      void *data);
+int evlist__add_sb_event(struct evlist *evlist, struct perf_event_attr *attr,
+			 evsel__sb_cb_t cb, void *data);
 void evlist__set_cb(struct evlist *evlist, evsel__sb_cb_t cb, void *data);
-int perf_evlist__start_sb_thread(struct evlist *evlist,
-				 struct target *target);
-void perf_evlist__stop_sb_thread(struct evlist *evlist);
+int evlist__start_sb_thread(struct evlist *evlist, struct target *target);
+void evlist__stop_sb_thread(struct evlist *evlist);
 
 int evlist__add_newtp(struct evlist *evlist, const char *sys, const char *name, void *handler);
 
@@ -141,21 +138,17 @@ void __perf_evlist__reset_sample_bit(struct evlist *evlist,
 #define perf_evlist__reset_sample_bit(evlist, bit) \
 	__perf_evlist__reset_sample_bit(evlist, PERF_SAMPLE_##bit)
 
-int perf_evlist__set_tp_filter(struct evlist *evlist, const char *filter);
-int perf_evlist__set_tp_filter_pid(struct evlist *evlist, pid_t pid);
-int perf_evlist__set_tp_filter_pids(struct evlist *evlist, size_t npids, pid_t *pids);
+int evlist__set_tp_filter(struct evlist *evlist, const char *filter);
+int evlist__set_tp_filter_pid(struct evlist *evlist, pid_t pid);
+int evlist__set_tp_filter_pids(struct evlist *evlist, size_t npids, pid_t *pids);
 
-int perf_evlist__append_tp_filter(struct evlist *evlist, const char *filter);
+int evlist__append_tp_filter(struct evlist *evlist, const char *filter);
 
-int perf_evlist__append_tp_filter_pid(struct evlist *evlist, pid_t pid);
-int perf_evlist__append_tp_filter_pids(struct evlist *evlist, size_t npids, pid_t *pids);
+int evlist__append_tp_filter_pid(struct evlist *evlist, pid_t pid);
+int evlist__append_tp_filter_pids(struct evlist *evlist, size_t npids, pid_t *pids);
 
-struct evsel *
-perf_evlist__find_tracepoint_by_id(struct evlist *evlist, int id);
-
-struct evsel *
-perf_evlist__find_tracepoint_by_name(struct evlist *evlist,
-				     const char *name);
+struct evsel *evlist__find_tracepoint_by_id(struct evlist *evlist, int id);
+struct evsel *evlist__find_tracepoint_by_name(struct evlist *evlist, const char *name);
 
 int evlist__add_pollfd(struct evlist *evlist, int fd);
 int evlist__filter_pollfd(struct evlist *evlist, short revents_and_mask);
@@ -171,7 +164,7 @@ struct evsel *evlist__id2evsel_strict(struct evlist *evlist, u64 id);
 
 struct perf_sample_id *evlist__id2sid(struct evlist *evlist, u64 id);
 
-void perf_evlist__toggle_bkw_mmap(struct evlist *evlist, enum bkw_mmap_state state);
+void evlist__toggle_bkw_mmap(struct evlist *evlist, enum bkw_mmap_state state);
 
 void evlist__mmap_consume(struct evlist *evlist, int idx);
 
@@ -185,12 +178,10 @@ void perf_evlist__config(struct evlist *evlist, struct record_opts *opts,
 			 struct callchain_param *callchain);
 int record_opts__config(struct record_opts *opts);
 
-int perf_evlist__prepare_workload(struct evlist *evlist,
-				  struct target *target,
-				  const char *argv[], bool pipe_output,
-				  void (*exec_error)(int signo, siginfo_t *info,
-						     void *ucontext));
-int perf_evlist__start_workload(struct evlist *evlist);
+int evlist__prepare_workload(struct evlist *evlist, struct target *target,
+			     const char *argv[], bool pipe_output,
+			     void (*exec_error)(int signo, siginfo_t *info, void *ucontext));
+int evlist__start_workload(struct evlist *evlist);
 
 struct option;
 
@@ -212,7 +203,7 @@ size_t evlist__mmap_size(unsigned long pages);
 
 void evlist__disable(struct evlist *evlist);
 void evlist__enable(struct evlist *evlist);
-void perf_evlist__toggle_enable(struct evlist *evlist);
+void evlist__toggle_enable(struct evlist *evlist);
 
 int perf_evlist__enable_event_idx(struct evlist *evlist,
 				  struct evsel *evsel, int idx);
@@ -221,16 +212,16 @@ void perf_evlist__set_selected(struct evlist *evlist,
 			       struct evsel *evsel);
 
 int perf_evlist__create_maps(struct evlist *evlist, struct target *target);
-int perf_evlist__apply_filters(struct evlist *evlist, struct evsel **err_evsel);
+int evlist__apply_filters(struct evlist *evlist, struct evsel **err_evsel);
 
-void __perf_evlist__set_leader(struct list_head *list);
-void perf_evlist__set_leader(struct evlist *evlist);
+void __evlist__set_leader(struct list_head *list);
+void evlist__set_leader(struct evlist *evlist);
 
 u64 __evlist__combined_sample_type(struct evlist *evlist);
 u64 evlist__combined_sample_type(struct evlist *evlist);
 u64 evlist__combined_branch_type(struct evlist *evlist);
 bool evlist__sample_id_all(struct evlist *evlist);
-u16 perf_evlist__id_hdr_size(struct evlist *evlist);
+u16 evlist__id_hdr_size(struct evlist *evlist);
 
 int evlist__parse_sample(struct evlist *evlist, union perf_event *event, struct perf_sample *sample);
 int evlist__parse_sample_timestamp(struct evlist *evlist, union perf_event *event, u64 *timestamp);
@@ -346,8 +337,7 @@ void evlist__cpu_iter_start(struct evlist *evlist);
 bool evsel__cpu_iter_skip(struct evsel *ev, int cpu);
 bool evsel__cpu_iter_skip_no_inc(struct evsel *ev, int cpu);
 
-struct evsel *
-perf_evlist__find_evsel_by_str(struct evlist *evlist, const char *str);
+struct evsel *evlist__find_evsel_by_str(struct evlist *evlist, const char *str);
 
 struct evsel *evlist__event2evsel(struct evlist *evlist, union perf_event *event);
 

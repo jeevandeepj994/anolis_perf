@@ -789,7 +789,7 @@ static int write_group_desc(struct feat_fd *ff,
 	evlist__for_each_entry(evlist, evsel) {
 		if (evsel__is_group_leader(evsel) && evsel->core.nr_members > 1) {
 			const char *name = evsel->group_name ?: "{anon_group}";
-			u32 leader_idx = evsel->idx;
+			u32 leader_idx = evsel->core.idx;
 			u32 nr_members = evsel->core.nr_members;
 
 			ret = do_write_string(ff, name);
@@ -1866,7 +1866,7 @@ static struct evsel *read_event_desc(struct feat_fd *ff)
 		msz = sz;
 
 	for (i = 0, evsel = events; i < nre; evsel++, i++) {
-		evsel->idx = i;
+		evsel->core.idx = i;
 
 		/*
 		 * must read entire on-file attr struct to
@@ -2383,29 +2383,26 @@ static int process_total_mem(struct feat_fd *ff, void *data __maybe_unused)
 	return 0;
 }
 
-static struct evsel *
-perf_evlist__find_by_index(struct evlist *evlist, int idx)
+static struct evsel *evlist__find_by_index(struct evlist *evlist, int idx)
 {
 	struct evsel *evsel;
 
 	evlist__for_each_entry(evlist, evsel) {
-		if (evsel->idx == idx)
+		if (evsel->core.idx == idx)
 			return evsel;
 	}
 
 	return NULL;
 }
 
-static void
-perf_evlist__set_event_name(struct evlist *evlist,
-			    struct evsel *event)
+static void evlist__set_event_name(struct evlist *evlist, struct evsel *event)
 {
 	struct evsel *evsel;
 
 	if (!event->name)
 		return;
 
-	evsel = perf_evlist__find_by_index(evlist, event->idx);
+	evsel = evlist__find_by_index(evlist, event->core.idx);
 	if (!evsel)
 		return;
 
@@ -2433,7 +2430,7 @@ process_event_desc(struct feat_fd *ff, void *data __maybe_unused)
 	}
 
 	for (evsel = events; evsel->core.attr.size; evsel++)
-		perf_evlist__set_event_name(session->evlist, evsel);
+		evlist__set_event_name(session->evlist, evsel);
 
 	if (!session->data->is_pipe)
 		free_event_desc(events);
@@ -2751,8 +2748,8 @@ static int process_group_desc(struct feat_fd *ff, void *data __maybe_unused)
 
 	i = nr = 0;
 	evlist__for_each_entry(session->evlist, evsel) {
-		if (evsel->idx == (int) desc[i].leader_idx) {
-			evsel->leader = evsel;
+		if (evsel->core.idx == (int) desc[i].leader_idx) {
+			evsel__set_leader(evsel, evsel);
 			/* {anon_group} is a dummy name */
 			if (strcmp(desc[i].name, "{anon_group}")) {
 				evsel->group_name = desc[i].name;
@@ -2770,7 +2767,7 @@ static int process_group_desc(struct feat_fd *ff, void *data __maybe_unused)
 			i++;
 		} else if (nr) {
 			/* This is a group member */
-			evsel->leader = leader;
+			evsel__set_leader(evsel, leader);
 
 			nr--;
 		}
@@ -3921,7 +3918,8 @@ static int perf_file_section__process(struct perf_file_section *section,
 }
 
 static int perf_file_header__read_pipe(struct perf_pipe_file_header *header,
-				       struct perf_header *ph, int fd,
+				       struct perf_header *ph,
+				       struct perf_data *data,
 				       bool repipe)
 {
 	struct feat_fd ff = {
@@ -3930,7 +3928,7 @@ static int perf_file_header__read_pipe(struct perf_pipe_file_header *header,
 	};
 	ssize_t ret;
 
-	ret = readn(fd, header, sizeof(*header));
+	ret = perf_data__read(data, header, sizeof(*header));
 	if (ret <= 0)
 		return -1;
 
@@ -3953,8 +3951,7 @@ static int perf_header__read_pipe(struct perf_session *session)
 	struct perf_header *header = &session->header;
 	struct perf_pipe_file_header f_header;
 
-	if (perf_file_header__read_pipe(&f_header, header,
-					perf_data__fd(session->data),
+	if (perf_file_header__read_pipe(&f_header, header, session->data,
 					session->repipe) < 0) {
 		pr_debug("incompatible file format\n");
 		return -EINVAL;
@@ -4009,8 +4006,7 @@ static int read_attr(int fd, struct perf_header *ph,
 	return ret <= 0 ? -1 : 0;
 }
 
-static int perf_evsel__prepare_tracepoint_event(struct evsel *evsel,
-						struct tep_handle *pevent)
+static int evsel__prepare_tracepoint_event(struct evsel *evsel, struct tep_handle *pevent)
 {
 	struct tep_event *event;
 	char bf[128];
@@ -4041,14 +4037,13 @@ static int perf_evsel__prepare_tracepoint_event(struct evsel *evsel,
 	return 0;
 }
 
-static int perf_evlist__prepare_tracepoint_events(struct evlist *evlist,
-						  struct tep_handle *pevent)
+static int evlist__prepare_tracepoint_events(struct evlist *evlist, struct tep_handle *pevent)
 {
 	struct evsel *pos;
 
 	evlist__for_each_entry(evlist, pos) {
 		if (pos->core.attr.type == PERF_TYPE_TRACEPOINT &&
-		    perf_evsel__prepare_tracepoint_event(pos, pevent))
+		    evsel__prepare_tracepoint_event(pos, pevent))
 			return -1;
 	}
 
@@ -4157,8 +4152,7 @@ int perf_session__read_header(struct perf_session *session)
 	perf_header__process_sections(header, fd, &session->tevent,
 				      perf_file_section__process);
 
-	if (perf_evlist__prepare_tracepoint_events(session->evlist,
-						   session->tevent.pevent))
+	if (evlist__prepare_tracepoint_events(session->evlist, session->tevent.pevent))
 		goto out_delete_evlist;
 
 	return 0;
@@ -4379,8 +4373,7 @@ int perf_event__process_tracing_data(struct perf_session *session,
 		return -1;
 	}
 
-	perf_evlist__prepare_tracepoint_events(session->evlist,
-					       session->tevent.pevent);
+	evlist__prepare_tracepoint_events(session->evlist, session->tevent.pevent);
 
 	return size_read + padding;
 }

@@ -3666,7 +3666,7 @@ static int trace__set_filter_loop_pids(struct trace *trace)
 		thread = parent;
 	}
 
-	err = perf_evlist__append_tp_filter_pids(trace->evlist, nr, pids);
+	err = evlist__append_tp_filter_pids(trace->evlist, nr, pids);
 	if (!err && trace->filter_pids.map)
 		err = bpf_map__set_filter_pids(trace->filter_pids.map, nr, pids);
 
@@ -3680,11 +3680,11 @@ static int trace__set_filter_pids(struct trace *trace)
 	 * Better not use !target__has_task() here because we need to cover the
 	 * case where no threads were specified in the command line, but a
 	 * workload was, and in that case we will fill in the thread_map when
-	 * we fork the workload in perf_evlist__prepare_workload.
+	 * we fork the workload in evlist__prepare_workload.
 	 */
 	if (trace->filter_pids.nr > 0) {
-		err = perf_evlist__append_tp_filter_pids(trace->evlist, trace->filter_pids.nr,
-							 trace->filter_pids.entries);
+		err = evlist__append_tp_filter_pids(trace->evlist, trace->filter_pids.nr,
+						    trace->filter_pids.entries);
 		if (!err && trace->filter_pids.map) {
 			err = bpf_map__set_filter_pids(trace->filter_pids.map, trace->filter_pids.nr,
 						       trace->filter_pids.entries);
@@ -3968,8 +3968,7 @@ static int trace__run(struct trace *trace, int argc, const char **argv)
 	signal(SIGINT, sig_handler);
 
 	if (forks) {
-		err = perf_evlist__prepare_workload(evlist, &trace->opts.target,
-						    argv, false, NULL);
+		err = evlist__prepare_workload(evlist, &trace->opts.target, argv, false, NULL);
 		if (err < 0) {
 			fprintf(trace->output, "Couldn't run the workload!\n");
 			goto out_delete_evlist;
@@ -4027,7 +4026,7 @@ static int trace__run(struct trace *trace, int argc, const char **argv)
 	err = trace__expand_filters(trace, &evsel);
 	if (err)
 		goto out_delete_evlist;
-	err = perf_evlist__apply_filters(evlist, &evsel);
+	err = evlist__apply_filters(evlist, &evsel);
 	if (err < 0)
 		goto out_error_apply_filters;
 
@@ -4042,7 +4041,7 @@ static int trace__run(struct trace *trace, int argc, const char **argv)
 		evlist__enable(evlist);
 
 	if (forks)
-		perf_evlist__start_workload(evlist);
+		evlist__start_workload(evlist);
 
 	if (trace->opts.initial_delay) {
 		usleep(trace->opts.initial_delay * 1000);
@@ -4228,12 +4227,10 @@ static int trace__replay(struct trace *trace)
 	if (err)
 		goto out;
 
-	evsel = perf_evlist__find_tracepoint_by_name(session->evlist,
-						     "raw_syscalls:sys_enter");
+	evsel = evlist__find_tracepoint_by_name(session->evlist, "raw_syscalls:sys_enter");
 	/* older kernels have syscalls tp versus raw_syscalls */
 	if (evsel == NULL)
-		evsel = perf_evlist__find_tracepoint_by_name(session->evlist,
-							     "syscalls:sys_enter");
+		evsel = evlist__find_tracepoint_by_name(session->evlist, "syscalls:sys_enter");
 
 	if (evsel &&
 	    (evsel__init_raw_syscall_tp(evsel, trace__sys_enter) < 0 ||
@@ -4242,11 +4239,9 @@ static int trace__replay(struct trace *trace)
 		goto out;
 	}
 
-	evsel = perf_evlist__find_tracepoint_by_name(session->evlist,
-						     "raw_syscalls:sys_exit");
+	evsel = evlist__find_tracepoint_by_name(session->evlist, "raw_syscalls:sys_exit");
 	if (evsel == NULL)
-		evsel = perf_evlist__find_tracepoint_by_name(session->evlist,
-							     "syscalls:sys_exit");
+		evsel = evlist__find_tracepoint_by_name(session->evlist, "syscalls:sys_exit");
 	if (evsel &&
 	    (evsel__init_raw_syscall_tp(evsel, trace__sys_exit) < 0 ||
 	    perf_evsel__init_sc_tp_uint_field(evsel, ret))) {
@@ -4906,7 +4901,7 @@ int cmd_trace(int argc, const char **argv)
 	if (evsel) {
 		trace.syscalls.events.augmented = evsel;
 
-		evsel = perf_evlist__find_tracepoint_by_name(trace.evlist, "raw_syscalls:sys_enter");
+		evsel = evlist__find_tracepoint_by_name(trace.evlist, "raw_syscalls:sys_enter");
 		if (evsel == NULL) {
 			pr_err("ERROR: raw_syscalls:sys_enter not found in the augmented BPF object\n");
 			goto out;

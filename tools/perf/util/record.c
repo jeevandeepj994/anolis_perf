@@ -25,12 +25,12 @@
  */
 static struct evsel *evsel__read_sampler(struct evsel *evsel, struct evlist *evlist)
 {
-	struct evsel *leader = evsel->leader;
+	struct evsel *leader = evsel__leader(evsel);
 
 	if (evsel__is_aux_event(leader) || arch_topdown_sample_read(leader) ||
 	    is_mem_loads_aux_event(leader)) {
 		evlist__for_each_entry(evlist, evsel) {
-			if (evsel->leader == leader && evsel != evsel->leader)
+			if (evsel__leader(evsel) == leader && evsel != evsel__leader(evsel))
 				return evsel;
 		}
 	}
@@ -53,7 +53,7 @@ static u64 evsel__config_term_mask(struct evsel *evsel)
 static void evsel__config_leader_sampling(struct evsel *evsel, struct evlist *evlist)
 {
 	struct perf_event_attr *attr = &evsel->core.attr;
-	struct evsel *leader = evsel->leader;
+	struct evsel *leader = evsel__leader(evsel);
 	struct evsel *read_sampler;
 	u64 term_types, freq_mask;
 
@@ -105,7 +105,7 @@ void perf_evlist__config(struct evlist *evlist, struct record_opts *opts,
 	 * since some might depend on this info.
 	 */
 	if (opts->group)
-		perf_evlist__set_leader(evlist);
+		evlist__set_leader(evlist);
 
 	if (evlist->core.cpus->map[0] < 0)
 		opts->no_inherit = true;

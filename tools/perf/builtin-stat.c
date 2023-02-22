@@ -239,7 +239,7 @@ static void evlist__check_cpu_maps(struct evlist *evlist)
 	char buf[1024];
 
 	evlist__for_each_entry(evlist, evsel) {
-		leader = evsel->leader;
+		leader = evsel__leader(evsel);
 
 		/* Check that leader matches cpus with each member. */
 		if (leader == evsel)
@@ -260,10 +260,10 @@ static void evlist__check_cpu_maps(struct evlist *evlist)
 		}
 
 		for_each_group_evsel(pos, leader) {
-			pos->leader = pos;
+			evsel__set_leader(pos, pos);
 			pos->core.nr_members = 0;
 		}
-		evsel->leader->core.nr_members = 0;
+		evsel->core.leader->nr_members = 0;
 	}
 }
 
@@ -283,7 +283,7 @@ static void perf_stat__reset_stats(void)
 {
 	int i;
 
-	perf_evlist__reset_stats(evsel_list);
+	evlist__reset_stats(evsel_list);
 	perf_stat__reset_shadow_stats();
 
 	for (i = 0; i < stat_config.stats_num; i++)
@@ -547,7 +547,7 @@ static void disable_counters(void)
 static volatile int workload_exec_errno;
 
 /*
- * perf_evlist__prepare_workload will send a SIGUSR1
+ * evlist__prepare_workload will send a SIGUSR1
  * if the fork fails, since we asked by setting its
  * want_signal to true.
  */
@@ -691,8 +691,8 @@ static enum counter_recovery stat_handle_error(struct evsel *counter)
 		 */
 		counter->errored = true;
 
-		if ((counter->leader != counter) ||
-		    !(counter->leader->core.nr_members > 1))
+		if ((evsel__leader(counter) != counter) ||
+		    !(counter->core.leader->nr_members > 1))
 			return COUNTER_SKIP;
 	} else if (evsel__fallback(counter, errno, msg, sizeof(msg))) {
 		if (verbose > 0)
@@ -737,8 +737,7 @@ static int __run_perf_stat(int argc, const char **argv, int run_idx)
 	bool second_pass = false;
 
 	if (forks) {
-		if (perf_evlist__prepare_workload(evsel_list, &target, argv, is_pipe,
-						  workload_exec_failed_signal) < 0) {
+		if (evlist__prepare_workload(evsel_list, &target, argv, is_pipe, workload_exec_failed_signal) < 0) {
 			perror("failed to prepare workload");
 			return -1;
 		}
@@ -746,7 +745,7 @@ static int __run_perf_stat(int argc, const char **argv, int run_idx)
 	}
 
 	if (group)
-		perf_evlist__set_leader(evsel_list);
+		evlist__set_leader(evsel_list);
 
 	if (affinity__setup(&affinity) < 0)
 		return -1;
@@ -771,7 +770,7 @@ try_again:
 				 * Don't close here because we're in the wrong affinity.
 				 */
 				if ((errno == EINVAL || errno == EBADF) &&
-				    counter->leader != counter &&
+				    evsel__leader(counter) != counter &&
 				    counter->weak_group) {
 					perf_evlist__reset_weak_group(evsel_list, counter, false);
 					assert(counter->reset_group);
@@ -856,7 +855,7 @@ try_again_reset:
 			return -1;
 	}
 
-	if (perf_evlist__apply_filters(evsel_list, &counter)) {
+	if (evlist__apply_filters(evsel_list, &counter)) {
 		pr_err("failed to set filter \"%s\" on event %s with %d (%s)\n",
 			counter->filter, evsel__name(counter), errno,
 			str_error_r(errno, msg, sizeof(msg)));
@@ -889,7 +888,7 @@ try_again_reset:
 	clock_gettime(CLOCK_MONOTONIC, &ref_time);
 
 	if (forks) {
-		perf_evlist__start_workload(evsel_list);
+		evlist__start_workload(evsel_list);
 		enable_counters();
 
 		if (interval || timeout || evlist__ctlfd_initialized(evsel_list))
@@ -927,10 +926,10 @@ try_again_reset:
 		update_stats(&walltime_nsecs_stats, t1 - t0);
 
 		if (stat_config.aggr_mode == AGGR_GLOBAL)
-			perf_evlist__save_aggr_prev_raw_counts(evsel_list);
+			evlist__save_aggr_prev_raw_counts(evsel_list);
 
-		perf_evlist__copy_prev_raw_counts(evsel_list);
-		perf_evlist__reset_prev_raw_counts(evsel_list);
+		evlist__copy_prev_raw_counts(evsel_list);
+		evlist__reset_prev_raw_counts(evsel_list);
 		runtime_stat_reset(&stat_config);
 		perf_stat__reset_shadow_per_stat(&rt_stat);
 	} else
@@ -1932,7 +1931,7 @@ static int set_maps(struct perf_stat *st)
 
 	perf_evlist__set_maps(&evsel_list->core, st->cpus, st->threads);
 
-	if (perf_evlist__alloc_stats(evsel_list, true))
+	if (evlist__alloc_stats(evsel_list, true))
 		return -ENOMEM;
 
 	st->maps_allocated = true;
@@ -2331,7 +2330,7 @@ int cmd_stat(int argc, const char **argv)
 		goto out;
 	}
 
-	if (perf_evlist__alloc_stats(evsel_list, interval))
+	if (evlist__alloc_stats(evsel_list, interval))
 		goto out;
 
 	if (perf_stat_init_aggr_mode())
@@ -2371,7 +2370,7 @@ int cmd_stat(int argc, const char **argv)
 				run_idx + 1);
 
 		if (run_idx != 0)
-			perf_evlist__reset_prev_raw_counts(evsel_list);
+			evlist__reset_prev_raw_counts(evsel_list);
 
 		status = run_perf_stat(argc, argv, run_idx);
 		if (forever && status != -1 && !interval) {
@@ -2422,7 +2421,7 @@ int cmd_stat(int argc, const char **argv)
 	}
 
 	perf_stat__exit_aggr_mode();
-	perf_evlist__free_stats(evsel_list);
+	evlist__free_stats(evsel_list);
 out:
 	zfree(&stat_config.walltime_run);
 

@@ -161,11 +161,9 @@ void evlist__delete(struct evlist *evlist)
 
 void evlist__add(struct evlist *evlist, struct evsel *entry)
 {
-	entry->evlist = evlist;
-	entry->idx = evlist->core.nr_entries;
-	entry->tracking = !entry->idx;
-
 	perf_evlist__add(&evlist->core, &entry->core);
+	entry->evlist = evlist;
+	entry->tracking = !entry->core.idx;
 
 	if (evlist->core.nr_entries == 1)
 		perf_evlist__set_id_pos(evlist);
@@ -191,7 +189,7 @@ void perf_evlist__splice_list_tail(struct evlist *evlist,
 		}
 
 		__evlist__for_each_entry_safe(list, temp, evsel) {
-			if (evsel->leader == leader) {
+			if (evsel__has_leader(evsel, leader)) {
 				list_del_init(&evsel->core.node);
 				evlist__add(evlist, evsel);
 			}
@@ -202,13 +200,12 @@ void perf_evlist__splice_list_tail(struct evlist *evlist,
 int __evlist__set_tracepoints_handlers(struct evlist *evlist,
 				       const struct evsel_str_handler *assocs, size_t nr_assocs)
 {
-	struct evsel *evsel;
 	size_t i;
 	int err;
 
 	for (i = 0; i < nr_assocs; i++) {
 		// Adding a handler for an event not in this evlist, just ignore it.
-		evsel = perf_evlist__find_tracepoint_by_name(evlist, assocs[i].name);
+		struct evsel *evsel = evlist__find_tracepoint_by_name(evlist, assocs[i].name);
 		if (evsel == NULL)
 			continue;
 
@@ -223,25 +220,25 @@ out:
 	return err;
 }
 
-void __perf_evlist__set_leader(struct list_head *list)
+void __evlist__set_leader(struct list_head *list)
 {
 	struct evsel *evsel, *leader;
 
 	leader = list_entry(list->next, struct evsel, core.node);
 	evsel = list_entry(list->prev, struct evsel, core.node);
 
-	leader->core.nr_members = evsel->idx - leader->idx + 1;
+	leader->core.nr_members = evsel->core.idx - leader->core.idx + 1;
 
 	__evlist__for_each_entry(list, evsel) {
-		evsel->leader = leader;
+		evsel->core.leader = &leader->core;
 	}
 }
 
-void perf_evlist__set_leader(struct evlist *evlist)
+void evlist__set_leader(struct evlist *evlist)
 {
 	if (evlist->core.nr_entries) {
 		evlist->nr_groups = evlist->core.nr_entries > 1 ? 1 : 0;
-		__perf_evlist__set_leader(&evlist->core.entries);
+		__evlist__set_leader(&evlist->core.entries);
 	}
 }
 
@@ -305,8 +302,7 @@ int __evlist__add_default_attrs(struct evlist *evlist, struct perf_event_attr *a
 	return evlist__add_attrs(evlist, attrs, nr_attrs);
 }
 
-struct evsel *
-perf_evlist__find_tracepoint_by_id(struct evlist *evlist, int id)
+struct evsel *evlist__find_tracepoint_by_id(struct evlist *evlist, int id)
 {
 	struct evsel *evsel;
 
@@ -319,9 +315,7 @@ perf_evlist__find_tracepoint_by_id(struct evlist *evlist, int id)
 	return NULL;
 }
 
-struct evsel *
-perf_evlist__find_tracepoint_by_name(struct evlist *evlist,
-				     const char *name)
+struct evsel *evlist__find_tracepoint_by_name(struct evlist *evlist, const char *name)
 {
 	struct evsel *evsel;
 
@@ -458,7 +452,7 @@ void evlist__enable(struct evlist *evlist)
 	evlist->enabled = true;
 }
 
-void perf_evlist__toggle_enable(struct evlist *evlist)
+void evlist__toggle_enable(struct evlist *evlist)
 {
 	(evlist->enabled ? evlist__disable : evlist__enable)(evlist);
 }
@@ -743,7 +737,7 @@ perf_evlist__mmap_cb_get(struct perf_evlist *_evlist, bool overwrite, int idx)
 		if (overwrite) {
 			evlist->overwrite_mmap = maps;
 			if (evlist->bkw_mmap_state == BKW_MMAP_NOTREADY)
-				perf_evlist__toggle_bkw_mmap(evlist, BKW_MMAP_RUNNING);
+				evlist__toggle_bkw_mmap(evlist, BKW_MMAP_RUNNING);
 		} else {
 			evlist->mmap = maps;
 		}
@@ -991,7 +985,7 @@ void __perf_evlist__reset_sample_bit(struct evlist *evlist,
 		__evsel__reset_sample_bit(evsel, bit);
 }
 
-int perf_evlist__apply_filters(struct evlist *evlist, struct evsel **err_evsel)
+int evlist__apply_filters(struct evlist *evlist, struct evsel **err_evsel)
 {
 	struct evsel *evsel;
 	int err = 0;
@@ -1014,7 +1008,7 @@ int perf_evlist__apply_filters(struct evlist *evlist, struct evsel **err_evsel)
 	return err;
 }
 
-int perf_evlist__set_tp_filter(struct evlist *evlist, const char *filter)
+int evlist__set_tp_filter(struct evlist *evlist, const char *filter)
 {
 	struct evsel *evsel;
 	int err = 0;
@@ -1034,7 +1028,7 @@ int perf_evlist__set_tp_filter(struct evlist *evlist, const char *filter)
 	return err;
 }
 
-int perf_evlist__append_tp_filter(struct evlist *evlist, const char *filter)
+int evlist__append_tp_filter(struct evlist *evlist, const char *filter)
 {
 	struct evsel *evsel;
 	int err = 0;
@@ -1080,32 +1074,32 @@ out_free:
 	return NULL;
 }
 
-int perf_evlist__set_tp_filter_pids(struct evlist *evlist, size_t npids, pid_t *pids)
+int evlist__set_tp_filter_pids(struct evlist *evlist, size_t npids, pid_t *pids)
 {
 	char *filter = asprintf__tp_filter_pids(npids, pids);
-	int ret = perf_evlist__set_tp_filter(evlist, filter);
+	int ret = evlist__set_tp_filter(evlist, filter);
 
 	free(filter);
 	return ret;
 }
 
-int perf_evlist__set_tp_filter_pid(struct evlist *evlist, pid_t pid)
+int evlist__set_tp_filter_pid(struct evlist *evlist, pid_t pid)
 {
-	return perf_evlist__set_tp_filter_pids(evlist, 1, &pid);
+	return evlist__set_tp_filter_pids(evlist, 1, &pid);
 }
 
-int perf_evlist__append_tp_filter_pids(struct evlist *evlist, size_t npids, pid_t *pids)
+int evlist__append_tp_filter_pids(struct evlist *evlist, size_t npids, pid_t *pids)
 {
 	char *filter = asprintf__tp_filter_pids(npids, pids);
-	int ret = perf_evlist__append_tp_filter(evlist, filter);
+	int ret = evlist__append_tp_filter(evlist, filter);
 
 	free(filter);
 	return ret;
 }
 
-int perf_evlist__append_tp_filter_pid(struct evlist *evlist, pid_t pid)
+int evlist__append_tp_filter_pid(struct evlist *evlist, pid_t pid)
 {
-	return perf_evlist__append_tp_filter_pids(evlist, 1, &pid);
+	return evlist__append_tp_filter_pids(evlist, 1, &pid);
 }
 
 bool evlist__valid_sample_type(struct evlist *evlist)
@@ -1178,7 +1172,7 @@ bool perf_evlist__valid_read_format(struct evlist *evlist)
 	return true;
 }
 
-u16 perf_evlist__id_hdr_size(struct evlist *evlist)
+u16 evlist__id_hdr_size(struct evlist *evlist)
 {
 	struct evsel *first = evlist__first(evlist);
 	struct perf_sample *data;
@@ -1331,9 +1325,8 @@ out_err:
 	return err;
 }
 
-int perf_evlist__prepare_workload(struct evlist *evlist, struct target *target,
-				  const char *argv[], bool pipe_output,
-				  void (*exec_error)(int signo, siginfo_t *info, void *ucontext))
+int evlist__prepare_workload(struct evlist *evlist, struct target *target, const char *argv[],
+			     bool pipe_output, void (*exec_error)(int signo, siginfo_t *info, void *ucontext))
 {
 	int child_ready_pipe[2], go_pipe[2];
 	char bf;
@@ -1378,7 +1371,7 @@ int perf_evlist__prepare_workload(struct evlist *evlist, struct target *target,
 		/*
 		 * The parent will ask for the execvp() to be performed by
 		 * writing exactly one byte, in workload.cork_fd, usually via
-		 * perf_evlist__start_workload().
+		 * evlist__start_workload().
 		 *
 		 * For cancelling the workload without actually running it,
 		 * the parent will just close workload.cork_fd, without writing
@@ -1445,7 +1438,7 @@ out_close_ready_pipe:
 	return -1;
 }
 
-int perf_evlist__start_workload(struct evlist *evlist)
+int evlist__start_workload(struct evlist *evlist)
 {
 	if (evlist->workload.cork_fd > 0) {
 		char bf = 0;
@@ -1576,7 +1569,7 @@ void perf_evlist__to_front(struct evlist *evlist,
 		return;
 
 	evlist__for_each_entry_safe(evlist, n, evsel) {
-		if (evsel->leader == move_evsel->leader)
+		if (evsel__leader(evsel) == evsel__leader(move_evsel))
 			list_move_tail(&evsel->core.node, &move);
 	}
 
@@ -1611,9 +1604,7 @@ void perf_evlist__set_tracking_event(struct evlist *evlist,
 	tracking_evsel->tracking = true;
 }
 
-struct evsel *
-perf_evlist__find_evsel_by_str(struct evlist *evlist,
-			       const char *str)
+struct evsel *evlist__find_evsel_by_str(struct evlist *evlist, const char *str)
 {
 	struct evsel *evsel;
 
@@ -1627,8 +1618,7 @@ perf_evlist__find_evsel_by_str(struct evlist *evlist,
 	return NULL;
 }
 
-void perf_evlist__toggle_bkw_mmap(struct evlist *evlist,
-				  enum bkw_mmap_state state)
+void evlist__toggle_bkw_mmap(struct evlist *evlist, enum bkw_mmap_state state)
 {
 	enum bkw_mmap_state old_state = evlist->bkw_mmap_state;
 	enum action {
@@ -1707,7 +1697,7 @@ void perf_evlist__force_leader(struct evlist *evlist)
 	if (!evlist->nr_groups) {
 		struct evsel *leader = evlist__first(evlist);
 
-		perf_evlist__set_leader(evlist);
+		evlist__set_leader(evlist);
 		leader->forced_leader = true;
 	}
 }
@@ -1719,7 +1709,8 @@ struct evsel *perf_evlist__reset_weak_group(struct evlist *evsel_list,
 	struct evsel *c2, *leader;
 	bool is_open = true;
 
-	leader = evsel->leader;
+	leader = evsel__leader(evsel);
+
 	pr_debug("Weak group for %s/%d failed\n",
 			leader->name, leader->core.nr_members);
 
@@ -1730,10 +1721,10 @@ struct evsel *perf_evlist__reset_weak_group(struct evlist *evsel_list,
 	evlist__for_each_entry(evsel_list, c2) {
 		if (c2 == evsel)
 			is_open = false;
-		if (c2->leader == leader) {
+		if (evsel__has_leader(c2, leader)) {
 			if (is_open && close)
 				perf_evsel__close(&c2->core);
-			c2->leader = c2;
+			evsel__set_leader(c2, c2);
 			c2->core.nr_members = 0;
 			/*
 			 * Set this for all former members of the group
@@ -1988,7 +1979,7 @@ struct evsel *evlist__find_evsel(struct evlist *evlist, int idx)
 	struct evsel *evsel;
 
 	evlist__for_each_entry(evlist, evsel) {
-		if (evsel->idx == idx)
+		if (evsel->core.idx == idx)
 			return evsel;
 	}
 	return NULL;
