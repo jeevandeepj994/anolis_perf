@@ -371,7 +371,7 @@ void perf_stat__collect_metric_expr(struct evlist *evsel_list)
 		if (!metric_events) {
 			if (expr__find_ids(counter->metric_expr,
 					   counter->name,
-					   ctx, 1) < 0)
+					   ctx) < 0)
 				continue;
 
 			metric_events = calloc(sizeof(struct evsel *),
@@ -808,7 +808,7 @@ static int prepare_metric(struct evsel **metric_events,
 			  struct runtime_stat *st)
 {
 	double scale;
-	char *n, *pn;
+	char *n;
 	int i, j, ret;
 
 	for (i = 0; metric_events[i]; i++) {
@@ -830,23 +830,11 @@ static int prepare_metric(struct evsel **metric_events,
 			if (v->metric_other)
 				metric_total = v->metric_total;
 		}
-
-		n = strdup(metric_events[i]->name);
+		n = strdup(evsel__metric_id(metric_events[i]));
 		if (!n)
 			return -ENOMEM;
-		/*
-		 * This display code with --no-merge adds [cpu] postfixes.
-		 * These are not supported by the parser. Remove everything
-		 * after the space.
-		 */
-		pn = strchr(n, ' ');
-		if (pn)
-			*pn = 0;
 
-		if (metric_total)
-			expr__add_id_val(pctx, n, metric_total);
-		else
-			expr__add_id_val(pctx, n, avg_stats(stats)*scale);
+		expr__add_id_val(pctx, n, metric_total ? : avg_stats(stats) * scale);
 	}
 
 	for (j = 0; metric_refs && metric_refs[j].metric_name; j++) {
@@ -880,13 +868,14 @@ static void generic_metric(struct perf_stat_config *config,
 	if (!pctx)
 		return;
 
+	pctx->runtime = runtime;
 	i = prepare_metric(metric_events, metric_refs, pctx, cpu, st);
 	if (i < 0) {
 		expr__ctx_free(pctx);
 		return;
 	}
 	if (!metric_events[i]) {
-		if (expr__parse(&ratio, pctx, metric_expr, runtime) == 0) {
+		if (expr__parse(&ratio, pctx, metric_expr) == 0) {
 			char *unit;
 			char metric_bf[64];
 
@@ -937,7 +926,7 @@ double test_generic_metric(struct metric_expr *mexp, int cpu, struct runtime_sta
 	if (prepare_metric(mexp->metric_events, mexp->metric_refs, pctx, cpu, st) < 0)
 		goto out;
 
-	if (expr__parse(&ratio, pctx, mexp->metric_expr, 1))
+	if (expr__parse(&ratio, pctx, mexp->metric_expr))
 		ratio = 0.0;
 
 out:

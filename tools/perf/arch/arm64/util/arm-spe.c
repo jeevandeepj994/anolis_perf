@@ -377,7 +377,7 @@ static int arm_spe_recording_options(struct auxtrace_record *itr,
 	 * To obtain the auxtrace buffer file descriptor, the auxtrace event
 	 * must come first.
 	 */
-	perf_evlist__to_front(evlist, arm_spe_evsel);
+	evlist__to_front(evlist, arm_spe_evsel);
 
 	/*
 	 * In the case of per-cpu mmaps, sample CPU for AUX event;

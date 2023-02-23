@@ -401,6 +401,11 @@ struct evsel *evsel__clone(struct evsel *orig)
 		if (evsel->filter == NULL)
 			goto out_err;
 	}
+	if (orig->metric_id) {
+		evsel->metric_id = strdup(orig->metric_id);
+		if (evsel->metric_id == NULL)
+			goto out_err;
+	}
 	evsel->cgrp = cgroup__get(orig->cgrp);
 	evsel->tp_format = orig->tp_format;
 	evsel->handler = orig->handler;
@@ -744,6 +749,17 @@ const char *evsel__name(struct evsel *evsel)
 	if (evsel->name)
 		return evsel->name;
 out_unknown:
+	return "unknown";
+}
+
+const char *evsel__metric_id(const struct evsel *evsel)
+{
+	if (evsel->metric_id)
+		return evsel->metric_id;
+
+	if (evsel->core.attr.type == PERF_TYPE_SOFTWARE && evsel->tool_event)
+		return "duration_time";
+
 	return "unknown";
 }
 
@@ -1399,6 +1415,7 @@ void evsel__exit(struct evsel *evsel)
 	zfree(&evsel->group_name);
 	zfree(&evsel->name);
 	zfree(&evsel->pmu_name);
+	zfree(&evsel->metric_id);
 	zfree(&evsel->per_pkg_mask);
 	zfree(&evsel->metric_events);
 	perf_evsel__object.fini(evsel);

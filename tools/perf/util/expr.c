@@ -25,7 +25,6 @@ struct expr_id_data {
 			const char *metric_name;
 			const char *metric_expr;
 		} ref;
-		struct expr_id	*parent;
 	};
 
 	enum {
@@ -35,8 +34,6 @@ struct expr_id_data {
 		EXPR_ID_DATA__REF,
 		/* A reference but the value has been computed. */
 		EXPR_ID_DATA__REF_VALUE,
-		/* A parent is remembered for the recursion check. */
-		EXPR_ID_DATA__PARENT,
 	} kind;
 };
 
@@ -80,19 +77,11 @@ void ids__free(struct hashmap *ids)
 	hashmap__free(ids);
 }
 
-int ids__insert(struct hashmap *ids, const char *id,
-		struct expr_id *parent)
+int ids__insert(struct hashmap *ids, const char *id)
 {
 	struct expr_id_data *data_ptr = NULL, *old_data = NULL;
 	char *old_key = NULL;
 	int ret;
-
-	data_ptr = malloc(sizeof(*data_ptr));
-	if (!data_ptr)
-		return -ENOMEM;
-
-	data_ptr->parent = parent;
-	data_ptr->kind = EXPR_ID_DATA__PARENT;
 
 	ret = hashmap__set(ids, id, data_ptr,
 			   (const void **)&old_key, (void **)&old_data);
@@ -142,7 +131,7 @@ struct hashmap *ids__union(struct hashmap *ids1, struct hashmap *ids2)
 /* Caller must make sure id is allocated */
 int expr__add_id(struct expr_parse_ctx *ctx, const char *id)
 {
-	return ids__insert(ctx->ids, id, ctx->parent);
+	return ids__insert(ctx->ids, id);
 }
 
 /* Caller must make sure id is allocated */
@@ -222,6 +211,21 @@ int expr__get_id(struct expr_parse_ctx *ctx, const char *id,
 	return hashmap__find(ctx->ids, id, (void **)data) ? 0 : -1;
 }
 
+bool expr__subset_of_ids(struct expr_parse_ctx *haystack,
+			 struct expr_parse_ctx *needles)
+{
+	struct hashmap_entry *cur;
+	size_t bkt;
+	struct expr_id_data *data;
+
+	hashmap__for_each_entry(needles->ids, cur, bkt) {
+		if (expr__get_id(haystack, cur->key, &data))
+			return false;
+	}
+	return true;
+}
+
+
 int expr__resolve_id(struct expr_parse_ctx *ctx, const char *id,
 		     struct expr_id_data **datap)
 {
@@ -238,15 +242,12 @@ int expr__resolve_id(struct expr_parse_ctx *ctx, const char *id,
 	case EXPR_ID_DATA__VALUE:
 		pr_debug2("lookup(%s): val %f\n", id, data->val);
 		break;
-	case EXPR_ID_DATA__PARENT:
-		pr_debug2("lookup(%s): parent %s\n", id, data->parent->id);
-		break;
 	case EXPR_ID_DATA__REF:
 		pr_debug2("lookup(%s): ref metric name %s\n", id,
 			data->ref.metric_name);
 		pr_debug("processing metric: %s ENTRY\n", id);
 		data->kind = EXPR_ID_DATA__REF_VALUE;
-		if (expr__parse(&data->ref.val, ctx, data->ref.metric_expr, 1)) {
+		if (expr__parse(&data->ref.val, ctx, data->ref.metric_expr)) {
 			pr_debug("%s failed to count\n", id);
 			return -1;
 		}
@@ -283,7 +284,8 @@ struct expr_parse_ctx *expr__ctx_new(void)
 		return NULL;
 
 	ctx->ids = hashmap__new(key_hash, key_equal, NULL);
-	ctx->parent = NULL;
+	ctx->runtime = 0;
+
 	return ctx;
 }
 
@@ -314,10 +316,10 @@ void expr__ctx_free(struct expr_parse_ctx *ctx)
 
 static int
 __expr__parse(double *val, struct expr_parse_ctx *ctx, const char *expr,
-	      bool compute_ids, int runtime)
+	      bool compute_ids)
 {
 	struct expr_scanner_ctx scanner_ctx = {
-		.runtime = runtime,
+		.runtime = ctx->runtime,
 	};
 	YY_BUFFER_STATE buffer;
 	void *scanner;
@@ -345,15 +347,15 @@ __expr__parse(double *val, struct expr_parse_ctx *ctx, const char *expr,
 }
 
 int expr__parse(double *final_val, struct expr_parse_ctx *ctx,
-		const char *expr, int runtime)
+		const char *expr)
 {
-	return __expr__parse(final_val, ctx, expr, /*compute_ids=*/false, runtime) ? -1 : 0;
+	return __expr__parse(final_val, ctx, expr, /*compute_ids=*/false) ? -1 : 0;
 }
 
 int expr__find_ids(const char *expr, const char *one,
-		   struct expr_parse_ctx *ctx, int runtime)
+		   struct expr_parse_ctx *ctx)
 {
-	int ret = __expr__parse(NULL, ctx, expr, /*compute_ids=*/true, runtime);
+	int ret = __expr__parse(NULL, ctx, expr, /*compute_ids=*/true);
 
 	if (one)
 		expr__del_id(ctx, one);
@@ -367,10 +369,4 @@ double expr_id_data__value(const struct expr_id_data *data)
 		return data->val;
 	assert(data->kind == EXPR_ID_DATA__REF_VALUE);
 	return data->ref.val;
-}
-
-struct expr_id *expr_id_data__parent(struct expr_id_data *data)
-{
-	assert(data->kind == EXPR_ID_DATA__PARENT);
-	return data->parent;
 }
