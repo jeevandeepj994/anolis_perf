@@ -5,13 +5,17 @@
 #include <stdlib.h>
 #include <string.h>
 #include "metricgroup.h"
+#include "cpumap.h"
+#include "cputopo.h"
 #include "debug.h"
 #include "expr.h"
 #include "expr-bison.h"
 #include "expr-flex.h"
+#include "smt.h"
 #include <linux/kernel.h>
 #include <linux/zalloc.h>
 #include <ctype.h>
+#include <math.h>
 
 #ifdef PARSER_DEBUG
 extern int expr_debug;
@@ -369,4 +373,38 @@ double expr_id_data__value(const struct expr_id_data *data)
 		return data->val;
 	assert(data->kind == EXPR_ID_DATA__REF_VALUE);
 	return data->ref.val;
+}
+
+double expr__get_literal(const char *literal)
+{
+	static struct cpu_topology *topology;
+
+	if (!strcmp("#smt_on", literal))
+		return smt_on() > 0 ? 1.0 : 0.0;
+
+	if (!strcmp("#num_cpus", literal))
+		return cpu__max_present_cpu();
+
+	/*
+	 * Assume that topology strings are consistent, such as CPUs "0-1"
+	 * wouldn't be listed as "0,1", and so after deduplication the number of
+	 * these strings gives an indication of the number of packages, dies,
+	 * etc.
+	 */
+	if (!topology) {
+		topology = cpu_topology__new();
+		if (!topology) {
+			pr_err("Error creating CPU topology");
+			return NAN;
+		}
+	}
+	if (!strcmp("#num_packages", literal))
+		return topology->package_cpus_lists;
+	if (!strcmp("#num_dies", literal))
+		return topology->die_cpus_lists;
+	if (!strcmp("#num_cores", literal))
+		return topology->core_cpus_lists;
+
+	pr_err("Unrecognized literal '%s'", literal);
+	return NAN;
 }

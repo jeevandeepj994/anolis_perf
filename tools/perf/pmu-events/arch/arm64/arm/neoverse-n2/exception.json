@@ -1,5 +1,11 @@
 [
     {
+        "ArchStdEvent": "EXC_TAKEN"
+    },
+    {
+        "ArchStdEvent": "MEMORY_ERROR"
+    },
+    {
         "ArchStdEvent": "EXC_UNDEF"
     },
     {
@@ -18,6 +24,9 @@
         "ArchStdEvent": "EXC_FIQ"
     },
     {
+        "ArchStdEvent": "EXC_SMC"
+    },
+    {
         "ArchStdEvent": "EXC_HVC"
     },
     {
@@ -34,11 +43,5 @@
     },
     {
         "ArchStdEvent": "EXC_TRAP_FIQ"
-    },
-    {
-        "ArchStdEvent": "EXC_TAKEN"
-    },
-    {
-        "ArchStdEvent": "EXC_RETURN"
     }
 ]
