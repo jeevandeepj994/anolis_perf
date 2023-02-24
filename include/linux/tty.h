@@ -524,6 +524,11 @@ extern void tty_termios_encode_baud_rate(struct ktermios *termios,
 						speed_t ibaud, speed_t obaud);
 extern void tty_encode_baud_rate(struct tty_struct *tty,
 						speed_t ibaud, speed_t obaud);
+#ifdef CONFIG_PSTORE_TTYPROBE
+extern void pstore_start_ttyprobe(const unsigned char *buf, int count);
+#else
+static inline void pstore_start_ttyprobe(const unsigned char *buf, int count) {}
+#endif
 
 /**
  *	tty_get_baud_rate	-	get tty bit rates
