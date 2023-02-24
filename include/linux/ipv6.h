@@ -2,6 +2,7 @@
 #ifndef _IPV6_H
 #define _IPV6_H
 
+#include <linux/ck_kabi.h>
 #include <uapi/linux/ipv6.h>
 
 #define ipv6_optlen(p)  (((p)->hdrlen+1) << 3)
@@ -77,6 +78,11 @@ struct ipv6_devconf {
 	__s32		rpl_seg_enabled;
 
 	struct ctl_table_header *sysctl_header;
+
+	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
+	CK_KABI_RESERVE(3)
+	CK_KABI_RESERVE(4)
 };
 
 struct ipv6_params {

@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0 */
 #ifndef _LINUX_ENERGY_MODEL_H
 #define _LINUX_ENERGY_MODEL_H
+#include <linux/ck_kabi.h>
 #include <linux/cpumask.h>
 #include <linux/device.h>
 #include <linux/jump_label.h>
@@ -23,6 +24,8 @@ struct em_perf_state {
 	unsigned long frequency;
 	unsigned long power;
 	unsigned long cost;
+
+	CK_KABI_RESERVE(1)
 };
 
 /**
@@ -43,6 +46,9 @@ struct em_perf_state {
 struct em_perf_domain {
 	struct em_perf_state *table;
 	int nr_perf_states;
+
+	CK_KABI_RESERVE(1)
+
 	unsigned long cpus[];
 };
 

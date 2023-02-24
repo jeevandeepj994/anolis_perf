@@ -10,6 +10,7 @@
 #ifndef _LINUX_MOUNT_H
 #define _LINUX_MOUNT_H
 
+#include <linux/ck_kabi.h>
 #include <linux/types.h>
 #include <linux/list.h>
 #include <linux/nodemask.h>
@@ -72,6 +73,8 @@ struct vfsmount {
 	struct dentry *mnt_root;	/* root of the mounted tree */
 	struct super_block *mnt_sb;	/* pointer to superblock */
 	int mnt_flags;
+
+	CK_KABI_RESERVE(1)
 } __randomize_layout;
 
 struct file; /* forward dec */

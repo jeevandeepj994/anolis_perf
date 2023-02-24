@@ -23,6 +23,7 @@
 #ifndef __DRM_PLANE_H__
 #define __DRM_PLANE_H__
 
+#include <linux/ck_kabi.h>
 #include <linux/list.h>
 #include <linux/ctype.h>
 #include <drm/drm_mode_object.h>
@@ -724,6 +725,8 @@ struct drm_plane {
 	 * See drm_plane_create_color_properties().
 	 */
 	struct drm_property *color_range_property;
+
+	CK_KABI_RESERVE(1)
 };
 
 #define obj_to_plane(x) container_of(x, struct drm_plane, base)

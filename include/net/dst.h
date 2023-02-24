@@ -9,6 +9,7 @@
 #ifndef _NET_DST_H
 #define _NET_DST_H
 
+#include <linux/ck_kabi.h>
 #include <net/dst_ops.h>
 #include <linux/netdevice.h>
 #include <linux/rtnetlink.h>
@@ -78,6 +79,13 @@ struct dst_entry {
 #endif
 
 	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
+	CK_KABI_RESERVE(3)
+	CK_KABI_RESERVE(4)
+	CK_KABI_RESERVE(5)
+	CK_KABI_RESERVE(6)
+	CK_KABI_RESERVE(7)
+	CK_KABI_RESERVE(8)
 };
 
 struct dst_metrics {

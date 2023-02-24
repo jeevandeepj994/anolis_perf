@@ -2,6 +2,7 @@
 #ifndef _NF_CONNTRACK_COMMON_H
 #define _NF_CONNTRACK_COMMON_H
 
+#include <linux/ck_kabi.h>
 #include <linux/atomic.h>
 #include <uapi/linux/netfilter/nf_conntrack_common.h>
 
@@ -18,6 +19,8 @@ struct ip_conntrack_stat {
 	unsigned int expect_create;
 	unsigned int expect_delete;
 	unsigned int search_restart;
+
+	CK_KABI_RESERVE(1)
 };
 
 #define NFCT_INFOMASK	7UL

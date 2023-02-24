@@ -30,6 +30,7 @@
 #ifndef _NET_PAGE_POOL_H
 #define _NET_PAGE_POOL_H
 
+#include <linux/ck_kabi.h>
 #include <linux/mm.h> /* Needed by ptr_ring */
 #include <linux/ptr_ring.h>
 #include <linux/dma-direction.h>
@@ -77,6 +78,9 @@ struct page_pool_params {
 	enum dma_data_direction dma_dir; /* DMA mapping direction */
 	unsigned int	max_len; /* max DMA sync memory size */
 	unsigned int	offset;  /* DMA addr offset */
+
+	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
 };
 
 struct page_pool {
@@ -126,6 +130,8 @@ struct page_pool {
 	refcount_t user_cnt;
 
 	u64 destroy_cnt;
+
+	CK_KABI_RESERVE(1)
 };
 
 struct page *page_pool_alloc_pages(struct page_pool *pool, gfp_t gfp);

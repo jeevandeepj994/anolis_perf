@@ -7,6 +7,7 @@
 #ifndef _NET_DEVLINK_H_
 #define _NET_DEVLINK_H_
 
+#include <linux/ck_kabi.h>
 #include <linux/device.h>
 #include <linux/slab.h>
 #include <linux/gfp.h>
@@ -52,6 +53,10 @@ struct devlink {
 	struct mutex lock; /* Serializes access to devlink instance specific objects such as
 			    * port, sb, dpipe, resource, params, region, traps and more.
 			    */
+
+	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
+
 	u8 reload_failed:1,
 	   reload_enabled:1,
 	   registered:1;

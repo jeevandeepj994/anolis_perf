@@ -8,6 +8,7 @@
 #ifndef _NET_FLOW_H
 #define _NET_FLOW_H
 
+#include <linux/ck_kabi.h>
 #include <linux/socket.h>
 #include <linux/in6.h>
 #include <linux/atomic.h>
@@ -41,6 +42,9 @@ struct flowi_common {
 	kuid_t  flowic_uid;
 	struct flowi_tunnel flowic_tun_key;
 	__u32		flowic_multipath_hash;
+
+	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
 };
 
 union flowi_uli {
@@ -93,6 +97,9 @@ struct flowi4 {
 #define fl4_ipsec_spi		uli.spi
 #define fl4_mh_type		uli.mht.type
 #define fl4_gre_key		uli.gre_key
+
+	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
 } __attribute__((__aligned__(BITS_PER_LONG/8)));
 
 static inline void flowi4_init_output(struct flowi4 *fl4, int oif,
@@ -154,6 +161,9 @@ struct flowi6 {
 #define fl6_mh_type		uli.mht.type
 #define fl6_gre_key		uli.gre_key
 	__u32			mp_hash;
+
+	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
 } __attribute__((__aligned__(BITS_PER_LONG/8)));
 
 struct flowidn {
@@ -169,6 +179,9 @@ struct flowidn {
 	union flowi_uli		uli;
 #define fld_sport		uli.ports.sport
 #define fld_dport		uli.ports.dport
+
+	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
 } __attribute__((__aligned__(BITS_PER_LONG/8)));
 
 struct flowi {
@@ -188,6 +201,8 @@ struct flowi {
 #define flowi_secid	u.__fl_common.flowic_secid
 #define flowi_tun_key	u.__fl_common.flowic_tun_key
 #define flowi_uid	u.__fl_common.flowic_uid
+
+	CK_KABI_RESERVE(1)
 } __attribute__((__aligned__(BITS_PER_LONG/8)));
 
 static inline struct flowi *flowi4_to_flowi(struct flowi4 *fl4)

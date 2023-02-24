@@ -7,6 +7,7 @@
 #ifndef _LINUX_POSIX_CLOCK_H_
 #define _LINUX_POSIX_CLOCK_H_
 
+#include <linux/ck_kabi.h>
 #include <linux/cdev.h>
 #include <linux/fs.h>
 #include <linux/poll.h>
@@ -62,6 +63,11 @@ struct posix_clock_operations {
 
 	ssize_t (*read)    (struct posix_clock *pc,
 			    uint flags, char __user *buf, size_t cnt);
+
+	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
+	CK_KABI_RESERVE(3)
+	CK_KABI_RESERVE(4)
 };
 
 /**
@@ -88,6 +94,15 @@ struct posix_clock {
 	struct device *dev;
 	struct rw_semaphore rwsem;
 	bool zombie;
+
+	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
+	CK_KABI_RESERVE(3)
+	CK_KABI_RESERVE(4)
+	CK_KABI_RESERVE(5)
+	CK_KABI_RESERVE(6)
+	CK_KABI_RESERVE(7)
+	CK_KABI_RESERVE(8)
 };
 
 /**

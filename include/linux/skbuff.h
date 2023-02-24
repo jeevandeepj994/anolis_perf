@@ -10,6 +10,7 @@
 #ifndef _LINUX_SKBUFF_H
 #define _LINUX_SKBUFF_H
 
+#include <linux/ck_kabi.h>
 #include <linux/kernel.h>
 #include <linux/compiler.h>
 #include <linux/time.h>
@@ -914,7 +915,17 @@ struct sk_buff {
 	__u32			headers_end[0];
 	/* public: */
 
+	/*
+	 * kABI: The kmem_caches of struct sk_buff are initialized with
+	 * SLAB_HWCACHE_ALIGN flag, such as skbuff_head_cache and
+	 * skbuff_fclone_cache, which causes each skb to be forcibly
+	 * aligned with cacheline size(64 bytes).
+	 * Reserve 24 bytes, total 248 bytes, this will not break
+	 * cacheline alignment.
+	 */
 	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
+	CK_KABI_RESERVE(3)
 
 	/* These elements must be at the end, see alloc_skb() for details.  */
 	sk_buff_data_t		tail;

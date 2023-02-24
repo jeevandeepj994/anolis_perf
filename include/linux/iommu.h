@@ -7,6 +7,7 @@
 #ifndef __LINUX_IOMMU_H
 #define __LINUX_IOMMU_H
 
+#include <linux/ck_kabi.h>
 #include <linux/scatterlist.h>
 #include <linux/device.h>
 #include <linux/types.h>
@@ -93,6 +94,11 @@ struct iommu_domain {
 	struct mutex switch_log_lock;
 	ioasid_t dma_pasid;		/* Used for DMA requests with PASID */
 	atomic_t dma_pasid_users;
+
+	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
+	CK_KABI_RESERVE(3)
+	CK_KABI_RESERVE(4)
 };
 
 enum iommu_cap {
@@ -203,6 +209,9 @@ struct iommu_iotlb_gather {
 	unsigned long		end;
 	size_t			pgsize;
 	struct page		*freelist;
+
+	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
 };
 
 /**
@@ -368,6 +377,15 @@ struct iommu_ops {
 
 	unsigned long pgsize_bitmap;
 	struct module *owner;
+
+	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
+	CK_KABI_RESERVE(3)
+	CK_KABI_RESERVE(4)
+	CK_KABI_RESERVE(5)
+	CK_KABI_RESERVE(6)
+	CK_KABI_RESERVE(7)
+	CK_KABI_RESERVE(8)
 };
 
 /**

@@ -2,6 +2,7 @@
 #ifndef _NET_NEIGHBOUR_H
 #define _NET_NEIGHBOUR_H
 
+#include <linux/ck_kabi.h>
 #include <linux/neighbour.h>
 
 /*
@@ -83,6 +84,8 @@ struct neigh_parms {
 	int	reachable_time;
 	int	data[NEIGH_VAR_DATA_MAX];
 	DECLARE_BITMAP(data_state, NEIGH_VAR_DATA_MAX);
+
+	CK_KABI_RESERVE(1)
 };
 
 static inline void neigh_var_set(struct neigh_parms *p, int index, int val)
@@ -157,6 +160,10 @@ struct neighbour {
 	struct list_head	gc_list;
 	struct rcu_head		rcu;
 	struct net_device	*dev;
+
+	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
+
 	u8			primary_key[0];
 } __randomize_layout;
 
@@ -226,6 +233,15 @@ struct neigh_table {
 	struct neigh_statistics	__percpu *stats;
 	struct neigh_hash_table __rcu *nht;
 	struct pneigh_entry	**phash_buckets;
+
+	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
+	CK_KABI_RESERVE(3)
+	CK_KABI_RESERVE(4)
+	CK_KABI_RESERVE(5)
+	CK_KABI_RESERVE(6)
+	CK_KABI_RESERVE(7)
+	CK_KABI_RESERVE(8)
 };
 
 enum {
@@ -438,7 +454,7 @@ static inline struct neighbour * neigh_clone(struct neighbour *neigh)
 static inline int neigh_event_send(struct neighbour *neigh, struct sk_buff *skb)
 {
 	unsigned long now = jiffies;
-	
+
 	if (READ_ONCE(neigh->used) != now)
 		WRITE_ONCE(neigh->used, now);
 	if (!(neigh->nud_state&(NUD_CONNECTED|NUD_DELAY|NUD_PROBE)))

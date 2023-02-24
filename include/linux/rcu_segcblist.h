@@ -14,6 +14,7 @@
 #ifndef __INCLUDE_LINUX_RCU_SEGCBLIST_H
 #define __INCLUDE_LINUX_RCU_SEGCBLIST_H
 
+#include <linux/ck_kabi.h>
 #include <linux/types.h>
 #include <linux/atomic.h>
 
@@ -74,6 +75,11 @@ struct rcu_segcblist {
 #endif
 	u8 enabled;
 	u8 offloaded;
+
+	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
+	CK_KABI_RESERVE(3)
+	CK_KABI_RESERVE(4)
 };
 
 #define RCU_SEGCBLIST_INITIALIZER(n) \

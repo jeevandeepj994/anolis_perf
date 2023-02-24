@@ -2,6 +2,7 @@
 #ifndef __NET_FIB_RULES_H
 #define __NET_FIB_RULES_H
 
+#include <linux/ck_kabi.h>
 #include <linux/types.h>
 #include <linux/slab.h>
 #include <linux/netdevice.h>
@@ -46,6 +47,13 @@ struct fib_rule {
 	struct rcu_head		rcu;
 
 	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
+	CK_KABI_RESERVE(3)
+	CK_KABI_RESERVE(4)
+	CK_KABI_RESERVE(5)
+	CK_KABI_RESERVE(6)
+	CK_KABI_RESERVE(7)
+	CK_KABI_RESERVE(8)
 };
 
 struct fib_lookup_arg {

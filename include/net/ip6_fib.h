@@ -9,6 +9,7 @@
 #ifndef _IP6_FIB_H
 #define _IP6_FIB_H
 
+#include <linux/ck_kabi.h>
 #include <linux/ipv6_route.h>
 #include <linux/rtnetlink.h>
 #include <linux/spinlock.h>
@@ -83,6 +84,8 @@ struct fib6_node {
 	int			fn_sernum;
 	struct fib6_info __rcu	*rr_ptr;
 	struct rcu_head		rcu;
+
+	CK_KABI_RESERVE(1)
 };
 
 struct fib6_gc_args {
@@ -199,6 +202,9 @@ struct fib6_info {
 
 	struct rcu_head			rcu;
 	struct nexthop			*nh;
+
+	CK_KABI_RESERVE(1)
+
 	struct fib6_nh			fib6_nh[];
 };
 
@@ -218,6 +224,8 @@ struct rt6_info {
 
 	/* more non-fragment space at head required */
 	unsigned short			rt6i_nfheader_len;
+
+	CK_KABI_RESERVE(1)
 };
 
 struct fib6_result {

@@ -2,6 +2,8 @@
 #ifndef INT_BLK_MQ_TAG_H
 #define INT_BLK_MQ_TAG_H
 
+#include <linux/ck_kabi.h>
+
 /*
  * Tag address space map.
  */
@@ -26,6 +28,11 @@ struct blk_mq_tags {
 	 * request pool
 	 */
 	spinlock_t lock;
+
+	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
+	CK_KABI_RESERVE(3)
+	CK_KABI_RESERVE(4)
 };
 
 extern struct blk_mq_tags *blk_mq_init_tags(unsigned int nr_tags,

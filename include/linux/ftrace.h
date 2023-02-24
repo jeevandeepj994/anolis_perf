@@ -7,6 +7,7 @@
 #ifndef _LINUX_FTRACE_H
 #define _LINUX_FTRACE_H
 
+#include <linux/ck_kabi.h>
 #include <linux/trace_clock.h>
 #include <linux/kallsyms.h>
 #include <linux/linkage.h>
@@ -217,6 +218,8 @@ struct ftrace_ops {
 	unsigned long			trampoline_size;
 	struct list_head		list;
 #endif
+
+	CK_KABI_RESERVE(1)
 };
 
 extern struct ftrace_ops __rcu *ftrace_ops_list;

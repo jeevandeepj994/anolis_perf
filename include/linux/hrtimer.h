@@ -12,6 +12,7 @@
 #ifndef _LINUX_HRTIMER_H
 #define _LINUX_HRTIMER_H
 
+#include <linux/ck_kabi.h>
 #include <linux/hrtimer_defs.h>
 #include <linux/rbtree.h>
 #include <linux/init.h>
@@ -124,6 +125,10 @@ struct hrtimer {
 	u8				is_rel;
 	u8				is_soft;
 	u8				is_hard;
+
+	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
+	CK_KABI_RESERVE(3)
 };
 
 /**
@@ -165,6 +170,9 @@ struct hrtimer_clock_base {
 	struct timerqueue_head	active;
 	ktime_t			(*get_time)(void);
 	ktime_t			offset;
+
+	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
 } __hrtimer_clock_base_align;
 
 enum  hrtimer_base_type {
@@ -235,6 +243,9 @@ struct hrtimer_cpu_base {
 	ktime_t				softirq_expires_next;
 	struct hrtimer			*softirq_next_timer;
 	struct hrtimer_clock_base	clock_base[HRTIMER_MAX_CLOCK_BASES];
+
+	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
 } ____cacheline_aligned;
 
 static inline void hrtimer_set_expires(struct hrtimer *timer, ktime_t time)

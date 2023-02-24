@@ -6,6 +6,7 @@
 #ifndef __LINUX_KERNFS_H
 #define __LINUX_KERNFS_H
 
+#include <linux/ck_kabi.h>
 #include <linux/kernel.h>
 #include <linux/err.h>
 #include <linux/list.h>
@@ -98,6 +99,8 @@ struct kernfs_elem_dir {
 	 * better directly in kernfs_node but is here to save space.
 	 */
 	struct kernfs_root	*root;
+
+	CK_KABI_RESERVE(1)
 };
 
 struct kernfs_elem_symlink {
@@ -175,6 +178,11 @@ struct kernfs_syscall_ops {
 		      const char *new_name);
 	int (*show_path)(struct seq_file *sf, struct kernfs_node *kn,
 			 struct kernfs_root *root);
+
+	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
+	CK_KABI_RESERVE(3)
+	CK_KABI_RESERVE(4)
 };
 
 struct kernfs_root {
@@ -268,6 +276,9 @@ struct kernfs_ops {
 #ifdef CONFIG_DEBUG_LOCK_ALLOC
 	struct lock_class_key	lockdep_key;
 #endif
+
+	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
 };
 
 /*
