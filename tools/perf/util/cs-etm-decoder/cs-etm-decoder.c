@@ -35,6 +35,7 @@
 struct cs_etm_decoder {
 	void *data;
 	void (*packet_printer)(const char *msg);
+	bool suppress_printing;
 	dcd_tree_handle_t dcd_tree;
 	cs_etm_mem_cb_type mem_access;
 	ocsd_datapath_resp_t prev_return;
@@ -74,9 +75,10 @@ int cs_etm_decoder__reset(struct cs_etm_decoder *decoder)
 	ocsd_datapath_resp_t dp_ret;
 
 	decoder->prev_return = OCSD_RESP_CONT;
-
+	decoder->suppress_printing = true;
 	dp_ret = ocsd_dt_process_data(decoder->dcd_tree, OCSD_OP_RESET,
 				      0, 0, NULL, NULL);
+	decoder->suppress_printing = false;
 	if (OCSD_DATA_RESP_IS_FATAL(dp_ret))
 		return -1;
 
@@ -146,8 +148,10 @@ static void cs_etm_decoder__print_str_cb(const void *p_context,
 					 const char *msg,
 					 const int str_len)
 {
-	if (p_context && str_len)
-		((struct cs_etm_decoder *)p_context)->packet_printer(msg);
+	const struct cs_etm_decoder *decoder = p_context;
+
+	if (p_context && str_len && !decoder->suppress_printing)
+		decoder->packet_printer(msg);
 }
 
 static int
@@ -682,7 +686,7 @@ cs_etm_decoder__create_etm_decoder(struct cs_etm_decoder_params *d_params,
 }
 
 struct cs_etm_decoder *
-cs_etm_decoder__new(int num_cpu, struct cs_etm_decoder_params *d_params,
+cs_etm_decoder__new(int decoders, struct cs_etm_decoder_params *d_params,
 		    struct cs_etm_trace_params t_params[])
 {
 	struct cs_etm_decoder *decoder;
@@ -727,7 +731,7 @@ cs_etm_decoder__new(int num_cpu, struct cs_etm_decoder_params *d_params,
 	/* init raw frame logging if required */
 	cs_etm_decoder__init_raw_frame_logging(d_params, decoder);
 
-	for (i = 0; i < num_cpu; i++) {
+	for (i = 0; i < decoders; i++) {
 		ret = cs_etm_decoder__create_etm_decoder(d_params,
 							 &t_params[i],
 							 decoder);
