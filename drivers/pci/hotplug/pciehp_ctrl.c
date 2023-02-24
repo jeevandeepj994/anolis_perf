@@ -229,7 +229,7 @@ void pciehp_handle_presence_or_link_change(struct slot *slot, u32 events)
 {
 	u8 slot_state;
 	struct controller *ctrl = slot->ctrl;
-	int present, link_active, pdce;
+	int present, link_active, pdce, dllsce;
 
 	/*
 	 * If the slot is on and presence or link has changed, turn it off.
@@ -261,15 +261,20 @@ void pciehp_handle_presence_or_link_change(struct slot *slot, u32 events)
 	link_active = pciehp_check_link_active(ctrl);
 	slot_state = slot->state;
 	pdce = pciehp_check_present_change_enable(ctrl);
-	ctrl_dbg(ctrl, "%s: P:%d L:%d PDCE:%d PDC:%d S:%d\n", __func__,
-		present, link_active, pdce, (events & PCI_EXP_SLTSTA_PDC), slot_state);
+	dllsce = pciehp_check_data_link_layer_state_change_enable(ctrl);
+	ctrl_dbg(ctrl, "%s: P:%d L:%d PDCE:%d PDC:%d DLLCE:%d DLLC:%d S:%d\n", __func__,
+		present, link_active, pdce, (events & PCI_EXP_SLTSTA_PDC),
+		dllsce, (events & PCI_EXP_SLTSTA_DLLSC), slot_state);
 	/*
 	 * If there is no device link and present, directly return.
 	 * If it's OFF_STATE, but no present-change event, we consider this
 	 * suitation as a noise in safety remove.
 	 */
 	if ((present <= 0 && link_active <= 0) ||
-		(pdce > 0 && !(events & PCI_EXP_SLTSTA_PDC) && slot_state == OFF_STATE)) {
+		(pdce > 0 && dllsce == 0 && !(events & PCI_EXP_SLTSTA_PDC) &&
+		slot_state == OFF_STATE) ||
+		(pdce == 0 && dllsce > 0 && !(events & PCI_EXP_SLTSTA_DLLSC) &&
+		slot_state == OFF_STATE)) {
 		mutex_unlock(&slot->lock);
 		return;
 	} else if (present > 0 && link_active <= 0) {
