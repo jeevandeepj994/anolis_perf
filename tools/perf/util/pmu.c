@@ -17,6 +17,8 @@
 #include <locale.h>
 #include <regex.h>
 #include <perf/cpumap.h>
+#include <fnmatch.h>
+#include <math.h>
 #include "debug.h"
 #include "evsel.h"
 #include "pmu.h"
@@ -688,7 +690,7 @@ static int is_arm_pmu_core(const char *name)
 	return file_available(path);
 }
 
-static char *perf_pmu__getcpuid(struct perf_pmu *pmu)
+char *perf_pmu__getcpuid(struct perf_pmu *pmu)
 {
 	char *cpuid;
 	static bool printed;
@@ -708,36 +710,9 @@ static char *perf_pmu__getcpuid(struct perf_pmu *pmu)
 	return cpuid;
 }
 
-const struct pmu_events_map *perf_pmu__find_map(struct perf_pmu *pmu)
+__weak const struct pmu_event *pmu_events_table__find(void)
 {
-	const struct pmu_events_map *map;
-	char *cpuid = perf_pmu__getcpuid(pmu);
-	int i;
-
-	/* on some platforms which uses cpus map, cpuid can be NULL for
-	 * PMUs other than CORE PMUs.
-	 */
-	if (!cpuid)
-		return NULL;
-
-	i = 0;
-	for (;;) {
-		map = &pmu_events_map[i++];
-		if (!map->table) {
-			map = NULL;
-			break;
-		}
-
-		if (!strcmp_cpuid_str(map->cpuid, cpuid))
-			break;
-	}
-	free(cpuid);
-	return map;
-}
-
-const struct pmu_events_map *__weak pmu_events_map__find(void)
-{
-	return perf_pmu__find_map(NULL);
+	return perf_pmu__find_table(NULL);
 }
 
 bool pmu_uncore_alias_match(const char *pmu_name, const char *name)
@@ -785,8 +760,8 @@ out:
  * to the current running CPU. Then, add all PMU events from that table
  * as aliases.
  */
-void pmu_add_cpu_aliases_map(struct list_head *head, struct perf_pmu *pmu,
-			     const struct pmu_events_map *map)
+void pmu_add_cpu_aliases_table(struct list_head *head, struct perf_pmu *pmu,
+			       const struct pmu_event *table)
 {
 	int i;
 	const char *name = pmu->name;
@@ -796,7 +771,7 @@ void pmu_add_cpu_aliases_map(struct list_head *head, struct perf_pmu *pmu,
 	i = 0;
 	while (1) {
 		const char *cpu_name = is_arm_pmu_core(name) ? name : "cpu";
-		const struct pmu_event *pe = &map->table[i++];
+		const struct pmu_event *pe = &table[i++];
 		const char *pname = pe->pmu ? pe->pmu : cpu_name;
 
 		if (!pe->name) {
@@ -821,40 +796,13 @@ new_alias:
 
 static void pmu_add_cpu_aliases(struct list_head *head, struct perf_pmu *pmu)
 {
-	const struct pmu_events_map *map;
+	const struct pmu_event *table;
 
-	map = perf_pmu__find_map(pmu);
-	if (!map)
+	table = perf_pmu__find_table(pmu);
+	if (!table)
 		return;
 
-	pmu_add_cpu_aliases_map(head, pmu, map);
-}
-
-void pmu_for_each_sys_event(pmu_sys_event_iter_fn fn, void *data)
-{
-	int i = 0;
-
-	while (1) {
-		const struct pmu_sys_events *event_table;
-		int j = 0;
-
-		event_table = &pmu_sys_event_tables[i++];
-
-		if (!event_table->table)
-			break;
-
-		while (1) {
-			const struct pmu_event *pe = &event_table->table[j++];
-			int ret;
-
-			if (!pe->name && !pe->metric_group && !pe->metric_name)
-				break;
-
-			ret = fn(pe, data);
-			if (ret)
-				break;
-		}
-	}
+	pmu_add_cpu_aliases_table(head, pmu, table);
 }
 
 struct pmu_sys_event_iter_data {
@@ -862,7 +810,9 @@ struct pmu_sys_event_iter_data {
 	struct perf_pmu *pmu;
 };
 
-static int pmu_add_sys_aliases_iter_fn(const struct pmu_event *pe, void *data)
+static int pmu_add_sys_aliases_iter_fn(const struct pmu_event *pe,
+				       const struct pmu_event *table __maybe_unused,
+				       void *data)
 {
 	struct pmu_sys_event_iter_data *idata = data;
 	struct perf_pmu *pmu = idata->pmu;
@@ -1877,4 +1827,9 @@ void perf_pmu__warn_invalid_config(struct perf_pmu *pmu, __u64 config,
 	pr_warning("WARNING: event '%s' not valid (bits %s of config "
 		   "'%llx' not supported by kernel)!\n",
 		   name ?: "N/A", buf, config);
+}
+
+double __weak perf_pmu__cpu_slots_per_cycle(void)
+{
+	return NAN;
 }

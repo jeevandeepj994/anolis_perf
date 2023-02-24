@@ -208,8 +208,8 @@ static struct metric *metric__new(const struct pmu_event *pe,
 	m->metric_name = pe->metric_name;
 	m->modifier = modifier ? strdup(modifier) : NULL;
 	if (modifier && !m->modifier) {
-		free(m);
 		expr__ctx_free(m->pctx);
+		free(m);
 		return NULL;
 	}
 	m->metric_expr = pe->metric_expr;
@@ -312,7 +312,7 @@ static int setup_metric_events(struct hashmap *ids,
 		 */
 		metric_id = evsel__metric_id(ev);
 		evlist__for_each_entry_continue(metric_evlist, ev) {
-			if (!strcmp(evsel__metric_id(metric_events[i]), metric_id))
+			if (!strcmp(evsel__metric_id(ev), metric_id))
 				ev->metric_leader = metric_events[i];
 		}
 	}
@@ -500,14 +500,14 @@ struct metricgroup_print_sys_idata {
 	bool details;
 };
 
-typedef int (*metricgroup_sys_event_iter_fn)(const struct pmu_event *pe, void *);
-
 struct metricgroup_iter_data {
-	metricgroup_sys_event_iter_fn fn;
+	pmu_event_iter_fn fn;
 	void *data;
 };
 
-static int metricgroup__sys_event_iter(const struct pmu_event *pe, void *data)
+static int metricgroup__sys_event_iter(const struct pmu_event *pe,
+				       const struct pmu_event *table __maybe_unused,
+				       void *data)
 {
 	struct metricgroup_iter_data *d = data;
 	struct perf_pmu *pmu = NULL;
@@ -520,13 +520,15 @@ static int metricgroup__sys_event_iter(const struct pmu_event *pe, void *data)
 		if (!pmu->id || strcmp(pmu->id, pe->compat))
 			continue;
 
-		return d->fn(pe, d->data);
+		return d->fn(pe, table, d->data);
 	}
 
 	return 0;
 }
 
-static int metricgroup__print_sys_event_iter(const struct pmu_event *pe, void *data)
+static int metricgroup__print_sys_event_iter(const struct pmu_event *pe,
+					     const struct pmu_event *table __maybe_unused,
+					     void *data)
 {
 	struct metricgroup_print_sys_idata *d = data;
 
@@ -537,9 +539,6 @@ static int metricgroup__print_sys_event_iter(const struct pmu_event *pe, void *d
 void metricgroup__print(bool metrics, bool metricgroups, char *filter,
 			bool raw, bool details)
 {
-	const struct pmu_events_map *map = pmu_events_map__find();
-	const struct pmu_event *pe;
-	int i;
 	struct rblist groups;
 	struct rb_node *node, *next;
 	struct strlist *metriclist = NULL;
@@ -554,8 +553,7 @@ void metricgroup__print(bool metrics, bool metricgroups, char *filter,
 	groups.node_new = mep_new;
 	groups.node_cmp = mep_cmp;
 	groups.node_delete = mep_delete;
-	for (i = 0; map; i++) {
-		pe = &map->table[i];
+	for (const struct pmu_event *pe = pmu_events_table__find(); pe; pe++) {
 
 		if (!pe->name && !pe->metric_group && !pe->metric_name)
 			break;
@@ -834,7 +832,7 @@ struct metricgroup_add_iter_data {
 	bool metric_no_group;
 	struct metric *root_metric;
 	const struct visited_metric *visited;
-	const struct pmu_events_map *map;
+	const struct pmu_event *table;
 };
 
 static int add_metric(struct list_head *metric_list,
@@ -843,7 +841,7 @@ static int add_metric(struct list_head *metric_list,
 		      bool metric_no_group,
 		      struct metric *root_metric,
 		      const struct visited_metric *visited,
-		      const struct pmu_events_map *map);
+		      const struct pmu_event *table);
 
 /**
  * resolve_metric - Locate metrics within the root metric and recursively add
@@ -858,7 +856,7 @@ static int add_metric(struct list_head *metric_list,
  *               metrics. When adding a root this argument is NULL.
  * @visited: A singly linked list of metric names being added that is used to
  *           detect recursion.
- * @map: The map that is searched for metrics, most commonly the table for the
+ * @table: The table that is searched for metrics, most commonly the table for the
  *       architecture perf is running upon.
  */
 static int resolve_metric(struct list_head *metric_list,
@@ -866,7 +864,7 @@ static int resolve_metric(struct list_head *metric_list,
 			  bool metric_no_group,
 			  struct metric *root_metric,
 			  const struct visited_metric *visited,
-			  const struct pmu_events_map *map)
+			  const struct pmu_event *table)
 {
 	struct hashmap_entry *cur;
 	size_t bkt;
@@ -888,7 +886,7 @@ static int resolve_metric(struct list_head *metric_list,
 	hashmap__for_each_entry(root_metric->pctx->ids, cur, bkt) {
 		const struct pmu_event *pe;
 
-		pe = metricgroup__find_metric(cur->key, map);
+		pe = metricgroup__find_metric(cur->key, table);
 		if (pe) {
 			pending = realloc(pending,
 					(pending_cnt + 1) * sizeof(struct to_resolve));
@@ -911,7 +909,7 @@ static int resolve_metric(struct list_head *metric_list,
 	 */
 	for (i = 0; i < pending_cnt; i++) {
 		ret = add_metric(metric_list, pending[i].pe, modifier, metric_no_group,
-				root_metric, visited, map);
+				root_metric, visited, table);
 		if (ret)
 			break;
 	}
@@ -934,7 +932,7 @@ static int resolve_metric(struct list_head *metric_list,
  *               metrics. When adding a root this argument is NULL.
  * @visited: A singly linked list of metric names being added that is used to
  *           detect recursion.
- * @map: The map that is searched for metrics, most commonly the table for the
+ * @table: The table that is searched for metrics, most commonly the table for the
  *       architecture perf is running upon.
  */
 static int __add_metric(struct list_head *metric_list,
@@ -944,7 +942,7 @@ static int __add_metric(struct list_head *metric_list,
 			int runtime,
 			struct metric *root_metric,
 			const struct visited_metric *visited,
-			const struct pmu_events_map *map)
+			const struct pmu_event *table)
 {
 	const struct visited_metric *vm;
 	int ret;
@@ -1016,7 +1014,7 @@ static int __add_metric(struct list_head *metric_list,
 	} else {
 		/* Resolve referenced metrics. */
 		ret = resolve_metric(metric_list, modifier, metric_no_group, root_metric,
-				     &visited_node, map);
+				     &visited_node, table);
 	}
 
 	if (ret) {
@@ -1029,25 +1027,25 @@ static int __add_metric(struct list_head *metric_list,
 	return ret;
 }
 
-#define map_for_each_event(__pe, __idx, __map)					\
-	if (__map)								\
-		for (__idx = 0, __pe = &__map->table[__idx];			\
+#define table_for_each_event(__pe, __idx, __table)					\
+	if (__table)								\
+		for (__idx = 0, __pe = &__table[__idx];				\
 		     __pe->name || __pe->metric_group || __pe->metric_name;	\
-		     __pe = &__map->table[++__idx])
+		     __pe = &__table[++__idx])
 
-#define map_for_each_metric(__pe, __idx, __map, __metric)		\
-	map_for_each_event(__pe, __idx, __map)				\
+#define table_for_each_metric(__pe, __idx, __table, __metric)		\
+	table_for_each_event(__pe, __idx, __table)				\
 		if (__pe->metric_expr &&				\
 		    (match_metric(__pe->metric_group, __metric) ||	\
 		     match_metric(__pe->metric_name, __metric)))
 
 const struct pmu_event *metricgroup__find_metric(const char *metric,
-						 const struct pmu_events_map *map)
+						 const struct pmu_event *table)
 {
 	const struct pmu_event *pe;
 	int i;
 
-	map_for_each_event(pe, i, map) {
+	table_for_each_event(pe, i, table) {
 		if (match_metric(pe->metric_name, metric))
 			return pe;
 	}
@@ -1061,7 +1059,7 @@ static int add_metric(struct list_head *metric_list,
 		      bool metric_no_group,
 		      struct metric *root_metric,
 		      const struct visited_metric *visited,
-		      const struct pmu_events_map *map)
+		      const struct pmu_event *table)
 {
 	int ret = 0;
 
@@ -1069,7 +1067,7 @@ static int add_metric(struct list_head *metric_list,
 
 	if (!strstr(pe->metric_expr, "?")) {
 		ret = __add_metric(metric_list, pe, modifier, metric_no_group, 0,
-				   root_metric, visited, map);
+				   root_metric, visited, table);
 	} else {
 		int j, count;
 
@@ -1082,13 +1080,14 @@ static int add_metric(struct list_head *metric_list,
 
 		for (j = 0; j < count && !ret; j++)
 			ret = __add_metric(metric_list, pe, modifier, metric_no_group, j,
-					root_metric, visited, map);
+					root_metric, visited, table);
 	}
 
 	return ret;
 }
 
 static int metricgroup__add_metric_sys_event_iter(const struct pmu_event *pe,
+						  const struct pmu_event *table __maybe_unused,
 						  void *data)
 {
 	struct metricgroup_add_iter_data *d = data;
@@ -1098,7 +1097,7 @@ static int metricgroup__add_metric_sys_event_iter(const struct pmu_event *pe,
 		return 0;
 
 	ret = add_metric(d->metric_list, pe, d->modifier, d->metric_no_group,
-			 d->root_metric, d->visited, d->map);
+			 d->root_metric, d->visited, d->table);
 	if (ret)
 		goto out;
 
@@ -1142,13 +1141,13 @@ static int metric_list_cmp(void *priv __maybe_unused, const struct list_head *l,
  *                   global. Grouping is the default but due to multiplexing the
  *                   user may override.
  * @metric_list: The list that the metric or metric group are added to.
- * @map: The map that is searched for metrics, most commonly the table for the
+ * @table: The table that is searched for metrics, most commonly the table for the
  *       architecture perf is running upon.
  */
 static int metricgroup__add_metric(const char *metric_name, const char *modifier,
 				   bool metric_no_group,
 				   struct list_head *metric_list,
-				   const struct pmu_events_map *map)
+				   const struct pmu_event *table)
 {
 	const struct pmu_event *pe;
 	LIST_HEAD(list);
@@ -1159,11 +1158,11 @@ static int metricgroup__add_metric(const char *metric_name, const char *modifier
 	 * Iterate over all metrics seeing if metric matches either the name or
 	 * group. When it does add the metric to the list.
 	 */
-	map_for_each_metric(pe, i, map, metric_name) {
+	table_for_each_metric(pe, i, table, metric_name) {
 		has_match = true;
 		ret = add_metric(&list, pe, modifier, metric_no_group,
 				 /*root_metric=*/NULL,
-				 /*visited_metrics=*/NULL, map);
+				 /*visited_metrics=*/NULL, table);
 		if (ret)
 			goto out;
 	}
@@ -1178,7 +1177,7 @@ static int metricgroup__add_metric(const char *metric_name, const char *modifier
 				.metric_no_group = metric_no_group,
 				.has_match = &has_match,
 				.ret = &ret,
-				.map = map,
+				.table = table,
 			},
 		};
 
@@ -1207,12 +1206,12 @@ out:
  *                   global. Grouping is the default but due to multiplexing the
  *                   user may override.
  * @metric_list: The list that metrics are added to.
- * @map: The map that is searched for metrics, most commonly the table for the
+ * @table: The table that is searched for metrics, most commonly the table for the
  *       architecture perf is running upon.
  */
 static int metricgroup__add_metric_list(const char *list, bool metric_no_group,
 					struct list_head *metric_list,
-					const struct pmu_events_map *map)
+					const struct pmu_event *table)
 {
 	char *list_itr, *list_copy, *metric_name, *modifier;
 	int ret, count = 0;
@@ -1229,7 +1228,7 @@ static int metricgroup__add_metric_list(const char *list, bool metric_no_group,
 
 		ret = metricgroup__add_metric(metric_name, modifier,
 					      metric_no_group, metric_list,
-					      map);
+					      table);
 		if (ret == -EINVAL)
 			pr_err("Cannot find metric or group `%s'\n", metric_name);
 
@@ -1380,7 +1379,7 @@ static int parse_groups(struct evlist *perf_evlist, const char *str,
 			bool metric_no_merge,
 			struct perf_pmu *fake_pmu,
 			struct rblist *metric_events_list,
-			const struct pmu_events_map *map)
+			const struct pmu_event *table)
 {
 	struct evlist *combined_evlist = NULL;
 	LIST_HEAD(metric_list);
@@ -1390,7 +1389,7 @@ static int parse_groups(struct evlist *perf_evlist, const char *str,
 	if (metric_events_list->nr_entries == 0)
 		metricgroup__rblist_init(metric_events_list);
 	ret = metricgroup__add_metric_list(str, metric_no_group,
-					   &metric_list, map);
+					   &metric_list, table);
 	if (ret)
 		goto out;
 
@@ -1522,34 +1521,34 @@ int metricgroup__parse_groups(const struct option *opt,
 			      struct rblist *metric_events)
 {
 	struct evlist *perf_evlist = *(struct evlist **)opt->value;
-	const struct pmu_events_map *map = pmu_events_map__find();
+	const struct pmu_event *table = pmu_events_table__find();
 
 	return parse_groups(perf_evlist, str, metric_no_group,
-			    metric_no_merge, NULL, metric_events, map);
+			    metric_no_merge, NULL, metric_events, table);
 }
 
 int metricgroup__parse_groups_test(struct evlist *evlist,
-				   const struct pmu_events_map *map,
+				   const struct pmu_event *table,
 				   const char *str,
 				   bool metric_no_group,
 				   bool metric_no_merge,
 				   struct rblist *metric_events)
 {
 	return parse_groups(evlist, str, metric_no_group,
-			    metric_no_merge, &perf_pmu__fake, metric_events, map);
+			    metric_no_merge, &perf_pmu__fake, metric_events, table);
 }
 
 bool metricgroup__has_metric(const char *metric)
 {
-	const struct pmu_events_map *map = pmu_events_map__find();
+	const struct pmu_event *table = pmu_events_table__find();
 	const struct pmu_event *pe;
 	int i;
 
-	if (!map)
+	if (!table)
 		return false;
 
 	for (i = 0; ; i++) {
-		pe = &map->table[i];
+		pe = &table[i];
 
 		if (!pe->name && !pe->metric_group && !pe->metric_name)
 			break;

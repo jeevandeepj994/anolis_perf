@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: GPL-2.0
 
-#include "../../util/cpumap.h"
-#include "../../util/pmu.h"
+#include "../../../util/cpumap.h"
+#include "../../../util/pmu.h"
+#include <api/fs/fs.h>
+#include <math.h>
 
-const struct pmu_events_map *pmu_events_map__find(void)
+static struct perf_pmu *pmu__find_core_pmu(void)
 {
 	struct perf_pmu *pmu = NULL;
 
@@ -18,8 +20,37 @@ const struct pmu_events_map *pmu_events_map__find(void)
 		if (pmu->cpus->nr != cpu__max_cpu())
 			return NULL;
 
-		return perf_pmu__find_map(pmu);
+		return pmu;
 	}
 
 	return NULL;
+}
+
+const struct pmu_event *pmu_events_table__find(void)
+{
+	struct perf_pmu *pmu = pmu__find_core_pmu();
+
+	if (pmu)
+		return perf_pmu__find_table(pmu);
+
+	return NULL;
+}
+
+double perf_pmu__cpu_slots_per_cycle(void)
+{
+	char path[PATH_MAX];
+	unsigned long long slots = 0;
+	struct perf_pmu *pmu = pmu__find_core_pmu();
+
+	if (pmu) {
+		scnprintf(path, PATH_MAX,
+			EVENT_SOURCE_DEVICE_PATH "%s/caps/slots", pmu->name);
+		/*
+		 * The value of slots is not greater than 32 bits, but sysfs__read_int
+		 * can't read value with 0x prefix, so use sysfs__read_ull instead.
+		 */
+		sysfs__read_ull(path, &slots);
+	}
+
+	return slots ? (double)slots : NAN;
 }
