@@ -2696,6 +2696,28 @@ static inline bool tcp_reqsk_queue_empty(struct sock *sk)
 	return reqsk_queue_empty(queue);
 }
 
+static void smc_fback_sock_def_wakeup(struct sock *sk)
+{
+	struct socket_wq *wq;
+
+	rcu_read_lock();
+	wq = rcu_dereference(sk->sk_wq);
+	if (skwq_has_sleeper(wq))
+		wake_up_interruptible_all(&wq->wait);
+	rcu_read_unlock();
+}
+
+static void smc_fback_sock_wakeup(struct sock *sk)
+{
+	/* check state change */
+	if ((1 << sk->sk_state) &
+	    (TCPF_FIN_WAIT1 | TCPF_FIN_WAIT2 | TCPF_CLOSE_WAIT)) {
+		smc_sock_perform_collecting_info(sk, SMC_SOCK_CLOSED_TIMING);
+		sk->sk_state_change = smc_fback_sock_def_wakeup;
+	}
+	return smc_fback_sock_def_wakeup(sk);
+}
+
 static inline void
 smc_restore_fbsock_protocol_family(struct socket *new_sock, struct socket *sock)
 {
@@ -2704,6 +2726,8 @@ smc_restore_fbsock_protocol_family(struct socket *new_sock, struct socket *sock)
 	new_sock->sk->sk_data_ready = lsmc->fbsock->sk->sk_data_ready;
 	new_sock->ops = lsmc->fbsock->ops;
 	new_sock->type = lsmc->fbsock->type;
+
+	new_sock->sk->sk_state_change = smc_fback_sock_wakeup;
 
 	module_put(sock->ops->owner);
 	__module_get(new_sock->ops->owner);
