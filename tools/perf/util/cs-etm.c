@@ -460,6 +460,21 @@ static void cs_etm__set_trace_param_etmv4(struct cs_etm_trace_params *t_params,
 	t_params[idx].etmv4.reg_traceidr = metadata[idx][CS_ETMV4_TRCTRACEIDR];
 }
 
+static void cs_etm__set_trace_param_ete(struct cs_etm_trace_params *t_params,
+					  struct cs_etm_auxtrace *etm, int idx)
+{
+	u64 **metadata = etm->metadata;
+
+	t_params[idx].protocol = CS_ETM_PROTO_ETE;
+	t_params[idx].ete.reg_idr0 = metadata[idx][CS_ETMV4_TRCIDR0];
+	t_params[idx].ete.reg_idr1 = metadata[idx][CS_ETMV4_TRCIDR1];
+	t_params[idx].ete.reg_idr2 = metadata[idx][CS_ETMV4_TRCIDR2];
+	t_params[idx].ete.reg_idr8 = metadata[idx][CS_ETMV4_TRCIDR8];
+	t_params[idx].ete.reg_configr = metadata[idx][CS_ETMV4_TRCCONFIGR];
+	t_params[idx].ete.reg_traceidr = metadata[idx][CS_ETMV4_TRCTRACEIDR];
+	t_params[idx].ete.reg_devarch = metadata[idx][CS_ETE_TRCDEVARCH];
+}
+
 static int cs_etm__init_trace_params(struct cs_etm_trace_params *t_params,
 				     struct cs_etm_auxtrace *etm,
 				     int decoders)
@@ -478,6 +493,9 @@ static int cs_etm__init_trace_params(struct cs_etm_trace_params *t_params,
 			break;
 		case __perf_cs_etmv4_magic:
 			cs_etm__set_trace_param_etmv4(t_params, etm, i);
+			break;
+		case __perf_cs_ete_magic:
+			cs_etm__set_trace_param_ete(t_params, etm, i);
 			break;
 		default:
 			return -EINVAL;
@@ -519,8 +537,8 @@ static void cs_etm__dump_event(struct cs_etm_queue *etmq,
 
 	fprintf(stdout, "\n");
 	color_fprintf(stdout, color,
-		     ". ... CoreSight ETM Trace data: size %zu bytes\n",
-		     buffer->size);
+		     ". ... CoreSight %s Trace data: size %zu bytes\n",
+		     cs_etm_decoder__get_name(etmq->decoder), buffer->size);
 
 	do {
 		size_t consumed;
@@ -716,8 +734,17 @@ static u32 cs_etm__mem_access(struct cs_etm_queue *etmq, u8 trace_chan_id,
 
 	len = dso__data_read_offset(al.map->dso, machine, offset, buffer, size);
 
-	if (len <= 0)
+	if (len <= 0) {
+		ui__warning_once("CS ETM Trace: Missing DSO. Use 'perf archive' or debuginfod to export data from the traced system.\n"
+				 "              Enable CONFIG_PROC_KCORE or use option '-k /path/to/vmlinux' for kernel symbols.\n");
+		if (!al.map->dso->auxtrace_warned) {
+			pr_err("CS ETM Trace: Debug data not found for address %#"PRIx64" in %s\n",
+				    address,
+				    al.map->dso->long_name ? al.map->dso->long_name : "Unknown");
+			al.map->dso->auxtrace_warned = true;
+		}
 		return 0;
+	}
 
 	return len;
 }
@@ -2512,6 +2539,7 @@ static const char * const cs_etmv4_priv_fmts[] = {
 	[CS_ETMV4_TRCIDR2]	= "	TRCIDR2			       %llx\n",
 	[CS_ETMV4_TRCIDR8]	= "	TRCIDR8			       %llx\n",
 	[CS_ETMV4_TRCAUTHSTATUS] = "	TRCAUTHSTATUS		       %llx\n",
+	[CS_ETE_TRCDEVARCH]	= "	TRCDEVARCH                     %llx\n"
 };
 
 static const char * const param_unk_fmt =
@@ -2571,10 +2599,15 @@ static int cs_etm__print_cpu_metadata_v1(__u64 *val, int *offset)
 			else
 				fprintf(stdout, cs_etm_priv_fmts[j], val[i]);
 		}
-	} else if (magic == __perf_cs_etmv4_magic) {
+	} else if (magic == __perf_cs_etmv4_magic || magic == __perf_cs_ete_magic) {
+		/*
+		 * ETE and ETMv4 can be printed in the same block because the number of parameters
+		 * is saved and they share the list of parameter names. ETE is also only supported
+		 * in V1 files.
+		 */
 		for (j = 0; j < total_params; j++, i++) {
 			/* if newer record - could be excess params */
-			if (j >= CS_ETMV4_PRIV_MAX)
+			if (j >= CS_ETE_PRIV_MAX)
 				fprintf(stdout, param_unk_fmt, j, val[i]);
 			else
 				fprintf(stdout, cs_etmv4_priv_fmts[j], val[i]);
@@ -2943,6 +2976,16 @@ int cs_etm__process_auxtrace_info(union perf_event *event,
 
 			/* The traceID is our handle */
 			trcidr_idx = CS_ETMV4_TRCTRACEIDR;
+		} else if (ptr[i] == __perf_cs_ete_magic) {
+			metadata[j] = cs_etm__create_meta_blk(ptr, &i, CS_ETE_PRIV_MAX, -1);
+
+			/* ETE shares first part of metadata with ETMv4 */
+			trcidr_idx = CS_ETMV4_TRCTRACEIDR;
+		} else {
+			ui__error("CS ETM Trace: Unrecognised magic number %#"PRIx64". File could be from a newer version of perf.\n",
+				  ptr[i]);
+			err = -EINVAL;
+			goto err_free_metadata;
 		}
 
 		if (!metadata[j]) {
