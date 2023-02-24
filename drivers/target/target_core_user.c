@@ -17,6 +17,8 @@
 #include <linux/radix-tree.h>
 #include <linux/stringify.h>
 #include <linux/bitops.h>
+#include <linux/sched/mm.h>
+#include <linux/mm.h>
 #include <linux/highmem.h>
 #include <linux/configfs.h>
 #include <linux/mutex.h>
@@ -74,6 +76,7 @@
 #define DATA_BLOCK_SIZE PAGE_SIZE
 #define DATA_BLOCK_SHIFT PAGE_SHIFT
 #define DATA_BLOCK_BITS_DEF (256 * 1024)
+#define ZC_DATA_BLOCK_BITS_DEF (256 * 1024)
 
 #define TCMU_MBS_TO_BLOCKS(_mbs) (_mbs << (20 - DATA_BLOCK_SHIFT))
 #define TCMU_BLOCKS_TO_MBS(_blocks) (_blocks >> (20 - DATA_BLOCK_SHIFT))
@@ -122,6 +125,8 @@ struct tcmu_dev {
 #define TCMU_DEV_BIT_BROKEN 1
 #define TCMU_DEV_BIT_BLOCKED 2
 #define TCMU_DEV_BIT_TMR_NOTIFY 3
+#define TCMU_DEV_BIT_READ_BYPASS_DATA_AREA 4
+#define TCMU_DEV_BIT_WRITE_BYPASS_DATA_AREA 5
 	unsigned long flags;
 
 	struct uio_info uio_info;
@@ -138,10 +143,13 @@ struct tcmu_dev {
 	/* Must add data_off and mb_addr to get the address */
 	size_t data_off;
 	size_t data_size;
+	size_t zc_data_size;
 	uint32_t max_blocks;
+	uint32_t zc_max_blocks;
 	size_t mmap_pages;
 
 	struct mutex cmdr_lock;
+	struct rw_semaphore i_mmap_sem;
 	struct list_head qfull_queue;
 	struct list_head tmr_queue;
 
@@ -149,6 +157,12 @@ struct tcmu_dev {
 	uint32_t dbi_thresh;
 	unsigned long *data_bitmap;
 	struct radix_tree_root data_blocks;
+
+	uint32_t zc_dbi_max;
+	uint32_t zc_dbi_thresh;
+	unsigned long *zc_data_bitmap;
+	uint32_t read_zc_size;
+	uint32_t write_zc_size;
 
 	struct idr commands;
 
@@ -175,6 +189,12 @@ struct tcmu_cmd {
 	struct tcmu_dev *tcmu_dev;
 	struct list_head queue_entry;
 
+	/* for zero_copy */
+	struct mm_struct *vma_vm_mm;
+	struct vm_area_struct *vma;
+	struct iovec *iov;
+	int iov_cnt;
+
 	uint16_t cmd_id;
 
 	/* Can't use se_cmd when cleaning up expired cmds, because if
@@ -189,7 +209,11 @@ struct tcmu_cmd {
 	unsigned long deadline;
 
 #define TCMU_CMD_BIT_EXPIRED 0
+#define TCMU_CMD_BIT_ZEROCOPY 1
+#define TCMU_CMD_BIT_BYPASS_DATA_AREA 2
 	unsigned long flags;
+
+	struct mutex cmd_lock;
 };
 
 struct tcmu_tmr {
@@ -492,10 +516,38 @@ static struct genl_family tcmu_genl_family __ro_after_init = {
 static void tcmu_cmd_free_data(struct tcmu_cmd *tcmu_cmd, uint32_t len)
 {
 	struct tcmu_dev *udev = tcmu_cmd->tcmu_dev;
+	unsigned long *data_bitmap;
 	uint32_t i;
 
+	if (test_bit(TCMU_CMD_BIT_ZEROCOPY, &tcmu_cmd->flags))
+		data_bitmap = udev->zc_data_bitmap;
+	else
+		data_bitmap = udev->data_bitmap;
+
 	for (i = 0; i < len; i++)
-		clear_bit(tcmu_cmd->dbi[i], udev->data_bitmap);
+		clear_bit(tcmu_cmd->dbi[i], data_bitmap);
+}
+
+static inline int tcmu_get_zc_empty_block(struct tcmu_dev *udev,
+					  struct tcmu_cmd *tcmu_cmd,
+					  int prev_dbi, int *iov_cnt)
+{
+	int dbi;
+
+	dbi = find_first_zero_bit(udev->zc_data_bitmap, udev->zc_dbi_thresh);
+	if (dbi == udev->zc_dbi_thresh)
+		return -1;
+
+	if (dbi > udev->zc_dbi_max)
+		udev->zc_dbi_max = dbi;
+
+	set_bit(dbi, udev->zc_data_bitmap);
+	tcmu_cmd_set_dbi(tcmu_cmd, dbi);
+
+	if (dbi != prev_dbi + 1)
+		*iov_cnt += 1;
+
+	return dbi;
 }
 
 static inline int tcmu_get_empty_block(struct tcmu_dev *udev,
@@ -543,14 +595,18 @@ err_alloc:
 }
 
 static int tcmu_get_empty_blocks(struct tcmu_dev *udev,
-				 struct tcmu_cmd *tcmu_cmd, int dbi_cnt)
+				 struct tcmu_cmd *tcmu_cmd, int dbi_cnt,
+				 bool zero_copy)
 {
 	/* start value of dbi + 1 must not be a valid dbi */
 	int dbi = -2;
 	int i, iov_cnt = 0;
 
 	for (i = 0; i < dbi_cnt; i++) {
-		dbi = tcmu_get_empty_block(udev, tcmu_cmd, dbi, &iov_cnt);
+		if (zero_copy)
+			dbi = tcmu_get_zc_empty_block(udev, tcmu_cmd, dbi, &iov_cnt);
+		else
+			dbi = tcmu_get_empty_block(udev, tcmu_cmd, dbi, &iov_cnt);
 		if (dbi < 0)
 			return -1;
 	}
@@ -563,8 +619,40 @@ tcmu_get_block_page(struct tcmu_dev *udev, uint32_t dbi)
 	return radix_tree_lookup(&udev->data_blocks, dbi);
 }
 
+static void tcmu_cmd_zerocopy_unmap(struct tcmu_cmd *cmd)
+{
+	struct mm_struct *mm;
+	struct vm_area_struct *vma;
+	struct iovec *iov = cmd->iov;
+	unsigned long address;
+	int i;
+
+	mm = cmd->vma_vm_mm;
+	vma = cmd->vma;
+	if (!mm)
+		return;
+
+	if (mmget_not_zero(mm)) {
+		mmap_read_lock(mm);
+		for (i = 0; i < cmd->iov_cnt; i++) {
+			address = (unsigned long)iov->iov_base;
+			zap_page_range(vma, address, iov->iov_len);
+			iov++;
+		}
+		mmap_read_unlock(mm);
+		mmput(mm);
+	}
+
+	cmd->vma_vm_mm = NULL;
+	cmd->vma = NULL;
+	mmdrop(mm);
+	kfree(cmd->iov);
+}
+
 static inline void tcmu_free_cmd(struct tcmu_cmd *tcmu_cmd)
 {
+	if (test_bit(TCMU_CMD_BIT_ZEROCOPY, &tcmu_cmd->flags))
+		tcmu_cmd_zerocopy_unmap(tcmu_cmd);
 	kfree(tcmu_cmd->dbi);
 	kmem_cache_free(tcmu_cmd_cache, tcmu_cmd);
 }
@@ -623,11 +711,67 @@ static void tcmu_setup_iovs(struct tcmu_dev *udev, struct tcmu_cmd *cmd,
 		dbi = new_block_to_iov(udev, cmd, iov, dbi, &data_length);
 }
 
+static void tcmu_set_cmd_bypass_data_area(struct tcmu_cmd *tcmu_cmd)
+{
+	struct tcmu_dev *udev = tcmu_cmd->tcmu_dev;
+	struct se_cmd *se_cmd = tcmu_cmd->se_cmd;
+
+	/*
+	 * Zero copy is map sg pages to userspace, and bypass data area
+	 * is copy data between sg pages and userspace buffer, so they
+	 * are completely different.
+	 */
+	if (test_bit(TCMU_CMD_BIT_ZEROCOPY, &tcmu_cmd->flags))
+		return;
+
+	if (se_cmd->data_direction == DMA_FROM_DEVICE &&
+	    test_bit(TCMU_DEV_BIT_READ_BYPASS_DATA_AREA, &udev->flags))
+		set_bit(TCMU_CMD_BIT_BYPASS_DATA_AREA, &tcmu_cmd->flags);
+
+	if (se_cmd->data_direction == DMA_TO_DEVICE &&
+	    test_bit(TCMU_DEV_BIT_WRITE_BYPASS_DATA_AREA, &udev->flags))
+		set_bit(TCMU_CMD_BIT_BYPASS_DATA_AREA, &tcmu_cmd->flags);
+}
+
+static void tcmu_set_cmd_do_zero_copy(struct tcmu_cmd *tcmu_cmd)
+{
+	struct tcmu_dev *udev = tcmu_cmd->tcmu_dev;
+	struct se_cmd *se_cmd = tcmu_cmd->se_cmd;
+	struct scatterlist *data_sg = se_cmd->t_data_sg, *sg;
+	unsigned int data_nents = se_cmd->t_data_nents;
+	int i;
+
+	if ((se_cmd->se_cmd_flags & SCF_BIDI) || !se_cmd->data_length ||
+	    !IS_ALIGNED(se_cmd->data_length, PAGE_SIZE))
+		return;
+
+	if ((se_cmd->data_direction == DMA_FROM_DEVICE) &&
+	    (!udev->read_zc_size ||
+	     se_cmd->data_length < (udev->read_zc_size << 10)))
+		return;
+
+	if ((se_cmd->data_direction == DMA_TO_DEVICE) &&
+	    (!udev->write_zc_size ||
+	     se_cmd->data_length < (udev->write_zc_size << 10)))
+		return;
+
+	/* Now, check every sg pages is aligned. */
+	for_each_sg(data_sg, sg, data_nents, i) {
+		if ((sg->offset && !IS_ALIGNED(sg->offset, PAGE_SIZE)) ||
+		    !IS_ALIGNED(sg->length, PAGE_SIZE))
+			break;
+	}
+	if (i == data_nents)
+		set_bit(TCMU_CMD_BIT_ZEROCOPY, &tcmu_cmd->flags);
+}
+
 static struct tcmu_cmd *tcmu_alloc_cmd(struct se_cmd *se_cmd)
 {
 	struct se_device *se_dev = se_cmd->se_dev;
 	struct tcmu_dev *udev = TCMU_DEV(se_dev);
 	struct tcmu_cmd *tcmu_cmd;
+	bool zero_copy;
+	bool bypass_data_area;
 
 	tcmu_cmd = kmem_cache_zalloc(tcmu_cmd_cache, GFP_NOIO);
 	if (!tcmu_cmd)
@@ -636,13 +780,24 @@ static struct tcmu_cmd *tcmu_alloc_cmd(struct se_cmd *se_cmd)
 	INIT_LIST_HEAD(&tcmu_cmd->queue_entry);
 	tcmu_cmd->se_cmd = se_cmd;
 	tcmu_cmd->tcmu_dev = udev;
+	mutex_init(&tcmu_cmd->cmd_lock);
 
-	tcmu_cmd_set_block_cnts(tcmu_cmd);
-	tcmu_cmd->dbi = kcalloc(tcmu_cmd->dbi_cnt, sizeof(uint32_t),
-				GFP_NOIO);
-	if (!tcmu_cmd->dbi) {
-		kmem_cache_free(tcmu_cmd_cache, tcmu_cmd);
-		return NULL;
+	tcmu_set_cmd_do_zero_copy(tcmu_cmd);
+	tcmu_set_cmd_bypass_data_area(tcmu_cmd);
+
+	zero_copy = test_bit(TCMU_CMD_BIT_ZEROCOPY, &tcmu_cmd->flags);
+	bypass_data_area = test_bit(TCMU_CMD_BIT_BYPASS_DATA_AREA, &tcmu_cmd->flags);
+	if (zero_copy || !bypass_data_area) {
+		tcmu_cmd_set_block_cnts(tcmu_cmd);
+		tcmu_cmd->dbi = kcalloc(tcmu_cmd->dbi_cnt, sizeof(uint32_t),
+					GFP_KERNEL);
+		if (!tcmu_cmd->dbi) {
+			kmem_cache_free(tcmu_cmd_cache, tcmu_cmd);
+			return NULL;
+		}
+	} else {
+		tcmu_cmd->dbi_cnt = 0;
+		tcmu_cmd->dbi = NULL;
 	}
 
 	return tcmu_cmd;
@@ -847,38 +1002,52 @@ static bool is_ring_space_avail(struct tcmu_dev *udev, size_t cmd_size)
  * Called with ring lock held.
  */
 static int tcmu_alloc_data_space(struct tcmu_dev *udev, struct tcmu_cmd *cmd,
-				  int *iov_bidi_cnt)
+				  int *iov_bidi_cnt, bool zero_copy)
 {
 	int space, iov_cnt = 0, ret = 0;
+	unsigned long *data_bitmap;
+	uint32_t *dbi_thresh, max_blocks;
 
-	if (!cmd->dbi_cnt)
+	if (test_bit(TCMU_CMD_BIT_BYPASS_DATA_AREA, &cmd->flags))
 		goto wr_iov_cnts;
 
+	if (zero_copy) {
+		data_bitmap = udev->zc_data_bitmap;
+		dbi_thresh = &udev->zc_dbi_thresh;
+		max_blocks = udev->zc_max_blocks;
+	} else {
+		data_bitmap = udev->data_bitmap;
+		dbi_thresh = &udev->dbi_thresh;
+		max_blocks = udev->max_blocks;
+	}
+
 	/* try to check and get the data blocks as needed */
-	space = spc_bitmap_free(udev->data_bitmap, udev->dbi_thresh);
+	space = spc_bitmap_free(data_bitmap, *dbi_thresh);
 	if (space < cmd->dbi_cnt) {
-		unsigned long blocks_left =
-				(udev->max_blocks - udev->dbi_thresh) + space;
+		unsigned long blocks_left = max_blocks - *dbi_thresh + space;
 
 		if (blocks_left < cmd->dbi_cnt) {
-			pr_debug("no data space: only %lu available, but ask for %lu\n",
+			pr_debug("no data space[%s]: only %lu available, but ask for %lu\n",
+					zero_copy ? "zero copy" : "non zero copy",
 					blocks_left * DATA_BLOCK_SIZE,
 					cmd->dbi_cnt * DATA_BLOCK_SIZE);
 			return -1;
 		}
 
-		udev->dbi_thresh += cmd->dbi_cnt;
-		if (udev->dbi_thresh > udev->max_blocks)
-			udev->dbi_thresh = udev->max_blocks;
+		*dbi_thresh += cmd->dbi_cnt;
+		if (*dbi_thresh > max_blocks)
+			*dbi_thresh = max_blocks;
 	}
 
 	iov_cnt = tcmu_get_empty_blocks(udev, cmd,
-					cmd->dbi_cnt - cmd->dbi_bidi_cnt);
+					cmd->dbi_cnt - cmd->dbi_bidi_cnt,
+					zero_copy);
 	if (iov_cnt < 0)
 		return -1;
 
 	if (cmd->dbi_bidi_cnt) {
-		ret = tcmu_get_empty_blocks(udev, cmd, cmd->dbi_bidi_cnt);
+		ret = tcmu_get_empty_blocks(udev, cmd, cmd->dbi_bidi_cnt,
+					    zero_copy);
 		if (ret < 0)
 			return -1;
 	}
@@ -999,6 +1168,8 @@ static int queue_cmd_ring(struct tcmu_cmd *tcmu_cmd, sense_reason_t *scsi_err)
 	uint64_t cdb_off;
 	/* size of data buffer needed */
 	size_t data_length = (size_t)tcmu_cmd->dbi_cnt * DATA_BLOCK_SIZE;
+	bool zero_copy = test_bit(TCMU_CMD_BIT_ZEROCOPY, &tcmu_cmd->flags);
+	bool bypass_data_area = test_bit(TCMU_CMD_BIT_BYPASS_DATA_AREA, &tcmu_cmd->flags);
 
 	*scsi_err = TCM_NO_SENSE;
 
@@ -1022,7 +1193,7 @@ static int queue_cmd_ring(struct tcmu_cmd *tcmu_cmd, sense_reason_t *scsi_err)
 		return -1;
 	}
 
-	iov_cnt = tcmu_alloc_data_space(udev, tcmu_cmd, &iov_bidi_cnt);
+	iov_cnt = tcmu_alloc_data_space(udev, tcmu_cmd, &iov_bidi_cnt, zero_copy);
 	if (iov_cnt < 0)
 		goto free_and_queue;
 
@@ -1071,16 +1242,18 @@ static int queue_cmd_ring(struct tcmu_cmd *tcmu_cmd, sense_reason_t *scsi_err)
 	tcmu_cmd_reset_dbi_cur(tcmu_cmd);
 	iov = &entry->req.iov[0];
 
-	if (se_cmd->data_direction == DMA_TO_DEVICE ||
-	    se_cmd->se_cmd_flags & SCF_BIDI)
-		scatter_data_area(udev, tcmu_cmd, &iov);
-	else
-		tcmu_setup_iovs(udev, tcmu_cmd, &iov, se_cmd->data_length);
+	if (zero_copy || !bypass_data_area) {
+		if (((se_cmd->data_direction == DMA_TO_DEVICE) && !zero_copy) ||
+		se_cmd->se_cmd_flags & SCF_BIDI)
+			scatter_data_area(udev, tcmu_cmd, &iov);
+		else
+			tcmu_setup_iovs(udev, tcmu_cmd, &iov, se_cmd->data_length);
+	}
 
 	entry->req.iov_cnt = iov_cnt - iov_bidi_cnt;
 
 	/* Handle BIDI commands */
-	if (se_cmd->se_cmd_flags & SCF_BIDI) {
+	if ((se_cmd->se_cmd_flags & SCF_BIDI) && !bypass_data_area) {
 		iov++;
 		tcmu_setup_iovs(udev, tcmu_cmd, &iov, tcmu_cmd->data_len_bidi);
 		entry->req.iov_bidi_cnt = iov_bidi_cnt;
@@ -1089,6 +1262,20 @@ static int queue_cmd_ring(struct tcmu_cmd *tcmu_cmd, sense_reason_t *scsi_err)
 	tcmu_setup_cmd_timer(tcmu_cmd, udev->cmd_time_out, &udev->cmd_timer);
 
 	entry->hdr.cmd_id = tcmu_cmd->cmd_id;
+	if (zero_copy) {
+		int i;
+		struct iovec *tiov;
+
+		tiov = &entry->req.iov[0];
+		for (i = 0; i < entry->req.iov_cnt; i++) {
+			tiov->iov_base = tiov->iov_base + udev->data_size;
+			tiov++;
+		}
+		entry->hdr.kflags |= TCMU_KFLAG_ZERO_COPY;
+	}
+
+	if (bypass_data_area)
+		entry->hdr.kflags |= TCMU_KFLAG_BYPASS_DATA_AREA;
 
 	tcmu_hdr_set_len(&entry->hdr.len_op, command_size);
 
@@ -1336,6 +1523,15 @@ static void tcmu_handle_completion(struct tcmu_cmd *cmd, struct tcmu_cmd_entry *
 		else
 			se_cmd->se_cmd_flags |= SCF_TREAT_READ_AS_NORMAL;
 	}
+
+	if (test_bit(TCMU_CMD_BIT_ZEROCOPY, &cmd->flags)) {
+		tcmu_cmd_zerocopy_unmap(cmd);
+		goto done;
+	}
+
+	if (test_bit(TCMU_CMD_BIT_BYPASS_DATA_AREA, &cmd->flags))
+		goto done;
+
 	if (se_cmd->se_cmd_flags & SCF_BIDI) {
 		/* Get Data-In buffer before clean up */
 		gather_data_area(udev, cmd, true, read_len);
@@ -1470,11 +1666,15 @@ static void tcmu_check_expired_ring_cmd(struct tcmu_cmd *cmd)
 	if (!time_after_eq(jiffies, cmd->deadline))
 		return;
 
+	mutex_lock(&cmd->cmd_lock);
+	if (test_bit(TCMU_CMD_BIT_ZEROCOPY, &cmd->flags))
+		tcmu_cmd_zerocopy_unmap(cmd);
 	set_bit(TCMU_CMD_BIT_EXPIRED, &cmd->flags);
 	list_del_init(&cmd->queue_entry);
 	se_cmd = cmd->se_cmd;
 	se_cmd->priv = NULL;
 	cmd->se_cmd = NULL;
+	mutex_unlock(&cmd->cmd_lock);
 
 	pr_debug("Timing out inflight cmd %u on dev %s.\n",
 		 cmd->cmd_id, cmd->tcmu_dev->name);
@@ -1566,8 +1766,12 @@ static struct se_device *tcmu_alloc_device(struct se_hba *hba, const char *name)
 	udev->qfull_time_out = -1;
 
 	udev->max_blocks = DATA_BLOCK_BITS_DEF;
+	udev->zc_max_blocks = ZC_DATA_BLOCK_BITS_DEF;
 	udev->cmdr_size = CMDR_SIZE_DEF;
 	mutex_init(&udev->cmdr_lock);
+	udev->read_zc_size = 0;
+	udev->write_zc_size = 0;
+	init_rwsem(&udev->i_mmap_sem);
 
 	INIT_LIST_HEAD(&udev->node);
 	INIT_LIST_HEAD(&udev->timedout_entry);
@@ -1677,11 +1881,11 @@ static struct page *tcmu_try_get_block_page(struct tcmu_dev *udev, uint32_t dbi)
 {
 	struct page *page;
 
-	mutex_lock(&udev->cmdr_lock);
+	down_read(&udev->i_mmap_sem);
 	page = tcmu_get_block_page(udev, dbi);
 	if (likely(page)) {
 		get_page(page);
-		mutex_unlock(&udev->cmdr_lock);
+		up_read(&udev->i_mmap_sem);
 		return page;
 	}
 
@@ -1692,7 +1896,7 @@ static struct page *tcmu_try_get_block_page(struct tcmu_dev *udev, uint32_t dbi)
 	pr_err("Invalid addr to data block mapping  (dbi %u) on device %s\n",
 	       dbi, udev->name);
 	page = NULL;
-	mutex_unlock(&udev->cmdr_lock);
+	up_read(&udev->i_mmap_sem);
 
 	return page;
 }
@@ -1742,7 +1946,7 @@ static int tcmu_mmap(struct uio_info *info, struct vm_area_struct *vma)
 {
 	struct tcmu_dev *udev = container_of(info, struct tcmu_dev, uio_info);
 
-	vma->vm_flags |= VM_DONTEXPAND | VM_DONTDUMP;
+	vma->vm_flags |= VM_DONTEXPAND | VM_DONTDUMP | VM_MIXEDMAP;
 	vma->vm_ops = &tcmu_vm_ops;
 
 	vma->vm_private_data = udev;
@@ -1845,9 +2049,113 @@ static void tcmu_dev_kref_release(struct kref *kref)
 
 	tcmu_blocks_release(&udev->data_blocks, 0, udev->dbi_max + 1);
 	bitmap_free(udev->data_bitmap);
+	bitmap_free(udev->zc_data_bitmap);
 	mutex_unlock(&udev->cmdr_lock);
 
 	call_rcu(&dev->rcu_head, tcmu_dev_call_rcu);
+}
+
+#define TCMU_ZEROCOPY_PAGE_BATCH 32
+
+static inline int tcmu_zerocopy_one_seg(struct iovec *iov,
+			struct vm_area_struct *vma,
+			struct sg_page_iter *sgiter)
+{
+	struct page *pages[TCMU_ZEROCOPY_PAGE_BATCH];
+	unsigned int len = iov->iov_len;
+	unsigned long address = (unsigned long)iov->iov_base;
+	unsigned long pages_remaining, pg_index = 0;
+	struct page *page;
+	int ret;
+
+	while (len > 0) {
+		__sg_page_iter_next(sgiter);
+		page = sg_page_iter_page(sgiter);
+		pages[pg_index++] = page;
+		len -= PAGE_SIZE;
+		if (pg_index == TCMU_ZEROCOPY_PAGE_BATCH || !len) {
+			pages_remaining = pg_index;
+			ret = vm_insert_pages_mkspecial(vma, address, pages,
+							&pages_remaining);
+			if (ret < 0) {
+				pr_err("vm insert pages failed, error code: %d\n", ret);
+				return ret;
+			}
+			address = address + pg_index * PAGE_SIZE;
+			pg_index = 0;
+		}
+	}
+
+	return 0;
+}
+
+long tcmu_ioctl_cmd_zerocopy(struct tcmu_dev *udev, unsigned long arg)
+{
+	struct tcmu_cmd *cmd;
+	struct se_cmd *se_cmd;
+	struct scatterlist *data_sg;
+	unsigned int data_nents;
+	struct tcmu_cmd_zerocopy zc;
+	struct iovec *iov, *tiov;
+	struct sg_page_iter sgiter;
+	struct mm_struct *mm = current->mm;
+	struct vm_area_struct *vma;
+	int i, ret = 0;
+
+	if (copy_from_user(&zc, (struct tcmu_cmd_zerocopy __user *)arg,
+	    sizeof(zc)))
+		return -EFAULT;
+	if (zc.iov_cnt <= 0)
+		return -EINVAL;
+
+	iov = kmalloc_array(zc.iov_cnt, sizeof(struct iovec), GFP_KERNEL);
+	if (!iov)
+		return -ENOMEM;
+	if (copy_from_user(iov, zc.iov, sizeof(struct iovec) * zc.iov_cnt)) {
+		kfree(iov);
+		return -EFAULT;
+	}
+
+	mutex_lock(&udev->cmdr_lock);
+	mmap_read_lock(mm);
+	cmd = idr_find(&udev->commands, zc.cmd_id);
+	if (!cmd) {
+		ret = -EINVAL;
+		kfree(iov);
+		pr_err("tcmu zero copy: cmd_id %d not found\n", zc.cmd_id);
+		goto out;
+	}
+	se_cmd = cmd->se_cmd;
+
+	vma = find_vma(current->mm, (unsigned long)iov->iov_base);
+	if (!vma) {
+		ret = -EINVAL;
+		kfree(iov);
+		pr_err("tcmu zero copy: invalid iov_base\n");
+		goto out;
+	}
+	data_sg = se_cmd->t_data_sg;
+	data_nents = se_cmd->t_data_nents;
+	__sg_page_iter_start(&sgiter, data_sg, data_nents, 0);
+	tiov = iov;
+	for (i = 0; i < zc.iov_cnt; i++) {
+		ret = tcmu_zerocopy_one_seg(tiov, vma, &sgiter);
+		if (ret < 0) {
+			kfree(iov);
+			goto out;
+		}
+		tiov++;
+	}
+
+	cmd->iov = iov;
+	cmd->iov_cnt = zc.iov_cnt;
+	cmd->vma_vm_mm = vma->vm_mm;
+	cmd->vma = vma;
+	mmgrab(cmd->vma_vm_mm);
+out:
+	mmap_read_unlock(mm);
+	mutex_unlock(&udev->cmdr_lock);
+	return ret;
 }
 
 static int tcmu_release(struct uio_info *info, struct inode *inode)
@@ -1860,6 +2168,107 @@ static int tcmu_release(struct uio_info *info, struct inode *inode)
 	/* release ref from open */
 	kref_put(&udev->kref, tcmu_dev_kref_release);
 	return 0;
+}
+
+static long tcmu_do_copy_data(struct tcmu_cmd *tcmu_cmd,
+			struct iovec __user *uiovec,
+			unsigned int vcnt,
+			bool is_copy_to_sgl)
+{
+	struct iovec iovstack[UIO_FASTIOV];
+	struct iovec *iov = iovstack;
+	struct iov_iter iter;
+	ssize_t ret;
+	struct se_cmd *se_cmd = tcmu_cmd->se_cmd;
+	struct scatterlist *data_sg, *sg;
+	int i;
+	unsigned int data_nents;
+
+	if (se_cmd->se_cmd_flags & SCF_BIDI) {
+		data_sg = se_cmd->t_bidi_data_sg;
+		data_nents = se_cmd->t_bidi_data_nents;
+	} else {
+		data_sg = se_cmd->t_data_sg;
+		data_nents = se_cmd->t_data_nents;
+	}
+
+	ret = import_iovec(READ, uiovec, vcnt, ARRAY_SIZE(iovstack), &iov, &iter);
+	if (ret < 0) {
+		pr_err("import iovec failed.\n");
+		return -EFAULT;
+	}
+
+	for_each_sg(data_sg, sg, data_nents, i) {
+		if (is_copy_to_sgl)
+			ret = copy_page_from_iter(sg_page(sg), sg->offset, sg->length, &iter);
+		else
+			ret = copy_page_to_iter(sg_page(sg), sg->offset, sg->length, &iter);
+		if (ret < 0) {
+			pr_err("copy failed.\n");
+			break;
+		}
+	}
+	kfree(iov);
+	return ret < 0 ? -EFAULT : 0;
+}
+
+static long tcmu_copy_data(struct tcmu_dev *udev,
+			unsigned long arg,
+			bool is_copy_to_sgl)
+{
+	struct tcmu_data_xfer __user *uxfer = (struct tcmu_data_xfer __user *)arg;
+	struct tcmu_data_xfer xfer;
+	struct tcmu_cmd *tcmu_cmd;
+	long ret;
+
+	if (copy_from_user(&xfer, uxfer, sizeof(xfer)))
+		return -EFAULT;
+
+	tcmu_cmd = idr_find(&udev->commands, xfer.cmd_id);
+	if (!tcmu_cmd) {
+		pr_err("Can not find tcmu command, cmd_id:%d\n", xfer.cmd_id);
+		set_bit(TCMU_DEV_BIT_BROKEN, &udev->flags);
+		return -EFAULT;
+	}
+
+	mutex_lock(&tcmu_cmd->cmd_lock);
+	if (!test_bit(TCMU_CMD_BIT_BYPASS_DATA_AREA, &tcmu_cmd->flags)) {
+		ret = -EINVAL;
+		goto out;
+	}
+
+	if (test_bit(TCMU_CMD_BIT_EXPIRED, &tcmu_cmd->flags)) {
+		pr_err("Command is expired, cmd_id:%d\n", xfer.cmd_id);
+		ret = -EFAULT;
+		goto out;
+	}
+
+	ret = tcmu_do_copy_data(tcmu_cmd, xfer.iovec,
+				xfer.iov_cnt, is_copy_to_sgl);
+out:
+	mutex_unlock(&tcmu_cmd->cmd_lock);
+	return ret;
+}
+
+static long tcmu_ioctl(struct uio_info *info, unsigned int cmd, unsigned long arg)
+{
+	struct tcmu_dev *udev = container_of(info, struct tcmu_dev, uio_info);
+	long ret;
+
+	switch (cmd) {
+	case TCMU_IOCTL_CMD_COPY_TO_SGL:
+		ret = tcmu_copy_data(udev, arg, true);
+		break;
+	case TCMU_IOCTL_CMD_COPY_FROM_SGL:
+		ret = tcmu_copy_data(udev, arg, false);
+		break;
+	case TCMU_IOCTL_CMD_ZEROCOPY:
+		ret = tcmu_ioctl_cmd_zerocopy(udev, arg);
+		break;
+	default:
+		ret = -EINVAL;
+	}
+	return ret;
 }
 
 static int tcmu_init_genl_cmd_reply(struct tcmu_dev *udev, int cmd)
@@ -2071,10 +2480,11 @@ static int tcmu_configure_device(struct se_device *dev)
 
 	mutex_lock(&udev->cmdr_lock);
 	udev->data_bitmap = bitmap_zalloc(udev->max_blocks, GFP_KERNEL);
+	udev->zc_data_bitmap = bitmap_zalloc(udev->zc_max_blocks, GFP_KERNEL);
 	mutex_unlock(&udev->cmdr_lock);
-	if (!udev->data_bitmap) {
+	if (!udev->data_bitmap || !udev->zc_data_bitmap) {
 		ret = -ENOMEM;
-		goto err_bitmap_alloc;
+		goto err_vzalloc;
 	}
 
 	mb = vzalloc(udev->cmdr_size + CMDR_OFF);
@@ -2088,8 +2498,11 @@ static int tcmu_configure_device(struct se_device *dev)
 	udev->cmdr = (void *)mb + CMDR_OFF;
 	udev->data_off = udev->cmdr_size + CMDR_OFF;
 	udev->data_size = udev->max_blocks * DATA_BLOCK_SIZE;
-	udev->mmap_pages = (udev->data_size + udev->cmdr_size + CMDR_OFF) >> PAGE_SHIFT;
+	udev->zc_data_size = udev->zc_max_blocks * DATA_BLOCK_SIZE;
+	udev->mmap_pages = (udev->data_size + udev->zc_data_size + udev->cmdr_size +
+				CMDR_OFF) >> PAGE_SHIFT;
 	udev->dbi_thresh = 0; /* Default in Idle state */
+	udev->zc_dbi_thresh = 0; /* Default in Idle state */
 
 	/* Initialise the mailbox of the ring buffer */
 	mb->version = TCMU_MAILBOX_VERSION;
@@ -2107,7 +2520,8 @@ static int tcmu_configure_device(struct se_device *dev)
 
 	info->mem[0].name = "tcm-user command & data buffer";
 	info->mem[0].addr = (phys_addr_t)(uintptr_t)udev->mb_addr;
-	info->mem[0].size = udev->data_size + udev->cmdr_size + CMDR_OFF;
+	info->mem[0].size = udev->data_size + udev->zc_data_size +
+				udev->cmdr_size + CMDR_OFF;
 	info->mem[0].memtype = UIO_MEM_NONE;
 
 	info->irqcontrol = tcmu_irqcontrol;
@@ -2116,6 +2530,7 @@ static int tcmu_configure_device(struct se_device *dev)
 	info->mmap = tcmu_mmap;
 	info->open = tcmu_open;
 	info->release = tcmu_release;
+	info->ioctl = tcmu_ioctl;
 
 	ret = uio_register_device(tcmu_root_device, info);
 	if (ret)
@@ -2162,7 +2577,8 @@ err_register:
 err_vzalloc:
 	bitmap_free(udev->data_bitmap);
 	udev->data_bitmap = NULL;
-err_bitmap_alloc:
+	kfree(udev->zc_data_bitmap);
+	udev->zc_data_bitmap = NULL;
 	kfree(info->name);
 	info->name = NULL;
 
@@ -2880,6 +3296,130 @@ static ssize_t tcmu_reset_ring_store(struct config_item *item, const char *page,
 }
 CONFIGFS_ATTR_WO(tcmu_, reset_ring);
 
+static ssize_t tcmu_read_bypass_data_area_show(struct config_item *item, char *page)
+{
+	struct se_dev_attrib *da = container_of(to_config_group(item),
+						struct se_dev_attrib, da_group);
+	struct tcmu_dev *udev = TCMU_DEV(da->da_dev);
+
+	if (test_bit(TCMU_DEV_BIT_READ_BYPASS_DATA_AREA, &udev->flags))
+		return snprintf(page, PAGE_SIZE, "%s\n", "true");
+	else
+		return snprintf(page, PAGE_SIZE, "%s\n", "false");
+}
+
+static ssize_t tcmu_read_bypass_data_area_store(struct config_item *item, const char *page,
+						size_t count)
+{
+	struct se_dev_attrib *da = container_of(to_config_group(item),
+						struct se_dev_attrib, da_group);
+	struct tcmu_dev *udev = TCMU_DEV(da->da_dev);
+	bool bypass_data_area;
+	int ret;
+
+	ret = strtobool(page, &bypass_data_area);
+	if (ret < 0)
+		return ret;
+
+	if (bypass_data_area)
+		set_bit(TCMU_DEV_BIT_READ_BYPASS_DATA_AREA, &udev->flags);
+	else
+		clear_bit(TCMU_DEV_BIT_READ_BYPASS_DATA_AREA, &udev->flags);
+
+	return count;
+}
+CONFIGFS_ATTR(tcmu_, read_bypass_data_area);
+
+static ssize_t tcmu_write_bypass_data_area_show(struct config_item *item, char *page)
+{
+	struct se_dev_attrib *da = container_of(to_config_group(item),
+						struct se_dev_attrib, da_group);
+	struct tcmu_dev *udev = TCMU_DEV(da->da_dev);
+
+	if (test_bit(TCMU_DEV_BIT_WRITE_BYPASS_DATA_AREA, &udev->flags))
+		return snprintf(page, PAGE_SIZE, "%s\n", "true");
+	else
+		return snprintf(page, PAGE_SIZE, "%s\n", "false");
+}
+
+static ssize_t tcmu_write_bypass_data_area_store(struct config_item *item, const char *page,
+						size_t count)
+{
+	struct se_dev_attrib *da = container_of(to_config_group(item),
+						struct se_dev_attrib, da_group);
+	struct tcmu_dev *udev = TCMU_DEV(da->da_dev);
+	bool bypass_data_area;
+	int ret;
+
+	ret = strtobool(page, &bypass_data_area);
+	if (ret < 0)
+		return ret;
+
+	if (bypass_data_area)
+		set_bit(TCMU_DEV_BIT_WRITE_BYPASS_DATA_AREA, &udev->flags);
+	else
+		clear_bit(TCMU_DEV_BIT_WRITE_BYPASS_DATA_AREA, &udev->flags);
+
+	return count;
+}
+CONFIGFS_ATTR(tcmu_, write_bypass_data_area);
+
+static ssize_t tcmu_read_zc_size_show(struct config_item *item, char *page)
+{
+	struct se_dev_attrib *da = container_of(to_config_group(item),
+						struct se_dev_attrib, da_group);
+	struct tcmu_dev *udev = TCMU_DEV(da->da_dev);
+
+	return snprintf(page, PAGE_SIZE, "%ukb\n", udev->read_zc_size);
+}
+
+static ssize_t tcmu_read_zc_size_store(struct config_item *item, const char *page,
+					size_t count)
+{
+	struct se_dev_attrib *da = container_of(to_config_group(item),
+						struct se_dev_attrib, da_group);
+	struct tcmu_dev *udev = TCMU_DEV(da->da_dev);
+	uint32_t read_zc_size;
+	int ret;
+
+	ret = kstrtou32(page, 0, &read_zc_size);
+	if (ret < 0)
+		return ret;
+
+	udev->read_zc_size = read_zc_size;
+
+	return count;
+}
+CONFIGFS_ATTR(tcmu_, read_zc_size);
+
+static ssize_t tcmu_write_zc_size_show(struct config_item *item, char *page)
+{
+	struct se_dev_attrib *da = container_of(to_config_group(item),
+						struct se_dev_attrib, da_group);
+	struct tcmu_dev *udev = TCMU_DEV(da->da_dev);
+
+	return snprintf(page, PAGE_SIZE, "%ukb\n", udev->write_zc_size);
+}
+
+static ssize_t tcmu_write_zc_size_store(struct config_item *item, const char *page,
+					size_t count)
+{
+	struct se_dev_attrib *da = container_of(to_config_group(item),
+						struct se_dev_attrib, da_group);
+	struct tcmu_dev *udev = TCMU_DEV(da->da_dev);
+	uint32_t write_zc_size;
+	int ret;
+
+	ret = kstrtou32(page, 0, &write_zc_size);
+	if (ret < 0)
+		return ret;
+
+	udev->write_zc_size = write_zc_size;
+
+	return count;
+}
+CONFIGFS_ATTR(tcmu_, write_zc_size);
+
 static struct configfs_attribute *tcmu_attrib_attrs[] = {
 	&tcmu_attr_cmd_time_out,
 	&tcmu_attr_qfull_time_out,
@@ -2890,6 +3430,10 @@ static struct configfs_attribute *tcmu_attrib_attrs[] = {
 	&tcmu_attr_emulate_write_cache,
 	&tcmu_attr_tmr_notification,
 	&tcmu_attr_nl_reply_supported,
+	&tcmu_attr_read_bypass_data_area,
+	&tcmu_attr_write_bypass_data_area,
+	&tcmu_attr_read_zc_size,
+	&tcmu_attr_write_zc_size,
 	NULL,
 };
 
@@ -2950,6 +3494,7 @@ static void find_free_blocks(void)
 			continue;
 		}
 
+		down_write(&udev->i_mmap_sem);
 		end = udev->dbi_max + 1;
 		block = find_last_bit(udev->data_bitmap, end);
 		if (block == udev->dbi_max) {
@@ -2957,6 +3502,7 @@ static void find_free_blocks(void)
 			 * The last bit is dbi_max, so it is not possible
 			 * reclaim any blocks.
 			 */
+			up_write(&udev->i_mmap_sem);
 			mutex_unlock(&udev->cmdr_lock);
 			continue;
 		} else if (block == end) {
@@ -2974,6 +3520,7 @@ static void find_free_blocks(void)
 
 		/* Release the block pages */
 		tcmu_blocks_release(&udev->data_blocks, start, end);
+		up_write(&udev->i_mmap_sem);
 		mutex_unlock(&udev->cmdr_lock);
 
 		total_freed += end - start;
