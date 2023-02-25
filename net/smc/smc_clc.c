@@ -1169,6 +1169,8 @@ void smc_clc_get_hostname(u8 **host)
 
 void __init smc_clc_init(void)
 {
+	static const char def_ueid[] = "SMCV2-DEFAULT-UEID";
+	char ueid[SMC_MAX_EID_LEN + 1] = { 0 };
 	struct new_utsname *u;
 
 	memset(smc_hostname, _S, sizeof(smc_hostname)); /* ASCII blanks */
@@ -1180,6 +1182,10 @@ void __init smc_clc_init(void)
 	rwlock_init(&smc_clc_eid_table.lock);
 	smc_clc_eid_table.ueid_cnt = 0;
 	smc_clc_eid_table.seid_enabled = 1;
+
+	memset(ueid, ' ', SMC_MAX_EID_LEN); /* fill with space */
+	memcpy(ueid, def_ueid, strlen(def_ueid));
+	smc_clc_ueid_add(ueid);
 }
 
 void smc_clc_exit(void)
