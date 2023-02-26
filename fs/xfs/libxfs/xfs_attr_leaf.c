@@ -287,6 +287,23 @@ xfs_attr3_leaf_verify_entry(
 	return NULL;
 }
 
+/*
+ * Validate an attribute leaf block.
+ *
+ * Empty leaf blocks can occur under the following circumstances:
+ *
+ * 1. setxattr adds a new extended attribute to a file;
+ * 2. The file has zero existing attributes;
+ * 3. The attribute is too large to fit in the attribute fork;
+ * 4. The attribute is small enough to fit in a leaf block;
+ * 5. A log flush occurs after committing the transaction that creates
+ *    the (empty) leaf block; and
+ * 6. The filesystem goes down after the log flush but before the new
+ *    attribute can be committed to the leaf block.
+ *
+ * Hence we need to ensure that we don't fail the validation purely
+ * because the leaf is empty.
+ */
 static xfs_failaddr_t
 xfs_attr3_leaf_verify(
 	struct xfs_buf			*bp)
