@@ -13086,9 +13086,21 @@ void account_ht_aware_quota(struct task_struct *p, u64 delta)
 		}
 	}
 }
+
+static inline void sched_core_init_cfs_rq(struct task_group *tg, struct cfs_rq *cfs_rq)
+{
+#ifdef CONFIG_FAIR_GROUP_SCHED
+	struct rq *rq = rq_of(cfs_rq);
+	int core_id = rq->core_id;
+
+	cfs_rq->core = tg->cfs_rq[core_id];
+#endif
+}
 #else
 static inline void task_tick_core(struct rq *rq, struct task_struct *curr) {}
+static inline void sched_core_init_cfs_rq(struct task_group *tg, struct cfs_rq *cfs_rq) {}
 #endif
+
 
 /*
  * scheduler tick hitting a task of our scheduling class.
@@ -13518,6 +13530,7 @@ int alloc_fair_sched_group(struct task_group *tg, struct task_group *parent)
 
 		init_cfs_rq(cfs_rq);
 		init_tg_cfs_entry(tg, cfs_rq, se, i, parent->se[i]);
+		sched_core_init_cfs_rq(tg, cfs_rq);
 		init_entity_runnable_average(se);
 	}
 
