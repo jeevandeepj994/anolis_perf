@@ -97,6 +97,7 @@
 #define _PAGE_KERNEL		(_PAGE_READ \
 				| _PAGE_WRITE \
 				| _PAGE_PRESENT \
+				| _PAGE_GLOBAL \
 				| _PAGE_ACCESSED \
 				| _PAGE_DIRTY \
 				| _PAGE_CACHE \
@@ -123,6 +124,8 @@
 				| _PAGE_DIRTY \
 				| _PAGE_SHARE \
 				| _PAGE_SO)
+
+#define PAGE_KERNEL_IO		__pgprot(_PAGE_IOREMAP)
 
 extern pgd_t swapper_pg_dir[];
 

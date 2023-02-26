@@ -24,6 +24,21 @@
 #define SR_FS_CLEAN	_AC(0x00004000, UL)
 #define SR_FS_DIRTY	_AC(0x00006000, UL)
 
+#define SR_VS_OFF	_AC(0x00000000, UL)
+
+#if (defined(CONFIG_VECTOR_1_0) && defined(__THEAD_VERSION__))
+#define SR_VS		_AC(0x00000600, UL) /* Vector Status */
+#define SR_VS_INITIAL	_AC(0x00000200, UL)
+#define SR_VS_CLEAN	_AC(0x00000400, UL)
+#define SR_VS_DIRTY	_AC(0x00000600, UL)
+#else
+#define SR_VS		_AC(0x01800000, UL) /* Vector Status */
+#define SR_VS_INITIAL	_AC(0x00800000, UL)
+#define SR_VS_CLEAN	_AC(0x01000000, UL)
+#define SR_VS_DIRTY	_AC(0x01800000, UL)
+
+#endif
+
 #define SR_XS		_AC(0x00018000, UL) /* Extension Status */
 #define SR_XS_OFF	_AC(0x00000000, UL)
 #define SR_XS_INITIAL	_AC(0x00008000, UL)
@@ -52,6 +67,9 @@
 #define SATP_PPN	_AC(0x00000FFFFFFFFFFF, UL)
 #define SATP_MODE_39	_AC(0x8000000000000000, UL)
 #define SATP_MODE	SATP_MODE_39
+#define SATP_ASID_BITS	16
+#define SATP_ASID_SHIFT	44
+#define SATP_ASID_MASK	_AC(0xFFFF, UL)
 #endif
 
 /* Exception cause high bit - is an interrupt if set */
@@ -117,6 +135,13 @@
 #define CSR_PMPCFG0		0x3a0
 #define CSR_PMPADDR0		0x3b0
 #define CSR_MHARTID		0xf14
+
+#define CSR_VSTART		0x8
+#define CSR_VXSAT		0x9
+#define CSR_VXRM		0xa
+#define CSR_VL			0xc20
+#define CSR_VTYPE		0xc21
+#define CSR_VLENB		0xc22
 
 #ifdef CONFIG_RISCV_M_MODE
 # define CSR_STATUS	CSR_MSTATUS

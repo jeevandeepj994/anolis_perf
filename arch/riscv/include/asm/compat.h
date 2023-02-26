@@ -17,6 +17,12 @@ static inline int is_compat_task(void)
 	return test_thread_flag(TIF_32BIT);
 }
 
+#define compat_user_stack_pointer() (user_stack_pointer(task_pt_regs(current)))
+static inline void __user *arch_compat_alloc_user_space(long len)
+{
+	return (void __user *)compat_user_stack_pointer() - len;
+}
+
 struct compat_user_regs_struct {
 	compat_ulong_t pc;
 	compat_ulong_t ra;

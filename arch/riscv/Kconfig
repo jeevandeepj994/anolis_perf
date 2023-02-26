@@ -39,6 +39,7 @@ config RISCV
 	select CLONE_BACKWARDS
 	select CLINT_TIMER if !MMU
 	select COMMON_CLK
+	select CPU_PM if (SUSPEND || CPU_IDLE)
 	select EDAC_SUPPORT
 	select DMA_DIRECT_REMAP
 	select GENERIC_ALLOCATOR
@@ -73,6 +74,7 @@ config RISCV
 	select HAVE_DMA_CONTIGUOUS if MMU
 	select HAVE_EBPF_JIT if MMU
 	select HAVE_FUNCTION_ERROR_INJECTION
+	select HAVE_EFFICIENT_UNALIGNED_ACCESS
 	select HAVE_FUTEX_CMPXCHG if FUTEX
 	select HAVE_GCC_PLUGINS
 	select HAVE_GENERIC_VDSO if MMU && 64BIT
@@ -155,6 +157,20 @@ config KASAN_SHADOW_OFFSET
 	depends on KASAN_GENERIC
 	default 0xdfffffc800000000 if 64BIT
 	default 0xffffffff if 32BIT
+
+config FORCE_MAX_ZONEORDER
+        int "Maximum zone order"
+        default 13
+	help
+	  The kernel memory allocator divides physically contiguous memory
+	  blocks into "zones", where each zone is a power of two number of
+	  pages.  This option selects the largest power of two that the kernel
+	  keeps in the memory allocator.  If you need to allocate very large
+	  blocks of physically contiguous memory, then you may need to
+	  increase this value.
+
+	  This config option is actually maximum order plus one. For example,
+	  a value of 13 means that the largest free memory block is 2^12 pages.
 
 config ARCH_FLATMEM_ENABLE
 	def_bool y
@@ -244,7 +260,7 @@ config ARCH_RV64I
 	select HAVE_FTRACE_MCOUNT_RECORD
 	select HAVE_FUNCTION_GRAPH_TRACER
 	select HAVE_FUNCTION_TRACER
-	select SWIOTLB if MMU
+	select SWIOTLB if RISCV_SWIOTLB
 
 endchoice
 
@@ -333,12 +349,17 @@ config RISCV_ISA_C
 
 	   If you don't know what to do here, say Y.
 
+config RISCV_SWIOTLB
+	bool "Enable SWIOTLB"
+	depends on MMU
+	default y
+
 menu "supported PMU type"
 	depends on PERF_EVENTS
 
 config RISCV_BASE_PMU
 	bool "Base Performance Monitoring Unit"
-	def_bool y
+	def_bool n
 	help
 	  A base PMU that serves as a reference implementation and has limited
 	  feature of perf.  It can run on any RISC-V machines so serves as the
@@ -354,6 +375,42 @@ config FPU
 	  in the kernel.
 
 	  If you don't know what to do here, say Y.
+
+config VECTOR
+	bool "VECTOR support"
+	default n
+
+choice VECTOR_VERSION
+	prompt "Vector Version"
+	depends on VECTOR
+	default VECTOR_1_0
+
+config VECTOR_1_0
+	bool "VECTOR 1.0 support"
+	help
+	  Say N here if you want to disable all vector 1.0 related procedure
+	  in the kernel.
+
+	  If you don't know what to do here, say Y.
+
+config VECTOR_0_7
+	bool "VECTOR 0.7 support"
+	help
+	  Say N here if you want to disable all vector 0.7 related procedure
+	  in the kernel.
+
+	  If you don't know what to do here, say Y.
+
+endchoice
+
+config VECTOR_EMU
+	bool "VECTOR e64 emulate for c906 v1"
+	depends on VECTOR
+	default n
+
+config THEAD_ISA
+	bool "T-HEAD extension ISA in AFLAGS with -march=_xtheadc"
+	default n
 
 endmenu
 
@@ -374,6 +431,7 @@ config KEXEC
 	select KEXEC_CORE
 	select HOTPLUG_CPU if SMP
 	depends on MMU
+	default y
 	help
 	  kexec is a system call that implements the ability to shutdown your
 	  current kernel, and to start another kernel. It is like a reboot
@@ -384,6 +442,7 @@ config KEXEC
 
 config CRASH_DUMP
 	bool "Build kdump crash kernel"
+	default y
 	help
 	  Generate crash dump after being started by kexec. This should
 	  be normally only set in special crash dump kernels which are
@@ -471,7 +530,12 @@ config BUILTIN_DTB
 
 menu "Power management options"
 
+source "drivers/cpuidle/Kconfig"
+source "drivers/cpufreq/Kconfig"
 source "kernel/power/Kconfig"
+
+config ARCH_SUSPEND_POSSIBLE
+	def_bool y
 
 endmenu
 
