@@ -110,8 +110,10 @@ extern void transfer_pid(struct task_struct *old, struct task_struct *new,
 struct pid_namespace;
 extern struct pid_namespace init_pid_ns;
 
+#ifndef CONFIG_MAX_PID_PER_NS
 extern int pid_max;
 extern int pid_max_min, pid_max_max;
+#endif
 
 /*
  * look up a PID in the hash table. Must be called with the tasklist_lock

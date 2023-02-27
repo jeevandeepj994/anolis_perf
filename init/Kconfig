@@ -1144,6 +1144,14 @@ config RICH_CONTAINER_CG_SWITCH
 	  in rich container. If Y, some new interface will be created in per
 	  cgroup directory, and if N, nothing will be created.
 
+config MAX_PID_PER_NS
+	bool "Max Pid per namespace"
+	default n
+	help
+	  This is to make each namespace has its own pid_max value, specified by
+	  "/proc/sys/kernel/pid_max". It may break the compatibility of sysctl.pid_max,
+	  say no if you don't know what this feature means.
+
 config CGROUP_CPUACCT
 	bool "Simple CPU accounting controller"
 	help
