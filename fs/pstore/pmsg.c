@@ -11,8 +11,8 @@
 
 static DEFINE_MUTEX(pmsg_lock);
 
-static ssize_t write_pmsg(struct file *file, const char __user *buf,
-			  size_t count, loff_t *ppos)
+static ssize_t do_write_pmsg(struct file *file, const char __user *buf,
+			  size_t count, loff_t *ppos, struct pstore_info *psinfo)
 {
 	struct pstore_record record;
 	int ret;
@@ -32,6 +32,25 @@ static ssize_t write_pmsg(struct file *file, const char __user *buf,
 	ret = psinfo->write_user(&record, buf);
 	mutex_unlock(&pmsg_lock);
 	return ret ? ret : count;
+}
+
+static ssize_t write_pmsg(struct file *file, const char __user *buf,
+			  size_t count, loff_t *ppos)
+{
+	int ret;
+	struct pstore_info_list *entry;
+
+	rcu_read_lock();
+	list_for_each_entry_rcu(entry, &psback->list_entry, list) {
+		if (entry->psi->flags & PSTORE_FLAGS_PMSG) {
+			int _ret = do_write_pmsg(file, buf, count, ppos, entry->psi);
+
+			ret = ret > _ret ? ret : _ret;
+		}
+	}
+	rcu_read_unlock();
+
+	return ret;
 }
 
 static const struct file_operations pmsg_fops = {

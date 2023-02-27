@@ -93,6 +93,7 @@ struct pstore_zone {
  * @ppsz: pmsg storage zone
  * @cpsz: console storage zone
  * @fpszs: ftrace storage zones
+ * @tpsz: ttyprobe storage zone
  * @kmsg_max_cnt: max count of @kpszs
  * @kmsg_read_cnt: counter of total read kmsg dumps
  * @kmsg_write_cnt: counter of total kmsg dump writes
@@ -100,6 +101,7 @@ struct pstore_zone {
  * @console_read_cnt: counter of total read console zone
  * @ftrace_max_cnt: max count of @fpszs
  * @ftrace_read_cnt: counter of max read ftrace zone
+ * @ttyprobe_read_cnt: counter of total read ttyprobe zone
  * @oops_counter: counter of oops dumps
  * @panic_counter: counter of panic dumps
  * @recovered: whether finished recovering data from storage
@@ -113,6 +115,7 @@ struct psz_context {
 	struct pstore_zone *ppsz;
 	struct pstore_zone *cpsz;
 	struct pstore_zone **fpszs;
+	struct pstore_zone *tpsz;
 	unsigned int kmsg_max_cnt;
 	unsigned int kmsg_read_cnt;
 	unsigned int kmsg_write_cnt;
@@ -120,6 +123,7 @@ struct psz_context {
 	unsigned int console_read_cnt;
 	unsigned int ftrace_max_cnt;
 	unsigned int ftrace_read_cnt;
+	unsigned int ttyprobe_read_cnt;
 	/*
 	 * These counters should be calculated during recovery.
 	 * It records the oops/panic times after crashes rather than boots.
@@ -325,6 +329,8 @@ static void psz_flush_all_dirty_zones(struct work_struct *work)
 		ret |= psz_flush_dirty_zones(cxt->kpszs, cxt->kmsg_max_cnt);
 	if (cxt->fpszs)
 		ret |= psz_flush_dirty_zones(cxt->fpszs, cxt->ftrace_max_cnt);
+	if (cxt->tpsz)
+		ret |= psz_flush_dirty_zone(cxt->tpsz);
 	if (ret && cxt->pstore_zone_info)
 		schedule_delayed_work(&psz_cleaner, msecs_to_jiffies(1000));
 }
@@ -617,6 +623,10 @@ static inline int psz_recovery(struct psz_context *cxt)
 	if (ret)
 		goto out;
 
+	ret = psz_recover_zone(cxt, cxt->tpsz);
+	if (ret)
+		goto out;
+
 	ret = psz_recover_zones(cxt, cxt->fpszs, cxt->ftrace_max_cnt);
 
 out:
@@ -637,6 +647,7 @@ static int psz_pstore_open(struct pstore_info *psi)
 	cxt->pmsg_read_cnt = 0;
 	cxt->console_read_cnt = 0;
 	cxt->ftrace_read_cnt = 0;
+	cxt->ttyprobe_read_cnt = 0;
 	return 0;
 }
 
@@ -713,6 +724,8 @@ static int psz_pstore_erase(struct pstore_record *record)
 		if (record->id >= cxt->ftrace_max_cnt)
 			return -EINVAL;
 		return psz_record_erase(cxt, cxt->fpszs[record->id]);
+	case PSTORE_TYPE_TTYPROBE:
+		return psz_record_erase(cxt, cxt->tpsz);
 	default: return -EINVAL;
 	}
 }
@@ -891,6 +904,8 @@ static int notrace psz_pstore_write(struct pstore_record *record)
 		return psz_record_write(cxt->cpsz, record);
 	case PSTORE_TYPE_PMSG:
 		return psz_record_write(cxt->ppsz, record);
+	case PSTORE_TYPE_TTYPROBE:
+		return psz_record_write(cxt->tpsz, record);
 	case PSTORE_TYPE_FTRACE: {
 		int zonenum = smp_processor_id();
 
@@ -931,6 +946,13 @@ static struct pstore_zone *psz_read_next_zone(struct psz_context *cxt)
 	if (cxt->console_read_cnt == 0) {
 		cxt->console_read_cnt++;
 		zone = cxt->cpsz;
+		if (psz_old_ok(zone))
+			return zone;
+	}
+
+	if (cxt->ttyprobe_read_cnt == 0) {
+		cxt->ttyprobe_read_cnt++;
+		zone = cxt->tpsz;
 		if (psz_old_ok(zone))
 			return zone;
 	}
@@ -1081,6 +1103,7 @@ next_zone:
 		readop = psz_ftrace_read;
 		break;
 	case PSTORE_TYPE_CONSOLE:
+	case PSTORE_TYPE_TTYPROBE:
 	case PSTORE_TYPE_PMSG:
 		readop = psz_record_read;
 		break;
@@ -1145,6 +1168,8 @@ static void psz_free_all_zones(struct psz_context *cxt)
 		psz_free_zone(&cxt->cpsz);
 	if (cxt->fpszs)
 		psz_free_zones(&cxt->fpszs, &cxt->ftrace_max_cnt);
+	if (cxt->tpsz)
+		psz_free_zone(&cxt->tpsz);
 }
 
 static struct pstore_zone *psz_init_zone(enum pstore_type_id type,
@@ -1255,6 +1280,15 @@ static int psz_alloc_zones(struct psz_context *cxt)
 		goto free_out;
 	}
 
+	off_size += info->ttyprobe_size;
+	cxt->tpsz = psz_init_zone(PSTORE_TYPE_TTYPROBE, &off,
+			info->ttyprobe_size);
+	if (IS_ERR(cxt->tpsz)) {
+		err = PTR_ERR(cxt->tpsz);
+		cxt->tpsz = NULL;
+		goto free_out;
+	}
+
 	off_size += info->ftrace_size;
 	cxt->fpszs = psz_init_zones(PSTORE_TYPE_FTRACE, &off,
 			info->ftrace_size,
@@ -1301,7 +1335,7 @@ int register_pstore_zone(struct pstore_zone_info *info)
 	}
 
 	if (!info->kmsg_size && !info->pmsg_size && !info->console_size &&
-	    !info->ftrace_size) {
+	    !info->ftrace_size && !info->ttyprobe_size) {
 		pr_warn("at least one record size must be non-zero\n");
 		return -EINVAL;
 	}
@@ -1326,6 +1360,7 @@ int register_pstore_zone(struct pstore_zone_info *info)
 	check_size(pmsg_size, SECTOR_SIZE);
 	check_size(console_size, SECTOR_SIZE);
 	check_size(ftrace_size, SECTOR_SIZE);
+	check_size(ttyprobe_size, SECTOR_SIZE);
 
 #undef check_size
 
@@ -1354,6 +1389,7 @@ int register_pstore_zone(struct pstore_zone_info *info)
 	pr_debug("\tpmsg size : %ld Bytes\n", info->pmsg_size);
 	pr_debug("\tconsole size : %ld Bytes\n", info->console_size);
 	pr_debug("\tftrace size : %ld Bytes\n", info->ftrace_size);
+	pr_debug("\tttyprobe size : %ld Bytes\n", info->ttyprobe_size);
 
 	err = psz_alloc_zones(cxt);
 	if (err) {
@@ -1394,6 +1430,10 @@ int register_pstore_zone(struct pstore_zone_info *info)
 	if (info->ftrace_size) {
 		cxt->pstore.flags |= PSTORE_FLAGS_FTRACE;
 		pr_cont(" ftrace");
+	}
+	if (info->ttyprobe_size) {
+		cxt->pstore.flags |= PSTORE_FLAGS_TTYPROBE;
+		pr_cont(" ttyprobe");
 	}
 	pr_cont("\n");
 
