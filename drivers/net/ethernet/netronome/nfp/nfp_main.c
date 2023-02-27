@@ -459,6 +459,10 @@ nfp_fw_load(struct pci_dev *pdev, struct nfp_pf *pf, struct nfp_nsp *nsp)
 		return 0;
 	}
 
+	/* Skip firmware loading in multi-PF setup if firmware is loaded. */
+	if (pf->multi_pf_support && nfp_nsp_fw_loaded(nsp))
+		return 1;
+
 	fw = nfp_net_fw_find(pdev, pf);
 	if (!fw)
 		return 0;
@@ -472,7 +476,6 @@ nfp_fw_load(struct pci_dev *pdev, struct nfp_pf *pf, struct nfp_nsp *nsp)
 	}
 
 	err = nfp_nsp_load_fw(nsp, fw);
-
 	if (err < 0) {
 		dev_err(&pdev->dev, "FW loading failed: %d\n", err);
 		goto exit_release_fw;
@@ -709,7 +712,7 @@ err_net_remove:
 err_fw_unload:
 	kfree(pf->rtbl);
 	nfp_mip_close(pf->mip);
-	if (pf->fw_loaded)
+	if (pf->fw_loaded && !pf->multi_pf_support)
 		nfp_fw_unload(pf);
 	kfree(pf->eth_tbl);
 	kfree(pf->nspi);
@@ -745,7 +748,7 @@ static void nfp_pci_remove(struct pci_dev *pdev)
 	vfree(pf->dumpspec);
 	kfree(pf->rtbl);
 	nfp_mip_close(pf->mip);
-	if (pf->fw_loaded)
+	if (pf->fw_loaded && !pf->multi_pf_support)
 		nfp_fw_unload(pf);
 
 	destroy_workqueue(pf->wq);
