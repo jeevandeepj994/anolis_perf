@@ -2371,6 +2371,7 @@ static struct ctl_table kern_table[] = {
 		.extra2		= SYSCTL_ONE,
 	},
 #endif /* CONFIG_SMP */
+#ifndef CONFIG_MAX_PID_PER_NS
 	{
 		.procname	= "pid_max",
 		.data		= &pid_max,
@@ -2380,6 +2381,7 @@ static struct ctl_table kern_table[] = {
 		.extra1		= &pid_max_min,
 		.extra2		= &pid_max_max,
 	},
+#endif /* CONFIG_MAX_PID_PER_NS */
 	{
 		.procname	= "panic_on_oops",
 		.data		= &panic_on_oops,

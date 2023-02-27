@@ -21,6 +21,9 @@ struct pid_namespace {
 	struct kref kref;
 	struct idr idr;
 	struct rcu_head rcu;
+#ifdef CONFIG_MAX_PID_PER_NS
+	int pid_max;
+#endif
 	unsigned int pid_allocated;
 	struct task_struct *child_reaper;
 	struct kmem_cache *pid_cachep;
