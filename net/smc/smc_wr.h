@@ -19,12 +19,7 @@
 #include "smc.h"
 #include "smc_core.h"
 
-#define SMC_WR_BUF_CNT 64	/* # of ctrl buffers per link, SMC_WR_BUF_CNT
-				 * should not be less than 2 * SMC_RMBS_PER_LGR_MAX,
-				 * since every connection at least has two rq/sq
-				 * credits in average, otherwise may result in
-				 * waiting for credits in sending process.
-				 */
+#define SMC_WR_BUF_CNT 16	/* # of ctrl buffers per link */
 
 #define SMC_WR_TX_WAIT_FREE_SLOT_TIME	(10 * HZ)
 
@@ -49,16 +44,6 @@ struct smc_wr_rx_handler {
 	struct hlist_node	list;	/* hash table collision resolution */
 	void			(*handler)(struct ib_wc *, void *);
 	u8			type;
-};
-
-struct smc_wr_tx_pend {	/* control data for a pending send request */
-	u64			wr_id;		/* work request id sent */
-	smc_wr_tx_handler	handler;
-	enum ib_wc_status	wc_status;	/* CQE status */
-	struct smc_link		*link;
-	u32			idx;
-	struct smc_wr_tx_pend_priv priv;
-	u8			compl_requested;
 };
 
 /* Only used by RDMA write WRs.
@@ -98,62 +83,6 @@ static inline void smc_wr_wakeup_reg_wait(struct smc_link *lnk)
 	wake_up(&lnk->wr_reg_wait);
 }
 
-// get one tx credit, and peer rq credits dec
-static inline int smc_wr_tx_get_credit(struct smc_link *link)
-{
-	return !link->credits_enable || atomic_dec_if_positive(&link->peer_rq_credits) >= 0;
-}
-
-// put tx credits, when some failures occurred after tx credits got
-// or receive announce credits msgs
-static inline void smc_wr_tx_put_credits(struct smc_link *link, int credits, bool wakeup)
-{
-	if (link->credits_enable && credits) {
-		atomic_add(credits, &link->peer_rq_credits);
-		if (wakeup && wq_has_sleeper(&link->wr_tx_wait))
-			wake_up_nr(&link->wr_tx_wait, credits);
-	}
-}
-
-// to check whether peer rq credits is lower than watermark.
-static inline int smc_wr_tx_credits_need_announce(struct smc_link *link)
-{
-	return link->credits_enable &&
-		atomic_read(&link->peer_rq_credits) <= link->peer_cr_watermark_low;
-}
-
-// get local rq credits and set credits to zero.
-// may called when announcing credits
-static inline int smc_wr_rx_get_credits(struct smc_link *link)
-{
-	return link->credits_enable ? atomic_fetch_and(0, &link->local_rq_credits) : 0;
-}
-
-// called when post_recv a rqe
-static inline void smc_wr_rx_put_credits(struct smc_link *link, int credits)
-{
-	if (link->credits_enable && credits)
-		atomic_add(credits, &link->local_rq_credits);
-}
-
-// to check whether local rq credits is higher than watermark.
-static inline int smc_wr_rx_credits_need_announce(struct smc_link *link)
-{
-	return link->credits_enable &&
-		atomic_read(&link->local_rq_credits) >= link->local_cr_watermark_high;
-}
-
-static inline int smc_wr_rx_credits_need_announce_frequent(struct smc_link *link)
-{
-	/* announce when local rq credits accumulated more than credits_update_limit, or
-	 * peer rq credits is empty. As peer credits empty and local credits is less than
-	 * credits_update_limit, may results in credits deadlock.
-	 */
-	return link->credits_enable &&
-		(atomic_read(&link->local_rq_credits) >= link->credits_update_limit ||
-		!atomic_read(&link->peer_rq_credits));
-}
-
 /* post a new receive work request to fill a completed old work request entry */
 static inline int smc_wr_rx_post(struct smc_link *link)
 {
@@ -167,8 +96,6 @@ static inline int smc_wr_rx_post(struct smc_link *link)
 	index = do_div(temp_wr_id, link->wr_rx_cnt);
 	link->wr_rx_ibs[index].wr_id = wr_id;
 	rc = ib_post_recv(link->roce_qp, &link->wr_rx_ibs[index], NULL);
-	if (!rc)
-		smc_wr_rx_put_credits(link, 1);
 	return rc;
 }
 

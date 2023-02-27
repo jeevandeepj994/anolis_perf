@@ -22,12 +22,7 @@
 #include "smc.h"
 #include "smc_ib.h"
 
-#define SMC_RMBS_PER_LGR_MAX	32	/* max. # of RMBs per link group. Correspondingly,
-					 * SMC_WR_BUF_CNT should not be less than 2 *
-					 * SMC_RMBS_PER_LGR_MAX, since every connection at
-					 * least has two rq/sq credits in average, otherwise
-					 * may result in waiting for credits in sending process.
-					 */
+#define SMC_RMBS_PER_LGR_MAX	255	/* max. # of RMBs per link group */
 
 struct smc_lgr_list {			/* list of link group definition */
 	struct list_head	list;
@@ -86,8 +81,6 @@ struct smc_rdma_wr {				/* work requests per message
 
 #define SMC_LGR_ID_SIZE		4
 
-#define SMC_LINKFLAG_ANNOUNCE_PENDING	0
-
 struct smc_link {
 	struct iw_ext_conn_param	iw_conn_param;
 	struct smc_ib_device	*smcibdev;	/* ib-device */
@@ -133,15 +126,6 @@ struct smc_link {
 	atomic_t		wr_reg_refcnt;	/* reg refs to link */
 	enum smc_wr_reg_state	wr_reg_state;	/* state of wr_reg request */
 
-	atomic_t	peer_rq_credits;	/* credits for peer rq flowctrl */
-	atomic_t	local_rq_credits;	/* credits for local rq flowctrl */
-	u8		credits_enable;		/* credits enable flag, set when negotiation */
-	u8		local_cr_watermark_high;	/* local rq credits watermark */
-	u8		peer_cr_watermark_low;	/* peer rq credits watermark */
-	u8		credits_update_limit;	/* credits update limit for cdc msg */
-	struct work_struct	credits_announce_work;	/* work for credits announcement */
-	unsigned long	flags;	/* link flags, SMC_LINKFLAG_ANNOUNCE_PENDING .etc */
-
 	u8			gid[SMC_GID_SIZE];/* gid matching used vlan id*/
 	u8			sgid_index;	/* gid index for vlan id      */
 	u32			peer_qpn;	/* QP number of peer */
@@ -168,7 +152,6 @@ struct smc_link {
 	struct completion	llc_testlink_resp; /* wait for rx of testlink */
 	int			llc_testlink_time; /* testlink interval */
 	atomic_t		conn_cnt; /* connections on this link */
-	struct socket		*clcsock;	/* keep for eRDMA */
 };
 
 /* For now we just allow one parallel link per link group. The SMC protocol
@@ -260,17 +243,14 @@ struct smc_llc_qentry;
 struct smc_llc_flow {
 	enum smc_llc_flowtype type;
 	struct smc_llc_qentry *qentry;
-	refcount_t	      parallel_refcnt;
 };
-
-struct smc_lgr_decision_maker;
 
 struct smc_link_group {
 	struct list_head	list;
 	struct rb_root		conns_all;	/* connection tree */
 	rwlock_t		conns_lock;	/* protects conns_all */
 	unsigned int		conns_num;	/* current # of connections */
-	atomic_t		rtoken_pendings;/* number of connection that
+	atomic_t                rtoken_pendings;/* number of connection that
 						 * lgr assigned but no rtoken got yet
 						 */
 	unsigned short		vlan_id;	/* vlan id of link group */
@@ -279,7 +259,7 @@ struct smc_link_group {
 	struct rw_semaphore	sndbufs_lock;	/* protects tx buffers */
 	struct list_head	rmbs[SMC_RMBE_SIZES];	/* rx buffers */
 	struct rw_semaphore	rmbs_lock;	/* protects rx buffers */
-	u8			first_contact_done; /* if first contact succeed */
+	u8			first_contact_done;	/* if first contact succeed */
 
 	u8			id[SMC_LGR_ID_SIZE];	/* unique lgr id */
 	struct delayed_work	free_work;	/* delayed freeing of an lgr */
@@ -345,7 +325,6 @@ struct smc_link_group {
 						/* rsn code for termination */
 			u8			nexthop_mac[ETH_ALEN];
 			u8			uses_gateway;
-			bool		disable_multiple_link;
 			__be32			saddr;
 						/* net namespace */
 			struct net		*net;
