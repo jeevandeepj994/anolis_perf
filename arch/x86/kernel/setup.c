@@ -543,10 +543,10 @@ static void __init reserve_crashkernel(void)
 	/* NOTE: Only reserve extra memory under 4G and without @offset */
 	if (sev_active() || sme_active())
 		/*
-		 * 256M is enough for kdump kernel, if not,
+		 * Extra 32M is enough for kdump kernel, if not,
 		 * user should use crashkernel to reserve more memory
 		 */
-		swiotlb_sz = ALIGN(min(swiotlb_size_or_default(), 256UL << 20),
+		swiotlb_sz = ALIGN(min(swiotlb_size_or_default(), 32UL << 20),
 				   SZ_1M);
 
 	/* 0 means: find the address automatically */
@@ -713,7 +713,7 @@ static void __init trim_snb_memory(void)
 	 * already been reserved.
 	 */
 	memblock_reserve(0, 1<<20);
-	
+
 	for (i = 0; i < ARRAY_SIZE(bad_pages); i++) {
 		if (memblock_reserve(bad_pages[i], PAGE_SIZE))
 			printk(KERN_WARNING "failed to reserve 0x%08lx\n",
@@ -805,7 +805,7 @@ static void __init trim_low_memory_range(void)
 {
 	memblock_reserve(0, ALIGN(reserve_low, PAGE_SIZE));
 }
-	
+
 /*
  * Dump out kernel offset information on panic.
  */
