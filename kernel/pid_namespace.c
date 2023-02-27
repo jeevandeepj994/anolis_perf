@@ -131,6 +131,9 @@ static struct pid_namespace *create_pid_namespace(struct user_namespace *user_ns
 	kref_init(&ns->kref);
 	ns->level = level;
 	ns->parent = get_pid_ns(parent_pid_ns);
+#ifdef CONFIG_MAX_PID_PER_NS
+	ns->pid_max = parent_pid_ns->pid_max;
+#endif
 	ns->user_ns = get_user_ns(user_ns);
 	ns->ucounts = ucounts;
 	ns->pid_allocated = PIDNS_ADDING;

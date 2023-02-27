@@ -63,8 +63,13 @@ int pid_max = PID_MAX_DEFAULT;
 
 #define RESERVED_PIDS		300
 
+#ifdef CONFIG_MAX_PID_PER_NS
+static int pid_max_min = RESERVED_PIDS + 1;
+static int pid_max_max = PID_MAX_LIMIT;
+#else
 int pid_max_min = RESERVED_PIDS + 1;
 int pid_max_max = PID_MAX_LIMIT;
+#endif
 
 /*
  * PID-map pages start out as NULL, they get allocated upon
@@ -187,12 +192,21 @@ struct pid *alloc_pid(struct pid_namespace *ns, pid_t *set_tid,
 	for (i = ns->level; i >= 0; i--) {
 		int tid = 0;
 
+#ifdef CONFIG_MAX_PID_PER_NS
+		int pid_max_local = tmp->pid_max;
+#endif
+
 		if (set_tid_size) {
 			tid = set_tid[ns->level - i];
 
 			retval = -EINVAL;
+#ifdef CONFIG_MAX_PID_PER_NS
+			if (tid < 1 || tid >= pid_max_local)
+				goto out_free;
+#else
 			if (tid < 1 || tid >= pid_max)
 				goto out_free;
+#endif
 			/*
 			 * Also fail if a PID != 1 is requested and
 			 * no PID 1 exists.
@@ -230,8 +244,13 @@ struct pid *alloc_pid(struct pid_namespace *ns, pid_t *set_tid,
 			 * Store a null pointer so find_pid_ns does not find
 			 * a partially initialized PID (see below).
 			 */
+#ifdef CONFIG_MAX_PID_PER_NS
 			nr = idr_alloc_cyclic(&tmp->idr, NULL, pid_min,
-					      pid_max, GFP_ATOMIC);
+					      pid_max_local, GFP_ATOMIC);
+#else
+			nr = idr_alloc_cyclic(&tmp->idr, NULL, pid_min, pid_max,
+					      GFP_ATOMIC);
+#endif
 		}
 		spin_unlock_irq(&pidmap_lock);
 		idr_preload_end();
@@ -605,22 +624,62 @@ SYSCALL_DEFINE2(pidfd_open, pid_t, pid, unsigned int, flags)
 	return fd;
 }
 
+#ifdef CONFIG_MAX_PID_PER_NS
+static int proc_dointvec_pidmax(struct ctl_table *table, int write,
+				void __user *buffer, size_t *lenp, loff_t *ppos)
+{
+	struct ctl_table tmp;
+
+	tmp = *table;
+	tmp.data = &(task_active_pid_ns(current)->pid_max);
+
+	return proc_dointvec_minmax(&tmp, write, buffer, lenp, ppos);
+}
+
+static struct ctl_table pid_ctl_table[] = {
+	{
+		.procname = "pid_max",
+		.data = &init_pid_ns.pid_max,
+		.maxlen = sizeof(int),
+		.mode = 0644,
+		.proc_handler = proc_dointvec_pidmax,
+		.extra1 = &pid_max_min,
+		.extra2 = &pid_max_max,
+	},
+	{ }
+};
+
+static struct ctl_path pid_kern_path[] = { { .procname = "kernel" }, {} };
+#endif
+
 void __init pid_idr_init(void)
 {
 	/* Verify no one has done anything silly: */
 	BUILD_BUG_ON(PID_MAX_LIMIT >= PIDNS_ADDING);
 
 	/* bump default and minimum pid_max based on number of cpus */
+#ifdef CONFIG_MAX_PID_PER_NS
+	init_pid_ns.pid_max = min(pid_max_max, max_t(int, pid_max,
+				PIDS_PER_CPU_DEFAULT * num_possible_cpus()));
+#else
 	pid_max = min(pid_max_max, max_t(int, pid_max,
 				PIDS_PER_CPU_DEFAULT * num_possible_cpus()));
-	pid_max_min = max_t(int, pid_max_min,
-				PIDS_PER_CPU_MIN * num_possible_cpus());
+#endif
+	pid_max_min =
+		max_t(int, pid_max_min, PIDS_PER_CPU_MIN * num_possible_cpus());
+#ifdef CONFIG_MAX_PID_PER_NS
+	pr_info("pid_max: default: %u minimum: %u\n", init_pid_ns.pid_max,
+		pid_max_min);
+#else
 	pr_info("pid_max: default: %u minimum: %u\n", pid_max, pid_max_min);
-
+#endif
 	idr_init(&init_pid_ns.idr);
 
 	init_pid_ns.pid_cachep = KMEM_CACHE(pid,
 			SLAB_HWCACHE_ALIGN | SLAB_PANIC | SLAB_ACCOUNT);
+#ifdef CONFIG_MAX_PID_PER_NS
+	register_sysctl_paths(pid_kern_path, pid_ctl_table);
+#endif
 }
 
 static struct file *__pidfd_fget(struct task_struct *task, int fd)
