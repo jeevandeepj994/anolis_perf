@@ -184,4 +184,15 @@ MAX_BTF_SOCK_TYPE,
 extern u32 btf_sock_ids[];
 #endif
 
+#if IS_ENABLED(CONFIG_SMC)
+enum {
+#define BTF_SMC_TYPE(name, type) name,
+BTF_SMC_TYPE(BTF_SMC_TYPE_SOCK, smc_sock)
+BTF_SMC_TYPE(BTF_SMC_TYPE_CONNECTION, smc_connection)
+#undef BTF_SMC_TYPE
+MAX_BTF_SMC_TYPE
+};
+extern u32 btf_smc_ids[];
+#endif
+
 #endif
