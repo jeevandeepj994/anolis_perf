@@ -13015,6 +13015,25 @@ static int task_is_throttled_fair(struct task_struct *p, int cpu)
 #endif
 	return throttled_hierarchy(cfs_rq);
 }
+
+void account_ht_aware_quota(struct task_struct *p, u64 delta)
+{
+	struct sched_entity *se;
+	unsigned int ht_ratio;
+	struct cfs_rq *cfs_rq;
+
+	/* We only account ht_aware_quota for cookied task. */
+	if (sched_feat(SCHED_CORE_HT_AWARE_QUOTA) && p->core_cookie) {
+		se = &p->se;
+		cfs_rq = task_cfs_rq(p);
+
+		if (se->parent) {
+			ht_ratio = se->parent->ht_ratio;
+			if (ht_ratio >= 100 && ht_ratio <= 200)
+				account_cfs_rq_runtime(cfs_rq, delta * (ht_ratio - 100) / 100);
+		}
+	}
+}
 #else
 static inline void task_tick_core(struct rq *rq, struct task_struct *curr) {}
 #endif
@@ -13448,6 +13467,9 @@ int alloc_fair_sched_group(struct task_group *tg, struct task_group *parent)
 		init_cfs_rq(cfs_rq);
 		init_tg_cfs_entry(tg, cfs_rq, se, i, parent->se[i]);
 		init_entity_runnable_average(se);
+#ifdef CONFIG_SCHED_CORE
+		se->ht_ratio = 100;
+#endif
 	}
 
 	return 1;

@@ -350,6 +350,7 @@ void __sched_core_account_sibidle(struct rq *rq)
 		 * if it comes from our SMT sibling.
 		 */
 		__account_sibidle_time(p, delta, !!rq->core->core_forceidle_count);
+		account_ht_aware_quota(p, delta);
 	}
 
 out:
