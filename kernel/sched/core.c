@@ -8604,6 +8604,9 @@ struct task_group *sched_create_group(struct task_group *parent)
 
 	alloc_uclamp_sched_group(tg, parent);
 
+#ifdef CONFIG_SCHED_CORE
+	tg->ht_ratio = 100;
+#endif
 	return tg;
 
 err:
@@ -9534,6 +9537,38 @@ static s64 cpu_identity_read_s64(struct cgroup_subsys_state *css,
 }
 #endif
 
+#ifdef CONFIG_SCHED_CORE
+static int cpu_ht_ratio_write(struct cgroup_subsys_state *css,
+			      struct cftype *cftype, u64 ht_ratio)
+{
+	struct task_group *tg = css_tg(css);
+	int cpu;
+
+	if (ht_ratio < 100 || ht_ratio > 200)
+		return -1;
+
+	if (tg == &root_task_group)
+		return -1;
+
+	tg->ht_ratio = ht_ratio;
+	for_each_online_cpu(cpu) {
+		struct sched_entity *se = tg->se[cpu];
+
+		se->ht_ratio = ht_ratio;
+	}
+
+	return 0;
+}
+
+static u64 cpu_ht_ratio_read(struct cgroup_subsys_state *css,
+					       struct cftype *cft)
+{
+	struct task_group *tg = css_tg(css);
+
+	return tg->ht_ratio;
+}
+#endif
+
 static struct cftype cpu_legacy_files[] = {
 #ifdef CONFIG_FAIR_GROUP_SCHED
 	{
@@ -9640,6 +9675,13 @@ static struct cftype cpu_legacy_files[] = {
 		.name = "ht_stable",
 		.read_u64 = cpu_ht_stable_read_u64,
 		.write_u64 = cpu_ht_stable_write_u64,
+	},
+#endif
+#ifdef CONFIG_SCHED_CORE
+	{
+		.name = "ht_ratio",
+		.read_u64 = cpu_ht_ratio_read,
+		.write_u64 = cpu_ht_ratio_write,
 	},
 #endif
 	{ }	/* Terminate */
@@ -10203,6 +10245,13 @@ static struct cftype cpu_files[] = {
 		.private = SCHED_LAT_IOBLOCK,
 		.write_u64 = sched_lat_stat_write,
 		.seq_show = sched_lat_stat_show
+	},
+#endif
+#ifdef CONFIG_SCHED_CORE
+	{
+		.name = "ht_ratio",
+		.read_u64 = cpu_ht_ratio_read,
+		.write_u64 = cpu_ht_ratio_write,
 	},
 #endif
 	{ }	/* terminate */

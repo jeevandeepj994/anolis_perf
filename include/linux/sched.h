@@ -579,7 +579,7 @@ struct sched_entity {
 
 #ifdef CONFIG_SCHED_CORE
 	u64				core_vruntime;
-	unsigned int			ht_aware_quota_coefficient;
+	unsigned int			ht_ratio;
 #endif
 
 	CK_KABI_RESERVE(1)
