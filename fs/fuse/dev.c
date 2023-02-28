@@ -2286,6 +2286,7 @@ void fuse_flush_pq(struct fuse_conn *fc)
 {
 	struct fuse_dev *fud;
 	LIST_HEAD(to_end);
+	unsigned int i;
 
 	spin_lock(&fc->lock);
 	if (!fc->connected) {
@@ -2297,7 +2298,8 @@ void fuse_flush_pq(struct fuse_conn *fc)
 
 		spin_lock(&fpq->lock);
 		WARN_ON(!list_empty(&fpq->io));
-		list_splice_init(fpq->processing, &to_end);
+		for (i = 0; i < FUSE_PQ_HASH_SIZE; i++)
+			list_splice_init(&fpq->processing[i], &to_end);
 		spin_unlock(&fpq->lock);
 	}
 	spin_unlock(&fc->lock);
@@ -2326,6 +2328,7 @@ void fuse_resend_pqueue(struct fuse_conn *fc)
 	struct fuse_req *req, *next;
 	struct fuse_iqueue *fiq = &fc->iq;
 	LIST_HEAD(to_queue);
+	unsigned int i;
 
 	spin_lock(&fc->lock);
 	if (!fc->connected) {
@@ -2345,7 +2348,8 @@ void fuse_resend_pqueue(struct fuse_conn *fc)
 			}
 			spin_unlock(&req->waitq.lock);
 		}
-		list_splice_tail_init(fpq->processing, &to_queue);
+		for (i = 0; i < FUSE_PQ_HASH_SIZE; i++)
+			list_splice_tail_init(&fpq->processing[i], &to_queue);
 		spin_unlock(&fpq->lock);
 	}
 	spin_unlock(&fc->lock);
