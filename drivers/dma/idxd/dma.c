@@ -73,11 +73,18 @@ void idxd_dma_complete_txd(struct idxd_desc *desc,
 		idxd_free_desc(desc->wq, desc);
 }
 
-static inline void op_control_flag_setup(unsigned long flags, u32 *desc_flags)
+static inline void op_control_flag_setup(unsigned long flags, u32 *desc_flags, struct idxd_wq *wq)
 {
-	*desc_flags = IDXD_OP_FLAG_CRAV | IDXD_OP_FLAG_RCR | IDXD_OP_FLAG_BOF;
+	*desc_flags = IDXD_OP_FLAG_CRAV | IDXD_OP_FLAG_RCR;
 	if (flags & DMA_PREP_INTERRUPT)
 		*desc_flags |= IDXD_OP_FLAG_RCI;
+
+	/*
+	 * Set Block on Fault flag in the descriptor if
+	 * Block on Fault bit in WQCFG register is set.
+	 */
+	if (wq->wqcfg->bof)
+		*desc_flags |= IDXD_OP_FLAG_BOF;
 }
 
 static inline void op_mem_flag_setup(unsigned long flags, u32 *desc_flags)
@@ -86,9 +93,9 @@ static inline void op_mem_flag_setup(unsigned long flags, u32 *desc_flags)
 		*desc_flags |= IDXD_OP_FLAG_CC;
 }
 
-static inline void op_flag_setup(unsigned long flags, u32 *desc_flags)
+static inline void op_flag_setup(unsigned long flags, u32 *desc_flags, struct idxd_wq *wq)
 {
-	op_control_flag_setup(flags, desc_flags);
+	op_control_flag_setup(flags, desc_flags, wq);
 	op_mem_flag_setup(flags, desc_flags);
 }
 
@@ -126,11 +133,16 @@ idxd_dma_prep_interrupt(struct dma_chan *c, unsigned long flags)
 	if (wq->state != IDXD_WQ_ENABLED)
 		return NULL;
 
-	op_flag_setup(flags, &desc_flags);
+	op_flag_setup(flags, &desc_flags, wq);
 	desc = idxd_alloc_desc(wq, IDXD_OP_BLOCK);
 	if (IS_ERR(desc))
 		return NULL;
 
+	/*
+	 * Cache Control and Block on Fault flags are not supported by No-op
+	 * operation. We need to explicitly clear the flags in the descriptor.
+	 */
+	desc_flags &= ~IDXD_OP_FLAG_CC & ~IDXD_OP_FLAG_BOF;
 	idxd_prep_desc_common(wq, desc->hw, DSA_OPCODE_NOOP,
 			      0, 0, 0, desc->compl_dma, desc_flags);
 	desc->txd.flags = flags;
@@ -152,7 +164,7 @@ idxd_dma_submit_memcpy(struct dma_chan *c, dma_addr_t dma_dest,
 	if (len > idxd->max_xfer_bytes)
 		return NULL;
 
-	op_flag_setup(flags, &desc_flags);
+	op_flag_setup(flags, &desc_flags, wq);
 	desc = idxd_alloc_desc(wq, IDXD_OP_BLOCK);
 	if (IS_ERR(desc))
 		return NULL;
@@ -213,7 +225,7 @@ idxd_dma_prep_memcpy_sg(struct dma_chan *chan,
 	struct idxd_batch *batch;
 	dma_addr_t dma_dst, dma_src;
 	size_t dst_avail, src_avail, len;
-	u32 desc_flags;
+	u32 desc_flags, sd_flags = 0;
 	int i;
 
 	/* sanity check */
@@ -247,6 +259,12 @@ idxd_dma_prep_memcpy_sg(struct dma_chan *chan,
 	 * or scatter list is consumed.
 	 */
 	batch = desc->batch;
+
+	/* Set flags for sub descriptors */
+	op_mem_flag_setup(flags, &sd_flags);
+	if (wq->wqcfg->bof)
+		sd_flags |= IDXD_OP_FLAG_BOF;
+
 	for (i = 0; i < wq->max_batch_size; i++) {
 		dma_dst = sg_dma_address(dst_sg) + sg_dma_len(dst_sg) -
 			dst_avail;
@@ -258,7 +276,7 @@ idxd_dma_prep_memcpy_sg(struct dma_chan *chan,
 
 		memset(batch->descs + i, 0, sizeof(struct dsa_hw_desc));
 		idxd_prep_desc_common(wq, batch->descs + i, DSA_OPCODE_MEMMOVE,
-				dma_src, dma_dst, len, 0, IDXD_OP_FLAG_CC);
+				dma_src, dma_dst, len, 0, sd_flags);
 		batch->num++;
 
 		dst_nents -= fetch_sg_and_pos(&dst_sg, &dst_avail, len);
@@ -277,12 +295,13 @@ idxd_dma_prep_memcpy_sg(struct dma_chan *chan,
 
 	/*
 	 * prepare DSA_OPCODE_BATCH with some common flags. We need to
-	 * explicity clear Cache Control flag in batch descriptor, since DSA
-	 * hw don't allow this flag for batch descriptor - DSA Spec 5.5,
-	 * otherwise HW reports Error Code: 0x11 (Invalid flags) - Spec 5.7
+	 * explicitly clear Cache Control and Block on Fault flags in batch
+	 * descriptor, since DSA hw don't allow these flags for batch descriptor
+	 * - DSA Spec 5.5, otherwise HW reports Error Code: 0x11 (Invalid flags)
+	 * - Spec 5.7
 	 */
-	op_flag_setup(flags, &desc_flags);
-	desc_flags &= ~IDXD_OP_FLAG_CC;
+	op_flag_setup(flags, &desc_flags, wq);
+	desc_flags &= ~IDXD_OP_FLAG_CC & ~IDXD_OP_FLAG_BOF;
 	idxd_prep_desc_common(wq, desc->hw, DSA_OPCODE_BATCH,
 			batch->dma_descs, 0, batch->num,
 			desc->compl_dma, desc_flags);
@@ -305,7 +324,7 @@ idxd_dma_prep_memset(struct dma_chan *c, dma_addr_t dma_dest, int value,
 	if (len > wq->max_xfer_bytes)
 		return NULL;
 
-	op_flag_setup(flags, &desc_flags);
+	op_flag_setup(flags, &desc_flags, wq);
 	desc = idxd_alloc_desc(wq, IDXD_OP_BLOCK);
 	if (IS_ERR(desc))
 		return NULL;
