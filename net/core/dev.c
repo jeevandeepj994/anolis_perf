@@ -4177,7 +4177,10 @@ static void rps_trigger_softirq(void *data)
 /* Called from hardirq (IPI) context */
 static void trigger_rx_softirq(void *data)
 {
+	struct softnet_data *sd = data;
+
 	__raise_softirq_irqoff(NET_RX_SOFTIRQ);
+	smp_store_release(&sd->defer_ipi_scheduled, 0);
 }
 
 /*
@@ -9725,7 +9728,7 @@ static int __init net_dev_init(void)
 		sd->cpu = i;
 #endif
 		sd->defer_csd.func = trigger_rx_softirq;
-		sd->defer_csd.info = NULL;
+		sd->defer_csd.info = sd;
 		spin_lock_init(&sd->defer_lock);
 
 		init_gro_hash(&sd->backlog);
