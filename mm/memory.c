@@ -3979,8 +3979,10 @@ static vm_fault_t do_read_fault(struct vm_fault *vmf)
 		return ret;
 
 	ret |= finish_fault(vmf);
-	if (likely(!is_zeropage(vmf->page)))
-		unlock_page(vmf->page);
+	if (unlikely(is_zeropage(vmf->page)))
+		return ret;
+
+	unlock_page(vmf->page);
 	if (unlikely(ret & (VM_FAULT_ERROR | VM_FAULT_NOPAGE | VM_FAULT_RETRY)))
 		put_page(vmf->page);
 	return ret;
@@ -4014,9 +4016,10 @@ static vm_fault_t do_cow_fault(struct vm_fault *vmf)
 	__SetPageUptodate(vmf->cow_page);
 
 	ret |= finish_fault(vmf);
-	if (likely(!is_zeropage(vmf->page)))
+	if (likely(!is_zeropage(vmf->page))) {
 		unlock_page(vmf->page);
-	put_page(vmf->page);
+		put_page(vmf->page);
+	}
 	if (unlikely(ret & (VM_FAULT_ERROR | VM_FAULT_NOPAGE | VM_FAULT_RETRY)))
 		goto uncharge_out;
 	return ret;
