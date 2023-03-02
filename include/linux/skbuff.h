@@ -597,6 +597,7 @@ typedef unsigned char *sk_buff_data_t;
  *	@prev: Previous buffer in list
  *	@tstamp: Time we arrived/left
  *	@rbnode: RB tree node, alternative to next/prev for netem/tcp
+ *	@ll_node: anchor in an llist (eg socket defer_list)
  *	@sk: Socket we are owned by
  *	@dev: Device we arrived on/are leaving by
  *	@cb: Control buffer. Free for use by every layer. Put private vars here
