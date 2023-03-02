@@ -206,4 +206,6 @@ int nfp_shared_buf_pool_set(struct nfp_pf *pf, unsigned int sb,
 
 int nfp_devlink_params_register(struct nfp_pf *pf);
 void nfp_devlink_params_unregister(struct nfp_pf *pf);
+
+u8 nfp_get_pf_id(struct nfp_pf *pf);
 #endif /* NFP_MAIN_H */
