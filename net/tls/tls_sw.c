@@ -949,6 +949,7 @@ int tls_sw_recvmsg(struct sock *sk,
 
 recv_end:
 	release_sock(sk);
+	sk_defer_free_flush(sk);
 	return copied ? : err;
 }
 
