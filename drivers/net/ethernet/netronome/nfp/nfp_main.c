@@ -93,6 +93,13 @@ static const struct pci_device_id nfp_pci_device_ids[] = {
 };
 MODULE_DEVICE_TABLE(pci, nfp_pci_device_ids);
 
+u8 nfp_get_pf_id(struct nfp_pf *pf)
+{
+	return nfp_cppcore_pcie_unit(pf->cpp) *
+	       pf->dev_info->pf_num_per_unit +
+	       pf->multi_pf.id;
+}
+
 int nfp_pf_rtsym_read_optional(struct nfp_pf *pf, const char *format,
 			       unsigned int default_val)
 {
@@ -100,7 +107,7 @@ int nfp_pf_rtsym_read_optional(struct nfp_pf *pf, const char *format,
 	int err = 0;
 	u64 val;
 
-	snprintf(name, sizeof(name), format, nfp_cppcore_pcie_unit(pf->cpp));
+	snprintf(name, sizeof(name), format, nfp_get_pf_id(pf));
 
 	val = nfp_rtsym_read_le(pf->rtbl, name, &err);
 	if (err) {
@@ -119,8 +126,7 @@ nfp_pf_map_rtsym(struct nfp_pf *pf, const char *name, const char *sym_fmt,
 {
 	char pf_symbol[256];
 
-	snprintf(pf_symbol, sizeof(pf_symbol), sym_fmt,
-		 nfp_cppcore_pcie_unit(pf->cpp));
+	snprintf(pf_symbol, sizeof(pf_symbol), sym_fmt, nfp_get_pf_id(pf));
 
 	return nfp_rtsym_map(pf->rtbl, pf_symbol, name, min_size, area);
 }
@@ -520,7 +526,7 @@ nfp_get_sibling_beat(struct nfp_pf *pf)
 	if (!pf->multi_pf.beat_addr)
 		return 0;
 
-	for (; i < 4; i++) {
+	for (; i < pf->dev_info->pf_num_per_unit; i++) {
 		if (i == pf->multi_pf.id)
 			continue;
 
@@ -704,10 +710,8 @@ static void nfp_fw_unload(struct nfp_pf *pf)
 
 static int nfp_pf_find_rtsyms(struct nfp_pf *pf)
 {
+	unsigned int pf_id = nfp_get_pf_id(pf);
 	char pf_symbol[256];
-	unsigned int pf_id;
-
-	pf_id = nfp_cppcore_pcie_unit(pf->cpp);
 
 	/* Optional per-PCI PF mailbox */
 	snprintf(pf_symbol, sizeof(pf_symbol), NFP_MBOX_SYM_NAME, pf_id);
