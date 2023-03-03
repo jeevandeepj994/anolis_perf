@@ -1122,8 +1122,8 @@ static void migrate_page_done(struct page *src,
 static int migrate_page_unmap(new_page_t get_new_page, free_page_t put_new_page,
 			      unsigned long private, struct page *src,
 			      struct page **dstp, int force,
-			      bool avoid_force_lock, enum migrate_mode mode,
-			      enum migrate_reason reason, struct list_head *ret)
+			      enum migrate_mode mode, enum migrate_reason reason,
+			      struct list_head *ret)
 {
 	int rc = -EAGAIN;
 	struct page *dst = NULL;
@@ -1174,17 +1174,6 @@ static int migrate_page_unmap(new_page_t get_new_page, free_page_t put_new_page,
 		 */
 		if (current->flags & PF_MEMALLOC)
 			goto out;
-
-		/*
-		 * We have locked some pages and are going to wait to lock
-		 * this page.  To avoid a potential deadlock, let's bail
-		 * out and not do that. The locked pages will be moved and
-		 * unlocked, then we can wait to lock this page.
-		 */
-		if (avoid_force_lock) {
-			rc = -EDEADLOCK;
-			goto out;
-		}
 
 		lock_page(src);
 	}
@@ -1275,7 +1264,9 @@ static int migrate_page_unmap(new_page_t get_new_page, free_page_t put_new_page,
 		/* Establish migration ptes */
 		VM_BUG_ON_PAGE(PageAnon(src) && !PageKsm(src) && !anon_vma,
 			       src);
-		try_to_unmap(src, TTU_MIGRATION|TTU_IGNORE_MLOCK|TTU_BATCH_FLUSH);
+		try_to_unmap(src, mode == MIGRATE_ASYNC ?
+			     TTU_MIGRATION|TTU_IGNORE_MLOCK|TTU_BATCH_FLUSH :
+			     TTU_MIGRATION|TTU_IGNORE_MLOCK);
 		page_was_mapped = 1;
 	}
 
@@ -1289,7 +1280,7 @@ out:
 	 * A page that has not been unmapped will be restored to
 	 * right list unless we want to retry.
 	 */
-	if (rc == -EAGAIN || rc == -EDEADLOCK)
+	if (rc == -EAGAIN)
 		ret = NULL;
 
 	migrate_page_undo_src(src, page_was_mapped, anon_vma, locked, ret);
@@ -1628,6 +1619,11 @@ static int migrate_hugetlbs(struct list_head *from, new_page_t get_new_page,
 /*
  * migrate_pages_batch() first unmaps pages in the from list as many as
  * possible, then move the unmapped pages.
+ *
+ * We only batch migration if mode == MIGRATE_ASYNC to avoid to wait a
+ * lock or bit when we have locked more than one page.  Which may cause
+ * deadlock (e.g., for loop device).  So, if mode != MIGRATE_ASYNC, the
+ * length of the from list must be <= 1.
  */
 int migrate_pages_batch(struct list_head *from, new_page_t get_new_page,
 		free_page_t put_new_page, unsigned long private,
@@ -1648,11 +1644,11 @@ int migrate_pages_batch(struct list_head *from, new_page_t get_new_page,
 	LIST_HEAD(new_pages);
 	bool nosplit = (reason == MR_NUMA_MISPLACED);
 	bool no_subpage_counting = false;
-	bool avoid_force_lock;
 
+	VM_WARN_ON_ONCE(mode != MIGRATE_ASYNC &&
+			!list_empty(from) && !list_is_singular(from));
 retry:
 	rc_saved = 0;
-	avoid_force_lock = false;
 	retry = 1;
 	for (pass = 0;
 	     pass < NR_MAX_MIGRATE_PAGES_RETRY && (retry || thp_retry);
@@ -1693,15 +1689,14 @@ retry:
 			}
 
 			rc = migrate_page_unmap(get_new_page, put_new_page, private,
-						page, &dst, pass > 2, avoid_force_lock,
-						mode, reason, ret_pages);
+						page, &dst, pass > 2, mode,
+						reason, ret_pages);
 			/*
 			 * The rules are:
 			 *	Success: page will be freed
 			 *	Unmap: page will be put on unmap_pages list,
 			 *	       new page put on new_pages list
 			 *	-EAGAIN: stay on the from list
-			 *	-EDEADLOCK: stay on the from list
 			 *	-ENOMEM: stay on the from list
 			 *	Other errno: put on ret_pages list
 			 */
@@ -1737,14 +1732,6 @@ retry:
 					goto out;
 				else
 					goto move;
-			case -EDEADLOCK:
-				/*
-				 * The page cannot be locked for potential deadlock.
-				 * Go move (and unlock) all locked pages.  Then we can
-				 * try again.
-				 */
-				rc_saved = rc;
-				goto move;
 			case -EAGAIN:
 				if (is_thp)
 					thp_retry++;
@@ -1758,11 +1745,6 @@ retry:
 					stats->nr_thp_succeeded++;
 				break;
 			case MIGRATEPAGE_UNMAP:
-				/*
-				 * We have locked some pages, don't force lock
-				 * to avoid deadlock.
-				 */
-				avoid_force_lock = true;
 				list_move_tail(&page->lru, &unmap_pages);
 				list_add_tail(&dst->lru, &new_pages);
 				break;
@@ -1878,16 +1860,14 @@ out:
 		 */
 		list_splice_init(from, ret_pages);
 		list_splice_init(&thp_split_pages, from);
+		/*
+		 * Force async mode to avoid to wait lock or bit when we have
+		 * locked more than one pages.
+		 */
+		mode = MIGRATE_ASYNC;
 		no_subpage_counting = true;
 		goto retry;
 	}
-
-	/*
-	 * We have unlocked all locked pages, so we can force lock now, let's
-	 * try again.
-	 */
-	if (rc == -EDEADLOCK)
-		goto retry;
 
 	return rc;
 }
@@ -1922,7 +1902,7 @@ int migrate_pages(struct list_head *from, new_page_t get_new_page,
 		enum migrate_mode mode, int reason, unsigned int *ret_succeeded)
 {
 	int rc, rc_gather;
-	int nr_pages;
+	int nr_pages, batch;
 	struct page *page;
 	struct page *page2;
 	int swapwrite = current->flags & PF_SWAPWRITE;
@@ -1938,6 +1918,11 @@ int migrate_pages(struct list_head *from, new_page_t get_new_page,
 			      &stats, &ret_pages);
 	if (rc_gather < 0)
 		goto out;
+
+	if (mode == MIGRATE_ASYNC)
+		batch = NR_MAX_BATCHED_MIGRATION;
+	else
+		batch = 1;
 again:
 	nr_pages = 0;
 	list_for_each_entry_safe(page, page2, from, lru) {
@@ -1948,11 +1933,11 @@ again:
 		}
 
 		nr_pages += compound_nr(page);
-		if (nr_pages > NR_MAX_BATCHED_MIGRATION)
+		if (nr_pages >= batch)
 			break;
 	}
-	if (nr_pages > NR_MAX_BATCHED_MIGRATION)
-		list_cut_before(&pages, from, &page->lru);
+	if (nr_pages >= batch)
+		list_cut_before(&pages, from, &page2->lru);
 	else
 		list_splice_init(from, &pages);
 	rc = migrate_pages_batch(&pages, get_new_page, put_new_page, private,
