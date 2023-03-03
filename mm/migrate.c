@@ -1628,9 +1628,10 @@ static int migrate_hugetlbs(struct list_head *from, new_page_t get_new_page,
 int migrate_pages_batch(struct list_head *from, new_page_t get_new_page,
 		free_page_t put_new_page, unsigned long private,
 		enum migrate_mode mode, int reason, struct list_head *ret_pages,
-		struct migrate_pages_stats *stats)
+		struct list_head *thp_split_pages, struct migrate_pages_stats *stats,
+		int nr_pass)
 {
-	int retry;
+	int retry = 1;
 	int thp_retry = 1;
 	int nr_failed = 0;
 	int nr_retry_pages = 0;
@@ -1638,21 +1639,14 @@ int migrate_pages_batch(struct list_head *from, new_page_t get_new_page,
 	bool is_thp = false;
 	struct page *page, *page2;
 	struct page *dst = NULL, *dst2;
-	int rc, rc_saved, nr_pages;
-	LIST_HEAD(thp_split_pages);
+	int rc, rc_saved = 0, nr_pages;
 	LIST_HEAD(unmap_pages);
 	LIST_HEAD(new_pages);
 	bool nosplit = (reason == MR_NUMA_MISPLACED);
-	bool no_subpage_counting = false;
 
 	VM_WARN_ON_ONCE(mode != MIGRATE_ASYNC &&
 			!list_empty(from) && !list_is_singular(from));
-retry:
-	rc_saved = 0;
-	retry = 1;
-	for (pass = 0;
-	     pass < NR_MAX_MIGRATE_PAGES_RETRY && (retry || thp_retry);
-	     pass++) {
+	for (pass = 0; pass < nr_pass && (retry || thp_retry); pass++) {
 		retry = 0;
 		thp_retry = 0;
 		nr_retry_pages = 0;
@@ -1679,7 +1673,7 @@ retry:
 			 */
 			if (!thp_migration_supported() && is_thp) {
 				stats->nr_thp_failed++;
-				if (!try_split_thp(page, &thp_split_pages)) {
+				if (!try_split_thp(page, thp_split_pages)) {
 					stats->nr_thp_split++;
 					continue;
 				}
@@ -1709,22 +1703,14 @@ retry:
 				if (is_thp) {
 					stats->nr_thp_failed++;
 					/* THP NUMA faulting doesn't split THP to retry. */
-					if (!nosplit && !try_split_thp(page, &thp_split_pages)) {
+					if (!nosplit && !try_split_thp(page, thp_split_pages)) {
 						stats->nr_thp_split++;
 						break;
 					}
-				} else if (!no_subpage_counting) {
+				} else
 					nr_failed++;
-				}
 
 				stats->nr_failed_pages += nr_pages + nr_retry_pages;
-				/*
-				 * There might be some subpages of fail-to-migrate THPs
-				 * left in thp_split_pages list. Move them back to migration
-				 * list so that they could be put back to the right list by
-				 * the caller otherwise the page refcnt will be leaked.
-				 */
-				list_splice_init(&thp_split_pages, ret_pages);
 				/* nr_failed isn't updated for not used */
 				stats->nr_thp_failed += thp_retry;
 				rc_saved = rc;
@@ -1735,7 +1721,7 @@ retry:
 			case -EAGAIN:
 				if (is_thp)
 					thp_retry++;
-				else if (!no_subpage_counting)
+				else
 					retry++;
 				nr_retry_pages += nr_pages;
 				break;
@@ -1757,7 +1743,7 @@ retry:
 				 */
 				if (is_thp)
 					stats->nr_thp_failed++;
-				else if (!no_subpage_counting)
+				else
 					nr_failed++;
 
 				stats->nr_failed_pages += nr_pages;
@@ -1773,9 +1759,7 @@ move:
 	try_to_unmap_flush();
 
 	retry = 1;
-	for (pass = 0;
-	     pass < NR_MAX_MIGRATE_PAGES_RETRY && (retry || thp_retry);
-	     pass++) {
+	for (pass = 0; pass < nr_pass && (retry || thp_retry); pass++) {
 		retry = 0;
 		thp_retry = 0;
 		nr_retry_pages = 0;
@@ -1801,7 +1785,7 @@ move:
 			case -EAGAIN:
 				if (is_thp)
 					thp_retry++;
-				else if (!no_subpage_counting)
+				else
 					retry++;
 				nr_retry_pages += nr_pages;
 				break;
@@ -1813,7 +1797,7 @@ move:
 			default:
 				if (is_thp)
 					stats->nr_thp_failed++;
-				else if (!no_subpage_counting)
+				else
 					nr_failed++;
 
 				stats->nr_failed_pages += nr_pages;
@@ -1846,27 +1830,6 @@ out:
 		migrate_page_undo_dst(dst, true, put_new_page, private);
 		dst = dst2;
 		dst2 = list_next_entry(dst, lru);
-	}
-
-	/*
-	 * Try to migrate subpages of fail-to-migrate THPs, no nr_failed
-	 * counting in this round, since all subpages of a THP is counted
-	 * as 1 failure in the first round.
-	 */
-	if (rc >= 0 && !list_empty(&thp_split_pages)) {
-		/*
-		 * Move non-migrated pages (after NR_MAX_MIGRATE_PAGES_RETRY
-		 * retries) to ret_pages to avoid migrating them again.
-		 */
-		list_splice_init(from, ret_pages);
-		list_splice_init(&thp_split_pages, from);
-		/*
-		 * Force async mode to avoid to wait lock or bit when we have
-		 * locked more than one pages.
-		 */
-		mode = MIGRATE_ASYNC;
-		no_subpage_counting = true;
-		goto retry;
 	}
 
 	return rc;
@@ -1908,6 +1871,7 @@ int migrate_pages(struct list_head *from, new_page_t get_new_page,
 	int swapwrite = current->flags & PF_SWAPWRITE;
 	LIST_HEAD(pages);
 	LIST_HEAD(ret_pages);
+	LIST_HEAD(thp_split_pages);
 	struct migrate_pages_stats stats;
 
 	if (!swapwrite)
@@ -1941,11 +1905,24 @@ again:
 	else
 		list_splice_init(from, &pages);
 	rc = migrate_pages_batch(&pages, get_new_page, put_new_page, private,
-				 mode, reason, &ret_pages, &stats);
+				 mode, reason, &ret_pages, &thp_split_pages,
+				 &stats, NR_MAX_MIGRATE_PAGES_RETRY);
 	list_splice_tail_init(&pages, &ret_pages);
 	if (rc < 0) {
 		rc_gather = rc;
+		list_splice_tail(&thp_split_pages, &ret_pages);
 		goto out;
+	}
+	if (!list_empty(&thp_split_pages)) {
+		/*
+		 * Failure isn't counted since all split pages of a large page
+		 * is counted as 1 failure already.  And, we only try to migrate
+		 * with minimal effort, force MIGRATE_ASYNC mode and retry once.
+		 */
+		migrate_pages_batch(&thp_split_pages, get_new_page, put_new_page,
+				    private, MIGRATE_ASYNC, reason, &ret_pages,
+				    NULL, &stats, 1);
+		list_splice_tail_init(&thp_split_pages, &ret_pages);
 	}
 	rc_gather += rc;
 	if (!list_empty(from))
