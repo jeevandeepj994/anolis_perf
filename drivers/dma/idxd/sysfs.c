@@ -1576,12 +1576,32 @@ static ssize_t cmd_status_store(struct device *dev, struct device_attribute *att
 }
 static DEVICE_ATTR_RW(cmd_status);
 
+static ssize_t iaa_cap_show(struct device *dev,
+			    struct device_attribute *attr, char *buf)
+{
+	struct idxd_device *idxd = confdev_to_idxd(dev);
+
+	if (idxd->hw.version < DEVICE_VERSION_2)
+		return -EOPNOTSUPP;
+
+	return sysfs_emit(buf, "%#llx\n", idxd->hw.iaa_cap.bits);
+}
+static DEVICE_ATTR_RO(iaa_cap);
+
 static bool idxd_device_attr_max_batch_size_invisible(struct attribute *attr,
 						      struct idxd_device *idxd)
 {
 	/* Intel IAA does not support batch processing, make it invisible */
 	return attr == &dev_attr_max_batch_size.attr &&
 	       idxd->data->type == IDXD_TYPE_IAX;
+}
+
+static bool idxd_device_attr_iaa_cap_invisible(struct attribute *attr,
+					       struct idxd_device *idxd)
+{
+	return attr == &dev_attr_iaa_cap.attr &&
+	       (idxd->data->type != IDXD_TYPE_IAX ||
+	       idxd->hw.version < DEVICE_VERSION_2);
 }
 
 static umode_t idxd_device_attr_visible(struct kobject *kobj,
@@ -1591,6 +1611,9 @@ static umode_t idxd_device_attr_visible(struct kobject *kobj,
 	struct idxd_device *idxd = confdev_to_idxd(dev);
 
 	if (idxd_device_attr_max_batch_size_invisible(attr, idxd))
+		return 0;
+
+	if (idxd_device_attr_iaa_cap_invisible(attr, idxd))
 		return 0;
 
 	return attr->mode;
@@ -1619,6 +1642,7 @@ static struct attribute *idxd_device_attributes[] = {
 	&dev_attr_cdev_major.attr,
 	&dev_attr_cmd_status.attr,
 	&dev_attr_wq_op_config.attr,
+	&dev_attr_iaa_cap.attr,
 	NULL,
 };
 
