@@ -1121,9 +1121,8 @@ static void migrate_page_done(struct page *src,
 /* Obtain the lock on page, remove all ptes. */
 static int migrate_page_unmap(new_page_t get_new_page, free_page_t put_new_page,
 			      unsigned long private, struct page *src,
-			      struct page **dstp, int force,
-			      enum migrate_mode mode, enum migrate_reason reason,
-			      struct list_head *ret)
+			      struct page **dstp, enum migrate_mode mode,
+			      enum migrate_reason reason, struct list_head *ret)
 {
 	int rc = -EAGAIN;
 	struct page *dst = NULL;
@@ -1156,7 +1155,7 @@ static int migrate_page_unmap(new_page_t get_new_page, free_page_t put_new_page,
 	dst->private = 0;
 
 	if (!trylock_page(src)) {
-		if (!force || mode == MIGRATE_ASYNC)
+		if (mode == MIGRATE_ASYNC)
 			goto out;
 
 		/*
@@ -1203,8 +1202,6 @@ static int migrate_page_unmap(new_page_t get_new_page, free_page_t put_new_page,
 			rc = -EBUSY;
 			goto out;
 		}
-		if (!force)
-			goto out;
 		wait_on_page_writeback(src);
 	}
 
@@ -1510,6 +1507,9 @@ static inline int try_split_thp(struct page *page, struct list_head *split_pages
 #define NR_MAX_BATCHED_MIGRATION	512
 #endif
 #define NR_MAX_MIGRATE_PAGES_RETRY	10
+#define NR_MAX_MIGRATE_ASYNC_RETRY	3
+#define NR_MAX_MIGRATE_SYNC_RETRY					\
+	(NR_MAX_MIGRATE_PAGES_RETRY - NR_MAX_MIGRATE_ASYNC_RETRY)
 
 struct migrate_pages_stats {
 	int nr_succeeded;	/* Normal and large pages migrated successfully, in
@@ -1683,8 +1683,8 @@ int migrate_pages_batch(struct list_head *from, new_page_t get_new_page,
 			}
 
 			rc = migrate_page_unmap(get_new_page, put_new_page, private,
-						page, &dst, pass > 2, mode,
-						reason, ret_pages);
+						page, &dst, mode, reason,
+						ret_pages);
 			/*
 			 * The rules are:
 			 *	Success: page will be freed
@@ -1835,6 +1835,52 @@ out:
 	return rc;
 }
 
+static int migrate_pages_sync(struct list_head *from, new_page_t get_new_page,
+		free_page_t put_new_page, unsigned long private,
+		enum migrate_mode mode, int reason, struct list_head *ret_pages,
+		struct list_head *thp_split_pages, struct migrate_pages_stats *stats)
+{
+	int rc, nr_failed = 0;
+	LIST_HEAD(pages);
+	struct migrate_pages_stats astats;
+
+	memset(&astats, 0, sizeof(astats));
+	/* Try to migrate in batch with MIGRATE_ASYNC mode firstly */
+	rc = migrate_pages_batch(from, get_new_page, put_new_page, private, MIGRATE_ASYNC,
+				 reason, &pages, thp_split_pages, &astats,
+				 NR_MAX_MIGRATE_ASYNC_RETRY);
+	stats->nr_succeeded += astats.nr_succeeded;
+	stats->nr_thp_succeeded += astats.nr_thp_succeeded;
+	stats->nr_thp_split += astats.nr_thp_split;
+	if (rc < 0) {
+		stats->nr_failed_pages += astats.nr_failed_pages;
+		stats->nr_thp_failed += astats.nr_thp_failed;
+		list_splice_tail(&pages, ret_pages);
+		return rc;
+	}
+	stats->nr_thp_failed += astats.nr_thp_split;
+	nr_failed += astats.nr_thp_split;
+	/*
+	 * Fall back to migrate all failed pages one by one synchronously. All
+	 * failed pages except split THPs will be retried, so their failure
+	 * isn't counted
+	 */
+	list_splice_tail_init(&pages, from);
+	while (!list_empty(from)) {
+		list_move(from->next, &pages);
+		rc = migrate_pages_batch(&pages, get_new_page, put_new_page,
+					 private, mode, reason, ret_pages,
+					 thp_split_pages, stats,
+					 NR_MAX_MIGRATE_SYNC_RETRY);
+		list_splice_tail_init(&pages, ret_pages);
+		if (rc < 0)
+			return rc;
+		nr_failed += rc;
+	}
+
+	return nr_failed;
+}
+
 /*
  * migrate_pages - migrate the pages specified in a list, to the free pages
  *		   supplied as the target for the page migration
@@ -1865,7 +1911,7 @@ int migrate_pages(struct list_head *from, new_page_t get_new_page,
 		enum migrate_mode mode, int reason, unsigned int *ret_succeeded)
 {
 	int rc, rc_gather;
-	int nr_pages, batch;
+	int nr_pages;
 	struct page *page;
 	struct page *page2;
 	int swapwrite = current->flags & PF_SWAPWRITE;
@@ -1883,10 +1929,6 @@ int migrate_pages(struct list_head *from, new_page_t get_new_page,
 	if (rc_gather < 0)
 		goto out;
 
-	if (mode == MIGRATE_ASYNC)
-		batch = NR_MAX_BATCHED_MIGRATION;
-	else
-		batch = 1;
 again:
 	nr_pages = 0;
 	list_for_each_entry_safe(page, page2, from, lru) {
@@ -1897,16 +1939,22 @@ again:
 		}
 
 		nr_pages += compound_nr(page);
-		if (nr_pages >= batch)
+		if (nr_pages >= NR_MAX_BATCHED_MIGRATION)
 			break;
 	}
-	if (nr_pages >= batch)
+	if (nr_pages >= NR_MAX_BATCHED_MIGRATION)
 		list_cut_before(&pages, from, &page2->lru);
 	else
 		list_splice_init(from, &pages);
-	rc = migrate_pages_batch(&pages, get_new_page, put_new_page, private,
-				 mode, reason, &ret_pages, &thp_split_pages,
-				 &stats, NR_MAX_MIGRATE_PAGES_RETRY);
+	if (mode == MIGRATE_ASYNC)
+		rc = migrate_pages_batch(&pages, get_new_page, put_new_page,
+					 private, mode, reason, &ret_pages,
+					 &thp_split_pages, &stats,
+					 NR_MAX_MIGRATE_PAGES_RETRY);
+	else
+		rc = migrate_pages_sync(&pages, get_new_page, put_new_page,
+					private, mode, reason, &ret_pages,
+					&thp_split_pages, &stats);
 	list_splice_tail_init(&pages, &ret_pages);
 	if (rc < 0) {
 		rc_gather = rc;
