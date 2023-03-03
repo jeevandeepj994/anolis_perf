@@ -399,7 +399,7 @@ static void idxd_check_ims(struct idxd_device *idxd)
 	dev_dbg(&pdev->dev, "IMS unsupported for device\n");
 }
 
-static void multi_u64_to_bmap(unsigned long *bmap, u64 *val, int count)
+void multi_u64_to_bmap(unsigned long *bmap, u64 *val, int count)
 {
 	int i, j, nr;
 
