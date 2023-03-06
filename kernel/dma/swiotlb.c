@@ -61,6 +61,8 @@
 
 enum swiotlb_force swiotlb_force;
 
+bool swiotlb_low = true;
+
 /*
  * Max segment that we can provide which (if pages are contingous) will
  * not be bounced (unless SWIOTLB_FORCE is set).
@@ -128,12 +130,18 @@ setup_io_tlb_npages(char *str)
 		swiotlb_adjust_nareas(simple_strtoul(str, &str, 0));
 	if (*str == ',')
 		++str;
-	if (!strcmp(str, "force")) {
+	if (!strncmp(str, "force", 5)) {
 		swiotlb_force = SWIOTLB_FORCE;
-	} else if (!strcmp(str, "noforce")) {
+		str += 5;
+	} else if (!strncmp(str, "noforce", 7)) {
 		swiotlb_force = SWIOTLB_NO_FORCE;
 		default_nslabs = 1;
+		str += 7;
 	}
+	if (*str == ',')
+		++str;
+	if (!strcmp(str, "low"))
+		swiotlb_low = true;
 
 	return 0;
 }
@@ -290,8 +298,16 @@ swiotlb_init(int verbose)
 	size_t bytes = PAGE_ALIGN(default_nslabs << IO_TLB_SHIFT);
 	void *tlb;
 
-	/* Get IO TLB memory from the low pages */
-	tlb = memblock_alloc_low(bytes, PAGE_SIZE);
+	/*
+	 * By default allocate the bounce buffer memory from low memory, but
+	 * allow to pick a location everywhere for hypervisors with guest
+	 * memory encryption (currently used by AMD SEV).
+	 */
+	if (swiotlb_low)
+		tlb = memblock_alloc_low(bytes, PAGE_SIZE);
+	else
+		tlb = memblock_alloc(bytes, PAGE_SIZE);
+
 	if (!tlb)
 		goto fail;
 	if (swiotlb_init_with_tbl(tlb, default_nslabs, verbose))

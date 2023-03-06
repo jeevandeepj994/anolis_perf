@@ -110,6 +110,7 @@ dma_addr_t swiotlb_map(struct device *dev, phys_addr_t phys,
 
 #ifdef CONFIG_SWIOTLB
 extern enum swiotlb_force swiotlb_force;
+extern bool swiotlb_low;
 extern phys_addr_t io_tlb_start, io_tlb_end;
 
 static inline bool is_swiotlb_buffer(phys_addr_t paddr)
