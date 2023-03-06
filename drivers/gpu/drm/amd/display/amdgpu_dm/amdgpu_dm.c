@@ -3329,6 +3329,8 @@ static int amdgpu_dm_initialize_drm_device(struct amdgpu_device *adev)
 	/* Update the actual used number of crtc */
 	adev->mode_info.num_crtc = adev->dm.display_indexes_num;
 
+	amdgpu_dm_set_irq_funcs(adev);
+
 	link_cnt = dm->dc->caps.max_links;
 	if (amdgpu_dm_mode_config_init(dm->adev)) {
 		DRM_ERROR("DM: Failed to initialize mode config\n");
@@ -3669,8 +3671,6 @@ static int dm_early_init(void *handle)
 		DRM_ERROR("Unsupported ASIC type: 0x%X\n", adev->asic_type);
 		return -EINVAL;
 	}
-
-	amdgpu_dm_set_irq_funcs(adev);
 
 	if (adev->mode_info.funcs == NULL)
 		adev->mode_info.funcs = &dm_display_funcs;
