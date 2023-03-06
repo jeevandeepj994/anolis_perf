@@ -22,10 +22,8 @@ struct page *__alloc_zeropage(struct vm_area_struct *vma, struct vm_fault *vmf)
 
 	if (vmf && !mm_forbids_zeropage(vma->vm_mm) &&
 	    !(vma->vm_flags & VM_SHARED) &&
-	    !(vmf->flags & FAULT_FLAG_NONZEROPAGE)) {
+	    !(vmf->flags & FAULT_FLAG_NONZEROPAGE))
 		page = ZERO_PAGE(0);
-		get_page(page);
-	}
 
 	return page;
 }
