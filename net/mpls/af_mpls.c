@@ -1349,7 +1349,9 @@ static int mpls_dev_sysctl_register(struct net_device *dev,
 	struct net *net = dev_net(dev);
 	struct ctl_table *table;
 	int i;
-
+    
+	if (!mdev->sysctl)
+		return;
 	table = kmemdup(&mpls_dev_table, sizeof(mpls_dev_table), GFP_KERNEL);
 	if (!table)
 		goto out;
@@ -1375,6 +1377,7 @@ static int mpls_dev_sysctl_register(struct net_device *dev,
 free:
 	kfree(table);
 out:
+    mdev->sysctl = NULL;
 	return -ENOBUFS;
 }
 
