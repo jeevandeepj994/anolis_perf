@@ -235,6 +235,11 @@ static int perf_event__synthesize_one_bpf_prog(struct perf_session *session,
 		__u64 *prog_addrs = (__u64 *)(uintptr_t)(info->jited_ksyms);
 		int name_len;
 
+		if (!prog_lens || !prog_addrs) {
+			err = -1;
+			goto out;
+		}
+
 		*ksymbol_event = (struct perf_record_ksymbol) {
 			.header = {
 				.type = PERF_RECORD_KSYMBOL,
