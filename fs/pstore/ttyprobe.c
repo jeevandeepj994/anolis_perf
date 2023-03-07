@@ -14,14 +14,11 @@
 #include "internal.h"
 
 static DEFINE_MUTEX(ttymsg_lock);
+DEFINE_STATIC_KEY_FALSE(ttyprobe_key);
 
 #define TTYPROBE_NAME "ttyprobe"
 #undef pr_fmt
 #define pr_fmt(fmt) TTYPROBE_NAME ": " fmt
-#define PSTORE_TTYPROBE_REGISTERED	1
-#define PSTORE_TTYPROBE_UNREGISTERED 0
-
-bool pstore_ttyprobe_status = PSTORE_TTYPROBE_UNREGISTERED;
 
 static void do_write_ttymsg(const unsigned char *buf, int count,
 							struct pstore_info *psinfo)
@@ -47,15 +44,12 @@ static void do_write_ttymsg(const unsigned char *buf, int count,
 
 void pstore_register_ttyprobe(void)
 {
-	pstore_ttyprobe_status = PSTORE_TTYPROBE_REGISTERED;
+	static_branch_enable(&ttyprobe_key);
 }
 
 void pstore_start_ttyprobe(const unsigned char *buf, int count)
 {
 	struct pstore_info_list *entry;
-
-	if (pstore_ttyprobe_status == PSTORE_TTYPROBE_UNREGISTERED)
-		return;
 
 	rcu_read_lock();
 	list_for_each_entry_rcu(entry, &psback->list_entry, list)
@@ -66,5 +60,5 @@ void pstore_start_ttyprobe(const unsigned char *buf, int count)
 
 void pstore_unregister_ttyprobe(void)
 {
-	pstore_ttyprobe_status = PSTORE_TTYPROBE_UNREGISTERED;
+	static_branch_disable(&ttyprobe_key);
 }
