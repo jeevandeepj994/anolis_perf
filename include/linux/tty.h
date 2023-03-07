@@ -532,9 +532,17 @@ extern void tty_termios_encode_baud_rate(struct ktermios *termios,
 extern void tty_encode_baud_rate(struct tty_struct *tty,
 						speed_t ibaud, speed_t obaud);
 #ifdef CONFIG_PSTORE_TTYPROBE
+DECLARE_STATIC_KEY_FALSE(ttyprobe_key);
 extern void pstore_start_ttyprobe(const unsigned char *buf, int count);
+
+static inline void tty_pstore_hook(const unsigned char *buf, int count)
+{
+	if (static_branch_unlikely(&ttyprobe_key))
+		pstore_start_ttyprobe(buf, count);
+}
+
 #else
-static inline void pstore_start_ttyprobe(const unsigned char *buf, int count) {}
+static inline void tty_pstore_hook(const unsigned char *buf, int count) {}
 #endif
 
 /**
