@@ -587,7 +587,7 @@ static ssize_t process_output_block(struct tty_struct *tty,
 		}
 	}
 break_out:
-	pstore_start_ttyprobe(buf, i);
+	tty_pstore_hook(buf, i);
 	i = tty->ops->write(tty, buf, i);
 
 	mutex_unlock(&ldata->output_lock);
