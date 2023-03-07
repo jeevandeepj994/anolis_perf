@@ -30,14 +30,14 @@ static void do_write_ttymsg(const unsigned char *buf, int count,
 	record.type = PSTORE_TYPE_TTYPROBE;
 	record.size = count;
 	record.buf = (char *)buf;
-	mutex_lock(&ttymsg_lock);
-	psinfo->write(&record);
 
-	// add newline character for reading
 	pstore_record_init(&newline, psinfo);
 	newline.type = PSTORE_TYPE_TTYPROBE;
 	newline.size = strlen(lbreak);
 	newline.buf = lbreak;
+
+	mutex_lock(&ttymsg_lock);
+	psinfo->write(&record);
 	psinfo->write(&newline);
 	mutex_unlock(&ttymsg_lock);
 }
