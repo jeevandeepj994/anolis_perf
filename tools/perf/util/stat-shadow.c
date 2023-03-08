@@ -816,10 +816,12 @@ static int prepare_metric(struct evsel **metric_events,
 		struct saved_value *v;
 		struct stats *stats;
 		u64 metric_total = 0;
+		int source_count;
 
 		if (!strcmp(metric_events[i]->name, "duration_time")) {
 			stats = &walltime_nsecs_stats;
 			scale = 1e-9;
+			source_count = 1;
 		} else {
 			v = saved_value_lookup(metric_events[i], cpu, false,
 					       STAT_NONE, 0, st);
@@ -827,6 +829,7 @@ static int prepare_metric(struct evsel **metric_events,
 				break;
 			stats = &v->stats;
 			scale = 1.0;
+			source_count = evsel__source_count(metric_events[i]);
 
 			if (v->metric_other)
 				metric_total = v->metric_total;
@@ -835,7 +838,9 @@ static int prepare_metric(struct evsel **metric_events,
 		if (!n)
 			return -ENOMEM;
 
-		expr__add_id_val(pctx, n, metric_total ? : avg_stats(stats) * scale);
+		expr__add_id_val_source_count(pctx, n,
+					metric_total ? : avg_stats(stats) * scale,
+					source_count);
 	}
 
 	for (j = 0; metric_refs && metric_refs[j].metric_name; j++) {
@@ -869,7 +874,10 @@ static void generic_metric(struct perf_stat_config *config,
 	if (!pctx)
 		return;
 
-	pctx->runtime = runtime;
+	if (config->user_requested_cpu_list)
+		pctx->sctx.user_requested_cpu_list = strdup(config->user_requested_cpu_list);
+	pctx->sctx.runtime = runtime;
+	pctx->sctx.system_wide = config->system_wide;
 	i = prepare_metric(metric_events, metric_refs, pctx, cpu, st);
 	if (i < 0) {
 		expr__ctx_free(pctx);
@@ -1256,7 +1264,6 @@ void perf_stat__print_shadow_stats(struct perf_stat_config *config,
 	} else if (runtime_stat_n(st, STAT_NSECS, 0, cpu) != 0) {
 		char unit = 'M';
 		char unit_buf[10];
-
 		total = runtime_stat_avg(st, STAT_NSECS, 0, cpu);
 
 		if (total)
@@ -1280,8 +1287,9 @@ void perf_stat__print_shadow_stats(struct perf_stat_config *config,
 			if (num++ > 0)
 				out->new_line(config, ctxp);
 			generic_metric(config, mexp->metric_expr, mexp->metric_events,
-					mexp->metric_refs, evsel->name, mexp->metric_name,
-					mexp->metric_unit, mexp->runtime, cpu, out, st);
+				       mexp->metric_refs, evsel->name, mexp->metric_name,
+				       mexp->metric_unit, mexp->runtime,
+				       cpu, out, st);
 		}
 	}
 	if (num == 0)

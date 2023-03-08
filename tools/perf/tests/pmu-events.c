@@ -9,10 +9,13 @@
 #include <linux/zalloc.h>
 #include "debug.h"
 #include "../pmu-events/pmu-events.h"
+#include <perf/evlist.h>
 #include "util/evlist.h"
 #include "util/expr.h"
 #include "util/parse-events.h"
 #include "metricgroup.h"
+#include "stat.h"
+#include "cpumap.h"
 
 struct perf_pmu_test_event {
 	/* used for matching against events from generated pmu-events.c */
@@ -146,7 +149,7 @@ static const struct perf_pmu_test_event unc_cbo_xsnp_response_miss_eviction = {
 static const struct perf_pmu_test_event uncore_hisi_l3c_rd_hit_cpipe = {
 	.event = {
 		.name = "uncore_hisi_l3c.rd_hit_cpipe",
-		.event = "event=0x2",
+		.event = "event=0x7",
 		.desc = "Total read hits. Unit: hisi_sccl,l3c ",
 		.topic = "uncore",
 		.long_desc = "Total read hits",
@@ -194,6 +197,40 @@ static const struct perf_pmu_test_event *uncore_events[] = {
 	NULL
 };
 
+static const struct perf_pmu_test_event sys_ddr_pmu_write_cycles = {
+	.event = {
+		.name = "sys_ddr_pmu.write_cycles",
+		.event = "event=0x2b",
+		.desc = "ddr write-cycles event. Unit: uncore_sys_ddr_pmu ",
+		.topic = "uncore",
+		.pmu = "uncore_sys_ddr_pmu",
+		.compat = "v8",
+	},
+	.alias_str = "event=0x2b",
+	.alias_long_desc = "ddr write-cycles event. Unit: uncore_sys_ddr_pmu ",
+	.matching_pmu = "uncore_sys_ddr_pmu",
+};
+
+static const struct perf_pmu_test_event sys_ccn_pmu_read_cycles = {
+	.event = {
+		.name = "sys_ccn_pmu.read_cycles",
+		.event = "config=0x2c",
+		.desc = "ccn read-cycles event. Unit: uncore_sys_ccn_pmu ",
+		.topic = "uncore",
+		.pmu = "uncore_sys_ccn_pmu",
+		.compat = "0x01",
+	},
+	.alias_str = "config=0x2c",
+	.alias_long_desc = "ccn read-cycles event. Unit: uncore_sys_ccn_pmu ",
+	.matching_pmu = "uncore_sys_ccn_pmu",
+};
+
+static const struct perf_pmu_test_event *sys_events[] = {
+	&sys_ddr_pmu_write_cycles,
+	&sys_ccn_pmu_read_cycles,
+	NULL
+};
+
 static bool is_same(const char *reference, const char *test)
 {
 	if (!reference && !test)
@@ -210,6 +247,24 @@ static bool is_same(const char *reference, const char *test)
 
 static int compare_pmu_events(const struct pmu_event *e1, const struct pmu_event *e2)
 {
+	if (!is_same(e1->name, e2->name)) {
+		pr_debug2("testing event e1 %s: mismatched name string, %s vs %s\n",
+			  e1->name, e1->name, e2->name);
+		return -1;
+	}
+
+	if (!is_same(e1->compat, e2->compat)) {
+		pr_debug2("testing event e1 %s: mismatched compat string, %s vs %s\n",
+			  e1->name, e1->compat, e2->compat);
+		return -1;
+	}
+
+	if (!is_same(e1->event, e2->event)) {
+		pr_debug2("testing event e1 %s: mismatched event, %s vs %s\n",
+			  e1->name, e1->event, e2->event);
+		return -1;
+	}
+
 	if (!is_same(e1->desc, e2->desc)) {
 		pr_debug2("testing event e1 %s: mismatched desc, %s vs %s\n",
 			  e1->name, e1->desc, e2->desc);
@@ -228,6 +283,12 @@ static int compare_pmu_events(const struct pmu_event *e1, const struct pmu_event
 		return -1;
 	}
 
+	if (!is_same(e1->pmu, e2->pmu)) {
+		pr_debug2("testing event e1 %s: mismatched pmu string, %s vs %s\n",
+			  e1->name, e1->pmu, e2->pmu);
+		return -1;
+	}
+
 	if (!is_same(e1->unit, e2->unit)) {
 		pr_debug2("testing event e1 %s: mismatched unit, %s vs %s\n",
 			  e1->name, e1->unit, e2->unit);
@@ -237,6 +298,12 @@ static int compare_pmu_events(const struct pmu_event *e1, const struct pmu_event
 	if (!is_same(e1->perpkg, e2->perpkg)) {
 		pr_debug2("testing event e1 %s: mismatched perpkg, %s vs %s\n",
 			  e1->name, e1->perpkg, e2->perpkg);
+		return -1;
+	}
+
+	if (!is_same(e1->aggr_mode, e2->aggr_mode)) {
+		pr_debug2("testing event e1 %s: mismatched aggr_mode, %s vs %s\n",
+			  e1->name, e1->aggr_mode, e2->aggr_mode);
 		return -1;
 	}
 
@@ -252,21 +319,21 @@ static int compare_pmu_events(const struct pmu_event *e1, const struct pmu_event
 		return -1;
 	}
 
+	if (!is_same(e1->metric_group, e2->metric_group)) {
+		pr_debug2("testing event e1 %s: mismatched metric_group, %s vs %s\n",
+			  e1->name, e1->metric_group, e2->metric_group);
+		return -1;
+	}
+
 	if (!is_same(e1->deprecated, e2->deprecated)) {
 		pr_debug2("testing event e1 %s: mismatched deprecated, %s vs %s\n",
 			  e1->name, e1->deprecated, e2->deprecated);
 		return -1;
 	}
 
-	if (!is_same(e1->pmu, e2->pmu)) {
-		pr_debug2("testing event e1 %s: mismatched pmu string, %s vs %s\n",
-			  e1->name, e1->pmu, e2->pmu);
-		return -1;
-	}
-
-	if (!is_same(e1->compat, e2->compat)) {
-		pr_debug2("testing event e1 %s: mismatched compat string, %s vs %s\n",
-			  e1->name, e1->compat, e2->compat);
+	if (!is_same(e1->metric_constraint, e2->metric_constraint)) {
+		pr_debug2("testing event e1 %s: mismatched metric_constant, %s vs %s\n",
+			  e1->name, e1->metric_constraint, e2->metric_constraint);
 		return -1;
 	}
 
@@ -330,14 +397,16 @@ static int compare_alias_to_test_event(struct perf_pmu_alias *alias,
 /* Verify generated events from pmu-events.c are as expected */
 static int test_pmu_event_table(void)
 {
+	const struct pmu_event *sys_event_tables = find_sys_events_table("pme_test_soc_sys");
 	const struct pmu_event *table = find_core_events_table("testarch", "testcpu");
 	int map_events = 0, expected_events;
 
-	/* ignore 2x sentinels */
+	/* ignore 3x sentinels */
 	expected_events = ARRAY_SIZE(core_events) +
-			  ARRAY_SIZE(uncore_events) - 2;
+			  ARRAY_SIZE(uncore_events) +
+			  ARRAY_SIZE(sys_events) - 3;
 
-	if (!table)
+	if (!table || !sys_event_tables)
 		return -1;
 
 	for (; table->name; table++) {
@@ -367,6 +436,33 @@ static int test_pmu_event_table(void)
 		if (!found) {
 			pr_err("testing event table: could not find event %s\n",
 			       table->name);
+			return -1;
+		}
+	}
+
+	for (table = sys_event_tables; table->name; table++) {
+		struct perf_pmu_test_event const **test_event_table;
+		bool found = false;
+
+		test_event_table = &sys_events[0];
+
+		for (; *test_event_table; test_event_table++) {
+			struct perf_pmu_test_event const *test_event = *test_event_table;
+			struct pmu_event const *event = &test_event->event;
+
+			if (strcmp(table->name, event->name))
+				continue;
+			found = true;
+			map_events++;
+
+			if (compare_pmu_events(table, event))
+				return -1;
+
+			pr_debug("testing sys event table %s: pass\n", table->name);
+		}
+		if (!found) {
+			pr_debug("testing event table: could not find event %s\n",
+				   table->name);
 			return -1;
 		}
 	}
@@ -459,6 +555,7 @@ static int __test_uncore_pmu_event_aliases(struct perf_pmu_test_pmu *test_pmu)
 	if (!events_table)
 		return -1;
 	pmu_add_cpu_aliases_table(&aliases, pmu, events_table);
+	pmu_add_sys_aliases(&aliases, pmu);
 
 	/* Count how many aliases we generated */
 	list_for_each_entry(alias, &aliases, list)
@@ -561,6 +658,26 @@ static struct perf_pmu_test_pmu test_pmus[] = {
 			&uncore_imc_cache_hits,
 		},
 	},
+	{
+		.pmu = {
+			.name = (char *)"uncore_sys_ddr_pmu0",
+			.is_uncore = 1,
+			.id = (char *)"v8",
+		},
+		.aliases = {
+			&sys_ddr_pmu_write_cycles,
+		},
+	},
+	{
+		.pmu = {
+			.name = (char *)"uncore_sys_ccn_pmu4",
+			.is_uncore = 1,
+			.id = (char *)"0x01",
+		},
+		.aliases = {
+			&sys_ccn_pmu_read_cycles,
+		},
+	},
 };
 
 /* Test that aliases generated are as expected */
@@ -637,32 +754,19 @@ static int check_parse_id(const char *id, struct parse_events_error *error,
 	for (cur = strchr(dup, '@') ; cur; cur = strchr(++cur, '@'))
 		*cur = '/';
 
+	if (fake_pmu) {
+		/*
+		 * Every call to __parse_events will try to initialize the PMU
+		 * state from sysfs and then clean it up at the end. Reset the
+		 * PMU events to the test state so that we don't pick up
+		 * erroneous prefixes and suffixes.
+		 */
+		perf_pmu__test_parse_init();
+	}
 	ret = __parse_events(evlist, dup, error, fake_pmu);
 	free(dup);
 
 	evlist__delete(evlist);
-	return ret;
-}
-
-static int check_parse_cpu(const char *id, bool same_cpu, const struct pmu_event *pe)
-{
-	struct parse_events_error error = { .idx = 0, };
-
-	int ret = check_parse_id(id, &error, NULL);
-	if (ret && same_cpu) {
-		pr_warning("Parse event failed metric '%s' id '%s' expr '%s'\n",
-			pe->metric_name, id, pe->metric_expr);
-		pr_warning("Error string '%s' help '%s'\n", error.str,
-			error.help);
-	} else if (ret) {
-		pr_debug3("Parse event failed, but for an event that may not be supported by this CPU.\nid '%s' metric '%s' expr '%s'\n",
-			  id, pe->metric_name, pe->metric_expr);
-		ret = 0;
-	}
-	free(error.str);
-	free(error.help);
-	free(error.first_str);
-	free(error.first_help);
 	return ret;
 }
 
@@ -683,71 +787,6 @@ struct metric {
 	struct metric_ref metric_ref;
 };
 
-static int resolve_metric_simple(struct expr_parse_ctx *pctx,
-				 struct list_head *compound_list,
-				 const struct pmu_event *map,
-				 const char *metric_name)
-{
-	struct hashmap_entry *cur, *cur_tmp;
-	struct metric *metric, *tmp;
-	size_t bkt;
-	bool all;
-	int rc;
-
-	do {
-		all = true;
-		hashmap__for_each_entry_safe(pctx->ids, cur, cur_tmp, bkt) {
-			struct metric_ref *ref;
-			const struct pmu_event *pe;
-
-			pe = metricgroup__find_metric(cur->key, map);
-			if (!pe)
-				continue;
-
-			if (!strcmp(metric_name, (char *)cur->key)) {
-				pr_warning("Recursion detected for metric %s\n", metric_name);
-				rc = -1;
-				goto out_err;
-			}
-
-			all = false;
-
-			/* The metric key itself needs to go out.. */
-			expr__del_id(pctx, cur->key);
-
-			metric = malloc(sizeof(*metric));
-			if (!metric) {
-				rc = -ENOMEM;
-				goto out_err;
-			}
-
-			ref = &metric->metric_ref;
-			ref->metric_name = pe->metric_name;
-			ref->metric_expr = pe->metric_expr;
-			list_add_tail(&metric->list, compound_list);
-
-			rc = expr__find_ids(pe->metric_expr, NULL, pctx);
-			if (rc)
-				goto out_err;
-			break; /* The hashmap has been modified, so restart */
-		}
-	} while (!all);
-
-	return 0;
-
-out_err:
-	list_for_each_entry_safe(metric, tmp, compound_list, list)
-		free(metric);
-
-	return rc;
-
-}
-
-static void expr_failure(const char *msg, const struct pmu_event *pe)
-{
-	pr_debug("%s\nOn metric %s\nOn expression %s\n", msg, pe->metric_name, pe->metric_expr);
-}
-
 struct test__parsing_data {
 	const struct pmu_event *cpus_table;
 	struct expr_parse_ctx *ctx;
@@ -755,85 +794,108 @@ struct test__parsing_data {
 };
 
 static int test__parsing_callback(const struct pmu_event *pe, const struct pmu_event *table,
-		void *vdata)
+		void *data)
 {
-	struct test__parsing_data *data = vdata;
-	struct metric *metric, *tmp;
-	struct hashmap_entry *cur;
-	LIST_HEAD(compound_list);
-	size_t bkt;
+	int *failures = data;
 	int k;
-	double result;
+	struct evlist *evlist;
+	struct perf_cpu_map *cpus;
+	struct runtime_stat st;
+	struct evsel *evsel;
+	struct rblist metric_events = {
+		.nr_entries = 0,
+	};
+	int err = 0;
 
 	if (!pe->metric_expr)
 		return 0;
 	pr_debug("Found metric '%s'\n", pe->metric_name);
+	(*failures)++;
 
-	expr__ctx_clear(data->ctx);
-	if (expr__find_ids(pe->metric_expr, NULL, data->ctx) < 0) {
-		expr_failure("Parse find ids failed", pe);
-		data->failures++;
-		return 0;
+	/*
+	 * We need to prepare evlist for stat mode running on CPU 0
+	 * because that's where all the stats are going to be created.
+	 */
+	evlist = evlist__new();
+	if (!evlist)
+		return -ENOMEM;
+
+	cpus = perf_cpu_map__new("0");
+	if (!cpus) {
+		evlist__delete(evlist);
+		return -ENOMEM;
 	}
 
-	if (resolve_metric_simple(data->ctx, &compound_list, table,
-				pe->metric_name)) {
-		expr_failure("Could not resolve metrics", pe);
-		data->failures++;
-		return TEST_FAIL; /* Don't tolerate errors due to severity */
+	perf_evlist__set_maps(&evlist->core, cpus, NULL);
+	runtime_stat__init(&st);
+
+	err = metricgroup__parse_groups_test(evlist, table, pe->metric_name,
+					     false, false,
+					     &metric_events);
+	if (err) {
+		if (!strcmp(pe->metric_name, "M1") || !strcmp(pe->metric_name, "M2") ||
+		    !strcmp(pe->metric_name, "M3")) {
+			(*failures)--;
+			pr_debug("Expected broken metric %s skipping\n", pe->metric_name);
+			err = 0;
+		}
+		goto out_err;
 	}
 
+	err = evlist__alloc_stats(evlist, false);
+	if (err)
+		goto out_err;
 	/*
 	 * Add all ids with a made up value. The value may trigger divide by
 	 * zero when subtracted and so try to make them unique.
 	 */
 	k = 1;
-	hashmap__for_each_entry(data->ctx->ids, cur, bkt)
-		expr__add_id_val(data->ctx, strdup(cur->key), k++);
-
-	hashmap__for_each_entry(data->ctx->ids, cur, bkt) {
-		if (check_parse_cpu(cur->key, table == data->cpus_table, pe))
-			data->failures++;
+	perf_stat__reset_shadow_stats();
+	evlist__for_each_entry(evlist, evsel) {
+		perf_stat__update_shadow_stats(evsel, k, 0, &st);
+		if (!strcmp(evsel->name, "duration_time"))
+			update_stats(&walltime_nsecs_stats, k);
+		k++;
 	}
+	evlist__for_each_entry(evlist, evsel) {
+		struct metric_event *me = metricgroup__lookup(&metric_events, evsel, false);
 
-	list_for_each_entry_safe(metric, tmp, &compound_list, list) {
-		expr__add_ref(data->ctx, &metric->metric_ref);
-		free(metric);
-	}
+		if (me != NULL) {
+			struct metric_expr *mexp;
 
-	if (expr__parse(&result, data->ctx, pe->metric_expr)) {
-		/*
-		 * Parsing failed, make numbers go from large to small which can
-		 * resolve divide by zero issues.
-		 */
-		k = 1024;
-		hashmap__for_each_entry(data->ctx->ids, cur, bkt)
-			expr__add_id_val(data->ctx, strdup(cur->key), k--);
-		if (expr__parse(&result, data->ctx, pe->metric_expr)) {
-			expr_failure("Parse failed", pe);
-			data->failures++;
+			list_for_each_entry (mexp, &me->head, nd) {
+				if (strcmp(mexp->metric_name, pe->metric_name))
+					continue;
+				pr_debug("Result %f\n", test_generic_metric(mexp, 0, &st));
+				err = 0;
+				(*failures)--;
+				goto out_err;
+			}
 		}
 	}
-	return 0;
+	pr_debug("Didn't find parsed metric %s", pe->metric_name);
+	err = 1;
+out_err:
+	if (err)
+		pr_debug("Broken metric %s\n", pe->metric_name);
+
+	/* ... cleanup. */
+	metricgroup__rblist_exit(&metric_events);
+	runtime_stat__exit(&st);
+	evlist__free_stats(evlist);
+	perf_cpu_map__put(cpus);
+	evlist__delete(evlist);
+	return err;
 }
 
 static int test_parsing(void)
 {
-	struct test__parsing_data data = {
-		.cpus_table = pmu_events_table__find(),
-		.ctx = expr__ctx_new(),
-		.failures = 0,
-	};
+	int failures = 0;
 
-	if (!data.ctx) {
-		pr_debug("expr__ctx_new failed");
-		return TEST_FAIL;
-	}
-	pmu_for_each_core_event(test__parsing_callback, &data);
-	pmu_for_each_sys_event(test__parsing_callback, &data);
+	pmu_for_each_core_event(test__parsing_callback, &failures);
+	pmu_for_each_sys_event(test__parsing_callback, &failures);
 
-	expr__ctx_free(data.ctx);
-	return data.failures == 0 ? TEST_OK : TEST_FAIL;
+	return failures == 0 ? TEST_OK : TEST_FAIL;
 }
 
 struct test_metric {
@@ -848,7 +910,7 @@ static struct test_metric metrics[] = {
 	{ "(imx8_ddr0@read\\-cycles@ + imx8_ddr0@write\\-cycles@)", },
 };
 
-static int metric_parse_fake(const char *str)
+static int metric_parse_fake(const char *metric_name, const char *str)
 {
 	struct expr_parse_ctx *ctx;
 	struct hashmap_entry *cur;
@@ -857,13 +919,14 @@ static int metric_parse_fake(const char *str)
 	size_t bkt;
 	int i;
 
-	pr_debug("parsing '%s'\n", str);
+	pr_debug("parsing '%s': '%s'\n", metric_name, str);
 
 	ctx = expr__ctx_new();
 	if (!ctx) {
 		pr_debug("expr__ctx_new failed");
 		return TEST_FAIL;
 	}
+	ctx->sctx.is_test = true;
 	if (expr__find_ids(str, NULL, ctx) < 0) {
 		pr_err("expr__find_ids failed\n");
 		return -1;
@@ -885,10 +948,25 @@ static int metric_parse_fake(const char *str)
 		}
 	}
 
-	if (expr__parse(&result, ctx, str))
-		pr_err("expr__parse failed\n");
-	else
-		ret = 0;
+	ret = 0;
+	if (expr__parse(&result, ctx, str)) {
+		/*
+		 * Parsing failed, make numbers go from large to small which can
+		 * resolve divide by zero issues.
+		 */
+		i = 1024;
+		hashmap__for_each_entry(ctx->ids, cur, bkt)
+			expr__add_id_val(ctx, strdup(cur->key), i--);
+		if (expr__parse(&result, ctx, str)) {
+			pr_err("expr__parse failed for %s\n", metric_name);
+			/* The following have hard to avoid divide by zero. */
+			if (!strcmp(metric_name, "tma_clears_resteers") ||
+			    !strcmp(metric_name, "tma_mispredicts_resteers"))
+				ret = 0;
+			else
+				ret = -1;
+		}
+	}
 
 out:
 	expr__ctx_free(ctx);
@@ -902,7 +980,7 @@ static int test__parsing_fake_callback(const struct pmu_event *pe,
 	if (!pe->metric_expr)
 		return 0;
 
-	return metric_parse_fake(pe->metric_expr);
+	return metric_parse_fake(pe->metric_name, pe->metric_expr);
 }
 
 /*
@@ -915,7 +993,7 @@ static int test_parsing_fake(void)
 	int err = 0;
 
 	for (size_t i = 0; i < ARRAY_SIZE(metrics); i++) {
-		err = metric_parse_fake(metrics[i].str);
+		err = metric_parse_fake("", metrics[i].str);
 		if (err)
 			return err;
 	}

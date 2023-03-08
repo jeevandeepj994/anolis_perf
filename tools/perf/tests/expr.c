@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0
+#include "util/cputopo.h"
 #include "util/debug.h"
 #include "util/expr.h"
 #include "util/smt.h"
@@ -124,7 +125,7 @@ int test__expr(struct test *t __maybe_unused, int subtest __maybe_unused)
 						    (void **)&val_ptr));
 
 	expr__ctx_clear(ctx);
-	ctx->runtime = 3;
+	ctx->sctx.runtime = 3;
 	TEST_ASSERT_VAL("find ids",
 			expr__find_ids("EVENT1\\,param\\=?@ + EVENT2\\,param\\=?@",
 					NULL, ctx) == 0);
@@ -135,15 +136,33 @@ int test__expr(struct test *t __maybe_unused, int subtest __maybe_unused)
 						    (void **)&val_ptr));
 
 	/* Only EVENT1 or EVENT2 need be measured depending on the value of smt_on. */
-	expr__ctx_clear(ctx);
-	TEST_ASSERT_VAL("find ids",
-			expr__find_ids("EVENT1 if #smt_on else EVENT2",
-				NULL, ctx) == 0);
-	TEST_ASSERT_VAL("find ids", hashmap__size(ctx->ids) == 1);
-	TEST_ASSERT_VAL("find ids", hashmap__find(ctx->ids,
-						  smt_on() ? "EVENT1" : "EVENT2",
-						  (void **)&val_ptr));
+	{
+		struct cpu_topology *topology = cpu_topology__new();
+		bool smton = smt_on(topology);
+		bool corewide = core_wide(/*system_wide=*/false,
+					  /*user_requested_cpus=*/false,
+					  topology);
 
+		cpu_topology__delete(topology);
+		expr__ctx_clear(ctx);
+		TEST_ASSERT_VAL("find ids",
+				expr__find_ids("EVENT1 if #smt_on else EVENT2",
+					NULL, ctx) == 0);
+		TEST_ASSERT_VAL("find ids", hashmap__size(ctx->ids) == 1);
+		TEST_ASSERT_VAL("find ids", hashmap__find(ctx->ids,
+							  smton ? "EVENT1" : "EVENT2",
+							  (void **)&val_ptr));
+
+		expr__ctx_clear(ctx);
+		TEST_ASSERT_VAL("find ids",
+				expr__find_ids("EVENT1 if #core_wide else EVENT2",
+					NULL, ctx) == 0);
+		TEST_ASSERT_VAL("find ids", hashmap__size(ctx->ids) == 1);
+		TEST_ASSERT_VAL("find ids", hashmap__find(ctx->ids,
+							  corewide ? "EVENT1" : "EVENT2",
+							  (void **)&val_ptr));
+
+	}
 	/* The expression is a constant 1.0 without needing to evaluate EVENT1. */
 	expr__ctx_clear(ctx);
 	TEST_ASSERT_VAL("find ids",
@@ -160,6 +179,18 @@ int test__expr(struct test *t __maybe_unused, int subtest __maybe_unused)
 	TEST_ASSERT_VAL("#num_cores >= #num_dies", num_cores >= num_dies);
 	TEST_ASSERT_VAL("#num_packages", expr__parse(&num_packages, ctx, "#num_packages") == 0);
 	TEST_ASSERT_VAL("#num_dies >= #num_packages", num_dies >= num_packages);
+
+	/*
+	 * Source count returns the number of events aggregating in a leader
+	 * event including the leader. Check parsing yields an id.
+	 */
+	expr__ctx_clear(ctx);
+	TEST_ASSERT_VAL("source count",
+			expr__find_ids("source_count(EVENT1)",
+			NULL, ctx) == 0);
+	TEST_ASSERT_VAL("source count", hashmap__size(ctx->ids) == 1);
+	TEST_ASSERT_VAL("source count", hashmap__find(ctx->ids, "EVENT1",
+							(void **)&val_ptr));
 
 	expr__ctx_free(ctx);
 
