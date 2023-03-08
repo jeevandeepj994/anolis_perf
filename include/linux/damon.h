@@ -56,6 +56,7 @@ struct damon_region {
 	unsigned int last_nr_accesses;
 	unsigned long local;
 	unsigned long remote;
+	bool lru_sort_done;
 };
 
 /**
@@ -99,6 +100,8 @@ enum damos_action {
 	DAMOS_PAGEOUT,
 	DAMOS_HUGEPAGE,
 	DAMOS_NOHUGEPAGE,
+	DAMOS_LRU_DEPRIO,
+	DAMOS_LRU_PRIO,
 	DAMOS_STAT,		/* Do nothing but only record the stat */
 };
 
