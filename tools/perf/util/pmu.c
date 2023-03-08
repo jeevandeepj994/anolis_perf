@@ -3,6 +3,7 @@
 #include <linux/compiler.h>
 #include <linux/string.h>
 #include <linux/zalloc.h>
+#include <linux/ctype.h>
 #include <subcmd/pager.h>
 #include <sys/types.h>
 #include <errno.h>
@@ -715,6 +716,35 @@ __weak const struct pmu_event *pmu_events_table__find(void)
 	return perf_pmu__find_table(NULL);
 }
 
+/*
+ * Suffix must be in form tok_{digits}, or tok{digits}, or same as pmu_name
+ * to be valid.
+ */
+static bool perf_pmu__valid_suffix(const char *pmu_name, char *tok)
+{
+	const char *p;
+
+	if (strncmp(pmu_name, tok, strlen(tok)))
+		return false;
+
+	p = pmu_name + strlen(tok);
+	if (*p == 0)
+		return true;
+
+	if (*p == '_')
+		++p;
+
+	/* Ensure we end in a number */
+	while (1) {
+		if (!isdigit(*p))
+			return false;
+		if (*(++p) == 0)
+			break;
+	}
+
+	return true;
+}
+
 bool pmu_uncore_alias_match(const char *pmu_name, const char *name)
 {
 	char *tmp = NULL, *tok, *str;
@@ -741,12 +771,19 @@ bool pmu_uncore_alias_match(const char *pmu_name, const char *name)
 	 *	    match "socket" in "socketX_pmunameY" and then "pmuname" in
 	 *	    "pmunameY".
 	 */
-	for (; tok; name += strlen(tok), tok = strtok_r(NULL, ",", &tmp)) {
+	while (1) {
+		char *next_tok = strtok_r(NULL, ",", &tmp);
+
 		name = strstr(name, tok);
-		if (!name) {
+		if (!name ||
+		    (!next_tok && !perf_pmu__valid_suffix(name, tok))) {
 			res = false;
 			goto out;
 		}
+		if (!next_tok)
+			break;
+		tok = next_tok;
+		name += strlen(tok);
 	}
 
 	res = true;
@@ -1832,4 +1869,15 @@ void perf_pmu__warn_invalid_config(struct perf_pmu *pmu, __u64 config,
 double __weak perf_pmu__cpu_slots_per_cycle(void)
 {
 	return NAN;
+}
+
+int perf_pmu__match(char *pattern, char *name, char *tok)
+{
+	if (fnmatch(pattern, name, 0))
+		return -1;
+
+	if (tok && !perf_pmu__valid_suffix(name, tok))
+		return -1;
+
+	return 0;
 }
