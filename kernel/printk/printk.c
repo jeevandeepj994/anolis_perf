@@ -2046,8 +2046,10 @@ asmlinkage int vprintk_emit(int facility, int level,
 		return 0;
 
 	if (unlikely(suppress_panic_printk) &&
-	    atomic_read(&panic_cpu) != raw_smp_processor_id())
+	    atomic_read(&panic_cpu) != raw_smp_processor_id()) {
+		pr_warn_once("Too many dropped messages. Suppress messages on non-panic CPUs to prevent livelock.\n");
 		return 0;
+	}
 
 	if (level == LOGLEVEL_SCHED) {
 		level = LOGLEVEL_DEFAULT;
@@ -2527,10 +2529,8 @@ skip:
 		if (console_seq != r.info->seq) {
 			console_dropped += r.info->seq - console_seq;
 			console_seq = r.info->seq;
-			if (panic_in_progress() && panic_console_dropped++ > 10) {
+			if (panic_in_progress() && panic_console_dropped++ > 10)
 				suppress_panic_printk = 1;
-				pr_warn_once("Too many dropped messages. Suppress messages on non-panic CPUs to prevent livelock.\n");
-			}
 		}
 
 		if (suppress_message_printing(r.info->level)) {
