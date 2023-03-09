@@ -108,6 +108,12 @@ extern void init_IRQ(void);
 extern void radix_tree_init(void);
 
 /*
+ * Now trap_init calls init_cea_offsets which use the random number supplied
+ * by prandom_u32. So we need to init the random seed in a earlier step.
+ */
+extern int prandom_init(void);
+
+/*
  * Debug helper: via this flag we know that we are in 'early bootup code'
  * where only the boot processor is running with IRQ disabled.  This means
  * two things - IRQ must not be enabled before the flag is cleared and some
@@ -585,6 +591,7 @@ asmlinkage __visible void __init start_kernel(void)
 	setup_log_buf(0);
 	vfs_caches_init_early();
 	sort_main_extable();
+	prandom_init();
 	trap_init();
 	mm_init();
 
