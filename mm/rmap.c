@@ -1491,38 +1491,44 @@ static bool try_to_unmap_one(struct page *page, struct vm_area_struct *vma,
 		subpage = page - page_to_pfn(page) + pte_pfn(*pvmw.pte);
 		address = pvmw.address;
 
-		if (PageHuge(page) && !PageAnon(page)) {
+		if (PageHuge(page)) {
 			/*
-			 * To call huge_pmd_unshare, i_mmap_rwsem must be
-			 * held in write mode.  Caller needs to explicitly
-			 * do this outside rmap routines.
+			 * huge_pmd_unshare may unmap an entire PMD page.
+			 * There is no way of knowing exactly which PMDs may
+			 * be cached for this mm, so we must flush them all.
+			 * start/end were already adjusted above to cover this
+			 * range.
 			 */
-			VM_BUG_ON(!(flags & TTU_RMAP_LOCKED));
-			if (huge_pmd_unshare(mm, vma, &address, pvmw.pte)) {
-				/*
-				 * huge_pmd_unshare unmapped an entire PMD
-				 * page.  There is no way of knowing exactly
-				 * which PMDs may be cached for this mm, so
-				 * we must flush them all.  start/end were
-				 * already adjusted above to cover this range.
-				 */
-				flush_cache_range(vma, range.start, range.end);
-				flush_tlb_range(vma, range.start, range.end);
-				mmu_notifier_invalidate_range(mm, range.start,
-							      range.end);
+			flush_cache_range(vma, range.start, range.end);
 
+			if (!PageAnon(page)) {
 				/*
-				 * The ref count of the PMD page was dropped
-				 * which is part of the way map counting
-				 * is done for shared PMDs.  Return 'true'
-				 * here.  When there is no other sharing,
-				 * huge_pmd_unshare returns false and we will
-				 * unmap the actual page and drop map count
-				 * to zero.
+				 * To call huge_pmd_unshare, i_mmap_rwsem must be
+				 * held in write mode.  Caller needs to explicitly
+				 * do this outside rmap routines.
 				 */
-				page_vma_mapped_walk_done(&pvmw);
-				break;
+				VM_BUG_ON(!(flags & TTU_RMAP_LOCKED));
+
+				if (huge_pmd_unshare(mm, vma, &address, pvmw.pte)) {
+					flush_tlb_range(vma, range.start, range.end);
+					mmu_notifier_invalidate_range(mm, range.start,
+								      range.end);
+
+					/*
+					 * The ref count of the PMD page was dropped
+					 * which is part of the way map counting
+					 * is done for shared PMDs.  Return 'true'
+					 * here.  When there is no other sharing,
+					 * huge_pmd_unshare returns false and we will
+					 * unmap the actual page and drop map count
+					 * to zero.
+					 */
+					page_vma_mapped_walk_done(&pvmw);
+					break;
+				}
 			}
+		} else {
+			flush_cache_page(vma, address, pte_pfn(*pvmw.pte));
 		}
 
 		if (IS_ENABLED(CONFIG_MIGRATION) &&
@@ -1565,22 +1571,25 @@ static bool try_to_unmap_one(struct page *page, struct vm_area_struct *vma,
 			goto discard;
 		}
 
-		/* Nuke the page table entry. */
-		flush_cache_page(vma, address, pte_pfn(*pvmw.pte));
-		if (should_defer_flush(mm, flags)) {
-			/*
-			 * We clear the PTE but do not flush so potentially
-			 * a remote CPU could still be writing to the page.
-			 * If the entry was previously clean then the
-			 * architecture must guarantee that a clear->dirty
-			 * transition on a cached TLB entry is written through
-			 * and traps if the PTE is unmapped.
-			 */
-			pteval = ptep_get_and_clear(mm, address, pvmw.pte);
-
-			set_tlb_ubc_flush_pending(mm, pte_dirty(pteval));
+		if (PageHuge(page)) {
+			pteval = huge_ptep_clear_flush(vma, address, pvmw.pte);
 		} else {
-			pteval = ptep_clear_flush(vma, address, pvmw.pte);
+			/* Nuke the page table entry. */
+			if (should_defer_flush(mm, flags)) {
+				/*
+				 * We clear the PTE but do not flush so potentially
+				 * a remote CPU could still be writing to the page.
+				 * If the entry was previously clean then the
+				 * architecture must guarantee that a clear->dirty
+				 * transition on a cached TLB entry is written through
+				 * and traps if the PTE is unmapped.
+				 */
+				pteval = ptep_get_and_clear(mm, address, pvmw.pte);
+
+				set_tlb_ubc_flush_pending(mm, pte_dirty(pteval));
+			} else {
+				pteval = ptep_clear_flush(vma, address, pvmw.pte);
+			}
 		}
 
 		/* Move the dirty bit to the page. Now the pte is gone. */
@@ -1623,7 +1632,10 @@ static bool try_to_unmap_one(struct page *page, struct vm_area_struct *vma,
 			pte_t swp_pte;
 
 			if (arch_unmap_one(mm, vma, address, pteval) < 0) {
-				set_pte_at(mm, address, pvmw.pte, pteval);
+				if (PageHuge(page))
+					set_huge_pte_at(mm, address, pvmw.pte, pteval);
+				else
+					set_pte_at(mm, address, pvmw.pte, pteval);
 				ret = false;
 				page_vma_mapped_walk_done(&pvmw);
 				break;
@@ -1641,7 +1653,11 @@ static bool try_to_unmap_one(struct page *page, struct vm_area_struct *vma,
 				swp_pte = pte_swp_mksoft_dirty(swp_pte);
 			if (pte_uffd_wp(pteval))
 				swp_pte = pte_swp_mkuffd_wp(swp_pte);
-			set_pte_at(mm, address, pvmw.pte, swp_pte);
+			if (PageHuge(page))
+				set_huge_swap_pte_at(mm, address, pvmw.pte,
+						     swp_pte, vma_mmu_pagesize(vma));
+			else
+				set_pte_at(mm, address, pvmw.pte, swp_pte);
 			/*
 			 * No need to invalidate here it will synchronize on
 			 * against the special swap migration pte.
