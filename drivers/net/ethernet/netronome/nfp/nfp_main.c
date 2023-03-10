@@ -437,6 +437,118 @@ nfp_net_fw_find(struct pci_dev *pdev, struct nfp_pf *pf)
 	return nfp_net_fw_request(pdev, pf, fw_name);
 }
 
+static u8 __iomem *
+nfp_get_beat_addr(struct nfp_pf *pf, int pf_id)
+{
+	/* Each PF has corresponding qword to beat:
+	 * offset | usage
+	 *   0    | magic number
+	 *   8    | beat qword of pf0
+	 *   16   | beat qword of pf1
+	 */
+	return pf->multi_pf.beat_addr + ((pf_id + 1) << 3);
+}
+
+static void
+nfp_nsp_beat_timer(struct timer_list *t)
+{
+	struct nfp_pf *pf = from_timer(pf, t, multi_pf.beat_timer);
+
+	writeq(jiffies, nfp_get_beat_addr(pf, pf->multi_pf.id));
+	/* Beat once per second. */
+	mod_timer(&pf->multi_pf.beat_timer, jiffies + HZ);
+}
+
+/**
+ * nfp_nsp_keepalive_start() - Start keepalive mechanism if needed
+ * @pf:		NFP PF Device structure
+ *
+ * Return 0 if no error, errno otherwise
+ */
+static int
+nfp_nsp_keepalive_start(struct nfp_pf *pf)
+{
+	struct nfp_resource *res;
+	u8 __iomem *base;
+	int err = 0;
+	u64 addr;
+	u32 cpp;
+
+	if (!pf->multi_pf.en)
+		return 0;
+
+	res = nfp_resource_acquire(pf->cpp, NFP_KEEPALIVE);
+	if (IS_ERR(res))
+		return PTR_ERR(res);
+
+	cpp = nfp_resource_cpp_id(res);
+	addr = nfp_resource_address(res);
+
+	/* Allocate a fixed area for keepalive. */
+	base = nfp_cpp_map_area(pf->cpp, "keepalive", cpp, addr,
+				nfp_resource_size(res), &pf->multi_pf.beat_area);
+	if (IS_ERR(base)) {
+		nfp_err(pf->cpp, "Failed to map area for keepalive\n");
+		err = PTR_ERR(base);
+		goto res_release;
+	}
+
+	pf->multi_pf.beat_addr = base;
+	timer_setup(&pf->multi_pf.beat_timer, nfp_nsp_beat_timer, 0);
+	mod_timer(&pf->multi_pf.beat_timer, jiffies);
+
+res_release:
+	nfp_resource_release(res);
+	return err;
+}
+
+static void
+nfp_nsp_keepalive_stop(struct nfp_pf *pf)
+{
+	if (pf->multi_pf.beat_area) {
+		del_timer_sync(&pf->multi_pf.beat_timer);
+		nfp_cpp_area_release_free(pf->multi_pf.beat_area);
+	}
+}
+
+static u64
+nfp_get_sibling_beat(struct nfp_pf *pf)
+{
+	unsigned int i = 0;
+	u64 beat = 0;
+
+	if (!pf->multi_pf.beat_addr)
+		return 0;
+
+	for (; i < 4; i++) {
+		if (i == pf->multi_pf.id)
+			continue;
+
+		beat += readq(nfp_get_beat_addr(pf, i));
+	}
+
+	return beat;
+}
+
+static bool
+nfp_skip_fw_load(struct nfp_pf *pf, struct nfp_nsp *nsp)
+{
+	unsigned long timeout = jiffies + HZ * 3;
+	u64 beat = nfp_get_sibling_beat(pf);
+
+	if (!pf->multi_pf.en || nfp_nsp_fw_loaded(nsp) <= 0)
+		return false;
+
+	while (time_is_after_jiffies(timeout)) {
+		if (beat != nfp_get_sibling_beat(pf))
+			return true;
+
+		msleep(500);
+	}
+
+	return false;
+}
+
 /**
  * nfp_net_fw_load() - Load the firmware image
  * @pdev:       PCI Device structure
@@ -459,8 +571,11 @@ nfp_fw_load(struct pci_dev *pdev, struct nfp_pf *pf, struct nfp_nsp *nsp)
 		return 0;
 	}
 
-	/* Skip firmware loading in multi-PF setup if firmware is loaded. */
-	if (pf->multi_pf_support && nfp_nsp_fw_loaded(nsp))
+	err = nfp_nsp_keepalive_start(pf);
+	if (err)
+		return err;
+
+	if (nfp_skip_fw_load(pf, nsp))
 		return 1;
 
 	fw = nfp_net_fw_find(pdev, pf);
@@ -485,6 +600,9 @@ nfp_fw_load(struct pci_dev *pdev, struct nfp_pf *pf, struct nfp_nsp *nsp)
 
 exit_release_fw:
 	release_firmware(fw);
+
+	if (err < 0)
+		nfp_nsp_keepalive_stop(pf);
 
 	return err < 0 ? err : 1;
 }
@@ -531,8 +649,9 @@ static int nfp_nsp_init(struct pci_dev *pdev, struct nfp_pf *pf)
 		return err;
 	}
 
-	pf->multi_pf_support = pdev->multifunction;
-	dev_info(&pdev->dev, "%s-PF detected\n", pf->multi_pf_support ? "Multi" : "Single");
+	pf->multi_pf.en = pdev->multifunction;
+	pf->multi_pf.id = PCI_FUNC(pdev->devfn);
+	dev_info(&pdev->dev, "%s-PF detected\n", pf->multi_pf.en ? "Multi" : "Single");
 
 	err = nfp_nsp_wait(nsp);
 	if (err < 0)
@@ -565,6 +684,12 @@ static void nfp_fw_unload(struct nfp_pf *pf)
 {
 	struct nfp_nsp *nsp;
 	int err;
+
+	if (pf->multi_pf.en && pf->multi_pf.beat_addr) {
+		/* NSP will unload firmware when no active PF exists. */
+		writeq(NFP_KEEPALIVE_MAGIC, pf->multi_pf.beat_addr);
+		return;
+	}
 
 	nsp = nfp_nsp_open(pf->cpp);
 	if (IS_ERR(nsp)) {
@@ -712,8 +837,9 @@ err_net_remove:
 err_fw_unload:
 	kfree(pf->rtbl);
 	nfp_mip_close(pf->mip);
-	if (pf->fw_loaded && !pf->multi_pf_support)
+	if (pf->fw_loaded)
 		nfp_fw_unload(pf);
+	nfp_nsp_keepalive_stop(pf);
 	kfree(pf->eth_tbl);
 	kfree(pf->nspi);
 	vfree(pf->dumpspec);
@@ -748,9 +874,10 @@ static void nfp_pci_remove(struct pci_dev *pdev)
 	vfree(pf->dumpspec);
 	kfree(pf->rtbl);
 	nfp_mip_close(pf->mip);
-	if (pf->fw_loaded && !pf->multi_pf_support)
+	if (pf->fw_loaded)
 		nfp_fw_unload(pf);
 
+	nfp_nsp_keepalive_stop(pf);
 	destroy_workqueue(pf->wq);
 	pci_set_drvdata(pdev, NULL);
 	kfree(pf->hwinfo);
