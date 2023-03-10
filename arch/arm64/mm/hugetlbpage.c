@@ -462,7 +462,7 @@ static __init int setup_hugepagesz(char *opt)
 	case PMD_SIZE * CONT_PMDS:
 	case PMD_SIZE:
 	case PAGE_SIZE * CONT_PTES:
-		add_huge_page_size(ps);
+		hugetlb_add_hstate(ilog2(ps) - PAGE_SHIFT);
 		return 1;
 	}
 
