@@ -1478,11 +1478,10 @@ static void smcr_buf_unuse(struct smc_buf_desc *buf_desc, bool is_rmb,
 
 		smc_buf_free(lgr, is_rmb, buf_desc);
 	} else {
-		if (is_rmb) {
+		if (is_rmb)
 			/* memzero_explicit provides potential memory barrier semantics */
 			memzero_explicit(buf_desc->cpu_addr, buf_desc->len);
-			WRITE_ONCE(buf_desc->used, 0);
-		}
+		WRITE_ONCE(buf_desc->used, 0);
 	}
 }
 
