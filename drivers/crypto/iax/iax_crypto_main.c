@@ -732,20 +732,20 @@ static int iax_compress(struct crypto_tfm *tfm,
 	desc->decompr_flags = IAX_DECOMP_FLAGS | IAX_DECOMP_SUPPRESS_OUTPUT;
 	desc->priv = 1;
 
-	src_addr = dma_map_single(dev, (void *)src, slen, DMA_TO_DEVICE);
+	src_addr = dma_map_single(dev, (void *)src, slen, DMA_FROM_DEVICE);
 	pr_debug("%s: dma_map_single, src_addr %llx, dev %p, src %p, slen %d\n", __func__, src_addr, dev, src, slen);
 	if (unlikely(dma_mapping_error(dev, src_addr))) {
 		pr_debug("%s: dma_map_single err, exiting\n", __func__);
 		ret = -ENOMEM;
-		goto err_map_src;
+		goto verify_err_map_src;
 	}
 
-	dst_addr = dma_map_single(dev, (void *)dst, *dlen, DMA_FROM_DEVICE);
+	dst_addr = dma_map_single(dev, (void *)dst, *dlen, DMA_TO_DEVICE);
 	pr_debug("%s: dma_map_single, dst_addr %llx, dev %p, dst %p, *dlen %d\n", __func__, dst_addr, dev, dst, *dlen);
 	if (unlikely(dma_mapping_error(dev, dst_addr))) {
 		pr_debug("%s: dma_map_single err, exiting\n", __func__);
 		ret = -ENOMEM;
-		goto err_map_dst;
+		goto verify_err_map_dst;
 	}
 
 	desc->src1_addr = (u64)dst_addr;
@@ -757,13 +757,13 @@ static int iax_compress(struct crypto_tfm *tfm,
 	ret = idxd_submit_desc(wq, idxd_desc);
 	if (ret) {
 		pr_warn("%s: submit_desc (verify) failed ret=%d\n", __func__, ret);
-		goto err;
+		goto verify_err;
 	}
 
 	ret = check_completion(idxd_desc->iax_completion, true);
 	if (ret) {
 		pr_warn("%s: check_completion (verify) failed ret=%d\n", __func__, ret);
-		goto err;
+		goto verify_err;
 	}
 
 	if (compression_crc != idxd_desc->iax_completion->crc) {
@@ -771,12 +771,14 @@ static int iax_compress(struct crypto_tfm *tfm,
 		pr_err("%s: iax comp/decomp crc mismatch: comp=0x%x, decomp=0x%x\n", __func__,
 		       compression_crc, idxd_desc->iax_completion->crc);
 		print_hex_dump(KERN_INFO, "cmp-rec: ", DUMP_PREFIX_OFFSET, 8, 1, idxd_desc->iax_completion, 64, 0);
-		goto err;
+		goto verify_err;
 	}
 
-	dma_unmap_single(dev, src_addr, slen, DMA_TO_DEVICE);
-	dma_unmap_single(dev, dst_addr, *dlen, DMA_FROM_DEVICE);
-
+verify_err:
+	dma_unmap_single(dev, dst_addr, *dlen, DMA_TO_DEVICE);
+verify_err_map_dst:
+	dma_unmap_single(dev, src_addr, slen, DMA_FROM_DEVICE);
+verify_err_map_src:
 	idxd_free_desc(wq, idxd_desc);
 out:
 	return ret;
