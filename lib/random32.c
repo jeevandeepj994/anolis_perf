@@ -459,7 +459,7 @@ EXPORT_SYMBOL(prandom_seed);
  *	Generate some initially weak seeding values to allow
  *	the prandom_u32() engine to be started.
  */
-static int __init prandom_init_early(void)
+int __init prandom_init_early(void)
 {
 	int i;
 	unsigned long v0, v1, v2, v3;
@@ -486,8 +486,6 @@ static int __init prandom_init_early(void)
 
 	return 0;
 }
-core_initcall(prandom_init_early);
-
 
 /* Stronger reseeding when available, and periodically thereafter. */
 static void prandom_reseed(struct timer_list *unused);
