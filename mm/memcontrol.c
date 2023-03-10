@@ -186,7 +186,6 @@ struct mem_cgroup_event {
 };
 
 static void mem_cgroup_threshold(struct mem_cgroup *memcg);
-static void mem_cgroup_oom_notify(struct mem_cgroup *memcg);
 
 /* Stuffs for move charges at task migration. */
 /*
@@ -5069,7 +5068,7 @@ static int mem_cgroup_oom_notify_cb(struct mem_cgroup *memcg)
 	return 0;
 }
 
-static void mem_cgroup_oom_notify(struct mem_cgroup *memcg)
+void mem_cgroup_oom_notify(struct mem_cgroup *memcg)
 {
 	struct mem_cgroup *iter;
 
