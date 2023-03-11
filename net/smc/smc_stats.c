@@ -17,6 +17,7 @@
 #include <net/sock.h>
 #include "smc_netlink.h"
 #include "smc_stats.h"
+#include "smc_core.h"
 
 int smc_stats_init(struct net *net)
 {
@@ -40,6 +41,36 @@ void smc_stats_exit(struct net *net)
 	kfree(net->smc.fback_rsn);
 	if (net->smc.smc_stats)
 		free_percpu(net->smc.smc_stats);
+}
+
+int smc_lgr_link_stats_init(struct smc_link_group *lgr)
+{
+	int i, j;
+
+	for (i = 0; i < SMC_LINKS_PER_LGR_MAX; i++) {
+		lgr->lnk_stats[i].ib_stats =
+			alloc_percpu(struct smc_link_ib_stats);
+		if (!lgr->lnk_stats[i].ib_stats)
+			goto err;
+	}
+	return 0;
+
+err:
+	for (j = i - 1; j >= 0; j--) {
+		free_percpu(lgr->lnk_stats[j].ib_stats);
+		lgr->lnk_stats[j].ib_stats = NULL;
+	}
+	return -ENOMEM;
+}
+
+void smc_lgr_link_stats_free(struct smc_link_group *lgr)
+{
+	int i;
+
+	for (i = 0; i < SMC_LINKS_PER_LGR_MAX; i++) {
+		free_percpu(lgr->lnk_stats[i].ib_stats);
+		lgr->lnk_stats[i].ib_stats = NULL;
+	}
 }
 
 static int smc_nl_fill_stats_rmb_data(struct sk_buff *skb,

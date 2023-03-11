@@ -1014,7 +1014,11 @@ static void smc_llc_save_add_link_rkeys(struct smc_link *link,
 static void smc_llc_save_add_link_info(struct smc_link *link,
 				       struct smc_llc_msg_add_link *add_llc)
 {
+	struct smc_link_stats *lnk_stats =
+		&link->lgr->lnk_stats[link->link_idx];
+
 	link->peer_qpn = ntoh24(add_llc->sender_qp_num);
+	lnk_stats->peer_qpn = link->peer_qpn;
 	memcpy(link->peer_gid, add_llc->sender_gid, SMC_GID_SIZE);
 	memcpy(link->peer_mac, add_llc->sender_mac, ETH_ALEN);
 	link->peer_psn = ntoh24(add_llc->initial_psn);
