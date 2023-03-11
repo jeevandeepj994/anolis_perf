@@ -756,7 +756,7 @@ static const struct dmi_system_id __initconst i8042_dmi_reset_table[] = {
 };
 
 #ifdef CONFIG_PNP
-static const struct dmi_system_id __initconst i8042_dmi_nopnp_table[] = {
+static const struct dmi_system_id i8042_dmi_laptop_table[] __initconst = {
 	{
 		/* Intel MBO Desktop D845PESV */
 		.matches = {
