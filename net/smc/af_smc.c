@@ -728,7 +728,11 @@ static void smc_link_save_peer_info(struct smc_link *link,
 				    struct smc_clc_msg_accept_confirm *clc,
 				    struct smc_init_info *ini)
 {
+	struct smc_link_stats *lnk_stats =
+		&link->lgr->lnk_stats[link->link_idx];
+
 	link->peer_qpn = ntoh24(clc->r0.qpn);
+	lnk_stats->peer_qpn = link->peer_qpn;
 	memcpy(link->peer_gid, ini->peer_gid, SMC_GID_SIZE);
 	memcpy(link->peer_mac, ini->peer_mac, sizeof(link->peer_mac));
 	link->peer_psn = ntoh24(clc->r0.psn);
