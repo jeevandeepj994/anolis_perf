@@ -252,6 +252,7 @@ struct smc_llc_flow {
 
 struct smc_link_group {
 	struct list_head	list;
+	struct list_head	stats_list;
 	struct rb_root		conns_all;	/* connection tree */
 	rwlock_t		conns_lock;	/* protects conns_all */
 	unsigned int		conns_num;	/* current # of connections */

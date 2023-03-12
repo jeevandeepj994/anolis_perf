@@ -492,7 +492,7 @@ static int smc_nl_handle_lgr(struct smc_link_group *lgr,
 	if (!list_links)
 		goto out;
 	for (i = 0; i < SMC_LINKS_PER_LGR_MAX; i++) {
-		if (!smc_link_usable(&lgr->lnk[i]))
+		if (lgr->lnk[i].state == SMC_LNK_UNUSED)
 			continue;
 		if (smc_nl_fill_lgr_link(lgr, &lgr->lnk[i], skb, cb))
 			goto errout;
@@ -517,7 +517,7 @@ static void smc_nl_fill_lgr_list(struct smc_lgr_list *smc_lgr,
 	int num = 0;
 
 	spin_lock_bh(&smc_lgr->lock);
-	list_for_each_entry(lgr, &smc_lgr->list, list) {
+	list_for_each_entry(lgr, &smc_lgr->list, stats_list) {
 		if (num < snum)
 			goto next;
 		if (smc_nl_handle_lgr(lgr, skb, cb, list_links))
@@ -647,7 +647,7 @@ int smcr_nl_get_lgr(struct sk_buff *skb, struct netlink_callback *cb)
 {
 	bool list_links = false;
 
-	smc_nl_fill_lgr_list(&smc_lgr_list, skb, cb, list_links);
+	smc_nl_fill_lgr_list(&smc_lgr_stats_list, skb, cb, list_links);
 	return skb->len;
 }
 
@@ -655,7 +655,7 @@ int smcr_nl_get_link(struct sk_buff *skb, struct netlink_callback *cb)
 {
 	bool list_links = true;
 
-	smc_nl_fill_lgr_list(&smc_lgr_list, skb, cb, list_links);
+	smc_nl_fill_lgr_list(&smc_lgr_stats_list, skb, cb, list_links);
 	return skb->len;
 }
 
