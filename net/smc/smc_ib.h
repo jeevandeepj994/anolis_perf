@@ -32,6 +32,7 @@ struct smc_ib_devices {			/* list of smc ib devices definition */
 
 extern struct smc_ib_devices	smc_ib_devices; /* list of smc ib devices */
 extern struct smc_lgr_list smc_lgr_list; /* list of linkgroups */
+extern struct smc_lgr_list smc_lgr_stats_list; /* list of statistic linkgroups */
 
 struct smc_ib_cq {				/* ib_cq wrapper for smc */
 	struct smc_ib_device	*smcibdev;	/* parent ib device */
