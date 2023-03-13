@@ -74,7 +74,7 @@ static DECLARE_WORK(pstore_work, pstore_dowork);
  * pstore_register(), pstore_unregister(), and
  * the filesystem mount/unmount routines.
  */
-static DEFINE_MUTEX(psback_lock);
+DEFINE_MUTEX(psback_lock);
 struct pstore_backends *psback;
 
 static char *compress =
@@ -605,15 +605,13 @@ int pstore_register(struct pstore_info *psi)
 			mutex_unlock(&psback_lock);
 			return -EBUSY;
 		}
-		rcu_read_lock();
-		list_for_each_entry_rcu(entry, &psback->list_entry, list) {
+		list_for_each_entry(entry, &psback->list_entry, list) {
 			if (strcmp(entry->psi->name, psi->name) == 0) {
 				pr_warn("ignoring unexpected backend '%s'\n", psi->name);
 				mutex_unlock(&psback_lock);
 				return -EPERM;
 			}
 		}
-		rcu_read_unlock();
 	}
 
 	if (!psback) {
@@ -629,7 +627,6 @@ int pstore_register(struct pstore_info *psi)
 	pslist->psi = psi;
 	pslist->index = ffz(psback->flag);
 	INIT_LIST_HEAD(&pslist->list);
-	list_add_rcu(&pslist->list, &psback->list_entry);
 	psback->flag |= (1 << pslist->index);
 
 	mutex_init(&psi->read_mutex);
@@ -658,6 +655,8 @@ int pstore_register(struct pstore_info *psi)
 
 	/* Start watching for new records, if desired. */
 	pstore_timer_kick();
+
+	list_add_rcu(&pslist->list, &psback->list_entry);
 
 	pr_info("Registered %s as persistent store backend\n", psi->name);
 
@@ -694,17 +693,16 @@ void pstore_unregister(struct pstore_info *psi)
 	/* Remove all backend records from filesystem tree. */
 	pstore_put_backend_records(psi);
 
-	rcu_read_lock();
-	list_for_each_entry_rcu(entry, &psback->list_entry, list) {
+	list_for_each_entry(entry, &psback->list_entry, list) {
 		if (entry->psi == psi) {
-			free_buf_for_compression(entry->index);
 			list_del_rcu(&entry->list);
 			psback->flag ^= 1 << entry->index;
+			synchronize_rcu();
+			free_buf_for_compression(entry->index);
 			kfree(entry);
 			break;
 		}
 	}
-	rcu_read_unlock();
 
 	if (psback->flag == PSOTRE_LIST_EMPTY) {
 		kfree(psback);
@@ -840,10 +838,10 @@ static void pstore_dowork(struct work_struct *work)
 {
 	struct pstore_info_list *entry;
 
-	rcu_read_lock();
-	list_for_each_entry_rcu(entry, &psback->list_entry, list)
+	mutex_lock(&psback_lock);
+	list_for_each_entry(entry, &psback->list_entry, list)
 		pstore_get_records(entry->psi, entry->index, 1);
-	rcu_read_unlock();
+	mutex_unlock(&psback_lock);
 }
 
 static void pstore_timefunc(struct timer_list *unused)
@@ -886,18 +884,18 @@ static int __init pstore_init(void)
 	 * initialize compression because crypto was not ready. If so,
 	 * initialize compression now.
 	 */
-	rcu_read_lock();
-	list_for_each_entry_rcu(entry, &psback->list_entry, list)
+	mutex_lock(&psback_lock);
+	list_for_each_entry(entry, &psback->list_entry, list)
 		allocate_buf_for_compression(entry->psi, entry->index);
-	rcu_read_unlock();
+	mutex_unlock(&psback_lock);
 
 	ret = pstore_init_fs();
 
 	if (ret) {
-		rcu_read_lock();
-		list_for_each_entry_rcu(entry, &psback->list_entry, list)
+		mutex_lock(&psback_lock);
+		list_for_each_entry(entry, &psback->list_entry, list)
 			free_buf_for_compression(entry->index);
-		rcu_read_unlock();
+		mutex_unlock(&psback_lock);
 	}
 
 	return ret;

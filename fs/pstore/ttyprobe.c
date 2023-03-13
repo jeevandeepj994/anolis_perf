@@ -13,7 +13,6 @@
 #include <linux/tty_driver.h>
 #include "internal.h"
 
-static DEFINE_MUTEX(ttymsg_lock);
 DEFINE_STATIC_KEY_FALSE(ttyprobe_key);
 
 #define TTYPROBE_NAME "ttyprobe"
@@ -36,10 +35,8 @@ static void do_write_ttymsg(const unsigned char *buf, int count,
 	newline.size = strlen(lbreak);
 	newline.buf = lbreak;
 
-	mutex_lock(&ttymsg_lock);
 	psinfo->write(&record);
 	psinfo->write(&newline);
-	mutex_unlock(&ttymsg_lock);
 }
 
 void pstore_register_ttyprobe(void)
