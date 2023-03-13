@@ -236,6 +236,7 @@ struct pstore_backends {
 
 extern int pstore_register(struct pstore_info *);
 extern void pstore_unregister(struct pstore_info *);
+extern struct mutex psback_lock;
 
 struct pstore_ftrace_record {
 	unsigned long ip;
