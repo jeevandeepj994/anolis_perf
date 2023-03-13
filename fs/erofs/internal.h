@@ -114,8 +114,8 @@ struct erofs_sb_info {
 #endif
 	u16 device_id_mask;
 
-	/* inode slot unit size in bit shift */
-	unsigned char islotbits;
+	unsigned char islotbits;	/* inode slot unit size in bit shift */
+	unsigned char blkszbits;
 
 	u32 build_time_nsec;
 	u64 build_time;
@@ -253,13 +253,6 @@ static inline int erofs_wait_on_workgroup_freezed(struct erofs_workgroup *grp)
 
 /* we strictly follow PAGE_SIZE and no buffer head yet */
 #define LOG_BLOCK_SIZE		PAGE_SHIFT
-
-#undef LOG_SECTORS_PER_BLOCK
-#define LOG_SECTORS_PER_BLOCK	(PAGE_SHIFT - 9)
-
-#undef SECTORS_PER_BLOCK
-#define SECTORS_PER_BLOCK	(1 << SECTORS_PER_BLOCK)
-
 #define EROFS_BLKSIZ		(1 << LOG_BLOCK_SIZE)
 
 #if (EROFS_BLKSIZ % 4096 || !EROFS_BLKSIZ)
@@ -278,16 +271,18 @@ struct erofs_buf {
 	struct page *page;
 	void *base;
 	enum erofs_kmap_type kmap_type;
+	unsigned char blkbits;
 	bool dax;
 };
 #define __EROFS_BUF_INITIALIZER	\
-	((struct erofs_buf){ .page = NULL, .mapping = NULL, .dax = false })
+	((struct erofs_buf){ .page = NULL, .mapping = NULL, .blkbits = 0, .dax = false })
 
 #define ROOT_NID(sb)		((sb)->root_nid)
 
-#define erofs_blknr(addr)       ((addr) / EROFS_BLKSIZ)
-#define erofs_blkoff(addr)      ((addr) % EROFS_BLKSIZ)
-#define blknr_to_addr(nr)       ((erofs_off_t)(nr) * EROFS_BLKSIZ)
+#define erofs_blknr(sb, addr)	((addr) >> (sb)->s_blocksize_bits)
+#define erofs_blkoff(sb, addr)	((addr) & ((sb)->s_blocksize - 1))
+#define erofs_pos(sb, blk)	((erofs_off_t)(blk) << (sb)->s_blocksize_bits)
+#define erofs_iblks(i)	(round_up((i)->i_size, i_blocksize(i)) >> (i)->i_blkbits)
 
 #define EROFS_FEATURE_FUNCS(name, compat, feature) \
 static inline bool erofs_sb_has_##name(struct erofs_sb_info *sbi) \
@@ -346,7 +341,7 @@ static inline erofs_off_t erofs_iloc(struct inode *inode)
 {
 	struct erofs_sb_info *sbi = EROFS_I_SB(inode);
 
-	return blknr_to_addr(sbi->meta_blkaddr) +
+	return erofs_pos(inode->i_sb, sbi->meta_blkaddr) +
 		(EROFS_I(inode)->nid << sbi->islotbits);
 }
 
