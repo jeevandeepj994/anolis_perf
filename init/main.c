@@ -117,6 +117,12 @@ extern void init_IRQ(void);
 extern void radix_tree_init(void);
 
 /*
+ * Now init_cea_offsets use prandom to randomize cpu entry.
+ * So we need to init prandom early.
+ */
+extern int prandom_init_early(void);
+
+/*
  * Debug helper: via this flag we know that we are in 'early bootup code'
  * where only the boot processor is running with IRQ disabled.  This means
  * two things - IRQ must not be enabled before the flag is cleared and some
@@ -902,6 +908,7 @@ asmlinkage __visible void __init __no_sanitize_address start_kernel(void)
 	setup_log_buf(0);
 	vfs_caches_init_early();
 	sort_main_extable();
+	prandom_init_early();
 	trap_init();
 	mm_init();
 
