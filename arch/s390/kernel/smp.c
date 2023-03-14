@@ -329,6 +329,7 @@ static void __no_sanitize_address pcpu_delegate(struct pcpu *pcpu,
 		CALL_ON_STACK(__pcpu_delegate, stack, 2, func, data);
 	/* Stop target cpu (if func returns this stops the current cpu). */
 	pcpu_sigp_retry(pcpu, SIGP_STOP, 0);
+	pcpu_sigp_retry(pcpu, SIGP_CPU_RESET, 0);
 	/* Restart func on the target cpu and stop the current cpu. */
 	mem_assign_absolute(lc->restart_stack, stack);
 	mem_assign_absolute(lc->restart_fn, (unsigned long) func);
