@@ -1926,9 +1926,11 @@ asmlinkage int vprintk_emit(int facility, int level,
 	unsigned long flags;
 	u64 curr_log_seq;
 
-        if (unlikely(suppress_panic_printk) &&
-            atomic_read(&panic_cpu) != raw_smp_processor_id())
-                return 0;
+	if (unlikely(suppress_panic_printk) &&
+	    atomic_read(&panic_cpu) != raw_smp_processor_id()) {
+		pr_warn_once("Too many dropped messages. Suppress messages on non-panic CPUs to prevent livelock.\n");
+		return 0;
+	}
 
 	if (level == LOGLEVEL_SCHED) {
 		level = LOGLEVEL_DEFAULT;
@@ -2420,10 +2422,8 @@ again:
 			/* messages are gone, move to first one */
 			console_seq = log_first_seq;
 			console_idx = log_first_idx;
-			if (panic_in_progress() && panic_console_dropped++ > 10) {
+			if (panic_in_progress() && panic_console_dropped++ > 10)
 				suppress_panic_printk = 1;
-				pr_warn_once("Too many dropped messages. Suppress messages on non-panic CPUs to prevent livelock.\n");
-			}
 		} else {
 			len = 0;
 		}
