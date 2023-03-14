@@ -380,13 +380,12 @@ static unsigned long isolate_coldpgs_from_lru(struct mem_cgroup *memcg,
 	unsigned long nr_zone_taken[MAX_NR_ZONES] = { 0, };
 	int zid, batch = 0;
 
-	spin_lock_irq(&pgdat->lru_lock);
+	spin_lock_irq(&lruvec->lru_lock);
 
 	for (scan = 0;
 	     !list_empty(src) && scan < size && nr_taken < nr_to_reclaim;
 	     scan++) {
 		page = lru_to_page(src);
-		VM_BUG_ON_PAGE(!PageLRU(page), page);
 
 		/*
 		 * The pages in the LRU list are visited in reverse order.
@@ -395,30 +394,40 @@ static unsigned long isolate_coldpgs_from_lru(struct mem_cgroup *memcg,
 		 * skipped safely. The eligible pages are moved to separate
 		 * (local) list.
 		 */
-		if (page_is_reclaimable(memcg, filter, pgdat, page, true) &&
-		    get_page_unless_zero(page)) {
-			ClearPageLRU(page);
+		if (!page_is_reclaimable(memcg, filter, pgdat, page, true) ||
+		    !get_page_unless_zero(page)) {
+			list_move(&page->lru, src);
+			goto isolate_fail;
+		}
 
+		if (TestClearPageLRU(page)) {
 			nr_pages = thp_nr_pages(page);
 			nr_zone_taken[page_zonenum(page)] += nr_pages;
 			nr_taken += nr_pages;
 			list_move(&page->lru, dst);
 		} else {
+			/*
+			 * This page may in other isolation path,
+			 * but we still hold lru_lock.
+			 */
+			put_page(page);
 			list_move(&page->lru, src);
 		}
 
+isolate_fail:
 		/*
-		 * The system might not survive if the node's LRU lock is
-		 * taken with interrupt disabled for long time, so we
-		 * refresh a bit when excessive isolations have been issued.
+		 * To schedule out a moment when reaching filter->batch. This
+		 * scheme mainly to avoid hold lru_lock long time if a huge
+		 * nr_to_reclaim here.
+		 *
 		 * This mechanism can be disabled when zero limit is provided.
 		 */
 		if (filter->batch && ++batch >= filter->batch) {
-			spin_unlock_irq(&pgdat->lru_lock);
+			spin_unlock_irq(&lruvec->lru_lock);
 			cond_resched();
+			spin_lock_irq(&lruvec->lru_lock);
 
 			batch = 0;
-			spin_lock_irq(&pgdat->lru_lock);
 		}
 	}
 
@@ -431,7 +440,7 @@ static unsigned long isolate_coldpgs_from_lru(struct mem_cgroup *memcg,
 				zid, -nr_zone_taken[zid]);
 	}
 
-	spin_unlock_irq(&pgdat->lru_lock);
+	spin_unlock_irq(&lruvec->lru_lock);
 
 	return nr_taken;
 }
@@ -681,9 +690,9 @@ static void my_putback_inactive_pages(struct lruvec *lruvec, struct list_head *p
 		VM_BUG_ON_PAGE(PageLRU(page), page);
 		list_del(&page->lru);
 		if (unlikely(!page_evictable(page))) {
-			spin_unlock_irq(&pgdat->lru_lock);
+			spin_unlock_irq(&lruvec->lru_lock);
 			my_putback_lru_page(page);
-			spin_lock_irq(&pgdat->lru_lock);
+			spin_lock_irq(&lruvec->lru_lock);
 			continue;
 		}
 
@@ -699,10 +708,10 @@ static void my_putback_inactive_pages(struct lruvec *lruvec, struct list_head *p
 			my_del_page_from_lru_list(page, lruvec, lru);
 
 			if (unlikely(PageCompound(page))) {
-				spin_unlock_irq(&pgdat->lru_lock);
+				spin_unlock_irq(&lruvec->lru_lock);
 				dtor = my_compound_page_dtors[page[1].compound_dtor];
 				(*dtor)(page);
-				spin_lock_irq(&pgdat->lru_lock);
+				spin_lock_irq(&lruvec->lru_lock);
 			} else
 				list_add(&page->lru, &pages_to_free);
 		} else {
@@ -934,9 +943,9 @@ keep:
 		list_move(&page->lru, &free_pages);
 
 		if (filter->batch && ++batch >= filter->batch) {
-			spin_lock_irq(&pgdat->lru_lock);
+			spin_lock_irq(&lruvec->lru_lock);
 			my_putback_inactive_pages(lruvec, &free_pages);
-			spin_unlock_irq(&pgdat->lru_lock);
+			spin_unlock_irq(&lruvec->lru_lock);
 
 			my_mem_cgroup_uncharge_list(&free_pages);
 #ifdef CONFIG_ARCH_WANT_BATCHED_UNMAP_TLB_FLUSH
@@ -952,9 +961,9 @@ keep:
 
 	/* Release the remaining pages */
 	if (!list_empty(&free_pages)) {
-		spin_lock_irq(&pgdat->lru_lock);
+		spin_lock_irq(&lruvec->lru_lock);
 		my_putback_inactive_pages(lruvec, &free_pages);
-		spin_unlock_irq(&pgdat->lru_lock);
+		spin_unlock_irq(&lruvec->lru_lock);
 
 		my_mem_cgroup_uncharge_list(&free_pages);
 #ifdef CONFIG_ARCH_WANT_BATCHED_UNMAP_TLB_FLUSH
