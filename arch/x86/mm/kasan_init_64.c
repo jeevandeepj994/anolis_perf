@@ -303,8 +303,18 @@ static unsigned long kasan_mem_to_shadow_align_up(unsigned long va)
 	return round_up(shadow, PAGE_SIZE);
 }
 
+void __init kasan_populate_shadow_for_vaddr(void *va, size_t size, int nid)
+{
+	unsigned long shadow_start, shadow_end;
+
+	shadow_start = kasan_mem_to_shadow_align_down((unsigned long)va);
+	shadow_end = kasan_mem_to_shadow_align_up((unsigned long)va + size);
+	kasan_populate_shadow(shadow_start, shadow_end, nid);
+}
+
 void __init kasan_init(void)
 {
+	unsigned long shadow_cea_per_cpu_begin;
 	unsigned long shadow_cpu_entry_begin, shadow_cpu_entry_end;
 	int i;
 
@@ -352,6 +362,7 @@ void __init kasan_init(void)
 	}
 
 	shadow_cpu_entry_begin = kasan_mem_to_shadow_align_down(CPU_ENTRY_AREA_BASE);
+	shadow_cea_per_cpu_begin = kasan_mem_to_shadow_align_up(CPU_ENTRY_AREA_PER_CPU);
 	shadow_cpu_entry_end = kasan_mem_to_shadow_align_up(CPU_ENTRY_AREA_BASE +
 							    CPU_ENTRY_AREA_MAP_SIZE);
 
@@ -359,8 +370,14 @@ void __init kasan_init(void)
 		kasan_mem_to_shadow((void *)PAGE_OFFSET + MAXMEM),
 		(void *)shadow_cpu_entry_begin);
 
+	/*
+	 * Populate the shadow for the shared portion of the CPU entry area.
+	 * Shadows for the per-CPU areas are mapped on-demand, as each CPU's
+	 * area is randomly placed somewhere in the 512GiB range and mapping
+	 * the entire 512GiB range is prohibitively expensive.
+	 */
 	kasan_populate_shadow(shadow_cpu_entry_begin,
-			      shadow_cpu_entry_end, 0);
+				shadow_cea_per_cpu_begin, 0);
 
 	kasan_populate_zero_shadow((void *)shadow_cpu_entry_end,
 				kasan_mem_to_shadow((void *)__START_KERNEL_map));
