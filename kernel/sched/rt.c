@@ -2468,6 +2468,21 @@ static void update_nr_uninterruptible_rt(struct task_struct *p, long inc)
 }
 #endif
 
+#ifdef CONFIG_SCHED_CORE
+static int task_is_throttled_rt(struct task_struct *p, int cpu)
+{
+	struct rt_rq *rt_rq;
+
+#ifdef CONFIG_RT_GROUP_SCHED
+	rt_rq = task_group(p)->rt_rq[cpu];
+#else
+	rt_rq = &cpu_rq(cpu)->rt;
+#endif
+
+	return rt_rq_throttled(rt_rq);
+}
+#endif
+
 const struct sched_class rt_sched_class
 	__section("__rt_sched_class") = {
 	.enqueue_task		= enqueue_task_rt,
@@ -2502,6 +2517,10 @@ const struct sched_class rt_sched_class
 
 #ifdef CONFIG_SCHED_SLI
 	.update_nr_uninterruptible = update_nr_uninterruptible_rt,
+#endif
+
+#ifdef CONFIG_SCHED_CORE
+	.task_is_throttled	= task_is_throttled_rt,
 #endif
 
 #ifdef CONFIG_UCLAMP_TASK

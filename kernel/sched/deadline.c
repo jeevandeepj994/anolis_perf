@@ -2505,6 +2505,13 @@ static void prio_changed_dl(struct rq *rq, struct task_struct *p,
 	}
 }
 
+#ifdef CONFIG_SCHED_CORE
+static int task_is_throttled_dl(struct task_struct *p, int cpu)
+{
+	return p->dl.dl_throttled;
+}
+#endif
+
 const struct sched_class dl_sched_class
 	__section("__dl_sched_class") = {
 	.enqueue_task		= enqueue_task_dl,
@@ -2536,6 +2543,9 @@ const struct sched_class dl_sched_class
 	.switched_to		= switched_to_dl,
 
 	.update_curr		= update_curr_dl,
+#ifdef CONFIG_SCHED_CORE
+	.task_is_throttled	= task_is_throttled_dl,
+#endif
 };
 
 int sched_dl_global_validate(void)
