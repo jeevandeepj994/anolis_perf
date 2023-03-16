@@ -348,8 +348,8 @@ static bool malidp_check_pages_threshold(struct malidp_plane_state *ms,
 		else
 			sgt = obj->funcs->get_sg_table(obj);
 
-		if (!sgt)
-			return false;
+		if (IS_ERR(sgt))
+            return false;
 
 		sgl = sgt->sgl;
 
