@@ -2354,6 +2354,10 @@ struct sched_class {
 	void (*update_nr_uninterruptible)(struct task_struct *p, long inc);
 	void (*update_nr_iowait)(struct task_struct *p, long inc);
 
+#ifdef CONFIG_SCHED_CORE
+	int (*task_is_throttled)(struct task_struct *p, int cpu);
+#endif
+
 	CK_KABI_RESERVE(1)
 	CK_KABI_RESERVE(2)
 	CK_KABI_RESERVE(3)
