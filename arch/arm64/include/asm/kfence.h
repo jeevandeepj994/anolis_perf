@@ -23,4 +23,14 @@ static inline bool kfence_protect_page(unsigned long addr, bool protect)
 
 static inline bool arch_kfence_free_pool(unsigned long addr) { return false; }
 
+#ifdef CONFIG_KFENCE
+extern bool kfence_early_init;
+static inline bool arm64_kfence_can_set_direct_map(void)
+{
+	return !kfence_early_init;
+}
+#else /* CONFIG_KFENCE */
+static inline bool arm64_kfence_can_set_direct_map(void) { return false; }
+#endif /* CONFIG_KFENCE */
+
 #endif /* __ASM_KFENCE_H */

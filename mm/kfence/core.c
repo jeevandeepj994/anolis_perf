@@ -141,6 +141,13 @@ static int param_set_num_objects(const char *val, const struct kernel_param *kp)
 	if (READ_ONCE(kfence_enabled) || !num)
 		return -EINVAL; /* can not change num_objects when enabled */
 
+	/*
+	 * If the kfence pool has been initialized eariler, do not change the
+	 * value of kfence_num_objects.
+	 */
+	if (__kfence_pool_early_init)
+		return (system_state == SYSTEM_BOOTING) ? 0 : -EINVAL;
+
 	*((unsigned long *)kp->arg) = num;
 	return 0;
 }
@@ -247,6 +254,12 @@ module_param_cb(fault, &fault_param_ops, &kfence_panic_on_fault, 0600);
  * Only used in booting init state. Will be cleared after that.
  */
 char **__kfence_pool_area;
+
+/*
+ * The pool of pages should be reserved earlier than kfence initialization. It's
+ * only assigned in arm64 architecture.
+ */
+char *__kfence_pool_early_init;
 
 /* The binary tree maintaining all kfence pool areas */
 struct rb_root kfence_pool_root = RB_ROOT;
@@ -1733,6 +1746,11 @@ void __init kfence_alloc_pool(void)
 	if (!__kfence_pool_area)
 		goto fail;
 
+	if (__kfence_pool_early_init) {
+		__kfence_pool_area[first_online_node] = __kfence_pool_early_init;
+		return;
+	}
+
 	for_each_node(node)
 		kfence_alloc_pool_node(node);
 
@@ -1806,6 +1824,9 @@ void kfence_init_late(void)
 	bool ret;
 
 	if (!READ_ONCE(kfence_sample_interval))
+		return;
+
+	if (__kfence_pool_early_init)
 		return;
 
 	mutex_lock(&kfence_mutex);

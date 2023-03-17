@@ -40,6 +40,9 @@ DECLARE_STATIC_KEY_FALSE(kfence_once_inited);
 #define GFP_KFENCE_NOT_ALLOC ((GFP_ZONEMASK & ~__GFP_HIGHMEM) | __GFP_NOKFENCE | __GFP_THISNODE)
 DECLARE_STATIC_KEY_TRUE(kfence_order0_page);
 
+extern unsigned long kfence_num_objects;
+extern char *__kfence_pool_early_init;
+
 /**
  * is_kfence_address_area() - check if an address belongs to KFENCE pool in given area
  * @addr: address to check

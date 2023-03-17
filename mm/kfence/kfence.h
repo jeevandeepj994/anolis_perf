@@ -98,7 +98,6 @@ struct kfence_metadata {
 	struct kfence_pool_area *kpa;
 };
 
-extern unsigned long kfence_num_objects;
 extern bool kfence_panic_on_fault;
 DECLARE_STATIC_KEY_FALSE(kfence_short_canary);
 
