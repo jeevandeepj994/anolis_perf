@@ -1288,7 +1288,7 @@ static int memory_failure_kill_procs(unsigned long long pfn, int flags)
 		 * communicated in siginfo, see kill_proc()
 		 */
 		start = (page->index << PAGE_SHIFT) & ~(size - 1);
-		unmap_mapping_range(page->mapping, start, start + size, 0);
+		unmap_mapping_range(page->mapping, start, size, 0);
 	}
 	kill_procs(&to_kill, flags & MF_MUST_KILL, !unmap_success, pfn, flags);
 
@@ -1329,7 +1329,7 @@ int dax_kill_mapping_procs(struct address_space *mapping, pgoff_t index, int fla
 		 * communicated in siginfo, see kill_proc()
 		 */
 		start = (index << PAGE_SHIFT) & ~(size - 1);
-		unmap_mapping_range(mapping, start, start + size, 0);
+		unmap_mapping_range(mapping, start, size, 0);
 	}
 
 	kill_procs(&to_kill, flags & MF_MUST_KILL, false, pfn, flags);
