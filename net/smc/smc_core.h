@@ -29,7 +29,7 @@
 					 * least has two rq/sq credits in average, otherwise
 					 * may result in waiting for credits in sending process.
 					 */
-
+#define SMC_MAX_TOKEN_LOCAL		255
 struct smc_lgr_list {			/* list of link group definition */
 	struct list_head	list;
 	spinlock_t		lock;	/* protects list of link groups */
@@ -121,6 +121,7 @@ struct smc_link {
 		struct percpu_ref	wr_tx_refs;
 	} ____cacheline_aligned_in_smp;
 	struct completion	tx_ref_comp;
+	atomic_t		tx_inflight_credit;
 
 	struct smc_wr_buf	*wr_rx_bufs;	/* WR recv payload buffers */
 	struct ib_recv_wr	*wr_rx_ibs;	/* WR recv meta data */
