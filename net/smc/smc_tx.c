@@ -338,7 +338,8 @@ static int smc_tx_rdma_write(struct smc_connection *conn, int peer_rmbe_offset,
 	struct smc_link *link = conn->lnk;
 	int rc;
 
-	rdma_wr->wr.wr_id = smc_wr_tx_get_next_wr_id(link);
+	if (!lgr->use_rwwi)
+		rdma_wr->wr.wr_id = smc_wr_tx_get_next_wr_id(link);
 	rdma_wr->wr.num_sge = num_sges;
 	rdma_wr->remote_addr =
 		lgr->rtokens[conn->rtoken_idx][link->link_idx].dma_addr +
@@ -359,6 +360,96 @@ static int smc_tx_rdma_write(struct smc_connection *conn, int peer_rmbe_offset,
 	return rc;
 }
 
+static int __smcr_tx_rdma_writes_rwwi(struct smc_connection *conn, int dst_off,
+				      int dst_len, int num_sges, bool inflight_credit_flag,
+				      struct ib_rdma_wr *wr)
+{
+	struct smc_cdc_producer_flags *pflags;
+	bool update_rx_curs_confirmed = false;
+	union smc_host_cursor cons_old;
+	union smc_wr_rwwi_tx_id wr_id;
+	union smc_wr_imm_msg imm_msg;
+	union smc_host_cursor cfed;
+	u8 urg_flags, prod_flags;
+	u8 conn_state_flags;
+	int diff_cons, rc;
+
+	BUILD_BUG_ON_MSG(sizeof(union smc_wr_imm_msg) > sizeof(__be32),
+			 "sizeof(union smc_wr_imm_msg) can not exceed the size of imm_data(__be32)");
+
+	pflags = &conn->local_tx_ctrl.prod_flags;
+	imm_msg.imm_data = 0;
+	wr_id.data = 0;
+
+	atomic_inc(&conn->cdc_pend_tx_wr);
+	smp_mb__after_atomic(); /* Make sure cdc_pend_tx_wr added before post */
+	imm_msg.hdr.token = conn->local_tx_ctrl.token;
+	imm_msg.hdr.opcode = SMC_WR_OP_DATA;
+
+	conn_state_flags = *((u8 *)&conn->local_tx_ctrl.conn_state_flags);
+	prod_flags = *((u8 *)pflags);
+	urg_flags = (*((u8 *)pflags) & SMC_PROD_FLAGS_MASK);
+	/* transfer priority:
+	 * 1. transfer conn_state_flags and prod_flags (except urg_flags)
+	 *    when they are set.
+	 * 2. transfer urg_flags when it is set.
+	 *    Diff_cons should be transferred together to ensure subsequent sending
+	 *    with urg_flags always set.
+	 * 3. transfer diff_cons without flags.
+	 */
+	if (urg_flags)
+		imm_msg.hdr.opcode = SMC_WR_OP_DATA_WITH_FLAGS;
+	/* conn_state_flags or prod_flags (except urg_flags) is set */
+	if (conn_state_flags || prod_flags != urg_flags)
+		imm_msg.hdr.opcode = SMC_WR_OP_CTRL;
+
+	smc_curs_copy(&cfed, &conn->local_tx_ctrl.cons, conn);
+	smc_curs_copy(&cons_old, &conn->rx_curs_confirmed, conn);
+	diff_cons = smc_curs_diff(conn->rmb_desc->len, &cons_old,
+				  &conn->local_tx_ctrl.cons);
+	switch (imm_msg.hdr.opcode) {
+	case SMC_WR_OP_DATA:
+		if (diff_cons > SMC_DATA_MAX_DIFF_CONS)
+			diff_cons = SMC_DATA_MAX_DIFF_CONS;
+		imm_msg.data.diff_cons = diff_cons;
+		update_rx_curs_confirmed = true;
+		break;
+	case SMC_WR_OP_CTRL:
+		imm_msg.ctrl.pflags = conn->local_tx_ctrl.prod_flags;
+		imm_msg.ctrl.csflags = conn->local_tx_ctrl.conn_state_flags;
+		break;
+	case SMC_WR_OP_DATA_WITH_FLAGS:
+		if (diff_cons > SMC_DATA_WITH_FLAGS_MAX_DIFF_CONS)
+			diff_cons = SMC_DATA_WITH_FLAGS_MAX_DIFF_CONS;
+		imm_msg.data_with_flags.write_blocked = pflags->write_blocked;
+		imm_msg.data_with_flags.urg_data_present = pflags->urg_data_present;
+		imm_msg.data_with_flags.urg_data_pending = pflags->urg_data_pending;
+		imm_msg.data_with_flags.diff_cons = diff_cons;
+		update_rx_curs_confirmed = true;
+		break;
+	}
+
+	wr_id.rwwi_flag = 1;
+	wr_id.inflight_credit_flag = inflight_credit_flag;
+	wr_id.token = conn->alert_token_local;
+	wr_id.inflight_sent = dst_len;
+	wr->wr.wr_id = wr_id.data;
+	wr->wr.ex.imm_data = cpu_to_be32(imm_msg.imm_data);
+
+	rc = smc_tx_rdma_write(conn, dst_off, num_sges, wr);
+	if (!rc) {
+		/* do not update rx_curs_confirmed if all flags equal to 0,
+		 * since diff_cons will not be carried by imm_data in this case.
+		 */
+		if (update_rx_curs_confirmed)
+			smc_curs_add(conn->rmb_desc->len, &conn->rx_curs_confirmed, diff_cons);
+	} else {
+		atomic_dec(&conn->cdc_pend_tx_wr);
+	}
+
+	return rc;
+}
+
 /* sndbuf consumer */
 static inline void smc_tx_advance_cursors(struct smc_connection *conn,
 					  union smc_host_cursor *prod,
@@ -375,55 +466,109 @@ static inline void smc_tx_advance_cursors(struct smc_connection *conn,
 	smc_curs_add(conn->sndbuf_desc->len, sent, len);
 }
 
-/* SMC-R helper for smc_tx_rdma_writes() */
-static int smcr_tx_rdma_writes(struct smc_connection *conn, size_t len,
-			       size_t src_off, size_t src_len,
-			       size_t dst_off, size_t dst_len,
-			       struct smc_rdma_wr *wr_rdma_buf)
+static int smc_tx_get_inflight_credit(struct smc_link *link,
+				      struct smc_connection *conn)
+{
+	struct smc_link_group *lgr = link->lgr;
+	int rc;
+
+	if (in_softirq() || lgr->terminating) {
+		if (atomic_dec_if_positive(&link->tx_inflight_credit) < 0)
+			return -EBUSY;
+	} else {
+		rc = wait_event_interruptible_timeout(link->wr_tx_wait,
+						      !smc_link_sendable(link) ||
+						      lgr->terminating ||
+				(atomic_dec_if_positive(&link->tx_inflight_credit) >= 0),
+						      SMC_WR_TX_WAIT_FREE_SLOT_TIME);
+		if (!rc) {
+			/* timeout - terminate link */
+			smcr_link_down_cond_sched(link);
+			return -EPIPE;
+		}
+		if (!smc_link_sendable(link) || lgr->terminating)
+			return -EPIPE;
+	}
+	if (conn->killed) {
+		atomic_inc(&link->tx_inflight_credit);
+		return -EPIPE;
+	}
+	return 0;
+}
+
+void smc_tx_put_inflight_credit(struct smc_link *link)
+{
+	atomic_inc(&link->tx_inflight_credit);
+}
+
+static int smc_tx_fill_wr(struct smc_connection *conn, int *src_off,
+			  int src_len, int dst_len, struct ib_rdma_wr *wr,
+			  struct ib_sge *sge, bool use_rwwi)
 {
 	struct smc_link *link = conn->lnk;
 
 	dma_addr_t dma_addr =
 		sg_dma_address(conn->sndbuf_desc->sgt[link->link_idx].sgl);
 	u64 virt_addr = (uintptr_t)conn->sndbuf_desc->cpu_addr;
+	int src_len_sum = src_len;
+	u64 base_addr = dma_addr;
+	int srcchunk;
+	int num_sges;
+
+	if (dst_len < link->qp_attr.cap.max_inline_data) {
+		base_addr = virt_addr;
+		wr->wr.send_flags |= IB_SEND_INLINE;
+	} else {
+		wr->wr.send_flags &= ~IB_SEND_INLINE;
+	}
+
+	num_sges = 0;
+	for (srcchunk = 0; srcchunk < 2; srcchunk++) {
+		sge[srcchunk].addr = conn->sndbuf_desc->is_vm ?
+			(virt_addr + *src_off) : (base_addr + *src_off);
+		sge[srcchunk].length = src_len;
+
+		if (conn->sndbuf_desc->is_vm) {
+			sge[srcchunk].lkey =
+				conn->sndbuf_desc->mr[link->link_idx]->lkey;
+		} else {
+			sge[srcchunk].lkey = conn->lnk->roce_pd->local_dma_lkey;
+		}
+		num_sges++;
+
+		*src_off += src_len;
+		if (*src_off >= conn->sndbuf_desc->len)
+			*src_off -= conn->sndbuf_desc->len;
+					/* modulo in send ring */
+		if (src_len_sum == dst_len)
+			break; /* either on 1st or 2nd iteration */
+		/* prepare next (== 2nd) iteration */
+		src_len = dst_len - src_len; /* remainder */
+		src_len_sum += src_len;
+	}
+
+	return num_sges;
+}
+
+/* SMC-R helper for smc_tx_rdma_writes() */
+static int smcr_tx_rdma_writes(struct smc_connection *conn, size_t len,
+			       size_t src_off, size_t src_len,
+			       size_t dst_off, size_t dst_len,
+			       struct smc_rdma_wr *wr_rdma_buf)
+{
 	int src_len_sum = src_len, dst_len_sum = dst_len;
 	int sent_count = src_off;
-	int srcchunk, dstchunk;
+	int *src_offset;
+	int dstchunk;
 	int num_sges;
 	int rc;
 
+	src_offset = (int *)&src_off;
 	for (dstchunk = 0; dstchunk < 2; dstchunk++) {
 		struct ib_rdma_wr *wr = &wr_rdma_buf->wr_tx_rdma[dstchunk];
 		struct ib_sge *sge = wr->wr.sg_list;
-		u64 base_addr = dma_addr;
 
-		if (dst_len < link->qp_attr.cap.max_inline_data) {
-			base_addr = virt_addr;
-			wr->wr.send_flags |= IB_SEND_INLINE;
-		} else {
-			wr->wr.send_flags &= ~IB_SEND_INLINE;
-		}
-
-		num_sges = 0;
-		for (srcchunk = 0; srcchunk < 2; srcchunk++) {
-			sge[srcchunk].addr = conn->sndbuf_desc->is_vm ?
-				(virt_addr + src_off) : (base_addr + src_off);
-			sge[srcchunk].length = src_len;
-			if (conn->sndbuf_desc->is_vm)
-				sge[srcchunk].lkey =
-					conn->sndbuf_desc->mr[link->link_idx]->lkey;
-			num_sges++;
-
-			src_off += src_len;
-			if (src_off >= conn->sndbuf_desc->len)
-				src_off -= conn->sndbuf_desc->len;
-						/* modulo in send ring */
-			if (src_len_sum == dst_len)
-				break; /* either on 1st or 2nd iteration */
-			/* prepare next (== 2nd) iteration */
-			src_len = dst_len - src_len; /* remainder */
-			src_len_sum += src_len;
-		}
+		num_sges = smc_tx_fill_wr(conn, src_offset, src_len, dst_len, wr, sge, false);
 		rc = smc_tx_rdma_write(conn, dst_off, num_sges, wr);
 		if (rc)
 			return rc;
@@ -438,6 +583,89 @@ static int smcr_tx_rdma_writes(struct smc_connection *conn, size_t len,
 		src_len_sum = src_len;
 	}
 	return 0;
+}
+
+static int smcr_tx_rdma_writes_rwwi(struct smc_connection *conn, size_t len,
+				    size_t src_off, size_t src_len,
+				    size_t dst_off, size_t dst_len)
+{
+	int src_len_sum = src_len, dst_len_sum = dst_len;
+	int sent_count = src_off;
+	struct ib_rdma_wr wr;
+	struct ib_sge sge[2];
+	int *src_offset;
+	int dstchunk;
+	int num_sges;
+	int rc;
+
+	src_offset = (int *)&src_off;
+	for (dstchunk = 0; dstchunk < 2; dstchunk++) {
+		memset(&wr, 0, sizeof(wr));
+		wr.wr.send_flags = IB_SEND_SIGNALED;
+		wr.wr.opcode = IB_WR_RDMA_WRITE_WITH_IMM;
+
+		num_sges = smc_tx_fill_wr(conn, src_offset, src_len, dst_len, &wr, sge, true);
+		wr.wr.sg_list = sge;
+
+		rc = __smcr_tx_rdma_writes_rwwi(conn, dst_off, dst_len, num_sges,
+						(dst_len_sum == len), &wr);
+		if (rc)
+			return rc;
+		if (dst_len_sum == len)
+			break; /* either on 1st or 2nd iteration */
+		/* prepare next (== 2nd) iteration */
+		dst_off = 0; /* modulo offset in RMBE ring buffer */
+		dst_len = len - dst_len; /* remainder */
+		dst_len_sum += dst_len;
+		src_len = min_t(int, dst_len, conn->sndbuf_desc->len -
+				sent_count);
+		src_len_sum = src_len;
+	}
+	return 0;
+}
+
+int smc_tx_rdma_write_with_no_data_rwwi(struct smc_connection *conn)
+{
+	struct smc_link *link;
+	struct ib_rdma_wr wr;
+	bool again = false;
+	int rc;
+
+	if (!smc_conn_lgr_valid(conn))
+		return -EPIPE;
+
+again:
+	link = conn->lnk;
+	if (!smc_wr_tx_link_hold(link))
+		return -ENOLINK;
+
+	memset(&wr, 0, sizeof(wr));
+	wr.wr.send_flags = IB_SEND_SIGNALED;
+	wr.wr.opcode = IB_WR_RDMA_WRITE_WITH_IMM;
+
+	rc = smc_tx_get_inflight_credit(link, conn);
+	if (rc)
+		goto put_out;
+
+	spin_lock_bh(&conn->send_lock);
+	if (link != conn->lnk) {
+		/* link of connection changed, try again one time*/
+		spin_unlock_bh(&conn->send_lock);
+		smc_tx_put_inflight_credit(link);
+		smc_wr_tx_link_put(link);
+		if (again)
+			return -ENOLINK;
+		again = true;
+		goto again;
+	}
+
+	rc = __smcr_tx_rdma_writes_rwwi(conn, 0, 0, 0, true, &wr);
+	if (rc)
+		smc_tx_put_inflight_credit(link);
+	spin_unlock_bh(&conn->send_lock);
+put_out:
+	smc_wr_tx_link_put(link);
+	return rc;
 }
 
 /* SMC-D helper for smc_tx_rdma_writes() */
@@ -544,12 +772,22 @@ static int smc_tx_rdma_writes(struct smc_connection *conn,
 		src_len = conn->sndbuf_desc->len - sent.count;
 	}
 
-	if (conn->lgr->is_smcd)
+	if (conn->lgr->is_smcd) {
 		rc = smcd_tx_rdma_writes(conn, len, sent.count, src_len,
 					 dst_off, dst_len);
-	else
+	} else if (conn->lgr->use_rwwi) {
+		/*update urg_data_present in advance since this info needs
+		 * to transfer to remote by write with imm
+		 */
+		if (conn->urg_tx_pend && len == to_send)
+			pflags->urg_data_present = 1;
+		rc = smcr_tx_rdma_writes_rwwi(conn, len, sent.count, src_len,
+					      dst_off, dst_len);
+	} else {
 		rc = smcr_tx_rdma_writes(conn, len, sent.count, src_len,
 					 dst_off, dst_len, wr_rdma_buf);
+	}
+
 	if (rc)
 		return rc;
 
@@ -625,6 +863,58 @@ out_unlock:
 	return rc;
 }
 
+static int smcr_tx_sndbuf_nonempty_rwwi(struct smc_connection *conn)
+{
+	struct smc_cdc_producer_flags *pflags = &conn->local_tx_ctrl.prod_flags;
+	struct smc_link *link = conn->lnk;
+	int rc;
+
+	if (!link || !smc_wr_tx_link_hold(link))
+		return -ENOLINK;
+	/*count the num of infight io and limit it*/
+	rc = smc_tx_get_inflight_credit(link, conn);
+	if (rc < 0) {
+		smc_wr_tx_link_put(link);
+		if (rc == -EBUSY) {
+			struct smc_sock *smc =
+				container_of(conn, struct smc_sock, conn);
+
+			if (smc->sk.sk_err == ECONNABORTED)
+				return sock_error(&smc->sk);
+			if (conn->killed)
+				return -EPIPE;
+			rc = 0;
+			mod_delayed_work(conn->lgr->tx_wq, &conn->tx_work,
+					 SMC_TX_WORK_DELAY);
+		}
+		return rc;
+	}
+
+	spin_lock_bh(&conn->send_lock);
+	if (link != conn->lnk) {
+		/* link of connection changed, tx_work will restart */
+		smc_tx_put_inflight_credit(link);
+		rc = -ENOLINK;
+		goto out_unlock;
+	}
+
+	rc = smc_tx_rdma_writes(conn, NULL);
+	if (rc) {
+		smc_tx_put_inflight_credit(link);
+		goto out_unlock;
+	}
+
+	if (pflags->urg_data_present) {
+		pflags->urg_data_pending = 0;
+		pflags->urg_data_present = 0;
+	}
+
+out_unlock:
+	spin_unlock_bh(&conn->send_lock);
+	smc_wr_tx_link_put(link);
+	return rc;
+}
+
 static int smcd_tx_sndbuf_nonempty(struct smc_connection *conn)
 {
 	struct smc_cdc_producer_flags *pflags = &conn->local_tx_ctrl.prod_flags;
@@ -664,10 +954,14 @@ static int __smc_tx_sndbuf_nonempty(struct smc_connection *conn)
 		rc = -EPIPE;    /* connection being aborted */
 		goto out;
 	}
-	if (conn->lgr->is_smcd)
+	if (conn->lgr->is_smcd) {
 		rc = smcd_tx_sndbuf_nonempty(conn);
-	else
-		rc = smcr_tx_sndbuf_nonempty(conn);
+	} else {
+		if (conn->lgr->use_rwwi)
+			rc = smcr_tx_sndbuf_nonempty_rwwi(conn);
+		else
+			rc = smcr_tx_sndbuf_nonempty(conn);
+	}
 
 	if (!rc) {
 		/* trigger socket release if connection is closing */
@@ -718,6 +1012,9 @@ void smc_tx_pending(struct smc_connection *conn)
 	if (smc->sk.sk_err)
 		return;
 
+	if (smc_tx_prepared_sends(conn) <= 0)
+		return;
+
 	rc = smc_tx_sndbuf_nonempty(conn);
 	if (!rc && conn->local_rx_ctrl.prod_flags.write_blocked &&
 	    !atomic_read(&conn->bytes_to_rcv))
@@ -764,11 +1061,21 @@ void smc_tx_consumer_update(struct smc_connection *conn, bool force)
 		if (conn->killed ||
 		    conn->local_rx_ctrl.conn_state_flags.peer_conn_abort)
 			return;
-		if ((smc_cdc_get_slot_and_msg_send(conn) < 0) &&
-		    !conn->killed) {
-			queue_delayed_work(conn->lgr->tx_wq, &conn->tx_work,
-					   SMC_TX_WORK_DELAY);
-			return;
+
+		if (conn->lgr->use_rwwi) {
+			if ((smc_tx_rdma_write_with_no_data_rwwi(conn) < 0) &&
+			    !conn->killed) {
+				queue_delayed_work(conn->lgr->tx_wq, &conn->tx_work,
+						   SMC_TX_WORK_DELAY);
+				return;
+			}
+		} else {
+			if ((smc_cdc_get_slot_and_msg_send(conn) < 0) &&
+			    !conn->killed) {
+				queue_delayed_work(conn->lgr->tx_wq, &conn->tx_work,
+						   SMC_TX_WORK_DELAY);
+				return;
+			}
 		}
 	}
 	if (conn->local_rx_ctrl.prod_flags.write_blocked &&

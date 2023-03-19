@@ -51,12 +51,127 @@ struct smc_wr_rx_handler {
 	u8			type;
 };
 
+enum {
+	SMC_WR_OP_DATA = 0,
+	SMC_WR_OP_DATA_WITH_FLAGS,
+	SMC_WR_OP_CTRL,
+	SMC_WR_OP_RSVD
+};
+
+/* used to replace member 'data' in union smc_wr_imm_msg
+ * when imm_data carries flags info
+ */
+struct smc_wr_imm_data_msg {
+#if defined(__BIG_ENDIAN_BITFIELD)
+		u32 token : 8;
+		u32	opcode : 3;
+		u32	diff_cons : 21;
+#elif defined(__LITTLE_ENDIAN_BITFIELD)
+		u32	diff_cons : 21;
+		u32	opcode : 3;
+		u32	token : 8;
+#endif
+} __packed;
+
+/* the value of SMC_PROD_FLAGS_MASK is related to
+ * the definition of struct smc_wr_imm_data_with_flags_msg
+ */
+struct smc_wr_imm_data_with_flags_msg {
+#if defined(__BIG_ENDIAN_BITFIELD)
+		u32 token : 8;
+		u32 opcode : 3;
+		u32	write_blocked : 1;
+		u32	urg_data_pending : 1;
+		u32	urg_data_present : 1;
+		u32 reserved : 1;
+		u32 diff_cons : 17;
+#elif defined(__LITTLE_ENDIAN_BITFIELD)
+		u32 diff_cons : 17;
+		u32 reserved : 1;
+		u32	urg_data_present : 1;
+		u32	urg_data_pending : 1;
+		u32	write_blocked : 1;
+		u32 opcode : 3;
+		u32 token : 8;
+#endif
+} __packed;
+
+struct smc_wr_imm_ctrl_msg {
+		struct smc_cdc_conn_state_flags	csflags;
+		struct smc_cdc_producer_flags pflags;
+#if defined(__BIG_ENDIAN_BITFIELD)
+		u8 opcode : 3;
+		u8 reserved : 5;
+#elif defined(__LITTLE_ENDIAN_BITFIELD)
+		u8 reserved : 5;
+		u8 opcode : 3;
+#endif
+		u8 token;
+} __packed;
+
+struct smc_wr_imm_header {
+#if defined(__BIG_ENDIAN_BITFIELD)
+		u32 token : 8;
+		u32 opcode : 3;
+		u32 data : 21;
+#elif defined(__LITTLE_ENDIAN_BITFIELD)
+		u32 data : 21;
+		u32 opcode : 3;
+		u32 token : 8;
+#endif
+} __packed;
+
+/* the 11-bit (token and opcode) definition of struct
+ * smc_wr_imm_xxx_msg should be consistent with
+ * that of struct smc_wr_imm_header
+ */
+union smc_wr_imm_msg {
+	u32 imm_data;
+	struct smc_wr_imm_header hdr;
+	struct smc_wr_imm_data_msg data;
+	struct smc_wr_imm_data_with_flags_msg data_with_flags;
+	struct smc_wr_imm_ctrl_msg ctrl;
+};
+
+union smc_wr_rwwi_tx_id {
+	u64 data;
+	struct {
+#if defined(__BIG_ENDIAN_BITFIELD)
+		u64	rwwi_flag : 1;
+		u64 inflight_credit_flag : 1;	/* put inflight credit or not when scqe comes */
+		u64	reserved : 6;
+		u64	token : 8;
+		u64	inflight_cons : 24;
+		u64	inflight_sent : 24;
+#elif defined(__LITTLE_ENDIAN_BITFIELD)
+		u64	inflight_sent : 24;
+		u64	inflight_cons : 24;
+		u64	token : 8;
+		u64	reserved : 6;
+		u64 inflight_credit_flag : 1;	/* put inflight credit or not when scqe comes */
+		u64	rwwi_flag : 1;
+#endif
+	};
+} __packed;
+
+/* diff_cons only holds 17 bits in DATA_WITH_FLAGS imm_data,
+ * and holds 21 bits in DATA imm_data,
+ * so diff_cons value is limited in one WRITE_WITH_IMM
+ * it is related to the definition of union smc_wr_imm_msg
+ */
+#define SMC_DATA_MAX_DIFF_CONS				((1 << 21) - 1)
+#define SMC_DATA_WITH_FLAGS_MAX_DIFF_CONS	((1 << 17) - 1)
+#define SMC_PROD_FLAGS_MASK				0xE0
+#define SMC_WR_ID_SEQ_MASK				((uint64_t)0x7FFFFFFFFFFFFFFFULL)
+#define SMC_WR_ID_FLAG_RWWI				(((uint64_t)1) << 63)
+#define SMC_WR_IS_TX_RWWI(wr_id)			((wr_id) & SMC_WR_ID_FLAG_RWWI)
+
 /* Only used by RDMA write WRs.
  * All other WRs (CDC/LLC) use smc_wr_tx_send handling WR_ID implicitly
  */
 static inline long smc_wr_tx_get_next_wr_id(struct smc_link *link)
 {
-	return atomic_long_add_return(2, &link->wr_tx_id);
+	return atomic_long_add_return(2, &link->wr_tx_id) & SMC_WR_ID_SEQ_MASK;
 }
 
 static inline void smc_wr_tx_set_wr_id(atomic_long_t *wr_tx_id, long val)
@@ -149,7 +264,7 @@ static inline int smc_wr_rx_credits_need_announce_frequent(struct smc_link *link
 }
 
 /* post a new receive work request to fill a completed old work request entry */
-static inline int smc_wr_rx_post(struct smc_link *link)
+static inline int smc_wr_rx_post(struct smc_link *link, bool create_update)
 {
 	struct smc_link_stats *lnk_stats =
 		&link->lgr->lnk_stats[link->link_idx];
@@ -158,14 +273,15 @@ static inline int smc_wr_rx_post(struct smc_link *link)
 	u32 index;
 
 	link->wr_rx_id += 2;
-	wr_id = link->wr_rx_id; /* tasklet context, thus not atomic */
+	wr_id = link->wr_rx_id & SMC_WR_ID_SEQ_MASK; /* tasklet context, thus not atomic */
 	temp_wr_id = wr_id / 2;
 	index = do_div(temp_wr_id, link->wr_rx_cnt);
 	link->wr_rx_ibs[index].wr_id = wr_id;
 	rc = ib_post_recv(link->roce_qp, &link->wr_rx_ibs[index], NULL);
 	if (!rc) {
 		SMC_LINK_STAT_WR(lnk_stats, 0, 1);
-		smc_wr_rx_put_credits(link, 1);
+		if (create_update)
+			smc_wr_rx_put_credits(link, 1);
 	}
 	return rc;
 }
