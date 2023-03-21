@@ -331,7 +331,7 @@ struct ftrace_ops {
 	struct list_head		list;
 #endif
 
-	CK_KABI_RESERVE(1)
+	CK_KABI_USE(1, unsigned long direct_call)
 };
 
 extern struct ftrace_ops __rcu *ftrace_ops_list;
