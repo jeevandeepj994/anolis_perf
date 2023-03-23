@@ -40,15 +40,15 @@ static ssize_t write_pmsg(struct file *file, const char __user *buf,
 	int ret;
 	struct pstore_info_list *entry;
 
-	rcu_read_lock();
-	list_for_each_entry_rcu(entry, &psback->list_entry, list) {
+	mutex_lock(&psback_lock);
+	list_for_each_entry(entry, &psback->list_entry, list) {
 		if (entry->psi->flags & PSTORE_FLAGS_PMSG) {
 			int _ret = do_write_pmsg(file, buf, count, ppos, entry->psi);
 
 			ret = ret > _ret ? ret : _ret;
 		}
 	}
-	rcu_read_unlock();
+	mutex_unlock(&psback_lock);
 
 	return ret;
 }
