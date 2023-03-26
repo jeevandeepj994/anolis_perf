@@ -1338,6 +1338,9 @@ int fuse_io_metrics_show(struct seq_file *s, void *unused);
 void fuse_io_counter_set_latency_target(struct fuse_io_counter *fic,
 					u64 target_ns);
 
+typedef int (*fuse_mount_cb_t)(struct file *file);
+extern fuse_mount_cb_t fuse_mount_callback;
+
 static inline bool is_virtfuse_device(struct file *file) { return false; }
 
 #endif /* _FS_FUSE_I_H */
