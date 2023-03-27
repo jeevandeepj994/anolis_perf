@@ -1038,7 +1038,7 @@ static long sev_ioctl(struct file *file, unsigned int ioctl, unsigned long arg)
 		switch (input.cmd) {
 		case CSV_HGSC_CERT_IMPORT:
 			ret = csv_ioctl_do_hgsc_import(&input);
-			break;
+			goto result_to_user;
 		default:
 			break;
 		}
@@ -1079,6 +1079,7 @@ static long sev_ioctl(struct file *file, unsigned int ioctl, unsigned long arg)
 		goto out;
 	}
 
+result_to_user:
 	if (copy_to_user(argp, &input, sizeof(struct sev_issue_cmd)))
 		ret = -EFAULT;
 out:
