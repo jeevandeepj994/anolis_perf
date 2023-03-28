@@ -843,6 +843,14 @@ int smcr_link_init(struct smc_link_group *lgr, struct smc_link *lnk,
 		lnk->smcibdev = ini->ib_dev;
 		lnk->ibport = ini->ib_port;
 	}
+
+	if (!lnk->smcibdev->ibdev) {
+		/* check if smcibdev still available */
+		memset(lnk, 0, sizeof(struct smc_link));
+		lnk->state = SMC_LNK_UNUSED;
+		return SMC_CLC_DECL_NOSMCRDEV;
+	}
+
 	get_device(&lnk->smcibdev->ibdev->dev);
 	atomic_inc(&lnk->smcibdev->lnk_cnt);
 	refcount_set(&lnk->refcnt, 1); /* link refcnt is set to 1 */
