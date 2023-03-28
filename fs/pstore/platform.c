@@ -640,6 +640,8 @@ int pstore_register(struct pstore_info *psi)
 		pstore_get_records(psi, pslist->index, 0);
 	}
 
+	list_add_rcu(&pslist->list, &psback->list_entry);
+
 	if (psi->flags & PSTORE_FLAGS_DMESG && !psback->front_cnt[PSTORE_TYPE_DMESG]++) {
 		pstore_dumper.max_reason = psi->max_reason;
 		pstore_register_kmsg();
@@ -655,8 +657,6 @@ int pstore_register(struct pstore_info *psi)
 
 	/* Start watching for new records, if desired. */
 	pstore_timer_kick();
-
-	list_add_rcu(&pslist->list, &psback->list_entry);
 
 	pr_info("Registered %s as persistent store backend\n", psi->name);
 
