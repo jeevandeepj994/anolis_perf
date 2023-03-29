@@ -2477,7 +2477,8 @@ static void smc_listen_work(struct work_struct *work)
 	}
 	smc_conn_save_peer_info(new_smc, cclc);
 	smc_listen_out_connected(new_smc);
-	SMC_STAT_SERV_SUCC_INC(sock_net(newclcsock->sk), ini);
+	if (newclcsock->sk)
+		SMC_STAT_SERV_SUCC_INC(sock_net(newclcsock->sk), ini);
 	goto out_free;
 
 out_unlock:
