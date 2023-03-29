@@ -1120,7 +1120,8 @@ static int iax_crypto_probe(struct idxd_dev *idxd_dev)
 	mutex_lock(&wq->wq_lock);
 
 	if (!idxd_wq_driver_name_match(wq, dev)) {
-		pr_warn("%s: wq driver_name match failed: wq driver_name %s, dev driver name %s\n", __func__, wq->driver_name, dev->driver->name);
+		pr_debug("%s: wq driver_name match failed: wq driver_name %s, dev driver name %s\n",
+			 __func__, wq->driver_name, dev->driver->name);
 		idxd->cmd_status = IDXD_SCMD_WQ_NO_DRV_NAME;
 		ret = -ENODEV;
 		goto err;
