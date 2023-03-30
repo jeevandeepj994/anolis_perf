@@ -304,6 +304,16 @@ err_prev_deinit:
 	return err;
 }
 
+static void nfp_net_pf_clean_vnics(struct nfp_pf *pf)
+{
+	struct nfp_net *nn;
+
+	list_for_each_entry(nn, &pf->vnics, vnic_list) {
+		if (nfp_net_is_data_vnic(nn))
+			nfp_net_pf_clean_vnic(pf, nn);
+	}
+}
+
 static int
 nfp_net_pf_app_init(struct nfp_pf *pf, u8 __iomem *qc_bar, unsigned int stride)
 {
@@ -801,10 +811,16 @@ int nfp_net_pci_probe(struct nfp_pf *pf)
 	if (err)
 		goto err_stop_app;
 
+	err = nfp_net_pf_init_sriov(pf);
+	if (err)
+		goto err_clean_vnics;
+
 	mutex_unlock(&pf->lock);
 
 	return 0;
 
+err_clean_vnics:
+	nfp_net_pf_clean_vnics(pf);
 err_stop_app:
 	nfp_net_pf_app_stop(pf);
 err_free_irqs:
