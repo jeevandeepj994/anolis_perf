@@ -106,17 +106,12 @@ static int iax_all_wqs_get(void)
 	int n_wqs = 0;
 	int ret;
 
-	spin_lock(&iax_devices_lock);
 	list_for_each_entry(iax_device, &iax_devices, list) {
 		ret = iax_wqs_get(iax_device);
-		if (ret < 0) {
-			spin_unlock(&iax_devices_lock);
+		if (ret < 0)
 			return ret;
-		}
 		n_wqs += ret;
 	}
-	spin_unlock(&iax_devices_lock);
-
 	return n_wqs;
 }
 
@@ -124,37 +119,42 @@ static void iax_all_wqs_put(void)
 {
 	struct iax_device *iax_device;
 
-	spin_lock(&iax_devices_lock);
 	list_for_each_entry(iax_device, &iax_devices, list)
 		iax_wqs_put(iax_device);
-	spin_unlock(&iax_devices_lock);
 }
 
 static bool iax_crypto_enabled = false;
 static int iax_crypto_enable(const char *val, const struct kernel_param *kp)
 {
 	int ret = 0;
+	bool flag;
 
-	if (val[0] == '0') {
+	spin_lock(&iax_devices_lock);
+	/* accept 'Yy1Nn0', or [oO][NnFf] for "on" and "off". */
+	ret = kstrtobool(val, &flag);
+	if (ret)
+		return ret;
+	if (!flag) {
+		if (!iax_crypto_enabled)
+			goto skipping;
 		iax_crypto_enabled = false;
 		iax_all_wqs_put();
-	} else if (val[0] == '1') {
-		ret = iax_all_wqs_get();
-		if (ret == 0) {
-			pr_info("%s: no wqs available, not enabling iax_crypto\n", __func__);
-			return ret;
-		} else if (ret < 0) {
-			pr_err("%s: iax_crypto enable failed: ret=%d\n", __func__, ret);
-			return ret;
-		} else
-			iax_crypto_enabled = true;
 	} else {
-		pr_err("%s: iax_crypto failed, bad enable val: ret=%d\n", __func__, -EINVAL);
-		return -EINVAL;
+		if (iax_crypto_enabled)
+			goto skipping;
+		ret = iax_all_wqs_get();
+		if (ret < 0)
+			pr_err("%s: iax_crypto enable failed: ret=%d\n", __func__, ret);
+		else if (ret == 0)
+			pr_info("%s: no wqs available, not enabling iax_crypto\n", __func__);
+		else
+			iax_crypto_enabled = true;
 	}
 
+skipping:
 	pr_info("%s: iax_crypto now %s\n", __func__,
 		iax_crypto_enabled ? "ENABLED" : "DISABLED");
+	spin_unlock(&iax_devices_lock);
 
 	return ret;
 }
