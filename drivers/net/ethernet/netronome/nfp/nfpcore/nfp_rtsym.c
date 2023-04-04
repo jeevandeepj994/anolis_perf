@@ -330,8 +330,9 @@ int nfp_rtsym_write_le(struct nfp_rtsym_table *rtbl, const char *name,
 }
 
 u8 __iomem *
-nfp_rtsym_map(struct nfp_rtsym_table *rtbl, const char *name, const char *id,
-	      unsigned int min_size, struct nfp_cpp_area **area)
+nfp_rtsym_map_offset(struct nfp_rtsym_table *rtbl, const char *name, const char *id,
+		     unsigned int offset, unsigned int min_size,
+		     struct nfp_cpp_area **area)
 {
 	const struct nfp_rtsym *sym;
 	u8 __iomem *mem;
@@ -344,13 +345,13 @@ nfp_rtsym_map(struct nfp_rtsym_table *rtbl, const char *name, const char *id,
 	cpp_id = NFP_CPP_ISLAND_ID(sym->target, NFP_CPP_ACTION_RW, 0,
 				   sym->domain);
 
-	if (sym->size < min_size) {
+	if (sym->size < min_size + offset) {
 		nfp_err(rtbl->cpp, "Symbol %s too small\n", name);
 		return (u8 __iomem *)ERR_PTR(-EINVAL);
 	}
 
-	mem = nfp_cpp_map_area(rtbl->cpp, id, cpp_id, sym->addr,
-			       sym->size, area);
+	mem = nfp_cpp_map_area(rtbl->cpp, id, cpp_id, sym->addr + offset,
+			       sym->size - offset, area);
 	if (IS_ERR(mem)) {
 		nfp_err(rtbl->cpp, "Failed to map symbol %s: %ld\n",
 			name, PTR_ERR(mem));
@@ -358,4 +359,11 @@ nfp_rtsym_map(struct nfp_rtsym_table *rtbl, const char *name, const char *id,
 	}
 
 	return mem;
+}
+
+u8 __iomem *
+nfp_rtsym_map(struct nfp_rtsym_table *rtbl, const char *name, const char *id,
+	      unsigned int min_size, struct nfp_cpp_area **area)
+{
+	return nfp_rtsym_map_offset(rtbl, name, id, 0, min_size, area);
 }
