@@ -4122,6 +4122,24 @@ long kvm_arch_dev_ioctl(struct file *filp,
 	case KVM_GET_MSRS:
 		r = msr_io(NULL, argp, do_get_msr_feature, 1);
 		break;
+	case KVM_GET_DEVICE_ATTR: {
+		struct kvm_device_attr attr;
+
+		r = -EFAULT;
+		if (copy_from_user(&attr, (void __user *)arg, sizeof(attr)))
+			break;
+		r = kvm_x86_dev_get_attr(&attr);
+		break;
+	}
+	case KVM_HAS_DEVICE_ATTR: {
+		struct kvm_device_attr attr;
+
+		r = -EFAULT;
+		if (copy_from_user(&attr, (void __user *)arg, sizeof(attr)))
+			break;
+		r = kvm_x86_dev_has_attr(&attr);
+		break;
+	}
 	default:
 		r = -EINVAL;
 		break;
@@ -5181,22 +5199,6 @@ long kvm_arch_vcpu_ioctl(struct file *filp,
 		if (copy_to_user(cpuid_arg, &cpuid, sizeof(cpuid)))
 			goto out;
 		r = 0;
-		break;
-	}
-	case KVM_GET_DEVICE_ATTR: {
-		struct kvm_device_attr attr;
-		r = -EFAULT;
-		if (copy_from_user(&attr, (void __user *)arg, sizeof(attr)))
-			break;
-		r = kvm_x86_dev_get_attr(&attr);
-		break;
-	}
-	case KVM_HAS_DEVICE_ATTR: {
-		struct kvm_device_attr attr;
-		r = -EFAULT;
-		if (copy_from_user(&attr, (void __user *)arg, sizeof(attr)))
-			break;
-		r = kvm_x86_dev_has_attr(&attr);
 		break;
 	}
 	default:
