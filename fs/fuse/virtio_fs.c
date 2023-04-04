@@ -1360,6 +1360,9 @@ static int virtio_fs_fill_super(struct super_block *sb, void *data,
 	fc->max_pages_limit = min_t(unsigned int, fc->max_pages_limit,
 				    virtqueue_size - FUSE_HEADER_OVERHEAD);
 
+	/* Delete stale dentries when timeout is zero */
+	fc->delete_stale = true;
+
 	/* TODO take fuse_mutex around this loop? */
 	for (i = 0; i < fs->nvqs; i++) {
 		struct virtio_fs_vq *fsvq = &fs->vqs[i];
