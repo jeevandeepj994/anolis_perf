@@ -3282,6 +3282,7 @@ void tr_add_hugepage(struct page *page)
 	spin_lock_irqsave(&hr_queue->reclaim_queue_lock, flags);
 	if (list_empty(hugepage_reclaim_list(page))) {
 		list_add(hugepage_reclaim_list(page), &hr_queue->reclaim_queue);
+		tr_set_hugepage_time(page, jiffies);
 		hr_queue->queue_length++;
 	}
 	spin_unlock_irqrestore(&hr_queue->reclaim_queue_lock, flags);
@@ -3301,6 +3302,7 @@ void tr_del_hugepage(struct page *page)
 	spin_lock_irqsave(&hr_queue->reclaim_queue_lock, flags);
 	if (!list_empty(hugepage_reclaim_list(head))) {
 		list_del_init(hugepage_reclaim_list(head));
+		tr_set_hugepage_time(page, 0);
 		hr_queue->queue_length--;
 	}
 	spin_unlock_irqrestore(&hr_queue->reclaim_queue_lock, flags);
@@ -6664,11 +6666,23 @@ static inline char *strsep_s(char **s, const char *ct)
 static int memcg_thp_reclaim_ctrl_show(struct seq_file *m, void *v)
 {
 	struct mem_cgroup *memcg = mem_cgroup_from_css(seq_css(m));
-	int thp_reclaim_threshold = READ_ONCE(memcg->thp_reclaim_threshold);
+	int thp_reclaim_threshold = READ_ONCE(memcg->tr_ctrl.threshold);
+	int thp_reclaim_proactive = READ_ONCE(memcg->tr_ctrl.proactive);
 
 	seq_printf(m, "threshold\t%d\n", thp_reclaim_threshold);
+	seq_printf(m, "proactive\t%d\n", thp_reclaim_proactive);
 
 	return 0;
+}
+
+static inline int get_thp_reclaim_ctrl_value(char *buf, int *value)
+{
+	char *string = strsep_s(&buf, " \t\n");
+
+	if (!string)
+		return -EINVAL;
+
+	return kstrtouint(string, 0, value);
 }
 
 #define CTRL_RECLAIM_MEMCG 1 /* only relciam current memcg*/
@@ -6677,34 +6691,29 @@ static ssize_t memcg_thp_reclaim_ctrl_write(struct kernfs_open_file *of,
 					char *buf, size_t nbytes, loff_t off)
 {
 	struct mem_cgroup *memcg = mem_cgroup_from_css(of_css(of));
-	int ret, threshold, mode;
-	char *key, *value;
+	int ret;
+	char *key;
 
 	key = strsep_s(&buf, " \t\n");
 	if (!key)
 		return -EINVAL;
 
 	if (!strcmp(key, "threshold")) {
-		value = strsep_s(&buf, " \t\n");
-		if (!value)
-			return -EINVAL;
+		int threshold;
 
-		ret = kstrtouint(value, 0, &threshold);
+		ret = get_thp_reclaim_ctrl_value(buf, &threshold);
 		if (ret)
 			return ret;
 
 		if (threshold > HPAGE_PMD_NR || threshold < 1)
 			return -EINVAL;
 
-		xchg(&memcg->thp_reclaim_threshold, threshold);
+		xchg(&memcg->tr_ctrl.threshold, threshold);
 	} else if (!strcmp(key, "reclaim")) {
 		struct mem_cgroup *iter;
+		int mode;
 
-		value = strsep_s(&buf, " \t\n");
-		if (!value)
-			return -EINVAL;
-
-		ret = kstrtouint(value, 0, &mode);
+		ret = get_thp_reclaim_ctrl_value(buf, &mode);
 		if (ret)
 			return ret;
 
@@ -6721,12 +6730,51 @@ static ssize_t memcg_thp_reclaim_ctrl_write(struct kernfs_open_file *of,
 		default:
 			return -EINVAL;
 		}
+	} else if (!strcmp(key, "proactive")) {
+		int proactive;
+
+		ret = get_thp_reclaim_ctrl_value(buf, &proactive);
+		if (ret)
+			return ret;
+
+		if (proactive != 0 && proactive != 1)
+			return -EINVAL;
+
+		xchg(&memcg->tr_ctrl.proactive, proactive);
 	} else
 		return -EINVAL;
 
 	return nbytes;
 }
 #endif
+
+static int thp_reclaim_proactive_memcg_init;
+static int __init setup_thp_reclaim_proactive_init(char *str)
+{
+	int ret = 0;
+	unsigned int value;
+
+	if (!str)
+		goto out;
+
+	ret = kstrtouint(str, 0, &value);
+	if (ret)
+		goto out;
+
+	if (value < 0 || value > 3)
+		goto out;
+
+	if (value & 0x1)
+		thp_reclaim_proactive = 1;
+
+	if (value & 0x2)
+		thp_reclaim_proactive_memcg_init = 1;
+out:
+	if (ret)
+		pr_warn("tr.proactive= cannot parse, ignored\n");
+	return !ret;
+}
+__setup("tr.proactive=", setup_thp_reclaim_proactive_init);
 
 static struct cftype mem_cgroup_legacy_files[] = {
 	{
@@ -7282,7 +7330,8 @@ static struct mem_cgroup *mem_cgroup_alloc(void)
 	memcg->deferred_split_queue.split_queue_len = 0;
 
 	memcg->thp_reclaim = THP_RECLAIM_DISABLE;
-	memcg->thp_reclaim_threshold = THP_RECLAIM_THRESHOLD_DEFAULT;
+	memcg->tr_ctrl.threshold = THP_RECLAIM_THRESHOLD_DEFAULT;
+	memcg->tr_ctrl.proactive = thp_reclaim_proactive_memcg_init;
 #endif
 	kidled_memcg_init(memcg);
 	idr_replace(&mem_cgroup_idr, memcg, memcg->id.id);
@@ -7322,7 +7371,8 @@ mem_cgroup_css_alloc(struct cgroup_subsys_state *parent_css)
 					    : 50;
 #ifdef CONFIG_TRANSPARENT_HUGEPAGE
 		memcg->thp_reclaim = parent->thp_reclaim;
-		memcg->thp_reclaim_threshold = parent->thp_reclaim_threshold;
+		memcg->tr_ctrl.threshold = parent->tr_ctrl.threshold;
+		memcg->tr_ctrl.proactive = parent->tr_ctrl.proactive;
 #endif
 		kidled_memcg_inherit_parent_buckets(parent, memcg);
 		memcg->reap_background = parent->reap_background;

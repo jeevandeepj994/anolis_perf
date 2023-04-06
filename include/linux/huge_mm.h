@@ -305,16 +305,41 @@ struct hugepage_reclaim {
 	HUGEPAGE_RECLAIM_STAT(split_failed);
 };
 
+struct thp_reclaim_ctrl {
+	int threshold;
+	int proactive;
+};
+
 #define THP_RECLAIM_THRESHOLD_DEFAULT	16
+#define THP_RECLAIM_PROACTIVE_SLEEP_MS 60000
 extern int global_thp_reclaim;
+extern int thp_reclaim_proactive;
 int tr_get_hugepage(struct hugepage_reclaim *hr_queue, struct page **reclaim,
-		    int threshold);
+		    int threshold, unsigned long time);
 unsigned long tr_reclaim_hugepage(struct hugepage_reclaim *hr_queue,
 				  struct lruvec *lruvec, struct page *page);
-void tr_reclaim_memcg(struct mem_cgroup *memcg);
+void __tr_reclaim_memcg(struct mem_cgroup *memcg, unsigned long time,
+			unsigned int scan, bool proactive);
+
+static inline void tr_reclaim_memcg(struct mem_cgroup *memcg)
+{
+	__tr_reclaim_memcg(memcg, 0, 0, false);
+}
+
 static inline struct list_head *hugepage_reclaim_list(struct page *page)
 {
 	return &page[3].hugepage_reclaim_list;
+}
+
+static inline unsigned long tr_hugepage_time(struct page *page)
+{
+	return page[3].list_time;
+}
+
+static inline void tr_set_hugepage_time(struct page *page,
+					     unsigned long time)
+{
+	page[3].list_time = time;
 }
 #endif
 

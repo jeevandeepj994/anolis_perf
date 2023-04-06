@@ -448,7 +448,7 @@ struct mem_cgroup {
 #ifdef CONFIG_TRANSPARENT_HUGEPAGE
 	struct deferred_split deferred_split_queue;
 	int thp_reclaim;
-	int thp_reclaim_threshold;
+	struct thp_reclaim_ctrl tr_ctrl;
 #endif
 
 #ifdef CONFIG_MEMSLI

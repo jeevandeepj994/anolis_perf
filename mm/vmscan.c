@@ -2765,7 +2765,7 @@ static inline unsigned long reclaim_hugepages(struct lruvec *lruvec,
 	if (!memcg)
 		goto out;
 
-	threshold = READ_ONCE(memcg->thp_reclaim_threshold);
+	threshold = READ_ONCE(memcg->tr_ctrl.threshold);
 	hr_queue = &memcg->nodeinfo[nid]->hugepage_reclaim_queue;
 
 	/* Now we only support zsr mode. */
@@ -2775,7 +2775,7 @@ static inline unsigned long reclaim_hugepages(struct lruvec *lruvec,
 	do {
 		struct page *page = NULL;
 
-		if (tr_get_hugepage(hr_queue, &page, threshold))
+		if (tr_get_hugepage(hr_queue, &page, threshold, 0))
 			break;
 
 		if (!page)
