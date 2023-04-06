@@ -179,6 +179,9 @@ struct mem_cgroup_per_node {
 	bool			on_tree;
 	struct mem_cgroup	*memcg;		/* Back pointer, we cannot */
 						/* use container_of	   */
+#ifdef CONFIG_TRANSPARENT_HUGEPAGE
+	struct hugepage_reclaim hugepage_reclaim_queue;
+#endif
 
 	CK_KABI_RESERVE(1)
 	CK_KABI_RESERVE(2)
@@ -444,6 +447,8 @@ struct mem_cgroup {
 
 #ifdef CONFIG_TRANSPARENT_HUGEPAGE
 	struct deferred_split deferred_split_queue;
+	int thp_reclaim;
+	int thp_reclaim_threshold;
 #endif
 
 #ifdef CONFIG_MEMSLI
@@ -1205,6 +1210,26 @@ void memcg_check_wmark_min_adj(struct task_struct *curr,
 
 void memcg_meminfo(struct mem_cgroup *memcg,
 		struct sysinfo *info, struct sysinfo_ext *ext);
+
+#ifdef CONFIG_TRANSPARENT_HUGEPAGE
+void tr_add_hugepage(struct page *page);
+void tr_del_hugepage(struct page *page);
+static inline int tr_get_reclaim_mode(struct mem_cgroup *memcg)
+{
+	int reclaim = READ_ONCE(global_thp_reclaim);
+
+	return (reclaim != THP_RECLAIM_MEMCG) ? reclaim :
+		READ_ONCE(memcg->thp_reclaim);
+}
+#else
+static inline void tr_add_hugepage(struct page *page)
+{
+}
+
+static inline void tr_del_hugepage(struct page *page)
+{
+}
+#endif
 
 #else /* CONFIG_MEMCG */
 

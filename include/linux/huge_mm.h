@@ -283,6 +283,41 @@ void prep_transhuge_page(struct page *page);
 void free_transhuge_page(struct page *page);
 bool is_transparent_hugepage(struct page *page);
 
+#ifdef CONFIG_MEMCG
+enum thp_reclaim_mode_item {
+	THP_RECLAIM_DISABLE,	/* disable mode */
+	THP_RECLAIM_SWAP,	/* swap mode */
+	THP_RECLAIM_ZSR,	/* reclaim mode, use zero subpages reclaim */
+	THP_RECLAIM_MEMCG,	/* For global configure */
+};
+
+#define HUGEPAGE_RECLAIM_STAT(stat)	\
+	atomic_long_t stat;		\
+	atomic_long_t total_##stat
+
+struct hugepage_reclaim {
+	spinlock_t reclaim_queue_lock;
+	struct list_head reclaim_queue;
+	unsigned long queue_length;
+
+	HUGEPAGE_RECLAIM_STAT(split_hugepage);
+	HUGEPAGE_RECLAIM_STAT(reclaim_subpage);
+	HUGEPAGE_RECLAIM_STAT(split_failed);
+};
+
+#define THP_RECLAIM_THRESHOLD_DEFAULT	16
+extern int global_thp_reclaim;
+int tr_get_hugepage(struct hugepage_reclaim *hr_queue, struct page **reclaim,
+		    int threshold);
+unsigned long tr_reclaim_hugepage(struct hugepage_reclaim *hr_queue,
+				  struct lruvec *lruvec, struct page *page);
+void tr_reclaim_memcg(struct mem_cgroup *memcg);
+static inline struct list_head *hugepage_reclaim_list(struct page *page)
+{
+	return &page[3].hugepage_reclaim_list;
+}
+#endif
+
 bool can_split_huge_page(struct page *page, int *pextra_pins);
 int split_huge_page_to_list(struct page *page, struct list_head *list);
 static inline int split_huge_page(struct page *page)
