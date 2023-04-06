@@ -531,4 +531,36 @@ reclaim
 	echo "reclaim 1" > memory.thp_reclaim_ctrl
 	echo "reclaim 2" > memory.thp_reclaim_ctrl
 
+proactive
+	Enable or disable the proactive reclaim of memory cgroup. See below.
++
+
 Only one of the configs mentioned above can be set at a time.
+
+We also provide proactive reclaim. It can be triggered by::
+
+	/sys/kernel/mm/transparent_hugepage/reclaim_proactive
+
+Set 1 to enable, and 0 to disable. If it's enabled, the proactive reclaim
+will run every 60000ms (by default). We can change the running frequency by::
+
+	/sys/kernel/mm/transparent_hugepage/reclaim_proactive_sleep_ms
+
+If memory cgroup does not want to enable proactive reclaim (The default is
+disable), we can disable it by::
+
+	echo "proactive 0"  > memory.thp_reclaim_ctrl
+
+And enable it by::
+
+	echo "proactive 1"  > memory.thp_reclaim_ctrl
+
+We can limit the scan numbers of each memcg for proactive reclaim by::
+
+	/sys/kernel/mm/transparent_hugepage/reclaim_proactive_scan
+
+We also provide boot parameters ``tr.proactive``.  ``tr.proactive=0``
+means disable proactive reclaim, ``tr.proactive=1`` means enable
+proactive when system boot, and ``tr.proactive=2`` means the root
+memory cgroup will enable proactive reclaim, and ``tr.proactive=3``
+means above both.

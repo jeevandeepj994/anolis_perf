@@ -67,6 +67,12 @@ static struct shrinker deferred_split_shrinker;
  * Zero subpages reclaim for huge pages only works when memcg defined.
  */
 int global_thp_reclaim = THP_RECLAIM_MEMCG;
+int thp_reclaim_proactive;
+unsigned int thp_reclaim_proactive_sleep_ms = THP_RECLAIM_PROACTIVE_SLEEP_MS;
+unsigned int thp_reclaim_proactive_scan = 100;
+static DEFINE_MUTEX(thp_reclaim_proactive_mutex);
+struct delayed_work thp_reclaim_proactive_dwork;
+static void thp_reclaim_proactive_func(struct work_struct *work);
 #endif
 
 static atomic_t huge_zero_refcount;
@@ -449,6 +455,97 @@ static ssize_t reclaim_store(struct kobject *kobj,
 
 static struct kobj_attribute reclaim_attr =
 	__ATTR(reclaim, 0644, reclaim_show, reclaim_store);
+
+static ssize_t reclaim_proactive_show(struct kobject *kobj,
+				      struct kobj_attribute *attr,
+				      char *buf)
+{
+	return sprintf(buf, "%d\n", READ_ONCE(thp_reclaim_proactive));
+}
+
+static ssize_t reclaim_proactive_store(struct kobject *kobj,
+				       struct kobj_attribute *attr,
+				       const char *buf, size_t count)
+{
+	int ret, proactive;
+
+	ret = kstrtouint(buf, 0, &proactive);
+	if (ret || (proactive != 0 && proactive != 1))
+		return -EINVAL;
+
+	mutex_lock(&thp_reclaim_proactive_mutex);
+	if (proactive == thp_reclaim_proactive)
+		goto unlock;
+
+	thp_reclaim_proactive = proactive;
+	if (thp_reclaim_proactive)
+		schedule_delayed_work(&thp_reclaim_proactive_dwork,
+			msecs_to_jiffies(thp_reclaim_proactive_sleep_ms));
+	else
+		cancel_delayed_work_sync(&thp_reclaim_proactive_dwork);
+unlock:
+	mutex_unlock(&thp_reclaim_proactive_mutex);
+
+	return count;
+}
+
+static struct kobj_attribute reclaim_proactive_attr =
+	__ATTR(reclaim_proactive, 0644, reclaim_proactive_show,
+	       reclaim_proactive_store);
+
+static ssize_t reclaim_proactive_sleep_ms_show(struct kobject *kobj,
+					struct kobj_attribute *attr, char *buf)
+{
+	return sprintf(buf, "%u\n", thp_reclaim_proactive_sleep_ms);
+}
+
+static ssize_t reclaim_proactive_sleep_ms_store(struct kobject *kobj,
+						struct kobj_attribute *attr,
+						const char *buf, size_t count)
+{
+	unsigned long msecs;
+	int ret;
+
+	ret = kstrtoul(buf, 10, &msecs);
+	if (ret || msecs > UINT_MAX)
+		return -EINVAL;
+
+	WRITE_ONCE(thp_reclaim_proactive_sleep_ms, msecs);
+
+	return count;
+}
+
+static struct kobj_attribute reclaim_proactive_sleep_ms_attr =
+	__ATTR(reclaim_proactive_sleep_ms, 0644,
+	       reclaim_proactive_sleep_ms_show,
+	       reclaim_proactive_sleep_ms_store);
+
+static ssize_t reclaim_proactive_scan_show(struct kobject *kobj,
+					struct kobj_attribute *attr, char *buf)
+{
+	return sprintf(buf, "%u\n", READ_ONCE(thp_reclaim_proactive_scan));
+}
+
+static ssize_t reclaim_proactive_scan_store(struct kobject *kobj,
+						struct kobj_attribute *attr,
+						const char *buf, size_t count)
+{
+	unsigned long scan;
+	int ret;
+
+	ret = kstrtoul(buf, 10, &scan);
+	if (ret || scan > UINT_MAX)
+		return -EINVAL;
+
+	WRITE_ONCE(thp_reclaim_proactive_scan, scan);
+
+	return count;
+}
+
+static struct kobj_attribute reclaim_proactive_scan_attr =
+	__ATTR(reclaim_proactive_scan, 0644,
+	       reclaim_proactive_scan_show,
+	       reclaim_proactive_scan_store);
 #endif
 
 static struct attribute *hugepage_attr[] = {
@@ -465,6 +562,9 @@ static struct attribute *hugepage_attr[] = {
 #endif
 #ifdef CONFIG_MEMCG
 	&reclaim_attr.attr,
+	&reclaim_proactive_attr.attr,
+	&reclaim_proactive_sleep_ms_attr.attr,
+	&reclaim_proactive_scan_attr.attr,
 #endif
 	NULL,
 };
@@ -573,6 +673,12 @@ static int __init hugepage_init(void)
 	err = start_stop_khugepaged();
 	if (err)
 		goto err_khugepaged;
+
+	INIT_DELAYED_WORK(&thp_reclaim_proactive_dwork,
+			  thp_reclaim_proactive_func);
+	if (thp_reclaim_proactive)
+		schedule_delayed_work(&thp_reclaim_proactive_dwork,
+			msecs_to_jiffies(thp_reclaim_proactive_sleep_ms));
 
 	return 0;
 err_khugepaged:
@@ -3447,7 +3553,7 @@ static inline struct mem_cgroup *hr_queue_to_memcg(struct hugepage_reclaim *hq)
  * queue.
  */
 int tr_get_hugepage(struct hugepage_reclaim *hr_queue, struct page **reclaim,
-		    int threshold)
+		    int threshold, unsigned long time)
 {
 	struct page *page;
 	unsigned long flags;
@@ -3462,6 +3568,11 @@ int tr_get_hugepage(struct hugepage_reclaim *hr_queue, struct page **reclaim,
 	}
 
 	page = hr_list_to_page(&hr_queue->reclaim_queue);
+
+	if (time && tr_hugepage_time(page) > time) {
+		ret = -EINVAL;
+		goto unlock;
+	}
 
 	list_del_init(hugepage_reclaim_list(page));
 	hr_queue->queue_length--;
@@ -3547,16 +3658,24 @@ unsigned long tr_reclaim_hugepage(struct hugepage_reclaim *hr_queue,
 	return reclaimed;
 }
 
-void tr_reclaim_memcg(struct mem_cgroup *memcg)
+/*
+ * Trigger the memcg reclaim.
+ * The huge page allocated before @time will be handled.
+ * @scan is the limit numbers of huge page can be handled.
+ * If @scan is 0, it means there is no limit.
+ */
+void __tr_reclaim_memcg(struct mem_cgroup *memcg, unsigned long time,
+			unsigned int scan, bool proactive)
 {
 	struct lruvec *lruvec;
 	struct hugepage_reclaim *hr_queue;
 	int threshold, nid;
+	int nr_to_scan = scan;
 
 	if (tr_get_reclaim_mode(memcg) != THP_RECLAIM_ZSR)
 		return;
 
-	threshold = READ_ONCE(memcg->thp_reclaim_threshold);
+	threshold = READ_ONCE(memcg->tr_ctrl.threshold);
 	for_each_online_node(nid) {
 		lruvec = mem_cgroup_lruvec(memcg, NODE_DATA(nid));
 		hr_queue = &memcg->nodeinfo[nid]->hugepage_reclaim_queue;
@@ -3565,11 +3684,22 @@ void tr_reclaim_memcg(struct mem_cgroup *memcg)
 
 			cond_resched();
 
-			if (tr_get_hugepage(hr_queue, &page, threshold))
+			if (proactive &&
+			    (!READ_ONCE(thp_reclaim_proactive) ||
+			     !READ_ONCE(memcg->tr_ctrl.proactive)))
+				break;
+
+			if (scan && nr_to_scan == 0)
+				break;
+
+			if (tr_get_hugepage(hr_queue, &page, threshold, time))
 				break;
 
 			if (!page)
 				continue;
+
+			if (scan)
+				nr_to_scan--;
 
 			tr_reclaim_hugepage(hr_queue, lruvec, page);
 		}
@@ -3600,4 +3730,29 @@ out:
 	return !ret;
 }
 __setup("tr=", setup_thp_reclaim);
+
+static void thp_reclaim_proactive_func(struct work_struct *work)
+{
+	struct mem_cgroup *memcg;
+	unsigned long time;
+	unsigned int scan;
+
+	if (READ_ONCE(global_thp_reclaim) == THP_RECLAIM_DISABLE)
+		goto resched;
+
+	scan = READ_ONCE(thp_reclaim_proactive_scan);
+	time = jiffies - msecs_to_jiffies(thp_reclaim_proactive_sleep_ms);
+	memcg = mem_cgroup_iter(NULL, NULL, NULL);
+	do {
+		if (READ_ONCE(memcg->tr_ctrl.proactive))
+			__tr_reclaim_memcg(memcg, time, scan, true);
+
+		if (!READ_ONCE(thp_reclaim_proactive))
+			break;
+	} while ((memcg = mem_cgroup_iter(NULL, memcg, NULL)));
+
+resched:
+	schedule_delayed_work(&thp_reclaim_proactive_dwork,
+		msecs_to_jiffies(thp_reclaim_proactive_sleep_ms));
+}
 #endif
