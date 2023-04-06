@@ -165,6 +165,9 @@ void dma_unmap_page_attrs(struct device *dev, dma_addr_t addr, size_t size,
 	const struct dma_map_ops *ops = get_dma_ops(dev);
 
 	BUG_ON(!valid_dma_direction(dir));
+#if defined(CONFIG_X86) && defined(CONFIG_PCI)
+	patch_p2cw_single_map(dev, addr, dir, ops);
+#endif
 	if (dma_map_direct(dev, ops))
 		dma_direct_unmap_page(dev, addr, size, dir, attrs);
 	else if (ops->unmap_page)
@@ -207,6 +210,9 @@ void dma_unmap_sg_attrs(struct device *dev, struct scatterlist *sg,
 
 	BUG_ON(!valid_dma_direction(dir));
 	debug_dma_unmap_sg(dev, sg, nents, dir);
+#if defined(CONFIG_X86) && defined(CONFIG_PCI)
+	patch_p2cw_sg_map(dev, sg, nents, dir, ops);
+#endif
 	if (dma_map_direct(dev, ops))
 		dma_direct_unmap_sg(dev, sg, nents, dir, attrs);
 	else if (ops->unmap_sg)
@@ -257,6 +263,9 @@ void dma_sync_single_for_cpu(struct device *dev, dma_addr_t addr, size_t size,
 	const struct dma_map_ops *ops = get_dma_ops(dev);
 
 	BUG_ON(!valid_dma_direction(dir));
+#if defined(CONFIG_X86) && defined(CONFIG_PCI)
+	patch_p2cw_single_map(dev, addr, dir, ops);
+#endif
 	if (dma_map_direct(dev, ops))
 		dma_direct_sync_single_for_cpu(dev, addr, size, dir);
 	else if (ops->sync_single_for_cpu)
@@ -285,6 +294,9 @@ void dma_sync_sg_for_cpu(struct device *dev, struct scatterlist *sg,
 	const struct dma_map_ops *ops = get_dma_ops(dev);
 
 	BUG_ON(!valid_dma_direction(dir));
+#if defined(CONFIG_X86) && defined(CONFIG_PCI)
+	patch_p2cw_sg_map(dev, sg, nelems, dir, ops);
+#endif
 	if (dma_map_direct(dev, ops))
 		dma_direct_sync_sg_for_cpu(dev, sg, nelems, dir);
 	else if (ops->sync_sg_for_cpu)
