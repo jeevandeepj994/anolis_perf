@@ -1996,8 +1996,8 @@ static int too_many_isolated(struct pglist_data *pgdat, int file,
  *
  * Returns the number of pages moved to the given lruvec.
  */
-static unsigned noinline_for_stack move_pages_to_lru(struct lruvec *lruvec,
-						     struct list_head *list)
+unsigned noinline_for_stack move_pages_to_lru(struct lruvec *lruvec,
+					      struct list_head *list)
 {
 	int nr_pages, nr_moved = 0;
 	LIST_HEAD(pages_to_free);
@@ -2747,6 +2747,56 @@ out:
 	}
 }
 
+#if defined(CONFIG_MEMCG) && defined(CONFIG_TRANSPARENT_HUGEPAGE)
+/*
+ * Try to reclaim the zero subpages for the transparent huge page.
+ */
+
+static inline unsigned long reclaim_hugepages(struct lruvec *lruvec,
+					      unsigned long nr_to_reclaim)
+{
+	struct mem_cgroup *memcg;
+	struct hugepage_reclaim *hr_queue;
+	int nid = lruvec->pgdat->node_id;
+	int threshold;
+	unsigned long nr_reclaimed = 0;
+
+	memcg = lruvec_memcg(lruvec);
+	if (!memcg)
+		goto out;
+
+	threshold = READ_ONCE(memcg->thp_reclaim_threshold);
+	hr_queue = &memcg->nodeinfo[nid]->hugepage_reclaim_queue;
+
+	/* Now we only support zsr mode. */
+	if (tr_get_reclaim_mode(memcg) != THP_RECLAIM_ZSR)
+		goto out;
+
+	do {
+		struct page *page = NULL;
+
+		if (tr_get_hugepage(hr_queue, &page, threshold))
+			break;
+
+		if (!page)
+			continue;
+
+		nr_reclaimed += tr_reclaim_hugepage(hr_queue, lruvec, page);
+
+		cond_resched();
+	} while (nr_reclaimed < nr_to_reclaim);
+
+out:
+	return nr_reclaimed;
+}
+#else
+static inline unsigned long reclaim_hugepages(struct lruvec *lruvec,
+					      unsigned long nr_to_reclaim)
+{
+	return 0;
+}
+#endif
+
 static void shrink_lruvec(struct lruvec *lruvec, struct scan_control *sc)
 {
 	unsigned long nr[NR_LRU_LISTS];
@@ -2850,6 +2900,12 @@ static void shrink_lruvec(struct lruvec *lruvec, struct scan_control *sc)
 		scan_adjusted = true;
 	}
 	blk_finish_plug(&plug);
+
+	/* Trigger zero subpages reclaim only when priority is 0. */
+	if (sc->priority == 0 && nr_reclaimed < nr_to_reclaim)
+		nr_reclaimed += reclaim_hugepages(lruvec,
+						  nr_to_reclaim - nr_reclaimed);
+
 	sc->nr_reclaimed += nr_reclaimed;
 
 	/*
