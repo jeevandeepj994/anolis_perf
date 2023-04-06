@@ -307,6 +307,11 @@ struct page *dma_alloc_contiguous(struct device *dev, size_t size, gfp_t gfp)
 	int nid = dev_to_node(dev);
 #endif
 
+#if defined(CONFIG_X86) && defined(CONFIG_PCI)
+	if (zhaoxin_p2cw_patch_en == true)
+		return NULL;
+#endif
+
 	/* CMA can be used only in the context which permits sleeping */
 	if (!gfpflags_allow_blocking(gfp))
 		return NULL;
