@@ -89,6 +89,43 @@ u16 rsvd_ports_base = SMC_IWARP_RSVD_PORTS_BASE;
 module_param(rsvd_ports_base, ushort, 0444);
 MODULE_PARM_DESC(rsvd_ports_base, "base of rsvd ports for reserve_mode");
 
+static int smc_sock_should_select_smc(const struct smc_sock *smc)
+{
+	const struct smc_sock_negotiator_ops *ops;
+	int ret;
+
+	rcu_read_lock();
+	ops = READ_ONCE(smc->negotiator_ops);
+
+	/* No negotiator_ops supply or no negotiate func set,
+	 * always pass it.
+	 */
+	if (!ops || !ops->negotiate) {
+		rcu_read_unlock();
+		return SK_PASS;
+	}
+
+	ret = ops->negotiate((struct sock *)&smc->sk);
+	rcu_read_unlock();
+	return ret;
+}
+
+static void smc_sock_perform_collecting_info(const struct smc_sock *smc, int timing)
+{
+	const struct smc_sock_negotiator_ops *ops;
+
+	rcu_read_lock();
+	ops = READ_ONCE(smc->negotiator_ops);
+
+	if (!ops || !ops->collect_info) {
+		rcu_read_unlock();
+		return;
+	}
+
+	ops->collect_info((struct sock *)&smc->sk, timing);
+	rcu_read_unlock();
+}
+
 int smc_nl_dump_hs_limitation(struct sk_buff *skb, struct netlink_callback *cb)
 {
 	struct smc_nl_dmp_ctx *cb_ctx = smc_nl_dmp_ctx(cb);
@@ -190,6 +227,9 @@ static bool smc_hs_congested(const struct sock *sk)
 	if (workqueue_congested(WORK_CPU_UNBOUND, smc_hs_wq))
 		return true;
 
+	if (!smc_sock_should_select_smc(smc))
+		return true;
+
 	/* only works for inet sock */
 	if (smc_sock_is_inet_sock(&smc->sk)) {
 		__smc_inet_sock_sort_csk_queue(&smc->sk, &tcp_cnt, &smc_cnt);
@@ -206,6 +246,7 @@ static bool smc_hs_congested(const struct sock *sk)
 			smc_inet_sock_leave_presure(&smc->sk);
 		}
 	}
+
 	return false;
 }
 
@@ -367,6 +408,9 @@ static int smc_release(struct socket *sock)
 
 	old_state = smc_sk_state(sk);
 
+	/* trigger info gathering if needed.*/
+	smc_sock_perform_collecting_info(smc, SMC_SOCK_CLOSED_TIMING);
+
 	/* cleanup for a dangling non-blocking connect */
 	if (smc->connect_nonblock && old_state == SMC_INIT)
 		tcp_abort(smc->clcsock->sk, ECONNABORTED);
@@ -404,6 +448,8 @@ static void smc_destruct(struct sock *sk)
 	if (smc_sk(sk)->original_sk_destruct)
 		smc_sk(sk)->original_sk_destruct(sk);
 
+	smc_sock_cleanup_negotiator_ops(smc_sk(sk), /* in release */ 1);
+
 	if (smc_sk_state(sk) != SMC_CLOSED)
 		return;
 	if (!sock_flag(sk, SOCK_DEAD))
@@ -429,6 +475,8 @@ static void smc_sock_init_passive(struct sock *par, struct sock *sk)
 
 	smc_sock_init_common(sk);
 	smc_sk(sk)->listen_smc = parent;
+
+	smc_sock_clone_negotiator_ops(par, sk);
 
 	clcsk = smc_sock_is_inet_sock(sk) ? sk : smc_sk(sk)->clcsock->sk;
 
@@ -1820,6 +1868,12 @@ static int smc_connect(struct socket *sock, struct sockaddr *addr,
 
 	smc_copy_sock_settings_to_clc(smc);
 
+	if (smc_sock_should_select_smc(smc) !=  SK_PASS) {
+		tcp_sk(smc->clcsock->sk)->syn_smc = 0;
+		smc_switch_to_fallback(smc, /* active fallback */ SMC_CLC_DECL_ACTIVE);
+		goto do_tcp_connect;
+	}
+
 	if (smc_sock_is_inet_sock(sk)) {
 		if (smc_inet_sock_set_syn_smc(sk)) {
 			if (flags & O_NONBLOCK) {
@@ -1839,6 +1893,7 @@ static int smc_connect(struct socket *sock, struct sockaddr *addr,
 		tcp_sk(smc->clcsock->sk)->syn_smc = 1;
 	}
 
+do_tcp_connect:
 	rc = kernel_connect(smc->clcsock, addr, alen, flags);
 	if (rc && rc != -EINPROGRESS)
 		goto out;
@@ -4191,6 +4246,9 @@ int smc_inet_release(struct socket *sock)
 		return 0;
 
 	smc = smc_sk(sk);
+
+	/* trigger info gathering if needed.*/
+	smc_sock_perform_collecting_info(smc, SMC_SOCK_CLOSED_TIMING);
 
 	if (!smc_inet_sock_try_fallback_fast(sk, /* force it to no_smc */ 1))
 		goto out;
