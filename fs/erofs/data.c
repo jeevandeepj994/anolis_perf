@@ -60,9 +60,10 @@ void erofs_put_metabuf(struct erofs_buf *buf)
  * Derive the block size from inode->i_blkbits to make compatible with
  * anonymous inode in fscache mode.
  */
-void *erofs_bread(struct erofs_buf *buf, struct inode *inode,
-		  erofs_blk_t blkaddr, enum erofs_kmap_type type)
+void *erofs_bread(struct erofs_buf *buf, erofs_blk_t blkaddr,
+		  enum erofs_kmap_type type)
 {
+	struct inode *inode = buf->inode;
 	unsigned char blkbits = buf->blkbits ? : inode->i_blkbits;
 	erofs_off_t offset = (erofs_off_t)blkaddr << blkbits;
 	struct address_space *const mapping = inode->i_mapping;
@@ -71,6 +72,7 @@ void *erofs_bread(struct erofs_buf *buf, struct inode *inode,
 
 	if (!page || page->index != index) {
 		erofs_put_metabuf(buf);
+
 		if (buf->dax)
 			page = rafsv6_dax_readpage(mapping, index, buf);
 		else
@@ -78,6 +80,7 @@ void *erofs_bread(struct erofs_buf *buf, struct inode *inode,
 				   mapping_gfp_constraint(mapping, ~__GFP_FS));
 		if (IS_ERR(page))
 			return page;
+
 		/* should already be PageUptodate, no need to lock page */
 		buf->page = page;
 	}
@@ -96,22 +99,26 @@ void *erofs_bread(struct erofs_buf *buf, struct inode *inode,
 	return buf->base + (offset & ~PAGE_MASK);
 }
 
-void *erofs_read_metabuf(struct erofs_buf *buf, struct super_block *sb,
-			 erofs_blk_t blkaddr, enum erofs_kmap_type type)
+void erofs_init_metabuf(struct erofs_buf *buf, struct super_block *sb)
 {
 	if (erofs_is_rafsv6_mode(sb)) {
 		buf->blkbits = sb->s_blocksize_bits;
 		if (IS_DAX(EROFS_SB(sb)->bootstrap->f_inode))
 			buf->dax = true;
-		return erofs_bread(buf, EROFS_SB(sb)->bootstrap->f_inode,
-				   blkaddr, type);
+		buf->inode = EROFS_SB(sb)->bootstrap->f_inode;
+	} else if (erofs_is_fscache_mode(sb)) {
+		buf->inode = EROFS_SB(sb)->s_fscache->inode;
+	} else {
+		buf->inode = sb->s_bdev->bd_inode;
 	}
+}
 
-	if (erofs_is_fscache_mode(sb))
-		return erofs_bread(buf, EROFS_SB(sb)->s_fscache->inode,
-				   blkaddr, type);
+void *erofs_read_metabuf(struct erofs_buf *buf, struct super_block *sb,
+			 erofs_blk_t blkaddr, enum erofs_kmap_type type)
+{
+	erofs_init_metabuf(buf, sb);
 
-	return erofs_bread(buf, sb->s_bdev->bd_inode, blkaddr, type);
+	return erofs_bread(buf,  blkaddr, type);
 }
 
 static int erofs_map_blocks_flatmode(struct inode *inode,
