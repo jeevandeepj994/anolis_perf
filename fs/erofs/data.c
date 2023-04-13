@@ -413,6 +413,8 @@ const struct address_space_operations erofs_raw_access_aops = {
 	.readpages = erofs_readpages,
 	.bmap = erofs_bmap,
 	.direct_IO = noop_direct_IO,
+	.invalidatepage = iomap_invalidatepage,
+	.releasepage = iomap_releasepage,
 };
 
 const struct file_operations erofs_file_fops = {
