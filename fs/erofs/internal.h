@@ -396,21 +396,6 @@ enum {
 /* zmap.c */
 extern const struct iomap_ops z_erofs_iomap_report_ops;
 
-#ifdef CONFIG_EROFS_FS_ZIP
-int z_erofs_fill_inode(struct inode *inode);
-int z_erofs_map_blocks_iter(struct inode *inode,
-			    struct erofs_map_blocks *map,
-			    int flags);
-#else
-static inline int z_erofs_fill_inode(struct inode *inode) { return -EOPNOTSUPP; }
-static inline int z_erofs_map_blocks_iter(struct inode *inode,
-					  struct erofs_map_blocks *map,
-					  int flags)
-{
-	return -EOPNOTSUPP;
-}
-#endif	/* !CONFIG_EROFS_FS_ZIP */
-
 struct erofs_map_dev {
 	struct erofs_fscache *m_fscache;
 	struct block_device *m_bdev;
@@ -511,6 +496,8 @@ int erofs_try_to_free_cached_page(struct page *page);
 int z_erofs_load_lz4_config(struct super_block *sb,
 			    struct erofs_super_block *dsb,
 			    struct z_erofs_lz4_cfgs *lz4, int len);
+int z_erofs_map_blocks_iter(struct inode *inode, struct erofs_map_blocks *map,
+			    int flags);
 #else
 static inline void erofs_shrinker_register(struct super_block *sb) {}
 static inline void erofs_shrinker_unregister(struct super_block *sb) {}
@@ -527,6 +514,12 @@ static inline int z_erofs_load_lz4_config(struct super_block *sb,
 		return -EINVAL;
 	}
 	return 0;
+}
+static inline int z_erofs_map_blocks_iter(struct inode *inode,
+					  struct erofs_map_blocks *map,
+					  int flags)
+{
+	return -EOPNOTSUPP;
 }
 #endif	/* !CONFIG_EROFS_FS_ZIP */
 
