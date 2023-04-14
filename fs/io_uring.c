@@ -974,6 +974,42 @@ static const struct io_op_def io_op_defs[] = {
 		.hash_reg_file		= 1,
 		.unbound_nonreg_file	= 1,
 	},
+	[IORING_OP_SHUTDOWN] = {
+		.not_supported		= 1,
+	},
+	[IORING_OP_RENAMEAT] = {
+		.not_supported		= 1,
+	},
+	[IORING_OP_UNLINKAT] = {
+		.not_supported		= 1,
+	},
+	[IORING_OP_MKDIRAT] = {
+		.not_supported		= 1,
+	},
+	[IORING_OP_SYMLINKAT] = {
+		.not_supported		= 1,
+	},
+	[IORING_OP_LINKAT] = {
+		.not_supported		= 1,
+	},
+	[IORING_OP_MSG_RING] = {
+		.not_supported		= 1,
+	},
+	[IORING_OP_FSETXATTR] = {
+		.not_supported		= 1,
+	},
+	[IORING_OP_SETXATTR] = {
+		.not_supported		= 1,
+	},
+	[IORING_OP_FGETXATTR] = {
+		.not_supported		= 1,
+	},
+	[IORING_OP_GETXATTR] = {
+		.not_supported		= 1,
+	},
+	[IORING_OP_SOCKET] = {
+		.not_supported		= 1,
+	},
 	[IORING_OP_URING_CMD] = {
 		.needs_file		= 1,
 		.needs_async_data	= 1,
@@ -6866,7 +6902,7 @@ static int io_init_req(struct io_ring_ctx *ctx, struct io_kiocb *req,
 	req->task = current;
 	req->result = 0;
 
-	if (unlikely(req->opcode >= IORING_OP_LAST))
+	if (unlikely(io_op_defs[req->opcode].not_supported || req->opcode >= IORING_OP_LAST))
 		return -EINVAL;
 
 	if (unlikely(io_sq_thread_acquire_mm_files(ctx, req)))
