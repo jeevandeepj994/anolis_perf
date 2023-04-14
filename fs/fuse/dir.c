@@ -25,33 +25,15 @@ static void fuse_advise_use_readdirplus(struct inode *dir)
 	set_bit(FUSE_I_ADVISE_RDPLUS, &fi->state);
 }
 
-#if BITS_PER_LONG >= 64
-static inline void __fuse_dentry_settime(struct dentry *entry, u64 time)
-{
-	entry->d_fsdata = (void *) time;
-}
-
-static inline u64 fuse_dentry_time(const struct dentry *entry)
-{
-	return (u64)entry->d_fsdata;
-}
-
-#else
-union fuse_dentry {
-	u64 time;
-	struct rcu_head rcu;
-};
-
 static inline void __fuse_dentry_settime(struct dentry *dentry, u64 time)
 {
-	((union fuse_dentry *) dentry->d_fsdata)->time = time;
+	((union fuse_dentry *) dentry->d_fsdata)->info.time = time;
 }
 
 static inline u64 fuse_dentry_time(const struct dentry *entry)
 {
-	return ((union fuse_dentry *) entry->d_fsdata)->time;
+	return ((union fuse_dentry *) entry->d_fsdata)->info.time;
 }
-#endif
 
 static void fuse_dentry_settime(struct dentry *dentry, u64 time)
 {
@@ -184,6 +166,18 @@ static void fuse_lookup_init(struct fuse_conn *fc, struct fuse_args *args,
 	args->out_args[0].value = outarg;
 }
 
+/* helper function to check whehter the dentry is valid */
+static bool fuse_dentry_is_valid(struct dentry *entry, struct inode *dir)
+{
+	struct fuse_conn *fc = get_fuse_conn(dir);
+
+	if (fc->invaldir_allentry &&
+		fuse_dentry_inval_version(entry) != fuse_inval_version(dir))
+		return false;
+
+	return true;
+}
+
 /*
  * Check whether the dentry is still valid
  *
@@ -195,16 +189,36 @@ static void fuse_lookup_init(struct fuse_conn *fc, struct fuse_args *args,
  */
 static int fuse_dentry_revalidate(struct dentry *entry, unsigned int flags)
 {
-	struct inode *inode;
+	struct inode *dir, *inode;
 	struct dentry *parent;
 	struct fuse_mount *fm;
 	struct fuse_inode *fi;
+	bool entry_valid = true;
+	u64 inval_version;
 	int ret;
 
 	inode = d_inode_rcu(entry);
 	if (inode && fuse_is_bad(inode))
 		goto invalid;
-	else if (time_before64(fuse_dentry_time(entry), get_jiffies_64()) ||
+
+	if (flags & LOOKUP_RCU) {
+		parent = READ_ONCE(entry->d_parent);
+		dir = d_inode_rcu(parent);
+		if (!dir)
+			return -ECHILD;
+	} else {
+		parent = dget_parent(entry);
+		dir = d_inode(parent);
+	}
+
+	/* inval_version under the protection of refcnt of dir*/
+	inval_version = fuse_inval_version(dir);
+	entry_valid = fuse_dentry_is_valid(entry, dir);
+
+	if (!(flags & LOOKUP_RCU))
+		dput(parent);
+
+	if (time_before64(fuse_dentry_time(entry), get_jiffies_64()) || !entry_valid ||
 		 (flags & (LOOKUP_EXCL | LOOKUP_REVAL | LOOKUP_RENAME_TARGET))) {
 		struct fuse_entry_out outarg;
 		FUSE_ARGS(args);
@@ -260,6 +274,7 @@ static int fuse_dentry_revalidate(struct dentry *entry, unsigned int flags)
 				       entry_attr_timeout(&outarg),
 				       attr_version);
 		fuse_change_entry_timeout(entry, &outarg);
+		fuse_dentry_set_inval_version(entry, inval_version);
 	} else if (inode) {
 		fi = get_fuse_inode(inode);
 		if (flags & LOOKUP_RCU) {
@@ -280,7 +295,6 @@ invalid:
 	goto out;
 }
 
-#if BITS_PER_LONG < 64
 static int fuse_dentry_init(struct dentry *dentry)
 {
 	dentry->d_fsdata = kzalloc(sizeof(union fuse_dentry),
@@ -294,7 +308,6 @@ static void fuse_dentry_release(struct dentry *dentry)
 
 	kfree_rcu(fd, rcu);
 }
-#endif
 
 static int fuse_dentry_delete(const struct dentry *dentry)
 {
@@ -392,18 +405,14 @@ out:
 const struct dentry_operations fuse_dentry_operations = {
 	.d_revalidate	= fuse_dentry_revalidate,
 	.d_delete	= fuse_dentry_delete,
-#if BITS_PER_LONG < 64
 	.d_init		= fuse_dentry_init,
 	.d_release	= fuse_dentry_release,
-#endif
 	.d_automount	= fuse_dentry_automount,
 };
 
 const struct dentry_operations fuse_root_dentry_operations = {
-#if BITS_PER_LONG < 64
 	.d_init		= fuse_dentry_init,
 	.d_release	= fuse_dentry_release,
-#endif
 };
 
 int fuse_valid_type(int m)
@@ -477,6 +486,7 @@ static struct dentry *fuse_lookup(struct inode *dir, struct dentry *entry,
 	struct dentry *newent;
 	bool outarg_valid = true;
 	bool locked;
+	u64 inval_version = fuse_inval_version(dir);
 
 	if (fuse_is_bad(dir))
 		return ERR_PTR(-EIO);
@@ -509,6 +519,8 @@ static struct dentry *fuse_lookup(struct inode *dir, struct dentry *entry,
 
 	if (inode)
 		fuse_advise_use_readdirplus(dir);
+	fuse_dentry_set_inval_version(entry, inval_version);
+
 	return newent;
 
  out_iput:
@@ -539,6 +551,7 @@ static int fuse_create_open(struct inode *dir, struct dentry *entry,
 	struct fuse_inode *fi;
 	struct fuse_file *ff;
 	bool trunc = flags & O_TRUNC;
+	u64 inval_version = fuse_inval_version(dir);
 
 	/* Userspace expects S_IFREG in create mode */
 	BUG_ON((mode & S_IFMT) != S_IFREG);
@@ -600,7 +613,9 @@ static int fuse_create_open(struct inode *dir, struct dentry *entry,
 	kfree(forget);
 	d_instantiate(entry, inode);
 	fuse_change_entry_timeout(entry, &outentry);
+	fuse_dentry_set_inval_version(entry, inval_version);
 	fuse_dir_changed(dir);
+
 	err = finish_open(file, entry, generic_file_open);
 	if (err) {
 		fi = get_fuse_inode(inode);
@@ -682,6 +697,7 @@ static int create_new_entry(struct fuse_mount *fm, struct fuse_args *args,
 	struct dentry *d;
 	int err;
 	struct fuse_forget_link *forget;
+	u64 inval_version = fuse_inval_version(dir);
 
 	if (fuse_is_bad(dir))
 		return -EIO;
@@ -721,9 +737,11 @@ static int create_new_entry(struct fuse_mount *fm, struct fuse_args *args,
 
 	if (d) {
 		fuse_change_entry_timeout(d, &outarg);
+		fuse_dentry_set_inval_version(d, inval_version);
 		dput(d);
 	} else {
 		fuse_change_entry_timeout(entry, &outarg);
+		fuse_dentry_set_inval_version(entry, inval_version);
 	}
 	fuse_dir_changed(dir);
 	return 0;

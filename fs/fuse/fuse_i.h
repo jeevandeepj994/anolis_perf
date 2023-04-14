@@ -57,6 +57,14 @@ extern struct mutex fuse_mutex;
 extern unsigned max_user_bgreq;
 extern unsigned max_user_congthresh;
 
+union fuse_dentry {
+	struct{
+		u64 time;
+		u64 inval_version;
+	} info;
+	struct rcu_head rcu;
+};
+
 /* One forget request */
 struct fuse_forget_link {
 	struct fuse_forget_one forget_one;
@@ -93,6 +101,9 @@ struct fuse_inode {
 
 	/** Version of last attribute change */
 	u64 attr_version;
+
+	/** Version of invalidate */
+	atomic64_t inval_version;
 
 	union {
 		/* Write related fields (regular file only) */
@@ -801,6 +812,9 @@ struct fuse_conn {
 	/** Passthrough mode for read/write IO */
 	unsigned int passthrough:1;
 
+	/* meta strong consistency */
+	unsigned int invaldir_allentry:1;
+
 	/** The number of requests waiting for completion */
 	atomic_t num_waiting;
 
@@ -948,6 +962,31 @@ static inline void fuse_make_bad(struct inode *inode)
 static inline bool fuse_is_bad(struct inode *inode)
 {
 	return unlikely(test_bit(FUSE_I_BAD, &get_fuse_inode(inode)->state));
+}
+
+static inline void fuse_invalidate_inval_version(struct inode *inode)
+{
+	struct fuse_inode *fi = get_fuse_inode(inode);
+
+	atomic64_inc(&fi->inval_version);
+}
+
+static inline u64 fuse_inval_version(struct inode *inode)
+{
+	struct fuse_inode *fi = get_fuse_inode(inode);
+
+	return atomic64_read(&fi->inval_version);
+}
+
+static inline u64 fuse_dentry_inval_version(struct dentry *entry)
+{
+	return ((union fuse_dentry *) entry->d_fsdata)->info.inval_version;
+}
+
+static inline void fuse_dentry_set_inval_version(struct dentry *entry, u64 inval_version)
+{
+	((union fuse_dentry *) entry->d_fsdata)
+		->info.inval_version = inval_version;
 }
 
 /** Device operations */

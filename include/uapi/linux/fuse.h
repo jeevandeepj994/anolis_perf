@@ -361,6 +361,7 @@ struct fuse_file_lock {
 #define FUSE_INIT_RESERVED	(1 << 31)
 /* bits 32..63 get shifted down 32 bits into the flags2 field */
 #define FUSE_HAS_INODE_DAX	(1ULL << 33)
+#define FUSE_INVALDIR_ALLENTRY	(1ULL << 62)
 #define FUSE_PASSTHROUGH	(1ULL << 63)
 
 /**
