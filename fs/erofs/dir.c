@@ -22,10 +22,9 @@ static void debug_one_dentry(unsigned char d_type, const char *de_name,
 }
 
 static int erofs_fill_dentries(struct inode *dir, struct dir_context *ctx,
-			       void *dentry_blk, unsigned int *ofs,
+			       void *dentry_blk, struct erofs_dirent *de,
 			       unsigned int nameoff, unsigned int maxsize)
 {
-	struct erofs_dirent *de = dentry_blk + *ofs;
 	const struct erofs_dirent *end = dentry_blk + nameoff;
 
 	while (de < end) {
@@ -59,9 +58,8 @@ static int erofs_fill_dentries(struct inode *dir, struct dir_context *ctx,
 			/* stopped by some reason */
 			return 1;
 		++de;
-		*ofs += sizeof(struct erofs_dirent);
+		ctx->pos += sizeof(struct erofs_dirent);
 	}
-	*ofs = maxsize;
 	return 0;
 }
 
@@ -69,9 +67,11 @@ static int erofs_readdir(struct file *f, struct dir_context *ctx)
 {
 	struct inode *dir = file_inode(f);
 	struct erofs_buf buf = __EROFS_BUF_INITIALIZER;
+	struct super_block *sb = dir->i_sb;
+	unsigned long bsz = sb->s_blocksize;
 	const size_t dirsize = i_size_read(dir);
-	unsigned int i = ctx->pos / EROFS_BLKSIZ;
-	unsigned int ofs = ctx->pos % EROFS_BLKSIZ;
+	unsigned int i = erofs_blknr(sb, ctx->pos);
+	unsigned int ofs = erofs_blkoff(sb, ctx->pos);
 	int err = 0;
 	bool initial = true;
 
@@ -81,42 +81,38 @@ static int erofs_readdir(struct file *f, struct dir_context *ctx)
 
 		de = erofs_bread(&buf, dir, i, EROFS_KMAP);
 		if (IS_ERR(de)) {
-			erofs_err(dir->i_sb,
-				  "fail to readdir of logical block %u of nid %llu",
+			erofs_err(sb, "fail to readdir of logical block %u of nid %llu",
 				  i, EROFS_I(dir)->nid);
 			err = PTR_ERR(de);
 			break;
 		}
 
 		nameoff = le16_to_cpu(de->nameoff);
-		if (nameoff < sizeof(struct erofs_dirent) ||
-		    nameoff >= EROFS_BLKSIZ) {
-			erofs_err(dir->i_sb,
-				  "invalid de[0].nameoff %u @ nid %llu",
+		if (nameoff < sizeof(struct erofs_dirent) || nameoff >= bsz) {
+			erofs_err(sb, "invalid de[0].nameoff %u @ nid %llu",
 				  nameoff, EROFS_I(dir)->nid);
 			err = -EFSCORRUPTED;
-			goto skip_this;
+			break;
 		}
 
-		maxsize = min_t(unsigned int,
-				dirsize - ctx->pos + ofs, EROFS_BLKSIZ);
+		maxsize = min_t(unsigned int, dirsize - ctx->pos + ofs, bsz);
 
 		/* search dirents at the arbitrary position */
 		if (initial) {
 			initial = false;
 
 			ofs = roundup(ofs, sizeof(struct erofs_dirent));
+			ctx->pos = erofs_pos(sb, i) + ofs;
 			if (ofs >= nameoff)
 				goto skip_this;
 		}
 
-		err = erofs_fill_dentries(dir, ctx, de, &ofs,
+		err = erofs_fill_dentries(dir, ctx, de, (void *)de + ofs,
 					  nameoff, maxsize);
-skip_this:
-		ctx->pos = blknr_to_addr(i) + ofs;
-
 		if (err)
 			break;
+skip_this:
+		ctx->pos = erofs_pos(sb, i) + maxsize;
 		++i;
 		ofs = 0;
 	}
