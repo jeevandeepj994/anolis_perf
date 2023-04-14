@@ -147,7 +147,7 @@ static int parse_dirfile(char *buf, size_t nbytes, struct file *file,
 
 static int fuse_direntplus_link(struct file *file,
 				struct fuse_direntplus *direntplus,
-				u64 attr_version)
+				u64 attr_version, u64 inval_version)
 {
 	struct fuse_entry_out *o = &direntplus->entry_out;
 	struct fuse_dirent *dirent = &direntplus->dirent;
@@ -244,13 +244,15 @@ retry:
 	if (fc->readdirplus_auto)
 		set_bit(FUSE_I_INIT_RDPLUS, &get_fuse_inode(inode)->state);
 	fuse_change_entry_timeout(dentry, o);
+	fuse_dentry_set_inval_version(dentry, inval_version);
 
 	dput(dentry);
 	return 0;
 }
 
 static int parse_dirplusfile(char *buf, size_t nbytes, struct file *file,
-			     struct dir_context *ctx, u64 attr_version)
+			    struct dir_context *ctx, u64 attr_version,
+			    u64 inval_version)
 {
 	struct fuse_direntplus *direntplus;
 	struct fuse_dirent *dirent;
@@ -285,7 +287,8 @@ static int parse_dirplusfile(char *buf, size_t nbytes, struct file *file,
 		buf += reclen;
 		nbytes -= reclen;
 
-		ret = fuse_direntplus_link(file, direntplus, attr_version);
+		ret = fuse_direntplus_link(file, direntplus, attr_version,
+					inval_version);
 		if (ret)
 			fuse_force_forget(file, direntplus->entry_out.nodeid);
 	}
@@ -302,6 +305,7 @@ static int fuse_readdir_uncached(struct file *file, struct dir_context *ctx)
 	struct fuse_conn *fc = get_fuse_conn(inode);
 	struct fuse_req *req;
 	u64 attr_version = 0;
+	u64 inval_version = 0;
 	bool locked;
 
 	req = fuse_get_req(fc, 1);
@@ -321,6 +325,7 @@ static int fuse_readdir_uncached(struct file *file, struct dir_context *ctx)
 	req->page_descs[0].length = PAGE_SIZE;
 	if (plus) {
 		attr_version = fuse_get_attr_version(fc);
+		inval_version = fuse_inval_version(inode);
 		fuse_read_fill(req, file, ctx->pos, PAGE_SIZE,
 			       FUSE_READDIRPLUS);
 	} else {
@@ -341,7 +346,7 @@ static int fuse_readdir_uncached(struct file *file, struct dir_context *ctx)
 				fuse_readdir_cache_end(file, ctx->pos);
 		} else if (plus) {
 			err = parse_dirplusfile(page_address(page), nbytes,
-						file, ctx, attr_version);
+						file, ctx, attr_version, inval_version);
 		} else {
 			err = parse_dirfile(page_address(page), nbytes, file,
 					    ctx);
