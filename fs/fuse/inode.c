@@ -84,6 +84,7 @@ static struct inode *fuse_alloc_inode(struct super_block *sb)
 	fi->attr_version = 0;
 	fi->orig_ino = 0;
 	fi->state = 0;
+	atomic64_set(&fi->inval_version, 0);
 	mutex_init(&fi->mutex);
 	init_rwsem(&fi->i_mmap_sem);
 	spin_lock_init(&fi->lock);
@@ -419,6 +420,7 @@ int fuse_reverse_inval_inode(struct fuse_conn *fc, u64 nodeid,
 
 	fuse_invalidate_attr(inode);
 	forget_all_cached_acls(inode);
+	fuse_invalidate_inval_version(inode);
 	if (offset >= 0) {
 		pg_start = offset >> PAGE_SHIFT;
 		if (len <= 0)
@@ -1110,6 +1112,8 @@ static void process_init_reply(struct fuse_mount *fm, struct fuse_args *args,
 				 */
 				fm->sb->s_stack_depth = 1;
 			}
+			if (flags & FUSE_INVALDIR_ALLENTRY)
+				fc->invaldir_allentry = 1;
 		} else {
 			ra_pages = fc->max_read / PAGE_SIZE;
 			fc->no_lock = 1;
@@ -1152,7 +1156,8 @@ static void fuse_prepare_send_init(struct fuse_mount *fm,
 		FUSE_PARALLEL_DIROPS | FUSE_HANDLE_KILLPRIV | FUSE_POSIX_ACL |
 		FUSE_ABORT_ERROR | FUSE_MAX_PAGES | FUSE_CACHE_SYMLINKS |
 		FUSE_NO_OPENDIR_SUPPORT | FUSE_EXPLICIT_INVAL_DATA |
-		FUSE_HANDLE_KILLPRIV_V2 | FUSE_INIT_EXT | FUSE_PASSTHROUGH;
+		FUSE_HANDLE_KILLPRIV_V2 | FUSE_INIT_EXT | FUSE_PASSTHROUGH |
+		FUSE_INVALDIR_ALLENTRY;
 #ifdef CONFIG_FUSE_DAX
 	if (fm->fc->dax)
 		flags |= FUSE_MAP_ALIGNMENT;
