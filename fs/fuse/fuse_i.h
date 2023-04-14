@@ -62,6 +62,14 @@ enum fuse_dax_mode {
 	FUSE_DAX_NEVER,
 };
 
+union fuse_dentry {
+	struct{
+		u64 time;
+		u64 inval_version;
+	} info;
+	struct rcu_head rcu;
+};
+
 /** Mount options */
 struct fuse_mount_data {
 	int fd;
@@ -131,6 +139,9 @@ struct fuse_inode {
 
 	/** Version of last attribute change */
 	u64 attr_version;
+
+	/** Version of invalidate */
+	atomic64_t inval_version;
 
 	/** Files usable in writepage.  Protected by fi->lock */
 	struct list_head write_files;
@@ -846,6 +857,9 @@ struct fuse_conn {
 	/* Does the filesystem has its own magic? */
 	unsigned int conn_fs_magic:1;
 
+	/* meta strong consistency */
+	unsigned int invaldir_allentry:1;
+
 	/** The number of requests waiting for completion */
 	atomic_t num_waiting;
 
@@ -928,6 +942,32 @@ static inline int invalid_nodeid(u64 nodeid)
 static inline u64 fuse_get_attr_version(struct fuse_conn *fc)
 {
 	return atomic64_read(&fc->attr_version);
+}
+
+
+static inline void fuse_invalidate_inval_version(struct inode *inode)
+{
+	struct fuse_inode *fi = get_fuse_inode(inode);
+
+	atomic64_inc(&fi->inval_version);
+}
+
+static inline u64 fuse_inval_version(struct inode *inode)
+{
+	struct fuse_inode *fi = get_fuse_inode(inode);
+
+	return atomic64_read(&fi->inval_version);
+}
+
+static inline u64 fuse_dentry_inval_version(struct dentry *entry)
+{
+	return ((union fuse_dentry *) entry->d_fsdata)->info.inval_version;
+}
+
+static inline void fuse_dentry_set_inval_version(struct dentry *entry, u64 inval_version)
+{
+	((union fuse_dentry *) entry->d_fsdata)
+		->info.inval_version = inval_version;
 }
 
 /** Device operations */

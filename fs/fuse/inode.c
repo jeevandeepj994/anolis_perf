@@ -82,6 +82,7 @@ static struct inode *fuse_alloc_inode(struct super_block *sb)
 	fi->writectr = 0;
 	fi->orig_ino = 0;
 	fi->state = 0;
+	atomic64_set(&fi->inval_version, 0);
 	INIT_LIST_HEAD(&fi->write_files);
 	INIT_LIST_HEAD(&fi->queued_writes);
 	INIT_LIST_HEAD(&fi->writepages);
@@ -366,6 +367,7 @@ int fuse_reverse_inval_inode(struct super_block *sb, u64 nodeid,
 
 	fuse_invalidate_attr(inode);
 	forget_all_cached_acls(inode);
+	fuse_invalidate_inval_version(inode);
 	if (offset >= 0) {
 		pg_start = offset >> PAGE_SHIFT;
 		if (len <= 0)
@@ -1070,6 +1072,8 @@ static void process_init_reply(struct fuse_conn *fc, struct fuse_req *req)
 				fc->handle_killpriv_v2 = 1;
 				fc->sb->s_flags |= SB_NOSEC;
 			}
+			if (flags & FUSE_INVALDIR_ALLENTRY)
+				fc->invaldir_allentry = 1;
 		} else {
 			ra_pages = fc->max_read / PAGE_SIZE;
 			fc->no_lock = 1;
@@ -1109,7 +1113,8 @@ static void fuse_prepare_init_req(struct fuse_conn *fc, struct fuse_req *req)
 		FUSE_WRITEBACK_CACHE | FUSE_NO_OPEN_SUPPORT |
 		FUSE_PARALLEL_DIROPS | FUSE_HANDLE_KILLPRIV | FUSE_POSIX_ACL |
 		FUSE_ABORT_ERROR | FUSE_MAX_PAGES | FUSE_CACHE_SYMLINKS |
-		FUSE_HANDLE_KILLPRIV_V2 | FUSE_INIT_EXT;
+		FUSE_HANDLE_KILLPRIV_V2 | FUSE_INIT_EXT |
+		FUSE_INVALDIR_ALLENTRY;
 #ifdef CONFIG_FUSE_DAX
 	if (fc->dax)
 		flags |= FUSE_MAP_ALIGNMENT;

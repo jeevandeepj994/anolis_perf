@@ -24,11 +24,6 @@ static void fuse_advise_use_readdirplus(struct inode *dir)
 	set_bit(FUSE_I_ADVISE_RDPLUS, &fi->state);
 }
 
-union fuse_dentry {
-	u64 time;
-	struct rcu_head rcu;
-};
-
 static void fuse_dentry_settime(struct dentry *dentry, u64 time)
 {
 	struct fuse_conn *fc = get_fuse_conn_super(dentry->d_sb);
@@ -47,12 +42,12 @@ static void fuse_dentry_settime(struct dentry *dentry, u64 time)
 		spin_unlock(&dentry->d_lock);
 	}
 
-	((union fuse_dentry *) dentry->d_fsdata)->time = time;
+	((union fuse_dentry *) dentry->d_fsdata)->info.time = time;
 }
 
 static inline u64 fuse_dentry_time(const struct dentry *entry)
 {
-	return ((union fuse_dentry *) entry->d_fsdata)->time;
+	return ((union fuse_dentry *) entry->d_fsdata)->info.time;
 }
 
 /*
@@ -165,6 +160,18 @@ static void fuse_lookup_init(struct fuse_conn *fc, struct fuse_args *args,
 	args->out.args[0].value = outarg;
 }
 
+/* helper function to check whehter the dentry is valid */
+static bool fuse_dentry_is_valid(struct dentry *entry, struct inode *dir)
+{
+	struct fuse_conn *fc = get_fuse_conn(dir);
+
+	if (fc->invaldir_allentry &&
+		fuse_dentry_inval_version(entry) != fuse_inval_version(dir))
+		return false;
+
+	return true;
+}
+
 /*
  * Check whether the dentry is still valid
  *
@@ -176,17 +183,37 @@ static void fuse_lookup_init(struct fuse_conn *fc, struct fuse_args *args,
  */
 static int fuse_dentry_revalidate(struct dentry *entry, unsigned int flags)
 {
-	struct inode *inode;
+	struct inode *dir, *inode;
 	struct dentry *parent;
 	struct fuse_conn *fc;
 	struct fuse_inode *fi;
+	bool entry_valid = true;
+	u64 inval_version;
 	int ret;
 
 	inode = d_inode_rcu(entry);
 	if (inode && is_bad_inode(inode))
 		goto invalid;
-	else if (time_before64(fuse_dentry_time(entry), get_jiffies_64()) ||
-		 (flags & LOOKUP_REVAL)) {
+
+	if (flags & LOOKUP_RCU) {
+		parent = READ_ONCE(entry->d_parent);
+		dir = d_inode_rcu(parent);
+		if (!dir)
+			return -ECHILD;
+	} else {
+		parent = dget_parent(entry);
+		dir = d_inode(parent);
+	}
+
+	/* inval_version under the protection of refcnt of dir*/
+	inval_version = fuse_inval_version(dir);
+	entry_valid = fuse_dentry_is_valid(entry, dir);
+
+	if (!(flags & LOOKUP_RCU))
+		dput(parent);
+
+	if (time_before64(fuse_dentry_time(entry), get_jiffies_64()) ||
+		(flags & LOOKUP_REVAL) || !entry_valid) {
 		struct fuse_entry_out outarg;
 		FUSE_ARGS(args);
 		struct fuse_forget_link *forget;
@@ -239,6 +266,7 @@ static int fuse_dentry_revalidate(struct dentry *entry, unsigned int flags)
 				       entry_attr_timeout(&outarg),
 				       attr_version);
 		fuse_change_entry_timeout(entry, &outarg);
+		fuse_dentry_set_inval_version(entry, inval_version);
 	} else if (inode) {
 		fi = get_fuse_inode(inode);
 		if (flags & LOOKUP_RCU) {
@@ -360,6 +388,7 @@ static struct dentry *fuse_lookup(struct inode *dir, struct dentry *entry,
 	struct dentry *newent;
 	bool outarg_valid = true;
 	bool locked;
+	u64 inval_version = fuse_inval_version(dir);
 
 	locked = fuse_lock_inode(dir);
 	err = fuse_lookup_name(dir->i_sb, get_node_id(dir), &entry->d_name,
@@ -388,6 +417,7 @@ static struct dentry *fuse_lookup(struct inode *dir, struct dentry *entry,
 		fuse_invalidate_entry_cache(entry);
 
 	fuse_advise_use_readdirplus(dir);
+	fuse_dentry_set_inval_version(entry, inval_version);
 	return newent;
 
  out_iput:
@@ -416,6 +446,7 @@ static int fuse_create_open(struct inode *dir, struct dentry *entry,
 	struct fuse_entry_out outentry;
 	struct fuse_inode *fi;
 	struct fuse_file *ff;
+	u64 inval_version = fuse_inval_version(dir);
 
 	/* Userspace expects S_IFREG in create mode */
 	BUG_ON((mode & S_IFMT) != S_IFREG);
@@ -481,7 +512,9 @@ static int fuse_create_open(struct inode *dir, struct dentry *entry,
 	kfree(forget);
 	d_instantiate(entry, inode);
 	fuse_change_entry_timeout(entry, &outentry);
+	fuse_dentry_set_inval_version(entry, inval_version);
 	fuse_dir_changed(dir);
+
 	err = finish_open(file, entry, generic_file_open);
 	if (err) {
 		fi = get_fuse_inode(inode);
@@ -556,6 +589,7 @@ static int create_new_entry(struct fuse_conn *fc, struct fuse_args *args,
 	struct dentry *d;
 	int err;
 	struct fuse_forget_link *forget;
+	u64 inval_version = fuse_inval_version(dir);
 
 	forget = fuse_alloc_forget();
 	if (!forget)
@@ -592,9 +626,11 @@ static int create_new_entry(struct fuse_conn *fc, struct fuse_args *args,
 
 	if (d) {
 		fuse_change_entry_timeout(d, &outarg);
+		fuse_dentry_set_inval_version(d, inval_version);
 		dput(d);
 	} else {
 		fuse_change_entry_timeout(entry, &outarg);
+		fuse_dentry_set_inval_version(entry, inval_version);
 	}
 	fuse_dir_changed(dir);
 	return 0;
