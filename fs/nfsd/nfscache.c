@@ -35,6 +35,8 @@ struct nfsd_drc_bucket {
 	spinlock_t cache_lock;
 };
 
+static struct kmem_cache	*drc_slab;
+
 static int	nfsd_cache_append(struct svc_rqst *rqstp, struct kvec *vec);
 static unsigned long nfsd_reply_cache_count(struct shrinker *shrink,
 					    struct shrink_control *sc);
@@ -93,7 +95,7 @@ nfsd_reply_cache_alloc(struct nfsd_net *nn)
 {
 	struct svc_cacherep	*rp;
 
-	rp = kmem_cache_alloc(nn->drc_slab, GFP_KERNEL);
+	rp = kmem_cache_alloc(drc_slab, GFP_KERNEL);
 	if (rp) {
 		rp->c_state = RC_UNUSED;
 		rp->c_type = RC_NOCACHE;
@@ -112,7 +114,7 @@ nfsd_reply_cache_free_locked(struct svc_cacherep *rp, struct nfsd_net *nn)
 	list_del(&rp->c_lru);
 	atomic_dec(&nn->num_drc_entries);
 	nn->drc_mem_usage -= sizeof(*rp);
-	kmem_cache_free(nn->drc_slab, rp);
+	kmem_cache_free(drc_slab, rp);
 }
 
 static void
@@ -122,6 +124,18 @@ nfsd_reply_cache_free(struct nfsd_drc_bucket *b, struct svc_cacherep *rp,
 	spin_lock(&b->cache_lock);
 	nfsd_reply_cache_free_locked(rp, nn);
 	spin_unlock(&b->cache_lock);
+}
+
+int nfsd_drc_slab_create(void)
+{
+	drc_slab = kmem_cache_create("nfsd_drc",
+		sizeof(struct svc_cacherep), 0, 0, NULL);
+	return drc_slab ? 0 : -ENOMEM;
+}
+
+void nfsd_drc_slab_free(void)
+{
+	kmem_cache_destroy(drc_slab);
 }
 
 int nfsd_reply_cache_init(struct nfsd_net *nn)
@@ -142,18 +156,13 @@ int nfsd_reply_cache_init(struct nfsd_net *nn)
 	if (status)
 		goto out_nomem;
 
-	nn->drc_slab = kmem_cache_create("nfsd_drc",
-				sizeof(struct svc_cacherep), 0, 0, NULL);
-	if (!nn->drc_slab)
-		goto out_shrinker;
-
 	nn->drc_hashtbl = kcalloc(hashsize,
 				sizeof(*nn->drc_hashtbl), GFP_KERNEL);
 	if (!nn->drc_hashtbl) {
 		nn->drc_hashtbl = vzalloc(array_size(hashsize,
 						sizeof(*nn->drc_hashtbl)));
 		if (!nn->drc_hashtbl)
-			goto out_slab;
+			goto out_shrinker;
 	}
 
 	for (i = 0; i < hashsize; i++) {
@@ -163,8 +172,6 @@ int nfsd_reply_cache_init(struct nfsd_net *nn)
 	nn->drc_hashsize = hashsize;
 
 	return 0;
-out_slab:
-	kmem_cache_destroy(nn->drc_slab);
 out_shrinker:
 	unregister_shrinker(&nn->nfsd_reply_cache_shrinker);
 out_nomem:
@@ -192,8 +199,6 @@ void nfsd_reply_cache_shutdown(struct nfsd_net *nn)
 	nn->drc_hashtbl = NULL;
 	nn->drc_hashsize = 0;
 
-	kmem_cache_destroy(nn->drc_slab);
-	nn->drc_slab = NULL;
 }
 
 /*
