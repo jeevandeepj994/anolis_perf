@@ -2598,7 +2598,8 @@ skip:
 
 	console_locked = 0;
 
-	raw_spin_unlock(&logbuf_lock);
+	if (!abandon_console_lock_in_panic())
+		raw_spin_unlock(&logbuf_lock);
 
 	up_console_sem();
 
@@ -2611,7 +2612,9 @@ skip:
 	raw_spin_lock(&logbuf_lock);
 	retry = prb_read_valid(prb, console_seq, NULL);
 	raw_spin_unlock(&logbuf_lock);
-	printk_safe_exit_irqrestore(flags);
+
+	if (!abandon_console_lock_in_panic())
+		printk_safe_exit_irqrestore(flags);
 
 	if (retry && !abandon_console_lock_in_panic() && console_trylock())
 		goto again;
