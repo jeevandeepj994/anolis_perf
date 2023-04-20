@@ -1457,6 +1457,9 @@ static __net_init int nfsd_init_net(struct net *net)
 	retval = nfsd_idmap_init(net);
 	if (retval)
 		goto out_idmap_error;
+	retval = nfsd_reply_cache_init(nn);
+	if (retval)
+		goto out_drc_error;
 	nn->nfsd4_lease = 90;	/* default lease time */
 	nn->nfsd4_grace = 90;
 	nn->somebody_reclaimed = false;
@@ -1470,6 +1473,8 @@ static __net_init int nfsd_init_net(struct net *net)
 
 	return 0;
 
+out_drc_error:
+	nfsd_idmap_shutdown(net);
 out_idmap_error:
 	nfsd_export_shutdown(net);
 out_export_error:
@@ -1478,7 +1483,9 @@ out_export_error:
 
 static __net_exit void nfsd_exit_net(struct net *net)
 {
-	nfsd_reply_cache_shutdown();
+	struct nfsd_net *nn = net_generic(net, nfsd_net_id);
+
+	nfsd_reply_cache_shutdown(nn);
 	nfsd_idmap_shutdown(net);
 	nfsd_export_shutdown(net);
 }
@@ -1511,9 +1518,6 @@ static int __init init_nfsd(void)
 	if (retval)
 		goto out_exit_pnfs;
 	nfsd_stat_init();	/* Statistics */
-	retval = nfsd_reply_cache_init();
-	if (retval)
-		goto out_free_stat;
 	nfsd_lockd_init();	/* lockd->nfsd callbacks */
 	retval = create_proc_exports_entry();
 	if (retval)
@@ -1527,8 +1531,6 @@ out_free_all:
 	remove_proc_entry("fs/nfs", NULL);
 out_free_lockd:
 	nfsd_lockd_shutdown();
-	nfsd_reply_cache_shutdown();
-out_free_stat:
 	nfsd_stat_shutdown();
 	nfsd_fault_inject_cleanup();
 out_exit_pnfs:
@@ -1544,7 +1546,6 @@ out_unregister_pernet:
 
 static void __exit exit_nfsd(void)
 {
-	nfsd_reply_cache_shutdown();
 	remove_proc_entry("fs/nfs/exports", NULL);
 	remove_proc_entry("fs/nfs", NULL);
 	nfsd_stat_shutdown();
