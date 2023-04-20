@@ -500,6 +500,7 @@ static void smc_sock_init(struct sock *sk, struct net *net)
 	WRITE_ONCE(sk->sk_sndbuf, READ_ONCE(net->smc.sysctl_wmem));
 	WRITE_ONCE(sk->sk_rcvbuf, READ_ONCE(net->smc.sysctl_rmem));
 	smc->limit_smc_hs = net->smc.limit_smc_hs;
+	smc_sock_assign_negotiator_ops(smc, "anolis");
 
 	/* already set (for inet sock), save the original */
 	if (sk->sk_destruct)
