@@ -1478,7 +1478,6 @@ out_export_error:
 
 static __net_exit void nfsd_exit_net(struct net *net)
 {
-	nfsd_reply_cache_shutdown();
 	nfsd_idmap_shutdown(net);
 	nfsd_export_shutdown(net);
 }
