@@ -173,7 +173,7 @@ int sysctl_sched_expel_idle_balance_delay = -1;
  *
  *  Default: 10, units: ms
  */
-unsigned long sysctl_sched_expel_update_interval = 10;
+unsigned int sysctl_sched_expel_update_interval = 10;
 #endif
 DEFINE_STATIC_KEY_FALSE(__group_identity_enabled);
 unsigned int sysctl_sched_group_indentity_enabled;
