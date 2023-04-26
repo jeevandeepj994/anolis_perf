@@ -720,9 +720,22 @@ swiotlb_alloc_buffer(struct device *dev, size_t size, dma_addr_t *dma_handle,
 		unsigned long attrs)
 {
 	phys_addr_t phys_addr;
+#if defined(CONFIG_X86) && defined(CONFIG_PCI) && defined(CONFIG_HAS_DMA)
+	u64 dma_mask = DMA_BIT_MASK(32);
+
+	if (zhaoxin_p2cw_patch_en == true)
+		if (dev && dev->coherent_dma_mask)
+			dma_mask = dev->coherent_dma_mask;
+#endif
 
 	if (swiotlb_force == SWIOTLB_NO_FORCE)
 		goto out_warn;
+
+#if defined(CONFIG_X86) && defined(CONFIG_PCI) && defined(CONFIG_HAS_DMA)
+	if (zhaoxin_p2cw_patch_en == true)
+		if (dma_mask > DMA_BIT_MASK(32))
+			return NULL;
+#endif
 
 	phys_addr = swiotlb_tbl_map_single(dev,
 			__phys_to_dma(dev, io_tlb_start),
