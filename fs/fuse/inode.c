@@ -1378,10 +1378,12 @@ static int fuse_fill_super(struct super_block *sb, void *data, int silent)
 
 	/*
 	 * Require mount to happen from the same user namespace which
-	 * opened /dev/fuse to prevent potential attacks.
+	 * opened /dev/fuse to prevent potential attacks. While for
+	 * virtual fuse, the mount is always bound to init_user_ns.
 	 */
-	if ((file->f_op != &fuse_dev_operations) ||
-	    (file->f_cred->user_ns != sb->s_user_ns))
+	if (!is_virtfuse_device(file) &&
+	    ((file->f_op != &fuse_dev_operations) ||
+	     (file->f_cred->user_ns != sb->s_user_ns)))
 		goto err_fput;
 
 	init_req = fuse_request_alloc(0);
@@ -1411,6 +1413,48 @@ err_fput:
 	fput(file);
 err:
 	return err;
+}
+
+/*
+ * It shall be equivalent to mount_nodev(), except that the mounted
+ * superblock is always bound to init_user_ns.
+ *
+ * Minic mounting fuse filesystem inside the init user namespace by rebinding
+ * to init_user_ns. The user namespace is used to:
+ * - generate user_id/group_id from mount options.
+ * - the generated uid/gid is used to set uid/gid for fuse control files by
+ *   fuse_ctl_add_dentry. The k8s device plugin driver should bind mount those
+ *   control files into the sidecar container with suitable permissions.
+ * - used by fuse_allow_current_process() for protection. This is acceptable
+ *   because the fuse filesystem provided by the sidecar container will only
+ *   be used by other containers within the same pod.
+ */
+static struct dentry *virtfuse_mount(struct file_system_type *fs_type,
+	int flags, void *data,
+	int (*fill_super)(struct super_block *, void *, int))
+{
+	int err;
+	struct super_block *sb;
+
+	/* Don't allow mounting unless the caller has CAP_SYS_ADMIN
+	 * over the namespace.
+	 */
+	if (!ns_capable(current_user_ns(), CAP_SYS_ADMIN))
+		return ERR_PTR(-EPERM);
+
+	sb = sget_userns(fs_type, NULL, set_anon_super, flags,
+			 &init_user_ns, NULL);
+	if (IS_ERR(sb))
+		return ERR_CAST(sb);
+
+	err = fill_super(sb, data, flags & SB_SILENT ? 1 : 0);
+	if (err) {
+		deactivate_locked_super(sb);
+		return ERR_PTR(err);
+	}
+
+	sb->s_flags |= SB_ACTIVE;
+	return dget(sb->s_root);
 }
 
 /*
@@ -1453,8 +1497,23 @@ static struct dentry *fuse_try_mount(struct file_system_type *fs_type,
 	if (!file)
 		goto out;
 
+	if (!is_virtfuse_device(file)) {
+		root = NULL;
+		goto out_fput;
+	}
+
+	if (flags & (SB_KERNMOUNT|SB_SUBMOUNT)) {
+		root = ERR_PTR(-EPERM);
+		goto out_fput;
+	}
+
 	fud = READ_ONCE(file->private_data);
-	if (file->f_op == &fuse_dev_operations && fud) {
+	if (!fud) {
+		/*
+		 * This is the first/initial fuse mount inside a user namespace.
+		 */
+		root = virtfuse_mount(fs_type, flags, raw_data, fuse_fill_super);
+	} else {
 		/*
 		 * Allow creating a fuse mount with an already initialized fuse
 		 * connection.
@@ -1466,6 +1525,7 @@ static struct dentry *fuse_try_mount(struct file_system_type *fs_type,
 			root = dget(sb->s_root);
 	}
 
+out_fput:
 	fput(file);
 out:
 	kfree(opts);
