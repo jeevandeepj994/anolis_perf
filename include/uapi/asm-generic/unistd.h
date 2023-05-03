@@ -875,9 +875,17 @@ __SYSCALL(__NR_landlock_restrict_self, sys_ni_syscall)
 #define __NR_memfd_secret 447
 __SYSCALL(__NR_memfd_secret, sys_memfd_secret)
 #endif
+#define __NR_process_mrelease 448
+__SYSCALL(__NR_process_mrelease, sys_ni_syscall)
+#define __NR_futex_waitv 449
+__SYSCALL(__NR_futex_waitv, sys_ni_syscall)
+#define __NR_set_mempolicy_home_node 450
+__SYSCALL(__NR_set_mempolicy_home_node, sys_ni_syscall)
+#define __NR_cachestat 451
+__SYSCALL(__NR_cachestat, sys_cachestat)
 
 #undef __NR_syscalls
-#define __NR_syscalls 448
+#define __NR_syscalls 452
 
 /*
  * 32 bit systems traditionally used different
