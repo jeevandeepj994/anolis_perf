@@ -3267,12 +3267,14 @@ static void free_unused_bufs(struct virtnet_info *vi)
 		n -= sq->xsk.hdr_pro;
 		if (n)
 			xsk_umem_complete_tx(sq->xsk.umem, n);
+		cond_resched();
 	}
 
 	for (i = 0; i < vi->max_queue_pairs; i++) {
 		struct virtqueue *vq = vi->rq[i].vq;
 		while ((buf = virtqueue_detach_unused_buf(vq)) != NULL)
 			virtnet_rq_free_unused_buf(vq, buf);
+		cond_resched();
 	}
 }
 
