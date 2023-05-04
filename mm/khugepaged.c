@@ -2027,6 +2027,9 @@ static void khugepaged_scan_file(struct mm_struct *mm,
 			break;
 
 		page = radix_tree_deref_slot(slot);
+		if (unlikely(!page))
+			continue;
+
 		if (radix_tree_deref_retry(page)) {
 			slot = radix_tree_iter_retry(&iter);
 			continue;
