@@ -1279,6 +1279,9 @@ void fuse_dax_dontcache(struct inode *inode, bool newdax);
 bool fuse_dax_check_alignment(struct fuse_conn *fc, unsigned int map_alignment);
 void fuse_dax_cancel_work(struct fuse_conn *fc);
 
+typedef int (*fuse_mount_cb_t)(struct file *file);
+extern fuse_mount_cb_t fuse_mount_callback;
+
 static inline bool is_virtfuse_device(struct file *file) { return false; }
 
 #endif /* _FS_FUSE_I_H */
