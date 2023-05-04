@@ -1418,6 +1418,7 @@ err:
 	return err;
 }
 
+#if IS_ENABLED(CONFIG_VIRT_FUSE)
 /*
  * It shall be equivalent to mount_nodev(), except that the mounted
  * superblock is always bound to init_user_ns.
@@ -1546,6 +1547,13 @@ out:
 	kfree(opts);
 	return root;
 }
+#else
+static struct dentry *fuse_try_mount(struct file_system_type *fs_type,
+				     int flags, void *raw_data)
+{
+	return NULL;
+}
+#endif
 
 static struct dentry *fuse_mount(struct file_system_type *fs_type,
 		       int flags, const char *dev_name,
