@@ -59,6 +59,9 @@ MODULE_PARM_DESC(max_user_congthresh,
 /** Congestion starts at 75% of maximum */
 #define FUSE_DEFAULT_CONGESTION_THRESHOLD (FUSE_DEFAULT_MAX_BACKGROUND * 3 / 4)
 
+fuse_mount_cb_t fuse_mount_callback;
+EXPORT_SYMBOL_GPL(fuse_mount_callback);
+
 struct fuse_forget_link *fuse_alloc_forget(void)
 {
 	return kzalloc(sizeof(struct fuse_forget_link), GFP_KERNEL);
@@ -1481,6 +1484,7 @@ static struct dentry *fuse_try_mount(struct file_system_type *fs_type,
 	struct fuse_mount_data d;
 	struct dentry *root;
 	char *opts;
+	int ret;
 
 	opts = kstrdup(raw_data, GFP_KERNEL);
 	if (!opts)
@@ -1523,6 +1527,17 @@ static struct dentry *fuse_try_mount(struct file_system_type *fs_type,
 			root = ERR_CAST(sb);
 		else
 			root = dget(sb->s_root);
+	}
+
+	if (IS_ERR(root) || WARN_ON(!fuse_mount_callback))
+		goto out_fput;
+
+	ret = fuse_mount_callback(file);
+	if (ret) {
+		sb = root->d_sb;
+		dput(root);
+		deactivate_locked_super(sb);
+		root = ERR_PTR(ret);
 	}
 
 out_fput:
