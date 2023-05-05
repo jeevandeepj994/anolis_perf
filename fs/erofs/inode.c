@@ -251,7 +251,6 @@ static int erofs_fill_inode(struct inode *inode)
 	struct erofs_inode *vi = EROFS_I(inode);
 	struct erofs_buf buf = __EROFS_BUF_INITIALIZER;
 	struct super_block *sb = inode->i_sb;
-	struct erofs_sb_info *sbi = EROFS_SB(sb);
 	void *kaddr;
 	unsigned int ofs;
 	int err = 0;
@@ -270,7 +269,7 @@ static int erofs_fill_inode(struct inode *inode)
 		if (erofs_inode_is_data_compressed(vi->datalayout)) {
 			inode->i_fop = &generic_ro_fops;
 		} else {
-			if (sbi->bootstrap)
+			if (erofs_is_rafsv6_mode(sb))
 				inode->i_fop = &rafs_v6_file_ro_fops;
 			else
 				inode->i_fop = &erofs_file_fops;
@@ -306,15 +305,18 @@ static int erofs_fill_inode(struct inode *inode)
 			err = -EOPNOTSUPP;
 		goto out_unlock;
 	}
-	if (sbi->bootstrap && !S_ISREG(inode->i_mode)) {
-		inode_nohighmem(inode);
-		inode->i_mapping->a_ops = &rafs_v6_aops;
-	} else if (inode->i_sb->s_bdev) {
-		inode->i_mapping->a_ops = &erofs_raw_access_aops;
+
+	if (erofs_is_rafsv6_mode(sb)) {
+		if (!S_ISREG(inode->i_mode)) {
+			inode_nohighmem(inode);
+			inode->i_mapping->a_ops = &rafs_v6_aops;
+		}
 #ifdef CONFIG_EROFS_FS_ONDEMAND
 	} else if (erofs_is_fscache_mode(inode->i_sb)) {
 		inode->i_mapping->a_ops = &erofs_fscache_access_aops;
 #endif
+	} else {
+		inode->i_mapping->a_ops = &erofs_raw_access_aops;
 	}
 
 out_unlock:
