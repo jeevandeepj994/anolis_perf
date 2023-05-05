@@ -56,7 +56,7 @@ void *__erofs_bread(struct super_block *sb, struct erofs_buf *buf,
 
 	if (!page || page->index != index) {
 		erofs_put_metabuf(buf);
-		if (sb && EROFS_SB(sb)->bootstrap) {
+		if (sb && erofs_is_rafsv6_mode(sb)) {
 			unsigned int nofs_flag;
 
 			nofs_flag = memalloc_nofs_save();
@@ -104,7 +104,7 @@ void *erofs_bread(struct erofs_buf *buf, struct inode *inode,
 void *erofs_read_metabuf(struct erofs_buf *buf, struct super_block *sb,
 			 erofs_blk_t blkaddr, enum erofs_kmap_type type)
 {
-	if (EROFS_SB(sb)->bootstrap)
+	if (erofs_is_rafsv6_mode(sb))
 		return __erofs_bread(sb, buf, EROFS_SB(sb)->bootstrap->f_inode,
 				     blkaddr, type);
 
