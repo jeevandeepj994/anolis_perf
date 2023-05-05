@@ -40,7 +40,7 @@ static struct page *erofs_read_meta_page(struct super_block *sb, pgoff_t index,
 	struct page *page;
 
 	buf->mapping = NULL;
-	if (EROFS_SB(sb)->bootstrap) {
+	if (erofs_is_rafsv6_mode(sb)) {
 		struct inode	*inode = EROFS_SB(sb)->bootstrap->f_inode;
 		unsigned int	nofs_flag;
 
