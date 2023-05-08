@@ -167,6 +167,8 @@ struct smc_link {
  */
 #define SMC_LINKS_PER_LGR_MAX	3
 #define SMC_SINGLE_LINK		0
+#define SMC_LINKS_PER_LGR_PREFER	1	/* prefer 1 link per lgr */
+#define SMC_LINKS_ADD_LNK_MAX	2
 
 /* tx/rx buffer list element for sndbufs list and rmbs list of a lgr */
 struct smc_buf_desc {
@@ -337,6 +339,8 @@ struct smc_link_group {
 			struct net		*net;
 			u8			max_conns;
 						/* max conn can be assigned to lgr */
+			u8			max_links;
+						/* max links can be added in lgr */
 		};
 		struct { /* SMC-D */
 			u64			peer_gid;
@@ -383,6 +387,7 @@ struct smc_init_info {
 	u8			smc_type_v2;
 	u8			release_ver;
 	u8			max_conns;
+	u8			max_links;
 	u8			first_contact_peer;
 	u8			first_contact_local;
 	unsigned short		vlan_id;
