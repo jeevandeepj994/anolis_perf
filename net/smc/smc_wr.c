@@ -87,8 +87,7 @@ static inline void smc_wr_tx_process_cqe(struct ib_wc *wc, bool is_rwwi)
 	link = wc->qp->qp_context;
 	if (is_rwwi) {
 		wr_id.data = wc->wr_id;
-		if (wr_id.inflight_credit_flag)
-			smc_tx_put_inflight_credit(link);
+		smc_tx_put_free_slot_rwwi(link, true);
 		if (wc->status)
 			smcr_link_down_cond_sched(link);
 		smc_cdc_tx_handler_rwwi(wc);
@@ -441,10 +440,6 @@ static inline void smc_wr_rx_demultiplex(struct ib_wc *wc)
 static inline void smc_wr_rx_process_cqe(struct ib_wc *wc)
 {
 	struct smc_link *link = wc->qp->qp_context;
-	bool credit_update = true;
-
-	if (wc->wc_flags & IB_WC_WITH_IMM)
-		credit_update = false;
 
 	if (wc->status == IB_WC_SUCCESS) {
 		link->wr_rx_tstamp = jiffies;
@@ -452,7 +447,7 @@ static inline void smc_wr_rx_process_cqe(struct ib_wc *wc)
 			smc_cdc_rx_handler_rwwi(wc);
 		else
 			smc_wr_rx_demultiplex(wc);
-		smc_wr_rx_post(link, credit_update); /* refill WR RX */
+		smc_wr_rx_post(link); /* refill WR RX */
 	} else {
 		/* handle status errors */
 		switch (wc->status) {
@@ -462,7 +457,7 @@ static inline void smc_wr_rx_process_cqe(struct ib_wc *wc)
 			smcr_link_down_cond_sched(link);
 			break;
 		default:
-			smc_wr_rx_post(link, credit_update); /* refill WR RX */
+			smc_wr_rx_post(link); /* refill WR RX */
 			break;
 		}
 	}
@@ -533,7 +528,7 @@ int smc_wr_rx_post_init(struct smc_link *link)
 	int rc = 0;
 
 	for (i = 0; i < link->wr_rx_cnt; i++)
-		rc = smc_wr_rx_post(link, true);
+		rc = smc_wr_rx_post(link);
 	/* credits have already been announced to peer */
 	atomic_set(&link->local_rq_credits, 0);
 	return rc;
