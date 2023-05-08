@@ -279,7 +279,8 @@ struct erofs_buf {
 	void *base;
 	enum erofs_kmap_type kmap_type;
 };
-#define __EROFS_BUF_INITIALIZER	((struct erofs_buf){ .page = NULL })
+#define __EROFS_BUF_INITIALIZER	\
+	((struct erofs_buf){ .page = NULL, .mapping = NULL })
 
 #define ROOT_NID(sb)		((sb)->root_nid)
 

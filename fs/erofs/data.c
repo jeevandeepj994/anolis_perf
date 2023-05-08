@@ -37,31 +37,26 @@ static struct page *erofs_read_meta_page(struct super_block *sb, pgoff_t index,
 					 struct erofs_buf *buf)
 {
 	struct address_space *mapping;
+	struct inode *inode;
 	struct page *page;
 
-	buf->mapping = NULL;
-	if (erofs_is_rafsv6_mode(sb)) {
-		struct inode	*inode = EROFS_SB(sb)->bootstrap->f_inode;
-		unsigned int	nofs_flag;
+	if (erofs_is_rafsv6_mode(sb))
+		inode = EROFS_SB(sb)->bootstrap->f_inode;
+	else if (erofs_is_fscache_mode(sb))
+		inode = EROFS_SB(sb)->s_fscache->inode;
+	else
+		inode = sb->s_bdev->bd_inode;
+	mapping = inode->i_mapping;
 
-		mapping = inode->i_mapping;
+	if (erofs_is_rafsv6_mode(sb) && IS_DAX(inode)) {
+		unsigned int nofs_flag;
+
 		nofs_flag = memalloc_nofs_save();
-		if (IS_DAX(inode)) {
-			page = mapping->a_ops->startpfn(mapping, index,
-					&buf->iomap);
-			if (!IS_ERR(page))
-				buf->mapping = mapping;
-		} else {
-			page = read_cache_page(mapping, index,
-					(filler_t *)mapping->a_ops->readpage,
-					EROFS_SB(sb)->bootstrap);
-		}
+		page = mapping->a_ops->startpfn(mapping, index, &buf->iomap);
+		if (!IS_ERR(page))
+			buf->mapping = mapping;
 		memalloc_nofs_restore(nofs_flag);
 	} else {
-		if (erofs_is_fscache_mode(sb))
-			mapping = EROFS_SB(sb)->s_fscache->inode->i_mapping;
-		else
-			mapping = sb->s_bdev->bd_inode->i_mapping;
 		page = read_cache_page_gfp(mapping, index,
 				mapping_gfp_constraint(mapping, ~__GFP_FS));
 	}
