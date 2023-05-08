@@ -441,8 +441,10 @@ static int smc_clc_fill_fce(struct smc_clc_first_contact_ext_v2x *fce,
 			fce->max_links = ini->max_links;
 		}
 
-		if (ini->vendor_opt_valid)
+		if (ini->vendor_opt_valid) {
 			fce->vendor_exp_options.valid = 1;
+			fce->vendor_exp_options.credits_en = ini->credits_en;
+		}
 	}
 
 out:
@@ -919,6 +921,7 @@ int smc_clc_send_proposal(struct smc_sock *smc, struct smc_init_info *ini)
 		memcpy(pclc_smcd->vendor_oui, SMC_VENDOR_OUI_ALIBABA,
 		       sizeof(SMC_VENDOR_OUI_ALIBABA));
 		pclc_smcd->vendor_exp_options.valid = 1;
+		pclc_smcd->vendor_exp_options.credits_en = 1;
 		plen += sizeof(*v2_ext);
 
 		read_lock(&smc_clc_eid_table.lock);
@@ -1079,9 +1082,13 @@ static int smc_clc_send_confirm_accept(struct smc_sock *smc,
 		switch (clc->hdr.type) {
 		case SMC_CLC_ACCEPT:
 			clc->r0.qp_mtu = link->path_mtu;
+			if (first_contact && ini->vendor_opt_valid && ini->credits_en)
+				clc->r0.init_credits = (u8)link->wr_rx_cnt;
 			break;
 		case SMC_CLC_CONFIRM:
 			clc->r0.qp_mtu = min(link->path_mtu, link->peer_mtu);
+			if (first_contact && link->credits_enable)
+				clc->r0.init_credits = (u8)link->wr_rx_cnt;
 			break;
 		}
 		clc->r0.rmbe_size = conn->rmbe_size_short;
@@ -1202,6 +1209,7 @@ void smc_clc_vendor_opt_validate(struct smc_clc_msg_proposal *pclc,
 		return;
 
 	ini->vendor_opt_valid = 1;
+	ini->credits_en = prop_smcd->vendor_exp_options.credits_en;
 }
 
 int smc_clc_srv_v2x_features_validate(struct smc_clc_msg_proposal *pclc,
@@ -1258,8 +1266,10 @@ int smc_clc_cli_v2x_features_validate(struct smc_clc_first_contact_ext *fce,
 		ini->max_links = fce_v2x->max_links;
 	}
 
-	if (fce_v2x->vendor_exp_options.valid)
+	if (fce_v2x->vendor_exp_options.valid) {
 		ini->vendor_opt_valid = 1;
+		ini->credits_en = fce_v2x->vendor_exp_options.credits_en;
+	}
 
 	return 0;
 }
@@ -1291,7 +1301,9 @@ int smc_clc_v2x_features_confirm_check(struct smc_clc_msg_accept_confirm *cclc,
 			return SMC_CLC_DECL_MAXLINKERR;
 	}
 
-	if (ini->vendor_opt_valid && !fce_v2x->vendor_exp_options.valid)
+	if (ini->vendor_opt_valid &&
+	    (!fce_v2x->vendor_exp_options.valid ||
+	     fce_v2x->vendor_exp_options.credits_en != ini->credits_en))
 		return SMC_CLC_DECL_VENDORERR;
 
 	return 0;
