@@ -1229,7 +1229,7 @@ static int smc_connect_rdma_v2_prepare(struct smc_sock *smc,
 	if (fce->release > SMC_RELEASE)
 		return SMC_CLC_DECL_VERSMISMAT;
 	ini->release_ver = fce->release;
-	rc = smc_clc_cli_v2x_features_validate(fce, ini);
+	rc = smc_clc_cli_v2x_features_validate(smc, fce, ini);
 	if (rc)
 		return rc;
 
@@ -1415,7 +1415,7 @@ static int smc_connect_ism(struct smc_sock *smc,
 			if (fce->release > SMC_RELEASE)
 				return SMC_CLC_DECL_VERSMISMAT;
 			ini->release_ver = fce->release;
-			rc = smc_clc_cli_v2x_features_validate(fce, ini);
+			rc = smc_clc_cli_v2x_features_validate(smc, fce, ini);
 			if (rc)
 				return rc;
 		}
@@ -2481,7 +2481,7 @@ static void smc_listen_work(struct work_struct *work)
 	if (rc)
 		goto out_decl;
 
-	rc = smc_clc_srv_v2x_features_validate(pclc, ini);
+	rc = smc_clc_srv_v2x_features_validate(new_smc, pclc, ini);
 	if (rc)
 		goto out_decl;
 
