@@ -286,9 +286,10 @@ static int proc_show_links(struct seq_file *seq, void *v)
 	struct smc_link *lnk;
 	int i = 0, j = 0;
 
-	seq_printf(seq, LINK_HDR_FM, "grp", "type", "role", "idx", "gconn",
-		   "conn", "state", "qpn_l", "qpn_r", "tx", "rx", "cr-e",
-		   "cr-l", "cr-r", "cr_h", "cr_l", "flags", "rwwi");
+	seq_printf(seq, LINK_HDR_FM, "grp", "type", "role", "mxlnk", "idx",
+		   "mxcon", "gconn", "conn", "state", "qpn_l", "qpn_r", "tx",
+		   "rx", "cr-e", "cr-l", "cr-r", "cr_h", "cr_l", "flags",
+		   "rwwi");
 
 	spin_lock_bh(&smc_lgr_list.lock);
 	list_for_each_entry_safe(lgr, lg, &smc_lgr_list.list, list) {
@@ -299,7 +300,8 @@ static int proc_show_links(struct seq_file *seq, void *v)
 			for (j = 0; j < SMC_LGR_ID_SIZE; j++)
 				seq_printf(seq, "%02X", lgr->id[j]);
 			seq_printf(seq, LINK_INFO_FM, lgr->is_smcd ? "D" : "R",
-				   lgr->role == SMC_CLNT ? "C" : "S", i, lgr->conns_num,
+				   lgr->role == SMC_CLNT ? "C" : "S", lgr->max_links,
+				   i, lgr->max_conns, lgr->conns_num,
 				   atomic_read(&lnk->conn_cnt), lnk->state,
 				   lnk->roce_qp ? lnk->roce_qp->qp_num : 0, lnk->peer_qpn,
 				   lnk->wr_tx_cnt, lnk->wr_rx_cnt, lnk->credits_enable,
