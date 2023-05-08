@@ -359,6 +359,7 @@ struct smc_link_group {
 						/* max links can be added in lgr */
 			u8			credits_en;
 						/* is credits enabled by vendor opts negotiation */
+			u8			use_rwwi; /* use RDMA WRITE with Imm or not */
 		};
 		struct { /* SMC-D */
 			u64			peer_gid;
@@ -408,6 +409,7 @@ struct smc_init_info {
 	u8			max_links;
 	u8			vendor_opt_valid : 1;
 	u8			credits_en : 1;
+	u8			rwwi_en : 1;
 	u8			first_contact_peer;
 	u8			first_contact_local;
 	unsigned short		vlan_id;

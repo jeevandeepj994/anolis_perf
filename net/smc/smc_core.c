@@ -996,12 +996,16 @@ static int smc_lgr_create(struct smc_sock *smc, struct smc_init_info *ini)
 			lgr->max_conns = ini->max_conns;
 			lgr->max_links = ini->max_links;
 			lgr->credits_en = ini->vendor_opt_valid && ini->credits_en;
+			/* use_rwwi is limited for single link lgr */
+			lgr->use_rwwi = ini->vendor_opt_valid && ini->rwwi_en &&
+					lgr->max_links <= 1;
 		} else {
 			ibdev = ini->ib_dev;
 			ibport = ini->ib_port;
 			lgr->max_conns = SMC_RMBS_PER_LGR_MAX;
 			lgr->max_links = SMC_LINKS_ADD_LNK_MAX;
 			lgr->credits_en = 0;
+			lgr->use_rwwi = 0;
 		}
 		memcpy(lgr->pnet_id, ibdev->pnetid[ibport - 1],
 		       SMC_MAX_PNETID_LEN);
