@@ -388,6 +388,7 @@ struct smc_init_info {
 	u8			release_ver;
 	u8			max_conns;
 	u8			max_links;
+	u8			vendor_opt_valid : 1;
 	u8			first_contact_peer;
 	u8			first_contact_local;
 	unsigned short		vlan_id;
