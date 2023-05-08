@@ -79,6 +79,13 @@ static struct ctl_table smc_table[] = {
 		.extra1         = SYSCTL_ZERO,
 		.extra2         = SYSCTL_ONE,
 	},
+	{
+		.procname	= "vendor_exp_options",
+		.data		= &init_net.smc.sysctl_vendor_exp_options,
+		.maxlen		= sizeof(init_net.smc.sysctl_vendor_exp_options),
+		.mode		= 0644,
+		.proc_handler	= proc_douintvec,
+	},
 	{  }
 };
 
@@ -104,6 +111,7 @@ int __net_init smc_sysctl_net_init(struct net *net)
 
 	net->smc.sysctl_autocorking_size = SMC_AUTOCORKING_DEFAULT_SIZE;
 	net->smc.sysctl_smcr_buf_type = SMCR_PHYS_CONT_BUFS;
+	net->smc.sysctl_vendor_exp_options = ~0U;
 	net->smc.sysctl_smcr_testlink_time = SMC_LLC_TESTLINK_DEFAULT_TIME;
 	net->smc.sysctl_wmem = 262144; /* 256 KiB */
 	net->smc.sysctl_rmem = 262144; /* 256 KiB */
