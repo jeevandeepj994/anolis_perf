@@ -23,6 +23,7 @@
 #include "smc_stats.h"
 
 #define SMC_RMBS_PER_LGR_MAX	255	/* max. # of RMBs per link group */
+#define SMC_CONN_PER_LGR_MAX	255	/* max. # of connections per link group */
 
 struct smc_lgr_list {			/* list of link group definition */
 	struct list_head	list;
@@ -334,6 +335,8 @@ struct smc_link_group {
 			__be32			saddr;
 						/* net namespace */
 			struct net		*net;
+			u8			max_conns;
+						/* max conn can be assigned to lgr */
 		};
 		struct { /* SMC-D */
 			u64			peer_gid;
@@ -379,6 +382,7 @@ struct smc_init_info {
 	u8			smc_type_v1;
 	u8			smc_type_v2;
 	u8			release_ver;
+	u8			max_conns;
 	u8			first_contact_peer;
 	u8			first_contact_local;
 	unsigned short		vlan_id;
