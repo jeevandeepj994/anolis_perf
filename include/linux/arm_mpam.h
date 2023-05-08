@@ -63,12 +63,11 @@ static inline bool resctrl_arch_event_is_free_running(enum resctrl_event_id evt)
 		return true;
 	case QOS_L3_MBM_TOTAL_EVENT_ID:
 	case QOS_L3_MBM_LOCAL_EVENT_ID:
+	case QOS_MC_MBM_BPS_EVENT_ID:
 		return mpam_monitors_free_runing;
+	default:
+		return false;
 	}
-
-	unreachable();
-
-	return false;
 }
 
 static inline unsigned int resctrl_arch_round_mon_val(unsigned int val)
@@ -80,6 +79,7 @@ bool resctrl_arch_alloc_capable(void);
 bool resctrl_arch_mon_capable(void);
 bool resctrl_arch_is_llc_occupancy_enabled(void);
 bool resctrl_arch_is_mbm_local_enabled(void);
+bool resctrl_arch_is_mbm_bps_enabled(void);
 
 static inline bool resctrl_arch_is_mbm_total_enabled(void)
 {

@@ -213,6 +213,11 @@ static inline bool resctrl_arch_is_mbm_local_enabled(void)
 	return (rdt_mon_features & (1 << QOS_L3_MBM_LOCAL_EVENT_ID));
 }
 
+static inline bool resctrl_arch_is_mbm_bps_enabled(void)
+{
+	return false;
+}
+
 u64 resctrl_arch_get_prefetch_disable_bits(void);
 int resctrl_arch_pseudo_lock_fn(void *_plr);
 int resctrl_arch_measure_cycles_lat_fn(void *_plr);
