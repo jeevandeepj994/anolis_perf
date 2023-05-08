@@ -51,11 +51,14 @@ struct smc_wr_rx_handler {
 	u8			type;
 };
 
+/* SMC_WR_OP_xx should not exceed 7, as op field is 3bits */
 enum {
 	SMC_WR_OP_DATA = 0,
 	SMC_WR_OP_DATA_WITH_FLAGS,
 	SMC_WR_OP_CTRL,
-	SMC_WR_OP_RSVD
+	SMC_WR_OP_RSVD,
+	SMC_WR_OP_DATA_CR = 6,
+	SMC_WR_OP_DATA_WITH_FLAGS_CR = 7
 };
 
 /* used to replace member 'data' in union smc_wr_imm_msg
@@ -109,6 +112,40 @@ struct smc_wr_imm_ctrl_msg {
 		u8 token;
 } __packed;
 
+struct smc_wr_imm_data_cr_msg {
+#if defined(__BIG_ENDIAN_BITFIELD)
+		u32 token : 8;
+		u32	opcode : 3;
+		u32 credits : 8;
+		u32	diff_cons : 13;
+#elif defined(__LITTLE_ENDIAN_BITFIELD)
+		u32	diff_cons : 13;
+		u32 credits : 8;
+		u32	opcode : 3;
+		u32	token : 8;
+#endif
+} __packed;
+
+struct smc_wr_imm_data_with_flags_cr_msg {
+#if defined(__BIG_ENDIAN_BITFIELD)
+		u32 token : 8;
+		u32 opcode : 3;
+		u32	write_blocked : 1;
+		u32	urg_data_pending : 1;
+		u32	urg_data_present : 1;
+		u32 credits : 8;
+		u32 diff_cons : 10;
+#elif defined(__LITTLE_ENDIAN_BITFIELD)
+		u32 diff_cons : 10;
+		u32 credits : 8;
+		u32	urg_data_present : 1;
+		u32	urg_data_pending : 1;
+		u32	write_blocked : 1;
+		u32 opcode : 3;
+		u32 token : 8;
+#endif
+} __packed;
+
 struct smc_wr_imm_header {
 #if defined(__BIG_ENDIAN_BITFIELD)
 		u32 token : 8;
@@ -131,6 +168,8 @@ union smc_wr_imm_msg {
 	struct smc_wr_imm_data_msg data;
 	struct smc_wr_imm_data_with_flags_msg data_with_flags;
 	struct smc_wr_imm_ctrl_msg ctrl;
+	struct smc_wr_imm_data_cr_msg data_cr;
+	struct smc_wr_imm_data_with_flags_cr_msg data_with_flags_cr;
 };
 
 union smc_wr_rwwi_tx_id {
@@ -138,8 +177,7 @@ union smc_wr_rwwi_tx_id {
 	struct {
 #if defined(__BIG_ENDIAN_BITFIELD)
 		u64	rwwi_flag : 1;
-		u64 inflight_credit_flag : 1;	/* put inflight credit or not when scqe comes */
-		u64	reserved : 6;
+		u64	reserved : 7;
 		u64	token : 8;
 		u64	inflight_cons : 24;
 		u64	inflight_sent : 24;
@@ -147,8 +185,7 @@ union smc_wr_rwwi_tx_id {
 		u64	inflight_sent : 24;
 		u64	inflight_cons : 24;
 		u64	token : 8;
-		u64	reserved : 6;
-		u64 inflight_credit_flag : 1;	/* put inflight credit or not when scqe comes */
+		u64	reserved : 7;
 		u64	rwwi_flag : 1;
 #endif
 	};
@@ -161,6 +198,8 @@ union smc_wr_rwwi_tx_id {
  */
 #define SMC_DATA_MAX_DIFF_CONS				((1 << 21) - 1)
 #define SMC_DATA_WITH_FLAGS_MAX_DIFF_CONS	((1 << 17) - 1)
+#define SMC_DATA_CR_MAX_DIFF_CONS				((1 << 13) - 1)
+#define SMC_DATA_WITH_FLAGS_CR_MAX_DIFF_CONS	((1 << 10) - 1)
 #define SMC_PROD_FLAGS_MASK				0xE0
 #define SMC_WR_ID_SEQ_MASK				((uint64_t)0x7FFFFFFFFFFFFFFFULL)
 #define SMC_WR_ID_FLAG_RWWI				(((uint64_t)1) << 63)
@@ -264,7 +303,7 @@ static inline int smc_wr_rx_credits_need_announce_frequent(struct smc_link *link
 }
 
 /* post a new receive work request to fill a completed old work request entry */
-static inline int smc_wr_rx_post(struct smc_link *link, bool create_update)
+static inline int smc_wr_rx_post(struct smc_link *link)
 {
 	struct smc_link_stats *lnk_stats =
 		&link->lgr->lnk_stats[link->link_idx];
@@ -280,8 +319,7 @@ static inline int smc_wr_rx_post(struct smc_link *link, bool create_update)
 	rc = ib_post_recv(link->roce_qp, &link->wr_rx_ibs[index], NULL);
 	if (!rc) {
 		SMC_LINK_STAT_WR(lnk_stats, 0, 1);
-		if (create_update)
-			smc_wr_rx_put_credits(link, 1);
+		smc_wr_rx_put_credits(link, 1);
 	}
 	return rc;
 }
