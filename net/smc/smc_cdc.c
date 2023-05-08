@@ -595,6 +595,54 @@ static void smc_cdc_handle_rwwi_data_with_flags_msg(struct smc_sock *smc,
 	__smc_cdc_msg_recv_action(smc, diff_prod, diff_cons);
 }
 
+static void smc_cdc_handle_rwwi_data_cr_msg(struct smc_sock *smc,
+					    union smc_wr_imm_msg *imm_msg, int diff_prod)
+{
+	struct smc_connection *conn = &smc->conn;
+	int diff_cons;
+
+	if (imm_msg->data_cr.credits)
+		smc_wr_tx_put_credits(conn->lnk, imm_msg->data_cr.credits, true);
+
+	diff_cons = imm_msg->data_cr.diff_cons;
+	if (diff_cons)
+		smc_curs_add(conn->peer_rmbe_size, &conn->local_rx_ctrl.cons, diff_cons);
+	/* cause this imm_data contains no conn_state_flags and prod_flags info, clean them */
+	memset(&conn->local_rx_ctrl.conn_state_flags, 0,
+	       sizeof(struct smc_cdc_conn_state_flags));
+	memset(&conn->local_rx_ctrl.prod_flags, 0,
+	       sizeof(struct smc_cdc_producer_flags));
+
+	__smc_cdc_msg_recv_action(smc, diff_prod, diff_cons);
+}
+
+static void smc_cdc_handle_rwwi_data_with_flags_cr_msg(struct smc_sock *smc,
+						       union smc_wr_imm_msg *imm_msg, int diff_prod)
+{
+	struct smc_connection *conn = &smc->conn;
+	struct smc_cdc_producer_flags *pflags;
+	int diff_cons;
+
+	if (imm_msg->data_with_flags_cr.credits)
+		smc_wr_tx_put_credits(conn->lnk, imm_msg->data_with_flags_cr.credits, true);
+
+	diff_cons = imm_msg->data_with_flags_cr.diff_cons;
+	if (diff_cons)
+		smc_curs_add(conn->peer_rmbe_size, &conn->local_rx_ctrl.cons, diff_cons);
+	/* clean prod_flags that are not carried by this imm_data */
+	memset(&conn->local_rx_ctrl.prod_flags, 0,
+	       sizeof(struct smc_cdc_producer_flags));
+	pflags = &conn->local_rx_ctrl.prod_flags;
+	pflags->write_blocked = imm_msg->data_with_flags_cr.write_blocked;
+	pflags->urg_data_present = imm_msg->data_with_flags_cr.urg_data_present;
+	pflags->urg_data_pending = imm_msg->data_with_flags_cr.urg_data_pending;
+	/* cause this imm_data contains no conn_state_flagsinfo, clean it */
+	memset(&conn->local_rx_ctrl.conn_state_flags, 0,
+	       sizeof(struct smc_cdc_conn_state_flags));
+
+	__smc_cdc_msg_recv_action(smc, diff_prod, diff_cons);
+}
+
 static void smc_cdc_handle_rwwi_ctrl_msg(struct smc_sock *smc,
 					 union smc_wr_imm_msg *imm_msg, int diff_prod)
 {
@@ -644,6 +692,12 @@ void smc_cdc_rx_handler_rwwi(struct ib_wc *wc)
 		break;
 	case SMC_WR_OP_CTRL:
 		smc_cdc_handle_rwwi_ctrl_msg(smc, &imm_msg, diff_prod);
+		break;
+	case SMC_WR_OP_DATA_CR:
+		smc_cdc_handle_rwwi_data_cr_msg(smc, &imm_msg, diff_prod);
+		break;
+	case SMC_WR_OP_DATA_WITH_FLAGS_CR:
+		smc_cdc_handle_rwwi_data_with_flags_cr_msg(smc, &imm_msg, diff_prod);
 		break;
 	}
 
