@@ -23,7 +23,12 @@
 #include "smc_stats.h"
 
 #define SMC_RMBS_PER_LGR_MAX	255	/* max. # of RMBs per link group */
-#define SMC_CONN_PER_LGR_MAX	255	/* max. # of connections per link group */
+#define SMC_CONN_PER_LGR_MAX	32	/* max. # of connections per link group.
+					 * Correspondingly, SMC_WR_BUF_CNT should not be less than
+					 * 2 * SMC_CONN_PER_LGR_MAX, since every connection at
+					 * least has two rq/sq credits in average, otherwise
+					 * may result in waiting for credits in sending process.
+					 */
 
 struct smc_lgr_list {			/* list of link group definition */
 	struct list_head	list;
