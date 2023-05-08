@@ -288,7 +288,7 @@ static int proc_show_links(struct seq_file *seq, void *v)
 
 	seq_printf(seq, LINK_HDR_FM, "grp", "type", "role", "idx", "gconn",
 		   "conn", "state", "qpn_l", "qpn_r", "tx", "rx", "cr-e",
-		   "cr-l", "cr-r", "cr_h", "cr_l", "flags");
+		   "cr-l", "cr-r", "cr_h", "cr_l", "flags", "rwwi");
 
 	spin_lock_bh(&smc_lgr_list.lock);
 	list_for_each_entry_safe(lgr, lg, &smc_lgr_list.list, list) {
@@ -306,7 +306,7 @@ static int proc_show_links(struct seq_file *seq, void *v)
 				   atomic_read(&lnk->local_rq_credits),
 				   atomic_read(&lnk->peer_rq_credits),
 				   lnk->local_cr_watermark_high,
-				   lnk->peer_cr_watermark_low, lnk->flags);
+				   lnk->peer_cr_watermark_low, lnk->flags, lgr->use_rwwi);
 		}
 	}
 	spin_unlock_bh(&smc_lgr_list.lock);
