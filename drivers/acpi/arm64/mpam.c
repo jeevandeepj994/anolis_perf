@@ -23,6 +23,26 @@
 
 int ddr_cpufreq;
 
+/* Use OEM info in MPAM ACPI table to distinguish different machine types */
+struct acpi_mpam_machine_oem_info {
+	enum mpam_machine_type type;
+	char signature[ACPI_NAMESEG_SIZE + 1];
+	u8 revision;
+	char oem_id[ACPI_OEM_ID_SIZE + 1];
+	char oem_table_id[ACPI_OEM_TABLE_ID_SIZE + 1];
+	u32 oem_revision;
+};
+
+static struct acpi_mpam_machine_oem_info acpi_mpam_machines[MPAM_NUM_MACHINE_TYPES] = {
+	[MPAM_YITIAN710] = {
+		.signature = "YMPM",
+		.revision = 0,
+		.oem_id = "PTG   ",
+		.oem_table_id = "PTG01   ",
+		.oem_revision = 0,
+	},
+};
+
 static bool frob_irq(struct platform_device *pdev, int intid, u32 flags,
 		     int *irq, u32 processor_container_uid)
 {
@@ -275,6 +295,7 @@ __setup("mpam", mpam_setup);
 static int __init acpi_mpam_parse(void)
 {
 	struct acpi_table_header *mpam;
+	enum mpam_machine_type mtype;
 	acpi_status status;
 	int err;
 
@@ -284,11 +305,21 @@ static int __init acpi_mpam_parse(void)
 	if (mpam_needed != MPAM_ENABLE_ACPI)
 		return 0;
 
-	status = acpi_get_table(ACPI_SIG_YMPM, 0, &mpam);
+	mtype = acpi_mpam_get_machine_type();
+
+	if (mtype != MPAM_DEFAULT_MACHINE)
+		status = acpi_get_table(acpi_mpam_machines[mtype].signature, 0, &mpam);
+	else
+		status = acpi_get_table(ACPI_SIG_MPAM, 0, &mpam);
 	if (ACPI_FAILURE(status))
 		return -ENOENT;
 
-	if (strncmp(mpam->oem_id, "PTG", 3)) {
+	/*
+	 * Kunpeng's MPAM ACPI adopts an older version of MPAM ACPI, so
+	 * this MPAM ACPI driver is not suitable for Kunpeng platform.
+	 * Another driver will be used for Kunpeng's MPAM, skip it.
+	 */
+	if (!strncmp(mpam->oem_id, "HISI", 4)) {
 		acpi_put_table(mpam);
 		return 0;
 	}
@@ -326,18 +357,51 @@ static int _count_msc(struct acpi_table_header *table)
 int acpi_mpam_count_msc(void)
 {
 	struct acpi_table_header *mpam;
+	enum mpam_machine_type mtype;
 	acpi_status status;
 	int ret;
 
 	if (acpi_disabled || !mpam_cpus_have_feature())
 		return 0;
 
-	status = acpi_get_table(ACPI_SIG_YMPM, 0, &mpam);
+	mtype = acpi_mpam_get_machine_type();
+
+	if (mtype != MPAM_DEFAULT_MACHINE)
+		status = acpi_get_table(acpi_mpam_machines[mtype].signature, 0, &mpam);
+	else
+		status = acpi_get_table(ACPI_SIG_MPAM, 0, &mpam);
 	if (ACPI_FAILURE(status))
 		return -ENOENT;
 
 	ret = _count_msc(mpam);
 	acpi_put_table(mpam);
+
+	return ret;
+}
+
+enum mpam_machine_type acpi_mpam_get_machine_type(void)
+{
+	struct acpi_table_header *table;
+	enum mpam_machine_type ret;
+	acpi_status status;
+	int i;
+
+	ret = MPAM_DEFAULT_MACHINE;
+
+	for (i = MPAM_DEFAULT_MACHINE + 1; i < MPAM_NUM_MACHINE_TYPES; i++) {
+		status = acpi_get_table(acpi_mpam_machines[i].signature, 0, &table);
+		if (ACPI_FAILURE(status))
+			continue;
+
+		if (!memcmp(acpi_mpam_machines[i].oem_id, table->oem_id, ACPI_OEM_ID_SIZE) &&
+		    !memcmp(acpi_mpam_machines[i].oem_table_id, table->oem_table_id,
+		    ACPI_OEM_TABLE_ID_SIZE) &&
+		    acpi_mpam_machines[i].oem_revision == table->oem_revision) {
+			ret = i;
+		}
+
+		acpi_put_table(table);
+	}
 
 	return ret;
 }
