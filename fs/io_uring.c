@@ -8617,7 +8617,7 @@ static void *io_mem_alloc(size_t size)
 }
 
 static unsigned long rings_size(unsigned sq_entries, unsigned cq_entries,
-				size_t *sq_offset)
+				size_t *sq_offset,  unsigned int flags)
 {
 	struct io_rings *rings;
 	size_t off, sq_array_size;
@@ -8625,6 +8625,10 @@ static unsigned long rings_size(unsigned sq_entries, unsigned cq_entries,
 	off = struct_size(rings, cqes, cq_entries);
 	if (off == SIZE_MAX)
 		return SIZE_MAX;
+	if (flags & IORING_SETUP_CQE32) {
+		if (check_shl_overflow(off, 1, &off))
+			return SIZE_MAX;
+	}
 
 #ifdef CONFIG_SMP
 	off = ALIGN(off, SMP_CACHE_BYTES);
@@ -8651,7 +8655,7 @@ static unsigned long ring_pages(unsigned sq_entries, unsigned cq_entries,
 	size_t pages;
 
 	pages = (size_t)1 << get_order(
-		rings_size(sq_entries, cq_entries, NULL));
+		rings_size(sq_entries, cq_entries, NULL, flags));
 	if (flags & IORING_SETUP_SQE128)
 		pages += (size_t)1 << get_order(
 			array_size(2 * sizeof(struct io_uring_sqe), sq_entries));
@@ -9868,7 +9872,7 @@ static int io_allocate_scq_urings(struct io_ring_ctx *ctx,
 	ctx->sq_entries = p->sq_entries;
 	ctx->cq_entries = p->cq_entries;
 
-	size = rings_size(p->sq_entries, p->cq_entries, &sq_array_offset);
+	size = rings_size(p->sq_entries, p->cq_entries, &sq_array_offset, p->flags);
 	if (size == SIZE_MAX)
 		return -EOVERFLOW;
 
