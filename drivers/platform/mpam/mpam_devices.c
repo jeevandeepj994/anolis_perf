@@ -45,6 +45,8 @@ DEFINE_STATIC_KEY_FALSE(mpam_enabled);
 static DEFINE_MUTEX(mpam_list_lock);
 static LIST_HEAD(mpam_all_msc);
 
+enum mpam_machine_type mpam_current_machine;
+
 /* MPAM isn't available until all the MSC have been probed. */
 static u32 mpam_num_msc;
 
@@ -1547,6 +1549,12 @@ static int mpam_msc_setup_error_irq(struct mpam_msc *msc)
 	return 0;
 }
 
+static enum mpam_machine_type mpam_dt_get_machine_type(void)
+{
+	/* FIXME: not supported yet */
+	return MPAM_DEFAULT_MACHINE;
+}
+
 static int mpam_dt_count_msc(void)
 {
 	int count = 0;
@@ -2304,6 +2312,11 @@ static int __init mpam_msc_driver_init(void)
 
 	if (!mpam_cpus_have_feature())
 		return -EOPNOTSUPP;
+
+	if (!acpi_disabled)
+		mpam_current_machine = acpi_mpam_get_machine_type();
+	else
+		mpam_current_machine = mpam_dt_get_machine_type();
 
 	if (!acpi_disabled)
 		fw_num_msc = acpi_mpam_count_msc();
