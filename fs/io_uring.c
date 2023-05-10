@@ -1733,7 +1733,11 @@ static inline bool io_sqring_full(struct io_ring_ctx *ctx)
 static struct io_uring_cqe *io_get_cqring(struct io_ring_ctx *ctx)
 {
 	struct io_rings *rings = ctx->rings;
+	unsigned int shift = 0;
 	unsigned tail;
+
+	if (ctx->flags & IORING_SETUP_CQE32)
+		shift = 1;
 
 	tail = ctx->cached_cq_tail;
 	/*
@@ -1745,7 +1749,7 @@ static struct io_uring_cqe *io_get_cqring(struct io_ring_ctx *ctx)
 		return NULL;
 
 	ctx->cached_cq_tail++;
-	return &rings->cqes[tail & ctx->cq_mask];
+	return &rings->cqes[(tail & ctx->cq_mask) << shift];
 }
 
 static inline bool io_should_trigger_evfd(struct io_ring_ctx *ctx)
