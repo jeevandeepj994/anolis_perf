@@ -418,7 +418,17 @@ struct vfs_ns_cap_data {
 
 #define CAP_CHECKPOINT_RESTORE	40
 
-#define CAP_LAST_CAP         CAP_CHECKPOINT_RESTORE
+/*
+ * XXX NOTES: Considering backward compatibility, a blank space is reserved
+ * here for synchronization with the upstream community
+ */
+
+/*
+ * Allow Persistent Reservations operations for block device
+ */
+#define CAP_BLOCK_ADMIN		61
+
+#define CAP_LAST_CAP		CAP_BLOCK_ADMIN
 
 #define cap_valid(x) ((x) >= 0 && (x) <= CAP_LAST_CAP)
 
