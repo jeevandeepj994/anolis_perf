@@ -2683,7 +2683,7 @@ bool cpus_share_cache(int this_cpu, int that_cpu)
 	return per_cpu(sd_llc_id, this_cpu) == per_cpu(sd_llc_id, that_cpu);
 }
 
-static inline bool ttwu_queue_cond(int cpu, int wake_flags)
+static inline bool ttwu_queue_cond(int cpu)
 {
 	/*
 	 * If the CPU does not share cache, then queue the task on the
@@ -2696,18 +2696,17 @@ static inline bool ttwu_queue_cond(int cpu, int wake_flags)
 		return false;
 
 	/*
-	 * If the CPU is idle, let itself do activation to improve utilization.
+	 * If the wakee cpu is idle, or the task is descheduling and the
+	 * only running task on the CPU, then use the wakelist to offload
+	 * the task activation to the idle (or soon-to-be-idle) CPU as
+	 * the current CPU is likely busy. nr_running is checked to
+	 * avoid unnecessary task stacking.
+	 *
+	 * Note that we can only get here with (wakee) p->on_rq=0,
+	 * p->on_cpu can be whatever, we've done the dequeue, so
+	 * the wakee has been accounted out of ->nr_running.
 	 */
-	if (sched_feat(PREFER_TTWU_QUEUE) && available_idle_cpu(cpu))
-		return true;
-
-	/*
-	 * If the task is descheduling and the only running task on the
-	 * CPU then use the wakelist to offload the task activation to
-	 * the soon-to-be-idle CPU as the current CPU is likely busy.
-	 * nr_running is checked to avoid unnecessary task stacking.
-	 */
-	if ((wake_flags & WF_ON_CPU) && cpu_rq(cpu)->nr_running <= 1)
+	if (!cpu_rq(cpu)->nr_running)
 		return true;
 
 	return false;
@@ -2715,7 +2714,7 @@ static inline bool ttwu_queue_cond(int cpu, int wake_flags)
 
 static bool ttwu_queue_wakelist(struct task_struct *p, int cpu, int wake_flags)
 {
-	if (sched_feat(TTWU_QUEUE) && ttwu_queue_cond(cpu, wake_flags)) {
+	if (sched_feat(TTWU_QUEUE) && ttwu_queue_cond(cpu)) {
 		sched_clock_cpu(cpu); /* Sync clocks across CPUs */
 		__ttwu_queue_wakelist(p, cpu, wake_flags);
 		return true;
@@ -2992,7 +2991,7 @@ try_to_wake_up(struct task_struct *p, unsigned int state, int wake_flags)
 	 * scheduling.
 	 */
 	if (smp_load_acquire(&p->on_cpu) &&
-	    ttwu_queue_wakelist(p, task_cpu(p), wake_flags | WF_ON_CPU))
+	    ttwu_queue_wakelist(p, task_cpu(p), wake_flags))
 		goto unlock;
 
 	/*
@@ -3533,7 +3532,8 @@ static inline void prepare_task(struct task_struct *next)
 	 * Claim the task as running, we do this before switching to it
 	 * such that any running task will have this set.
 	 *
-	 * See the ttwu() WF_ON_CPU case and its ordering comment.
+	 * See the smp_load_acquire(&p->on_cpu) case in ttwu() and
+	 * its ordering comment.
 	 */
 	WRITE_ONCE(next->on_cpu, 1);
 #endif
