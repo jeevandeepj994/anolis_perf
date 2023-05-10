@@ -50,7 +50,6 @@ SCHED_FEAT(NONTASK_CAPACITY, true)
  * using the scheduler IPI. Reduces rq->lock contention/bounces.
  */
 SCHED_FEAT(TTWU_QUEUE, true)
-SCHED_FEAT(PREFER_TTWU_QUEUE, true)
 
 /*
  * When doing wakeups, attempt to limit superfluous scans of the LLC domain.
