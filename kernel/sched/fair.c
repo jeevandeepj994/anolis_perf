@@ -13102,6 +13102,19 @@ void free_fair_sched_group(struct task_group *tg)
 
 	destroy_cfs_bandwidth(tg_cfs_bandwidth(tg));
 
+#ifdef CONFIG_GROUP_IDENTITY
+	/*
+	 * When cgroup is created failed, the refcount should be rollback.
+	 * If remove a existed cgroup, the tg->id_flags has been set to zero
+	 * by clear_identity() before here.
+	 */
+	if (tg->id_flags) {
+		mutex_lock(&identity_mutex);
+		group_identity_put();
+		mutex_unlock(&identity_mutex);
+	}
+#endif
+
 	for_each_possible_cpu(i) {
 		if (tg->cfs_rq)
 			kfree(tg->cfs_rq[i]);
@@ -13131,6 +13144,11 @@ int alloc_fair_sched_group(struct task_group *tg, struct task_group *parent)
 #ifdef CONFIG_GROUP_IDENTITY
 	tg->bvt_warp_ns = parent->bvt_warp_ns;
 	tg->id_flags = parent->id_flags;
+	if (tg->id_flags) {
+		mutex_lock(&identity_mutex);
+		group_identity_get();
+		mutex_unlock(&identity_mutex);
+	}
 #endif
 
 	init_cfs_bandwidth(tg_cfs_bandwidth(tg));
