@@ -81,6 +81,7 @@ EXPORT_SYMBOL_GPL(fs_kobj);
  * tree or hash is modified or when a vfsmount structure is modified.
  */
 __cacheline_aligned_in_smp DEFINE_SEQLOCK(mount_lock);
+EXPORT_SYMBOL_GPL(mount_lock);
 
 static inline struct hlist_head *m_hash(struct vfsmount *mnt, struct dentry *dentry)
 {

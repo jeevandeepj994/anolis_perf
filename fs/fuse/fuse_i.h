@@ -27,6 +27,7 @@
 #include <linux/pid_namespace.h>
 #include <linux/refcount.h>
 #include <linux/user_namespace.h>
+#include <linux/miscdevice.h>
 
 /** Default max number of pages that can be used in a single read request */
 #define FUSE_DEFAULT_MAX_PAGES_PER_REQ 32
@@ -1278,5 +1279,17 @@ void fuse_dax_inode_cleanup(struct inode *inode);
 void fuse_dax_dontcache(struct inode *inode, bool newdax);
 bool fuse_dax_check_alignment(struct fuse_conn *fc, unsigned int map_alignment);
 void fuse_dax_cancel_work(struct fuse_conn *fc);
+
+typedef int (*fuse_mount_cb_t)(struct file *file);
+extern fuse_mount_cb_t fuse_mount_callback;
+
+#if IS_ENABLED(CONFIG_VIRT_FUSE)
+static inline bool is_virtfuse_device(struct file *file)
+{
+	return iminor(file_inode(file)) != FUSE_MINOR;
+}
+#else
+static inline bool is_virtfuse_device(struct file *file) { return false; }
+#endif
 
 #endif /* _FS_FUSE_I_H */
