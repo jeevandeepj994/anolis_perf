@@ -195,8 +195,10 @@ void __init sme_early_init(void)
 	for (i = 0; i < ARRAY_SIZE(protection_map); i++)
 		protection_map[i] = pgprot_encrypted(protection_map[i]);
 
-	if (sev_active())
+	if (sev_active()) {
 		swiotlb_force = SWIOTLB_FORCE;
+		swiotlb_low = false;
+	}
 }
 
 void __init sev_setup_arch(void)
