@@ -1816,6 +1816,10 @@ static bool __io_cqring_overflow_flush(struct io_ring_ctx *ctx, bool force,
 			WRITE_ONCE(cqe->user_data, req->user_data);
 			WRITE_ONCE(cqe->res, req->result);
 			WRITE_ONCE(cqe->flags, req->compl.cflags);
+			if ((ctx->flags & IORING_SETUP_CQE32)) {
+				WRITE_ONCE(cqe->big_cqe[0], req->extra1);
+				WRITE_ONCE(cqe->big_cqe[1], req->extra2);
+			}
 		} else {
 			ctx->cached_cq_overflow++;
 			WRITE_ONCE(ctx->rings->cq_overflow,
@@ -1862,20 +1866,44 @@ static void __io_cqring_fill_event(struct io_kiocb *req, long res,
 	struct io_ring_ctx *ctx = req->ctx;
 	struct io_uring_cqe *cqe;
 
-	trace_io_uring_complete(ctx, req->user_data, res, cflags, 0, 0);
+	if (!(ctx->flags & IORING_SETUP_CQE32)) {
+		trace_io_uring_complete(ctx, req->user_data, res, cflags, 0, 0);
 
-	/*
-	 * If we can't get a cq entry, userspace overflowed the
-	 * submission (by quite a lot). Increment the overflow count in
-	 * the ring.
-	 */
-	cqe = io_get_cqring(ctx);
-	if (likely(cqe)) {
-		WRITE_ONCE(cqe->user_data, req->user_data);
-		WRITE_ONCE(cqe->res, res);
-		WRITE_ONCE(cqe->flags, cflags);
-	} else if (ctx->cq_overflow_flushed ||
-		   atomic_read(&req->task->io_uring->in_idle)) {
+		/*
+		 * If we can't get a cq entry, userspace overflowed the
+		 * submission (by quite a lot). Increment the overflow count in
+		 * the ring.
+		 */
+		cqe = io_get_cqring(ctx);
+		if (likely(cqe)) {
+			WRITE_ONCE(cqe->user_data, req->user_data);
+			WRITE_ONCE(cqe->res, res);
+			WRITE_ONCE(cqe->flags, cflags);
+			return;
+		}
+	} else {
+		u64 extra1 = req->extra1;
+		u64 extra2 = req->extra2;
+
+		trace_io_uring_complete(ctx, req->user_data, res, cflags, extra1, extra2);
+
+		/*
+		 * If we can't get a cq entry, userspace overflowed the
+		 * submission (by quite a lot). Increment the overflow count in
+		 * the ring.
+		 */
+		cqe = io_get_cqring(ctx);
+		if (likely(cqe)) {
+			WRITE_ONCE(cqe->user_data, req->user_data);
+			WRITE_ONCE(cqe->res, res);
+			WRITE_ONCE(cqe->flags, cflags);
+			WRITE_ONCE(cqe->big_cqe[0], extra1);
+			WRITE_ONCE(cqe->big_cqe[1], extra2);
+			return;
+		}
+	}
+
+	if (ctx->cq_overflow_flushed || atomic_read(&req->task->io_uring->in_idle)) {
 		/*
 		 * If we're in ring overflow flush mode, or in task cancel mode,
 		 * then we cannot store the request for later flushing, we need
