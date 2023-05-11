@@ -22,6 +22,7 @@
 #include <linux/usb/xhci-dbgp.h>
 #include <linux/static_call.h>
 #include <linux/swiotlb.h>
+#include <linux/cc_platform.h>
 
 #include <uapi/linux/mount.h>
 
@@ -541,7 +542,7 @@ static void __init reserve_crashkernel(void)
 	}
 
 	/* NOTE: Only reserve extra memory under 4G and without @offset */
-	if (sev_active() || sme_active())
+	if (cc_platform_has(CC_ATTR_GUEST_MEM_ENCRYPT) || cc_platform_has(CC_ATTR_HOST_MEM_ENCRYPT))
 		/*
 		 * Extra 32M is enough for kdump kernel, if not,
 		 * user should use crashkernel to reserve more memory
