@@ -432,7 +432,17 @@ static ssize_t rafs_v6_read_chunk(struct super_block *sb,
 			pr_debug("pipe ret %ld off %llu size %llu read %ld\n",
 				 ret, off, size, read);
 			if (ret <= 0) {
-				pr_err("%s: failed to read blob ret %ld\n", __func__, ret);
+				pr_err("%s: pipe failed to read blob ret %ld\n", __func__, ret);
+				return ret;
+			}
+		} else if (iov_iter_is_kvec(to)) {
+			iov_iter_kvec(&titer, READ, to->kvec, 1, size - read);
+
+			ret = vfs_iter_read(mdev.m_fp, &titer, &off, 0);
+			pr_debug("kvec ret %ld off %llu size %llu read %ld\n",
+				 ret, off, size, read);
+			if (ret <= 0) {
+				pr_err("%s: kvec failed to read blob ret %ld\n", __func__, ret);
 				return ret;
 			}
 		} else {
@@ -448,7 +458,7 @@ static ssize_t rafs_v6_read_chunk(struct super_block *sb,
 			iov_iter_init(&titer, READ, &iovec, 1, iovec.iov_len);
 			ret = vfs_iter_read(mdev.m_fp, &titer, &off, 0);
 			if (ret <= 0) {
-				pr_err("%s: failed to read blob ret %ld\n", __func__, ret);
+				pr_err("%s: iovec failed to read blob ret %ld\n", __func__, ret);
 				return ret;
 			} else if (ret < iovec.iov_len) {
 				return read;
