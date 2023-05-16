@@ -984,6 +984,7 @@ static void __ris_msmon_csu_read(void *arg)
 }
 
 #define MBWU_MASK GENMASK(23, 0)
+#define MBWU_WINWD_MAX GENMASK(22, 0)
 #define MBWU_GET(v) ((v) & MBWU_MASK)
 #define MPAMF_CUST_MBWC_OFFSET 0x08
 #define MPAMF_CUST_WINDW_OFFSET 0x0C
@@ -1165,6 +1166,7 @@ static void mpam_reprogram_ris_partid(struct mpam_msc_ris *ris, u16 partid,
 	u16 dspri = GENMASK(rprops->dspri_wd, 0);
 	u16 intpri = GENMASK(rprops->intpri_wd, 0);
 	u16 bwa_fract = GENMASK(15, rprops->bwa_wd);
+	u32 custom_reg_base_addr;
 
 	assert_spin_locked(&msc->lock);
 
@@ -1221,6 +1223,12 @@ static void mpam_reprogram_ris_partid(struct mpam_msc_ris *ris, u16 partid,
 			pri_val |= FIELD_PREP(MPAMCFG_PRI_DSPRI, dspri);
 
 		mpam_write_partsel_reg(msc, PRI, pri_val);
+	}
+
+	if (FIELD_GET(MPAMF_IDR_HAS_IMPL_IDR, ris->idr)) {
+		custom_reg_base_addr = __mpam_read_reg(msc, MPAMF_IMPL_IDR);
+		__mpam_write_reg(msc, custom_reg_base_addr + MPAMF_CUST_WINDW_OFFSET,
+				 MBWU_WINWD_MAX);
 	}
 
 	spin_unlock(&msc->part_sel_lock);
