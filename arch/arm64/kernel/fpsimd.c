@@ -138,7 +138,9 @@ static void set_sve_default_vl(int val)
 
 /* Maximum supported vector length across all CPUs (initially poisoned) */
 int __ro_after_init sve_max_vl = SVE_VL_MIN;
+EXPORT_SYMBOL(sve_max_vl);
 int __ro_after_init sve_max_virtualisable_vl = SVE_VL_MIN;
+EXPORT_SYMBOL(sve_max_virtualisable_vl);
 
 /*
  * Set of available vector lengths,
@@ -158,6 +160,15 @@ extern __ro_after_init DECLARE_BITMAP(sve_vq_partial_map, SVE_VQ_MAX);
 extern void __percpu *efi_sve_state;
 
 #endif /* ! CONFIG_ARM64_SVE */
+
+#if defined(CONFIG_KVM_ARM_HOST_VHE_ONLY)
+/* Ensure vq >= SVE_VQ_MIN && vq <= SVE_VQ_MAX before calling this function */
+bool sve_vq_available(unsigned int vq)
+{
+	return test_bit(__vq_to_bit(vq), sve_vq_map);
+}
+EXPORT_SYMBOL(sve_vq_available);
+#endif
 
 DEFINE_PER_CPU(bool, fpsimd_context_busy);
 EXPORT_PER_CPU_SYMBOL(fpsimd_context_busy);
@@ -1136,6 +1147,7 @@ void fpsimd_bind_state_to_cpu(struct user_fpsimd_state *st, void *sve_state,
 	last->sve_state = sve_state;
 	last->sve_vl = sve_vl;
 }
+EXPORT_SYMBOL(fpsimd_bind_state_to_cpu);
 
 /*
  * Load the userland FPSIMD state of 'current' from memory, but only if the
@@ -1245,6 +1257,7 @@ void fpsimd_save_and_flush_cpu_state(void)
 	fpsimd_flush_cpu_state();
 	__put_cpu_fpsimd_context();
 }
+EXPORT_SYMBOL(fpsimd_save_and_flush_cpu_state);
 
 #ifdef CONFIG_KERNEL_MODE_NEON
 

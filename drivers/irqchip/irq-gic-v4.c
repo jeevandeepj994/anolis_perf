@@ -83,10 +83,6 @@
  *   performing INVALL operations.
  */
 
-static struct irq_domain *gic_domain;
-static const struct irq_domain_ops *vpe_domain_ops;
-static const struct irq_domain_ops *sgi_domain_ops;
-
 static bool has_v4_1(void)
 {
 	return !!sgi_domain_ops;
@@ -177,6 +173,7 @@ err:
 
 	return -ENOMEM;
 }
+EXPORT_SYMBOL(its_alloc_vcpu_irqs);
 
 static void its_free_sgi_irqs(struct its_vm *vm)
 {
@@ -204,6 +201,7 @@ void its_free_vcpu_irqs(struct its_vm *vm)
 	irq_domain_remove(vm->domain);
 	irq_domain_free_fwnode(vm->fwnode);
 }
+EXPORT_SYMBOL(its_free_vcpu_irqs);
 
 static int its_send_vpe_cmd(struct its_vpe *vpe, struct its_cmd_info *info)
 {
@@ -285,6 +283,7 @@ int its_invall_vpe(struct its_vpe *vpe)
 
 	return its_send_vpe_cmd(vpe, &info);
 }
+EXPORT_SYMBOL(its_invall_vpe);
 
 int its_map_vlpi(int irq, struct its_vlpi_map *map)
 {
@@ -308,6 +307,7 @@ int its_map_vlpi(int irq, struct its_vlpi_map *map)
 
 	return ret;
 }
+EXPORT_SYMBOL(its_map_vlpi);
 
 int its_get_vlpi(int irq, struct its_vlpi_map *map)
 {
@@ -320,12 +320,14 @@ int its_get_vlpi(int irq, struct its_vlpi_map *map)
 
 	return irq_set_vcpu_affinity(irq, &info);
 }
+EXPORT_SYMBOL(its_get_vlpi);
 
 int its_unmap_vlpi(int irq)
 {
 	irq_clear_status_flags(irq, IRQ_DISABLE_UNLAZY);
 	return irq_set_vcpu_affinity(irq, NULL);
 }
+EXPORT_SYMBOL(its_unmap_vlpi);
 
 int its_prop_update_vlpi(int irq, u8 config, bool inv)
 {
@@ -338,6 +340,7 @@ int its_prop_update_vlpi(int irq, u8 config, bool inv)
 
 	return irq_set_vcpu_affinity(irq, &info);
 }
+EXPORT_SYMBOL(its_prop_update_vlpi);
 
 int its_prop_update_vsgi(int irq, u8 priority, bool group)
 {
@@ -350,20 +353,4 @@ int its_prop_update_vsgi(int irq, u8 priority, bool group)
 	};
 
 	return irq_set_vcpu_affinity(irq, &info);
-}
-
-int its_init_v4(struct irq_domain *domain,
-		const struct irq_domain_ops *vpe_ops,
-		const struct irq_domain_ops *sgi_ops)
-{
-	if (domain) {
-		pr_info("ITS: Enabling GICv4 support\n");
-		gic_domain = domain;
-		vpe_domain_ops = vpe_ops;
-		sgi_domain_ops = sgi_ops;
-		return 0;
-	}
-
-	pr_err("ITS: No GICv4 VPE domain allocated\n");
-	return -ENODEV;
 }

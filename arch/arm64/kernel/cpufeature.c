@@ -109,6 +109,7 @@ bool arm64_use_ng_mappings = false;
 EXPORT_SYMBOL(arm64_use_ng_mappings);
 
 DEFINE_PER_CPU_READ_MOSTLY(const char *, this_cpu_vector) = vectors;
+EXPORT_SYMBOL(this_cpu_vector);
 
 /*
  * Flag to indicate if we have computed the system wide
@@ -2566,7 +2567,9 @@ static void verify_sve_features(void)
 static void verify_hyp_capabilities(void)
 {
 	u64 safe_mmfr1, mmfr0, mmfr1;
+#if !defined(CONFIG_KVM_ARM_HOST_VHE_ONLY)
 	int parange, ipa_max;
+#endif
 	unsigned int safe_vmid_bits, vmid_bits;
 
 	if (!IS_ENABLED(CONFIG_KVM))
@@ -2584,6 +2587,7 @@ static void verify_hyp_capabilities(void)
 		cpu_die_early();
 	}
 
+#if !defined(CONFIG_KVM_ARM_HOST_VHE_ONLY)
 	/* Verify IPA range */
 	parange = cpuid_feature_extract_unsigned_field(mmfr0,
 				ID_AA64MMFR0_PARANGE_SHIFT);
@@ -2592,6 +2596,7 @@ static void verify_hyp_capabilities(void)
 		pr_crit("CPU%d: IPA range mismatch\n", smp_processor_id());
 		cpu_die_early();
 	}
+#endif
 }
 
 /*

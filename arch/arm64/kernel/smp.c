@@ -437,8 +437,11 @@ static void __init hyp_mode_check(void)
 			   "CPU: CPUs started in inconsistent modes");
 	else
 		pr_info("CPU: All CPU(s) started at EL1\n");
+
+#if !defined(CONFIG_KVM_ARM_HOST_VHE_ONLY)
 	if (IS_ENABLED(CONFIG_KVM))
 		kvm_compute_layout();
+#endif
 }
 
 void __init smp_cpus_done(unsigned int max_cpus)
@@ -1068,6 +1071,7 @@ void smp_send_reschedule(int cpu)
 {
 	smp_cross_call(cpumask_of(cpu), IPI_RESCHEDULE);
 }
+EXPORT_SYMBOL(smp_send_reschedule);
 
 #ifdef CONFIG_GENERIC_CLOCKEVENTS_BROADCAST
 void tick_broadcast(const struct cpumask *mask)

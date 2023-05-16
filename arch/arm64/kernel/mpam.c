@@ -8,6 +8,7 @@
 #include <linux/percpu.h>
 
 DEFINE_STATIC_KEY_FALSE(arm64_mpam_has_hcr);
+EXPORT_SYMBOL(arm64_mpam_has_hcr);
 DEFINE_PER_CPU(u64, arm64_mpam_default);
 DEFINE_PER_CPU(u64, arm64_mpam_current);
 

@@ -98,11 +98,15 @@ static inline unsigned int __bit_to_vq(unsigned int bit)
 	return SVE_VQ_MAX - bit;
 }
 
+#if defined(CONFIG_KVM_ARM_HOST_VHE_ONLY)
+bool sve_vq_available(unsigned int vq);
+#else
 /* Ensure vq >= SVE_VQ_MIN && vq <= SVE_VQ_MAX before calling this function */
 static inline bool sve_vq_available(unsigned int vq)
 {
 	return test_bit(__vq_to_bit(vq), sve_vq_map);
 }
+#endif
 
 #ifdef CONFIG_ARM64_SVE
 

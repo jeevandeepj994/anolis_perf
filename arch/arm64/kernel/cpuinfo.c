@@ -43,6 +43,24 @@ static const char *icache_policy_str[] = {
 
 unsigned long __icache_flags;
 
+#if defined(CONFIG_KVM_ARM_HOST_VHE_ONLY)
+/*
+ * Whilst the D-side always behaves as PIPT on AArch64, aliasing is
+ * permitted in the I-cache.
+ */
+int icache_is_aliasing(void)
+{
+	return test_bit(ICACHEF_ALIASING, &__icache_flags);
+}
+EXPORT_SYMBOL(icache_is_aliasing);
+
+int icache_is_vpipt(void)
+{
+	return test_bit(ICACHEF_VPIPT, &__icache_flags);
+}
+EXPORT_SYMBOL(icache_is_vpipt);
+#endif
+
 static const char *const hwcap_str[] = {
 	[KERNEL_HWCAP_FP]		= "fp",
 	[KERNEL_HWCAP_ASIMD]		= "asimd",
