@@ -1002,7 +1002,7 @@ static void __ris_msmon_mbwu_read(void *arg)
 
 	assert_spin_locked(&msc->lock);
 
-	spin_lock_irqsave(&msc->mon_sel_lock, flags);
+	spin_lock_irqsave(&msc->part_sel_lock, flags);
 
 	__mpam_write_reg(msc, MPAMCFG_PART_SEL, ctx->mon);
 
@@ -1017,7 +1017,7 @@ static void __ris_msmon_mbwu_read(void *arg)
 	cycle = __mpam_read_reg(msc, custom_reg_base_addr + MPAMF_CUST_WINDW_OFFSET);
 	val = __mpam_read_reg(msc, custom_reg_base_addr + MPAMF_CUST_MBWC_OFFSET);
 
-	spin_unlock_irqrestore(&msc->mon_sel_lock, flags);
+	spin_unlock_irqrestore(&msc->part_sel_lock, flags);
 
 	if (val & MSMON___NRDY) {
 		m->err = -EBUSY;
