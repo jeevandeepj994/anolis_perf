@@ -55,6 +55,8 @@ enum io_uring_cmd_flags {
 
 	/* ctx state flags, for URING_CMD */
 	IO_URING_F_SQE128		= 4,
+	IO_URING_F_CQE32		= 8,
+	IO_URING_F_IOPOLL		= 16,
 };
 
 struct io_uring_cmd {
