@@ -4055,6 +4055,10 @@ static int io_uring_cmd(struct io_kiocb *req, unsigned int issue_flags)
 
 	if (ctx->flags & IORING_SETUP_SQE128)
 		issue_flags |= IO_URING_F_SQE128;
+	if (ctx->flags & IORING_SETUP_CQE32)
+		issue_flags |= IO_URING_F_CQE32;
+	if (ctx->flags & IORING_SETUP_IOPOLL)
+		issue_flags |= IO_URING_F_IOPOLL;
 
 	if (req->async_data)
 		ioucmd->cmd = req->async_data;
