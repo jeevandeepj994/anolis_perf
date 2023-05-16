@@ -5,6 +5,7 @@
 #define pr_fmt(fmt)     "tdx: " fmt
 
 #include <linux/cpufeature.h>
+#include <linux/swiotlb.h>
 #include <asm/coco.h>
 #include <asm/tdx.h>
 #include <asm/vmx.h>
@@ -675,6 +676,9 @@ void __init tdx_early_init(void)
 	cc_set_vendor(CC_VENDOR_INTEL);
 	cc_mask = get_cc_mask();
 	cc_set_mask(cc_mask);
+
+	if (cc_platform_has(CC_ATTR_GUEST_MEM_ENCRYPT))
+		swiotlb_force = SWIOTLB_FORCE;
 
 	/*
 	 * All bits above GPA width are reserved and kernel treats shared bit
