@@ -156,6 +156,11 @@ struct erofs_sb_info {
 #define set_opt(sbi, option)	((sbi)->mount_opt |= EROFS_MOUNT_##option)
 #define test_opt(sbi, option)	((sbi)->mount_opt & EROFS_MOUNT_##option)
 
+static inline bool erofs_is_rafsv6_mode(struct super_block *sb)
+{
+	return !sb->s_bdev && EROFS_SB(sb)->bootstrap_path;
+}
+
 static inline bool erofs_is_fscache_mode(struct super_block *sb)
 {
 	/* to distinguish from rafsv6 which also works in nodev mode */
@@ -274,7 +279,8 @@ struct erofs_buf {
 	void *base;
 	enum erofs_kmap_type kmap_type;
 };
-#define __EROFS_BUF_INITIALIZER	((struct erofs_buf){ .page = NULL })
+#define __EROFS_BUF_INITIALIZER	\
+	((struct erofs_buf){ .page = NULL, .mapping = NULL })
 
 #define ROOT_NID(sb)		((sb)->root_nid)
 
@@ -460,6 +466,7 @@ void erofs_put_metabuf(struct erofs_buf *buf);
 void *erofs_read_metabuf(struct erofs_buf *buf, struct super_block *sb,
 			 erofs_blk_t blkaddr, enum erofs_kmap_type type);
 int erofs_map_dev(struct super_block *sb, struct erofs_map_dev *dev);
+extern const struct file_operations erofs_file_fops;
 
 /* inode.c */
 static inline unsigned long erofs_inode_hash(erofs_nid_t nid)
