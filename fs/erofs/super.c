@@ -182,7 +182,7 @@ static int erofs_init_device(struct erofs_buf *buf, struct super_block *sb,
 	return 0;
 }
 
-static int erofs_init_devices(struct super_block *sb,
+static int erofs_scan_devices(struct super_block *sb,
 			      struct erofs_super_block *dsb)
 {
 	struct erofs_sb_info *sbi = EROFS_SB(sb);
@@ -307,7 +307,7 @@ static int erofs_read_superblock(struct super_block *sb)
 	}
 
 	/* handle multiple devices */
-	ret = erofs_init_devices(sb, dsb);
+	ret = erofs_scan_devices(sb, dsb);
 out:
 	erofs_put_metabuf(&buf);
 	return ret;
@@ -628,14 +628,10 @@ static int erofs_fill_super(struct super_block *sb, void *data, int silent)
 	int err;
 
 	sb->s_magic = EROFS_SUPER_MAGIC;
+	sb->s_flags |= SB_RDONLY | SB_NOATIME;
+	sb->s_maxbytes = MAX_LFS_FILESIZE;
+	sb->s_op = &erofs_sops;
 
-	if (sb->s_bdev && !sb_set_blocksize(sb, EROFS_BLKSIZ)) {
-		erofs_err(sb, "failed to set erofs blksize");
-		return -EINVAL;
-	} else {
-		sb->s_blocksize = EROFS_BLKSIZ;
-		sb->s_blocksize_bits = LOG_BLOCK_SIZE;
-	}
 	sbi = kzalloc(sizeof(*sbi), GFP_KERNEL);
 	if (!sbi)
 		return -ENOMEM;
@@ -648,11 +644,7 @@ static int erofs_fill_super(struct super_block *sb, void *data, int silent)
 	idr_init(&sbi->devs->tree);
 	init_rwsem(&sbi->devs->rwsem);
 
-	sb->s_flags |= SB_RDONLY | SB_NOATIME;
-	sb->s_maxbytes = MAX_LFS_FILESIZE;
 	sb->s_time_gran = 1;
-
-	sb->s_op = &erofs_sops;
 	sb->s_xattr = erofs_xattr_handlers;
 
 	/* set erofs default mount options */
@@ -661,6 +653,16 @@ static int erofs_fill_super(struct super_block *sb, void *data, int silent)
 	err = erofs_parse_options(sb, data);
 	if (err)
 		return err;
+
+	if (!sb->s_bdev) {
+		sb->s_blocksize = EROFS_BLKSIZ;
+		sb->s_blocksize_bits = LOG_BLOCK_SIZE;
+	} else {
+		if (!sb_set_blocksize(sb, EROFS_BLKSIZ)) {
+			erofs_err(sb, "failed to set erofs blksize");
+			return -EINVAL;
+		}
+	}
 
 	if (erofs_is_fscache_mode(sb)) {
 		err = erofs_fscache_register_fs(sb);
