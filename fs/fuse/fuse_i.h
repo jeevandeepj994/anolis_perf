@@ -874,6 +874,9 @@ struct fuse_conn {
 	/** List of device instances belonging to this connection */
 	struct list_head devices;
 
+	/* fuse connection tag */
+	char tag[FUSE_TAG_NAME_MAX];
+
 #ifdef CONFIG_FUSE_DAX
 	/* dax mode: FUSE_DAX_* (always, never or per-file) */
 	enum fuse_dax_mode dax_mode;
@@ -944,6 +947,11 @@ struct fuse_forget_link *fuse_alloc_forget(void);
 
 struct fuse_forget_link *fuse_dequeue_forget(struct fuse_iqueue *fiq,
 					     unsigned max, unsigned *countp);
+
+/**
+ * Send FUSE_INIT command
+ */
+void fuse_queue_init(struct fuse_iqueue *fiq, struct fuse_req *req);
 
 /* Used by READDIRPLUS */
 void fuse_force_forget(struct file *file, u64 nodeid);
@@ -1089,6 +1097,7 @@ void fuse_request_end(struct fuse_conn *fc, struct fuse_req *req);
 
 /* Abort all requests */
 void fuse_abort_conn(struct fuse_conn *fc, bool is_abort);
+void fuse_reset_conn(struct fuse_conn *fc);
 void fuse_wait_aborted(struct fuse_conn *fc);
 
 /* Flush all requests in processing queue */
@@ -1144,6 +1153,7 @@ int parse_fuse_opt(char *opt, struct fuse_mount_data *d, int is_bdev,
 int fuse_fill_super_common(struct super_block *sb,
 			   struct fuse_mount_data *mount_data);
 void fuse_send_init(struct fuse_conn *fc, struct fuse_req *req);
+void fuse_resend_init(struct fuse_conn *fc, struct fuse_req *req);
 
 /**
  * Disassociate fuse connection from superblock and kill the superblock
