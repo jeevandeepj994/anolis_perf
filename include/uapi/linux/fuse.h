@@ -743,6 +743,13 @@ struct fuse_ioctl_out {
 	uint32_t	out_iovs;
 };
 
+#define FUSE_TAG_NAME_MAX		128
+
+struct fuse_ioctl_attach {
+	unsigned char	tag[FUSE_TAG_NAME_MAX];
+	uint64_t		dev;
+};
+
 struct fuse_poll_in {
 	uint64_t	fh;
 	uint64_t	kh;
@@ -855,6 +862,7 @@ struct fuse_notify_retrieve_in {
 /* Device ioctls: */
 #define FUSE_DEV_IOC_MAGIC		229
 #define FUSE_DEV_IOC_CLONE		_IOR(FUSE_DEV_IOC_MAGIC, 0, uint32_t)
+#define FUSE_DEV_IOC_ATTACH            _IOWR(FUSE_DEV_IOC_MAGIC, 200, struct fuse_ioctl_attach)
 
 struct fuse_lseek_in {
 	uint64_t	fh;

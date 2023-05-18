@@ -738,6 +738,12 @@ void fuse_conn_init(struct fuse_conn *fc, struct user_namespace *user_ns,
 }
 EXPORT_SYMBOL_GPL(fuse_conn_init);
 
+void fuse_conn_fill_tag(struct fuse_conn *fc, const char *tag)
+{
+	strncpy(fc->tag, tag, FUSE_TAG_NAME_MAX - 1);
+}
+EXPORT_SYMBOL_GPL(fuse_conn_fill_tag);
+
 void fuse_conn_put(struct fuse_conn *fc)
 {
 	if (refcount_dec_and_test(&fc->count)) {
@@ -1090,7 +1096,7 @@ static void process_init_reply(struct fuse_conn *fc, struct fuse_req *req)
 	wake_up_all(&fc->blocked_waitq);
 }
 
-void fuse_send_init(struct fuse_conn *fc, struct fuse_req *req)
+static void fuse_prepare_init_req(struct fuse_conn *fc, struct fuse_req *req)
 {
 	struct fuse_init_in *arg = &req->misc.init_in;
 	u64 flags;
@@ -1128,9 +1134,45 @@ void fuse_send_init(struct fuse_conn *fc, struct fuse_req *req)
 	req->out.args[0].size = sizeof(struct fuse_init_out);
 	req->out.args[0].value = &req->misc.init_out;
 	req->end = process_init_reply;
+}
+
+void fuse_send_init(struct fuse_conn *fc, struct fuse_req *req)
+{
+	fuse_prepare_init_req(fc, req);
 	fuse_request_send_background(fc, req);
 }
 EXPORT_SYMBOL_GPL(fuse_send_init);
+
+void fuse_resend_init(struct fuse_conn *fc, struct fuse_req *req)
+{
+	fuse_prepare_init_req(fc, req);
+
+	spin_lock(&fc->lock);
+	if (fc->connected) {
+		struct fuse_iqueue *fiq = &fc->iq;
+
+		if (!test_bit(FR_WAITING, &req->flags)) {
+			__set_bit(FR_WAITING, &req->flags);
+			atomic_inc(&fc->num_waiting);
+		}
+		__set_bit(FR_ISREPLY, &req->flags);
+		spin_lock(&fiq->lock);
+		if (!fiq->connected) {
+			spin_unlock(&fiq->lock);
+			goto out;
+		} else {
+			req->in.h.unique = fuse_get_unique(fiq);
+			fuse_queue_init(fiq, req);
+			spin_unlock(&fc->lock);
+		}
+	} else {
+out:
+		spin_unlock(&fc->lock);
+		req->out.h.error = -ENOTCONN;
+		req->end(fc, req);
+		fuse_put_request(fc, req);
+	}
+}
 
 static void fuse_free_conn(struct fuse_conn *fc)
 {
@@ -1277,6 +1319,8 @@ int fuse_fill_super_common(struct super_block *sb,
 
 	fuse_conn_init(fc, sb->s_user_ns, mount_data->fiq_ops,
 		       mount_data->fiq_priv);
+	if (mount_data->tag_present)
+		fuse_conn_fill_tag(fc, mount_data->tag);
 	fc->release = fuse_free_conn;
 
 	if (IS_ENABLED(CONFIG_FUSE_DAX)) {
@@ -1361,6 +1405,20 @@ int fuse_fill_super_common(struct super_block *sb,
 }
 EXPORT_SYMBOL_GPL(fuse_fill_super_common);
 
+static bool fuse_find_instance(const char *tag)
+{
+	struct fuse_conn *fc;
+
+	mutex_lock(&fuse_mutex);
+	list_for_each_entry(fc, &fuse_conn_list, entry) {
+		if (!strncmp(fc->tag, tag, FUSE_TAG_NAME_MAX - 1))
+			return true;
+	}
+	mutex_unlock(&fuse_mutex);
+
+	return false;
+}
+
 static int fuse_fill_super(struct super_block *sb, void *data, int silent)
 {
 	struct fuse_mount_data d;
@@ -1372,12 +1430,25 @@ static int fuse_fill_super(struct super_block *sb, void *data, int silent)
 	err = -EINVAL;
 	if (!parse_fuse_opt(data, &d, is_bdev, sb->s_user_ns, false))
 		goto err;
-	if (!d.fd_present)
+
+	if (!d.fd_present) {
+		pr_err("fuse: missing fd option\n");
 		goto err;
+	}
+
+	if (d.tag_present) {
+		if (fuse_find_instance(d.tag)) {
+			err = -EEXIST;
+			pr_err("fuse: tag %s already exist\n", d.tag);
+			goto err;
+		}
+	}
 
 	file = fget(d.fd);
-	if (!file)
+	if (!file) {
+		pr_err("fuse: invalid fd option\n");
 		goto err;
+	}
 
 	/*
 	 * Require mount to happen from the same user namespace which

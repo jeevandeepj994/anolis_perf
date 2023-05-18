@@ -361,6 +361,15 @@ __releases(fiq->lock)
 	fiq->ops->wake_pending_and_unlock(fiq);
 }
 
+void fuse_queue_init(struct fuse_iqueue *fiq, struct fuse_req *req)
+__releases(fiq->lock)
+{
+	req->in.h.len = sizeof(struct fuse_in_header) +
+		fuse_len_args(req->in.numargs, (struct fuse_arg *) req->in.args);
+	list_add(&req->list, &fiq->pending);
+	fiq->ops->wake_pending_and_unlock(fiq);
+}
+
 void fuse_queue_forget(struct fuse_conn *fc, struct fuse_forget_link *forget,
 		       u64 nodeid, u64 nlookup)
 {
@@ -2386,12 +2395,29 @@ static int fuse_device_clone(struct fuse_conn *fc, struct file *new)
 	return 0;
 }
 
+void fuse_reset_conn(struct fuse_conn *fc)
+{
+	struct fuse_iqueue *fiq;
+
+	spin_lock(&fc->lock);
+	fiq = &fc->iq;
+	spin_lock(&fiq->lock);
+	fiq->connected = 1;
+	spin_unlock(&fiq->lock);
+	fc->connected = 1;
+	spin_unlock(&fc->lock);
+}
+EXPORT_SYMBOL_GPL(fuse_reset_conn);
+
 static long fuse_dev_ioctl(struct file *file, unsigned int cmd,
 			   unsigned long arg)
 {
 	int res;
 	int oldfd;
 	struct fuse_dev *fud = NULL;
+	struct fuse_ioctl_attach attach_info;
+	struct fuse_conn *fc;
+	struct fuse_req *init_req;
 
 	switch (cmd) {
 	case FUSE_DEV_IOC_CLONE:
@@ -2417,6 +2443,66 @@ static long fuse_dev_ioctl(struct file *file, unsigned int cmd,
 				fput(old);
 			}
 		}
+		break;
+	case FUSE_DEV_IOC_ATTACH:
+		if (copy_from_user(&attach_info, (__u32 __user *)arg, sizeof(attach_info))) {
+			res = -EFAULT;
+			goto out;
+		}
+
+		if (attach_info.tag[0] == '\0') {
+			res = -EINVAL;
+			goto out;
+		}
+
+		if (!file) {
+			res = -EBADF;
+			goto out;
+		}
+
+		if (file->f_op != &fuse_dev_operations || file->private_data) {
+			res = -EBADF;
+			goto out;
+		}
+
+		res = -EINVAL;
+		mutex_lock(&fuse_mutex);
+		list_for_each_entry(fc, &fuse_conn_list, entry) {
+			if (!strncmp(fc->tag, attach_info.tag, FUSE_TAG_NAME_MAX - 1)) {
+				attach_info.dev = fc->dev;
+				if (copy_to_user((void __user *)arg,
+						&attach_info, sizeof(attach_info))) {
+					res = -EFAULT;
+					mutex_unlock(&fuse_mutex);
+					goto out;
+				}
+
+				init_req = fuse_request_alloc(0);
+				if (!init_req) {
+					res = -ENOMEM;
+					mutex_unlock(&fuse_mutex);
+					goto out;
+				}
+
+				fud = fuse_dev_alloc_install(fc);
+				if (!fud) {
+					res = -ENOMEM;
+					mutex_unlock(&fuse_mutex);
+					fuse_request_free(init_req);
+					goto out;
+				}
+
+				res = 0;
+				file->private_data = fud;
+				atomic_inc(&fc->dev_count);
+				fuse_reset_conn(fc);
+				mutex_unlock(&fuse_mutex);
+				fuse_resend_init(fc, init_req);
+				goto out;
+			}
+		}
+		mutex_unlock(&fuse_mutex);
+out:
 		break;
 	default:
 		res = -ENOTTY;
