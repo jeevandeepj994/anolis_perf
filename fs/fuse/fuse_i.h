@@ -41,7 +41,7 @@
 #define FUSE_NAME_MAX 1024
 
 /** Number of dentries for each connection in the control filesystem */
-#define FUSE_CTL_NUM_DENTRIES 6
+#define FUSE_CTL_NUM_DENTRIES 7
 
 /** Number of page pointers embedded in fuse_req */
 #define FUSE_REQ_INLINE_PAGES 1
@@ -991,6 +991,11 @@ void fuse_init_file_inode(struct inode *inode, unsigned int flags);
  * Initialize inode operations on regular files and special files
  */
 void fuse_init_common(struct inode *inode);
+
+/**
+ * Resend all requests in processing queue
+ */
+void fuse_resend_pqueue(struct fuse_conn *fc);
 
 /**
  * Initialize inode and file operations on a directory
