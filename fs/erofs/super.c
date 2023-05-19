@@ -12,6 +12,7 @@
 #include <linux/seq_file.h>
 #include <linux/crc32c.h>
 #include <linux/backing-dev-defs.h>
+#include <linux/exportfs.h>
 #include "xattr.h"
 
 #define CREATE_TRACE_POINTS
@@ -51,18 +52,21 @@ void _erofs_info(struct super_block *sb, const char *function,
 
 static int erofs_superblock_csum_verify(struct super_block *sb, void *sbdata)
 {
+	size_t len = 1 << EROFS_SB(sb)->blkszbits;
 	struct erofs_super_block *dsb;
 	u32 expected_crc, crc;
 
-	dsb = kmemdup(sbdata + EROFS_SUPER_OFFSET,
-		      EROFS_BLKSIZ - EROFS_SUPER_OFFSET, GFP_KERNEL);
+	if (len > EROFS_SUPER_OFFSET)
+		len -= EROFS_SUPER_OFFSET;
+
+	dsb = kmemdup(sbdata + EROFS_SUPER_OFFSET, len, GFP_KERNEL);
 	if (!dsb)
 		return -ENOMEM;
 
 	expected_crc = le32_to_cpu(dsb->checksum);
 	dsb->checksum = 0;
 	/* to allow for x86 boot sectors and other oddities. */
-	crc = crc32c(~0, dsb, EROFS_BLKSIZ - EROFS_SUPER_OFFSET);
+	crc = crc32c(~0, dsb, len);
 	kfree(dsb);
 
 	if (crc != expected_crc) {
@@ -137,10 +141,10 @@ static int erofs_init_device(struct erofs_buf *buf, struct super_block *sb,
 	struct block_device *bdev;
 	void *ptr;
 
-	ptr = erofs_read_metabuf(buf, sb, erofs_blknr(*pos), EROFS_KMAP);
+	ptr = erofs_read_metabuf(buf, sb, erofs_blknr(sb, *pos), EROFS_KMAP);
 	if (IS_ERR(ptr))
 		return PTR_ERR(ptr);
-	dis = ptr + erofs_blkoff(*pos);
+	dis = ptr + erofs_blkoff(sb, *pos);
 
 	if (!dif->path) {
 		if (!dis->tag[0]) {
@@ -167,7 +171,7 @@ static int erofs_init_device(struct erofs_buf *buf, struct super_block *sb,
 			return PTR_ERR(f);
 		}
 		dif->blobfile = f;
-	} else {
+	} else if (!sbi->devs->flatdev) {
 		bdev = blkdev_get_by_path(dif->path, FMODE_READ | FMODE_EXCL,
 					  sb->s_type);
 		if (IS_ERR(bdev))
@@ -182,7 +186,7 @@ static int erofs_init_device(struct erofs_buf *buf, struct super_block *sb,
 	return 0;
 }
 
-static int erofs_init_devices(struct super_block *sb,
+static int erofs_scan_devices(struct super_block *sb,
 			      struct erofs_super_block *dsb)
 {
 	struct erofs_sb_info *sbi = EROFS_SB(sb);
@@ -206,6 +210,9 @@ static int erofs_init_devices(struct super_block *sb,
 	}
 	if (!ondisk_extradevs)
 		return 0;
+
+	if (!sbi->devs->extra_devices && sb->s_bdev)
+		sbi->devs->flatdev = true;
 
 	sbi->device_id_mask = roundup_pow_of_two(ondisk_extradevs + 1) - 1;
 	pos = le16_to_cpu(dsb->devt_slotoff) * EROFS_DEVT_SLOT_SIZE;
@@ -246,7 +253,6 @@ static int erofs_read_superblock(struct super_block *sb)
 	struct erofs_sb_info *sbi;
 	struct erofs_buf buf = __EROFS_BUF_INITIALIZER;
 	struct erofs_super_block *dsb;
-	unsigned int blkszbits;
 	void *data;
 	int ret;
 
@@ -265,6 +271,16 @@ static int erofs_read_superblock(struct super_block *sb)
 		goto out;
 	}
 
+	sbi->blkszbits  = dsb->blkszbits;
+	if (sbi->blkszbits < 9 || sbi->blkszbits > PAGE_SHIFT) {
+		erofs_err(sb, "blkszbits %u isn't supported", sbi->blkszbits);
+		goto out;
+	}
+	if (dsb->dirblkbits) {
+		erofs_err(sb, "dirblkbits %u isn't supported", dsb->dirblkbits);
+		goto out;
+	}
+
 	sbi->feature_compat = le32_to_cpu(dsb->feature_compat);
 	if (erofs_sb_has_sb_chksum(sbi)) {
 		ret = erofs_superblock_csum_verify(sb, data);
@@ -273,14 +289,6 @@ static int erofs_read_superblock(struct super_block *sb)
 	}
 
 	ret = -EINVAL;
-	blkszbits = dsb->blkszbits;
-	/* 9(512 bytes) + LOG_SECTORS_PER_BLOCK == LOG_BLOCK_SIZE */
-	if (blkszbits != LOG_BLOCK_SIZE) {
-		erofs_err(sb, "blkszbits %u isn't supported on this platform",
-			  blkszbits);
-		goto out;
-	}
-
 	if (!check_layout_compatibility(sb, dsb))
 		goto out;
 
@@ -307,7 +315,7 @@ static int erofs_read_superblock(struct super_block *sb)
 	}
 
 	/* handle multiple devices */
-	ret = erofs_init_devices(sb, dsb);
+	ret = erofs_scan_devices(sb, dsb);
 out:
 	erofs_put_metabuf(&buf);
 	return ret;
@@ -590,6 +598,45 @@ static int erofs_init_managed_cache(struct super_block *sb)
 static int erofs_init_managed_cache(struct super_block *sb) { return 0; }
 #endif
 
+static struct inode *erofs_nfs_get_inode(struct super_block *sb,
+					 u64 ino, u32 generation)
+{
+	return erofs_iget(sb, ino);
+}
+
+static struct dentry *erofs_fh_to_dentry(struct super_block *sb,
+		struct fid *fid, int fh_len, int fh_type)
+{
+	return generic_fh_to_dentry(sb, fid, fh_len, fh_type,
+				    erofs_nfs_get_inode);
+}
+
+static struct dentry *erofs_fh_to_parent(struct super_block *sb,
+		struct fid *fid, int fh_len, int fh_type)
+{
+	return generic_fh_to_parent(sb, fid, fh_len, fh_type,
+				    erofs_nfs_get_inode);
+}
+
+static struct dentry *erofs_get_parent(struct dentry *child)
+{
+	static const struct qstr dotdot_name = QSTR_INIT("..", 2);
+	erofs_nid_t nid;
+	unsigned int d_type;
+	int err;
+
+	err = erofs_namei(d_inode(child), &dotdot_name, &nid, &d_type);
+	if (err)
+		return ERR_PTR(err);
+	return d_obtain_alias(erofs_iget(child->d_sb, nid));
+}
+
+static const struct export_operations erofs_export_ops = {
+	.fh_to_dentry = erofs_fh_to_dentry,
+	.fh_to_parent = erofs_fh_to_parent,
+	.get_parent = erofs_get_parent,
+};
+
 static int rafs_v6_fill_super(struct super_block *sb, void *data)
 {
 	struct erofs_sb_info *sbi = EROFS_SB(sb);
@@ -628,14 +675,10 @@ static int erofs_fill_super(struct super_block *sb, void *data, int silent)
 	int err;
 
 	sb->s_magic = EROFS_SUPER_MAGIC;
+	sb->s_flags |= SB_RDONLY | SB_NOATIME;
+	sb->s_maxbytes = MAX_LFS_FILESIZE;
+	sb->s_op = &erofs_sops;
 
-	if (sb->s_bdev && !sb_set_blocksize(sb, EROFS_BLKSIZ)) {
-		erofs_err(sb, "failed to set erofs blksize");
-		return -EINVAL;
-	} else {
-		sb->s_blocksize = EROFS_BLKSIZ;
-		sb->s_blocksize_bits = LOG_BLOCK_SIZE;
-	}
 	sbi = kzalloc(sizeof(*sbi), GFP_KERNEL);
 	if (!sbi)
 		return -ENOMEM;
@@ -648,12 +691,9 @@ static int erofs_fill_super(struct super_block *sb, void *data, int silent)
 	idr_init(&sbi->devs->tree);
 	init_rwsem(&sbi->devs->rwsem);
 
-	sb->s_flags |= SB_RDONLY | SB_NOATIME;
-	sb->s_maxbytes = MAX_LFS_FILESIZE;
 	sb->s_time_gran = 1;
-
-	sb->s_op = &erofs_sops;
 	sb->s_xattr = erofs_xattr_handlers;
+	sb->s_export_op = &erofs_export_ops;
 
 	/* set erofs default mount options */
 	erofs_default_options(sbi);
@@ -661,6 +701,17 @@ static int erofs_fill_super(struct super_block *sb, void *data, int silent)
 	err = erofs_parse_options(sb, data);
 	if (err)
 		return err;
+
+	sbi->blkszbits = PAGE_SHIFT;
+	if (!sb->s_bdev) {
+		sb->s_blocksize = PAGE_SIZE;
+		sb->s_blocksize_bits = PAGE_SHIFT;
+	} else {
+		if (!sb_set_blocksize(sb, PAGE_SIZE)) {
+			erofs_err(sb, "failed to set initial blksize");
+			return -EINVAL;
+		}
+	}
 
 	if (erofs_is_fscache_mode(sb)) {
 		err = erofs_fscache_register_fs(sb);
@@ -681,6 +732,21 @@ static int erofs_fill_super(struct super_block *sb, void *data, int silent)
 	if (err)
 		return err;
 
+	if (sb->s_blocksize_bits != sbi->blkszbits) {
+		if (erofs_is_fscache_mode(sb)) {
+			erofs_err(sb, "unsupported blksize for fscache mode");
+			return -EINVAL;
+		}
+		if (erofs_is_rafsv6_mode(sb)) {
+			erofs_err(sb, "unsupported blksize for rafsv6 mode");
+			return -EINVAL;
+		}
+		if (!sb_set_blocksize(sb, 1 << sbi->blkszbits)) {
+			erofs_err(sb, "failed to set erofs blksize");
+			return -EINVAL;
+		}
+	}
+
 	if (test_opt(sbi, POSIX_ACL))
 		sb->s_flags |= SB_POSIXACL;
 	else
@@ -698,7 +764,7 @@ static int erofs_fill_super(struct super_block *sb, void *data, int silent)
 #endif
 
 	/* get the root inode */
-	inode = erofs_iget(sb, ROOT_NID(sbi), true);
+	inode = erofs_iget(sb, ROOT_NID(sbi));
 	if (IS_ERR(inode))
 		return PTR_ERR(inode);
 
@@ -928,7 +994,7 @@ static int erofs_statfs(struct dentry *dentry, struct kstatfs *buf)
 		id = 0;
 
 	buf->f_type = sb->s_magic;
-	buf->f_bsize = EROFS_BLKSIZ;
+	buf->f_bsize = sb->s_blocksize;
 	buf->f_blocks = sbi->total_blocks;
 	buf->f_bfree = buf->f_bavail = 0;
 
