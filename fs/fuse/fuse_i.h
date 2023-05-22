@@ -41,7 +41,7 @@
 #define FUSE_NAME_MAX 1024
 
 /** Number of dentries for each connection in the control filesystem */
-#define FUSE_CTL_NUM_DENTRIES 7
+#define FUSE_CTL_NUM_DENTRIES 8
 
 /** Number of page pointers embedded in fuse_req */
 #define FUSE_REQ_INLINE_PAGES 1
@@ -493,6 +493,9 @@ struct fuse_req {
 	/** Request is stolen from fuse_file->reserved_req */
 	struct file *stolen_file;
 
+	/** send time*/
+	uint64_t send_time;
+
 #if IS_ENABLED(CONFIG_VIRTIO_FS)
 	/** virtio-fs's physically contiguous buffer for in and out args */
 	void *argbuf;
@@ -599,6 +602,14 @@ struct fuse_dev {
 
 	/** list entry on fc->devices */
 	struct list_head entry;
+};
+
+/**
+ *  Fuse stats for debuging.
+ */
+struct fuse_stats {
+	atomic64_t req_time[FUSE_OP_MAX];
+	atomic64_t req_cnts[FUSE_OP_MAX];
 };
 
 /**
@@ -876,6 +887,9 @@ struct fuse_conn {
 
 	/* fuse connection tag */
 	char tag[FUSE_TAG_NAME_MAX];
+
+	/** fuse stats **/
+	struct fuse_stats stats;
 
 #ifdef CONFIG_FUSE_DAX
 	/* dax mode: FUSE_DAX_* (always, never or per-file) */

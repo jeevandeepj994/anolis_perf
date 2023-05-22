@@ -36,6 +36,11 @@ static struct fuse_dev *fuse_get_dev(struct file *file)
 	return READ_ONCE(file->private_data);
 }
 
+static inline uint64_t get_time_now_us(void)
+{
+	return ktime_to_us(ktime_get());
+}
+
 static void fuse_request_init(struct fuse_req *req, struct page **pages,
 			      struct fuse_page_desc *page_descs,
 			      unsigned npages)
@@ -406,6 +411,19 @@ static void flush_bg_queue(struct fuse_conn *fc)
 	}
 }
 
+static void fuse_update_stats(struct fuse_conn *fc, int opcode, uint64_t send_time)
+{
+	uint64_t delta_time;
+
+	delta_time = get_time_now_us() - send_time;
+
+	atomic64_add(delta_time, &fc->stats.req_time[FUSE_SUMMARY]);
+	atomic64_add(delta_time, &fc->stats.req_time[opcode]);
+
+	atomic64_inc(&fc->stats.req_cnts[FUSE_SUMMARY]);
+	atomic64_inc(&fc->stats.req_cnts[opcode]);
+}
+
 /*
  * This function is called when a request is finished.  Either a reply
  * has arrived or it was aborted (and not yet sent) or some error
@@ -427,6 +445,8 @@ void fuse_request_end(struct fuse_conn *fc, struct fuse_req *req)
 	WARN_ON(test_bit(FR_PENDING, &req->flags));
 	WARN_ON(test_bit(FR_SENT, &req->flags));
 	if (test_bit(FR_BACKGROUND, &req->flags)) {
+		fuse_update_stats(fc, req->in.h.opcode, req->send_time);
+
 		spin_lock(&fc->bg_lock);
 		clear_bit(FR_BACKGROUND, &req->flags);
 		if (fc->num_background == fc->max_background) {
@@ -530,6 +550,7 @@ static void __fuse_request_send(struct fuse_conn *fc, struct fuse_req *req)
 		spin_unlock(&fiq->lock);
 		req->out.h.error = -ENOTCONN;
 	} else {
+		req->send_time = get_time_now_us();
 		req->in.h.unique = fuse_get_unique(fiq);
 		/*
 		 * acquire extra reference, since request is still
@@ -541,6 +562,8 @@ static void __fuse_request_send(struct fuse_conn *fc, struct fuse_req *req)
 		request_wait_answer(fc, req);
 		/* Pairs with smp_wmb() in fuse_request_end() */
 		smp_rmb();
+
+		fuse_update_stats(fc, req->in.h.opcode, req->send_time);
 	}
 }
 
@@ -630,6 +653,9 @@ bool fuse_request_queue_background(struct fuse_conn *fc, struct fuse_req *req)
 		atomic_inc(&fc->num_waiting);
 	}
 	__set_bit(FR_ISREPLY, &req->flags);
+
+	req->send_time = get_time_now_us();
+
 	spin_lock(&fc->bg_lock);
 	if (likely(fc->connected)) {
 		fc->num_background++;
