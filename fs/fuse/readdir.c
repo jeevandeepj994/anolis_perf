@@ -250,6 +250,7 @@ retry:
 	if (fc->readdirplus_auto)
 		set_bit(FUSE_I_INIT_RDPLUS, &get_fuse_inode(inode)->state);
 	fuse_change_entry_timeout(dentry, o);
+	fuse_dentry_set_fo_version(dentry, fo_version);
 	fuse_dentry_set_inval_version(dentry, inval_version);
 
 	dput(dentry);
