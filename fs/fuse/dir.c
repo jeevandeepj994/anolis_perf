@@ -166,6 +166,23 @@ static void fuse_lookup_init(struct fuse_conn *fc, struct fuse_args *args,
 	args->out_args[0].value = outarg;
 }
 
+static bool fuse_dentry_fo_version_valid(struct dentry *entry, struct inode *dir)
+{
+	struct fuse_conn *fc = get_fuse_conn(dir);
+	struct inode *inode = d_inode_rcu(entry);
+	struct fuse_inode *dir_fi = get_fuse_inode(dir);
+	u64 fo_version = fuse_get_fo_version(fc);
+
+	if (dir_fi->fo_version != fo_version)
+		return false;
+	if (inode && get_fuse_inode(inode)->fo_version != fo_version)
+		return false;
+	if (fuse_dentry_fo_version(entry) != fo_version)
+		return false;
+
+	return true;
+}
+
 /* helper function to check whehter the dentry is valid */
 static bool fuse_dentry_is_valid(struct dentry *entry, struct inode *dir)
 {
@@ -174,6 +191,9 @@ static bool fuse_dentry_is_valid(struct dentry *entry, struct inode *dir)
 	if (fc->invaldir_allentry &&
 		fuse_dentry_inval_version(entry) != fuse_inval_version(dir))
 		return false;
+
+	if (fc->inval_cache_in_failover)
+		return fuse_dentry_fo_version_valid(entry, dir);
 
 	return true;
 }
@@ -278,6 +298,7 @@ static int fuse_dentry_revalidate(struct dentry *entry, unsigned int flags)
 				       entry_attr_timeout(&outarg),
 				       attr_version, wb_version, fo_version);
 		fuse_change_entry_timeout(entry, &outarg);
+		fuse_dentry_set_fo_version(entry, fo_version);
 		fuse_dentry_set_inval_version(entry, inval_version);
 	} else if (inode) {
 		fi = get_fuse_inode(inode);
@@ -495,6 +516,8 @@ static struct dentry *fuse_lookup(struct inode *dir, struct dentry *entry,
 	bool outarg_valid = true;
 	bool locked;
 	u64 inval_version = fuse_inval_version(dir);
+	struct fuse_conn *fc = get_fuse_conn(dir);
+	u64 fo_version = fuse_get_fo_version(fc);
 
 	if (fuse_is_bad(dir))
 		return ERR_PTR(-EIO);
@@ -527,6 +550,7 @@ static struct dentry *fuse_lookup(struct inode *dir, struct dentry *entry,
 
 	if (inode)
 		fuse_advise_use_readdirplus(dir);
+	fuse_dentry_set_fo_version(entry, fo_version);
 	fuse_dentry_set_inval_version(entry, inval_version);
 
 	return newent;
@@ -622,6 +646,7 @@ static int fuse_create_open(struct inode *dir, struct dentry *entry,
 	kfree(forget);
 	d_instantiate(entry, inode);
 	fuse_change_entry_timeout(entry, &outentry);
+	fuse_dentry_set_fo_version(entry, fo_version);
 	fuse_dentry_set_inval_version(entry, inval_version);
 	fuse_dir_changed(dir);
 
@@ -747,10 +772,12 @@ static int create_new_entry(struct fuse_mount *fm, struct fuse_args *args,
 
 	if (d) {
 		fuse_change_entry_timeout(d, &outarg);
+		fuse_dentry_set_fo_version(d, fo_version);
 		fuse_dentry_set_inval_version(d, inval_version);
 		dput(d);
 	} else {
 		fuse_change_entry_timeout(entry, &outarg);
+		fuse_dentry_set_fo_version(entry, fo_version);
 		fuse_dentry_set_inval_version(entry, inval_version);
 	}
 	fuse_dir_changed(dir);

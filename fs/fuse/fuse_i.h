@@ -60,6 +60,7 @@ extern unsigned max_user_congthresh;
 union fuse_dentry {
 	struct{
 		u64 time;
+		u64 fo_version;
 		u64 inval_version;
 	} info;
 	struct rcu_head rcu;
@@ -1016,6 +1017,16 @@ static inline void fuse_dentry_set_inval_version(struct dentry *entry, u64 inval
 {
 	((union fuse_dentry *) entry->d_fsdata)
 		->info.inval_version = inval_version;
+}
+
+static inline u64 fuse_dentry_fo_version(struct dentry *entry)
+{
+	return ((union fuse_dentry *) entry->d_fsdata)->info.fo_version;
+}
+
+static inline void fuse_dentry_set_fo_version(struct dentry *entry, u64 fo_version)
+{
+	((union fuse_dentry *) entry->d_fsdata)->info.fo_version = fo_version;
 }
 
 /** Device operations */
