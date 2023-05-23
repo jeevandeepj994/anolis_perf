@@ -242,11 +242,11 @@ static void smc_llc_flow_parallel(struct smc_link_group *lgr, u8 flow_type,
 	}
 	/* drop parallel or already-in-progress llc requests */
 	if (flow_type != msg_type)
-		pr_warn_once("smc: SMC-R lg %*phN dropped parallel "
-			     "LLC msg: msg %d flow %d role %d\n",
-			     SMC_LGR_ID_SIZE, &lgr->id,
-			     qentry->msg.raw.hdr.common.type,
-			     flow_type, lgr->role);
+		pr_warn_ratelimited("smc: SMC-R lg %*phN dropped parallel "
+				    "LLC msg: msg %d flow %d role %d\n",
+				    SMC_LGR_ID_SIZE, &lgr->id,
+				    qentry->msg.raw.hdr.common.type,
+				    flow_type, lgr->role);
 	kfree(qentry);
 }
 
@@ -359,11 +359,11 @@ struct smc_llc_qentry *smc_llc_wait(struct smc_link_group *lgr,
 					   smc_llc_flow_qentry_clr(flow));
 			return NULL;
 		}
-		pr_warn_once("smc: SMC-R lg %*phN dropped unexpected LLC msg: "
-			     "msg %d exp %d flow %d role %d flags %x\n",
-			     SMC_LGR_ID_SIZE, &lgr->id, rcv_msg, exp_msg,
-			     flow->type, lgr->role,
-			     flow->qentry->msg.raw.hdr.flags);
+		pr_warn_ratelimited("smc: SMC-R lg %*phN dropped unexpected LLC msg: "
+				    "msg %d exp %d flow %d role %d flags %x\n",
+				    SMC_LGR_ID_SIZE, &lgr->id, rcv_msg, exp_msg,
+				    flow->type, lgr->role,
+				    flow->qentry->msg.raw.hdr.flags);
 		smc_llc_flow_qentry_del(flow);
 	}
 out:
@@ -2160,7 +2160,7 @@ int smc_llc_link_init(struct smc_link *link)
 
 void smc_llc_link_active(struct smc_link *link)
 {
-	pr_warn_ratelimited("smc: SMC-R lg %*phN link added: id %*phN, "
+	pr_info_ratelimited("smc: SMC-R lg %*phN link added: id %*phN, "
 			    "peerid %*phN, ibdev %s, ibport %d\n",
 			    SMC_LGR_ID_SIZE, &link->lgr->id,
 			    SMC_LGR_ID_SIZE, &link->link_uid,
@@ -2178,7 +2178,7 @@ void smc_llc_link_active(struct smc_link *link)
 void smc_llc_link_clear(struct smc_link *link, bool log)
 {
 	if (log)
-		pr_warn_ratelimited("smc: SMC-R lg %*phN link removed: id %*phN"
+		pr_info_ratelimited("smc: SMC-R lg %*phN link removed: id %*phN"
 				    ", peerid %*phN, ibdev %s, ibport %d\n",
 				    SMC_LGR_ID_SIZE, &link->lgr->id,
 				    SMC_LGR_ID_SIZE, &link->link_uid,
