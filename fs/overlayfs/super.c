@@ -116,53 +116,59 @@ bug:
 	return dentry;
 }
 
-static int ovl_dentry_revalidate(struct dentry *dentry, unsigned int flags)
+static int ovl_revalidate_real(struct dentry *d, unsigned int flags, bool weak)
 {
-	struct ovl_entry *oe = dentry->d_fsdata;
-	unsigned int i;
 	int ret = 1;
 
-	for (i = 0; i < oe->numlower; i++) {
-		struct dentry *d = oe->lowerstack[i].dentry;
-
-		if (d->d_flags & DCACHE_OP_REVALIDATE) {
-			ret = d->d_op->d_revalidate(d, flags);
-			if (ret < 0)
-				return ret;
-			if (!ret) {
-				if (!(flags & LOOKUP_RCU))
-					d_invalidate(d);
-				return -ESTALE;
-			}
-		}
-	}
-	return 1;
-}
-
-static int ovl_dentry_weak_revalidate(struct dentry *dentry, unsigned int flags)
-{
-	struct ovl_entry *oe = dentry->d_fsdata;
-	unsigned int i;
-	int ret = 1;
-
-	for (i = 0; i < oe->numlower; i++) {
-		struct dentry *d = oe->lowerstack[i].dentry;
-
-		if (d->d_flags & DCACHE_OP_WEAK_REVALIDATE) {
-			ret = d->d_op->d_weak_revalidate(d, flags);
-			if (ret <= 0)
-				break;
+	if (weak) {
+		if (d->d_flags & DCACHE_OP_WEAK_REVALIDATE)
+			ret =  d->d_op->d_weak_revalidate(d, flags);
+	} else if (d->d_flags & DCACHE_OP_REVALIDATE) {
+		ret = d->d_op->d_revalidate(d, flags);
+		if (!ret) {
+			if (!(flags & LOOKUP_RCU))
+				d_invalidate(d);
+			ret = -ESTALE;
 		}
 	}
 	return ret;
 }
 
-static const struct dentry_operations ovl_dentry_operations = {
-	.d_release = ovl_dentry_release,
-	.d_real = ovl_d_real,
-};
+static int ovl_dentry_revalidate_common(struct dentry *dentry,
+					unsigned int flags, bool weak)
+{
+	struct ovl_entry *oe = dentry->d_fsdata;
+	struct inode *inode = d_inode_rcu(dentry);
+	struct dentry *upper;
+	unsigned int i;
+	int ret = 1;
 
-static const struct dentry_operations ovl_reval_dentry_operations = {
+	/* Careful in RCU mode */
+	if (!inode)
+		return -ECHILD;
+
+	upper = ovl_i_dentry_upper(inode);
+	if (upper)
+		ret = ovl_revalidate_real(upper, flags, weak);
+
+	for (i = 0; ret > 0 && i < oe->numlower; i++) {
+		ret = ovl_revalidate_real(oe->lowerstack[i].dentry, flags,
+					  weak);
+	}
+	return ret;
+}
+
+static int ovl_dentry_revalidate(struct dentry *dentry, unsigned int flags)
+{
+	return ovl_dentry_revalidate_common(dentry, flags, false);
+}
+
+static int ovl_dentry_weak_revalidate(struct dentry *dentry, unsigned int flags)
+{
+	return ovl_dentry_revalidate_common(dentry, flags, true);
+}
+
+static const struct dentry_operations ovl_dentry_operations = {
 	.d_release = ovl_dentry_release,
 	.d_real = ovl_d_real,
 	.d_revalidate = ovl_dentry_revalidate,
@@ -799,13 +805,12 @@ static int ovl_mount_dir(const char *name, struct path *path)
 		ovl_unescape(tmp);
 		err = ovl_mount_dir_noesc(tmp, path);
 
-		if (!err)
-			if (ovl_dentry_remote(path->dentry)) {
-				pr_err("overlayfs: filesystem on '%s' not supported as upperdir\n",
-				       tmp);
-				path_put_init(path);
-				err = -EINVAL;
-			}
+		if (!err && path->dentry->d_flags & DCACHE_OP_REAL) {
+			pr_err("overlayfs: filesystem on '%s' not supported as upperdir\n",
+			       tmp);
+			path_put_init(path);
+			err = -EINVAL;
+		}
 		kfree(tmp);
 	}
 	return err;
@@ -826,7 +831,7 @@ static int ovl_check_namelen(struct path *path, struct ovl_fs *ofs,
 }
 
 static int ovl_lower_dir(const char *name, struct path *path,
-			 struct ovl_fs *ofs, int *stack_depth, bool *remote)
+			 struct ovl_fs *ofs, int *stack_depth)
 {
 	int fh_type;
 	int err;
@@ -840,9 +845,6 @@ static int ovl_lower_dir(const char *name, struct path *path,
 		goto out_put;
 
 	*stack_depth = max(*stack_depth, path->mnt->mnt_sb->s_stack_depth);
-
-	if (ovl_dentry_remote(path->dentry))
-		*remote = true;
 
 	/*
 	 * The inodes index feature and NFS export need to encode and decode
@@ -1589,7 +1591,6 @@ static struct ovl_entry *ovl_get_lowerstack(struct super_block *sb,
 	char *lowertmp, *lower;
 	struct path *stack = NULL;
 	unsigned int stacklen, numlower = 0, i;
-	bool remote = false;
 	struct ovl_entry *oe;
 
 	err = -ENOMEM;
@@ -1621,7 +1622,7 @@ static struct ovl_entry *ovl_get_lowerstack(struct super_block *sb,
 	lower = lowertmp;
 	for (numlower = 0; numlower < stacklen; numlower++) {
 		err = ovl_lower_dir(lower, &stack[numlower], ofs,
-				    &sb->s_stack_depth, &remote);
+				    &sb->s_stack_depth);
 		if (err)
 			goto out_err;
 
@@ -1648,11 +1649,6 @@ static struct ovl_entry *ovl_get_lowerstack(struct super_block *sb,
 		oe->lowerstack[i].dentry = dget(stack[i].dentry);
 		oe->lowerstack[i].layer = &ofs->layers[i+1];
 	}
-
-	if (remote)
-		sb->s_d_op = &ovl_reval_dentry_operations;
-	else
-		sb->s_d_op = &ovl_dentry_operations;
 
 out:
 	for (i = 0; i < numlower; i++)
@@ -1773,6 +1769,7 @@ static struct dentry *ovl_get_root(struct super_block *sb,
 	ovl_dentry_set_flag(OVL_E_CONNECTED, root);
 	ovl_set_upperdata(d_inode(root));
 	ovl_inode_init(d_inode(root), &oip, ino, fsid);
+	ovl_dentry_update_reval(root, upperdentry, DCACHE_OP_WEAK_REVALIDATE);
 
 	return root;
 }
@@ -1801,6 +1798,8 @@ static int ovl_fill_super(struct super_block *sb, void *data, int silent)
 	struct ovl_fs *ofs;
 	struct cred *cred;
 	int err;
+
+	sb->s_d_op = &ovl_dentry_operations;
 
 	err = -ENOMEM;
 	ofs = kzalloc(sizeof(struct ovl_fs), GFP_KERNEL);
