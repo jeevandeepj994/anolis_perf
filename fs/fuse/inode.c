@@ -1529,11 +1529,13 @@ static struct dentry *fuse_try_mount(struct file_system_type *fs_type,
 		else
 			root = dget(sb->s_root);
 	}
-
-	if (IS_ERR(root) || WARN_ON(!fuse_mount_callback))
+	if (IS_ERR(root))
 		goto out_fput;
 
-	ret = fuse_mount_callback(file);
+	if (WARN_ON(!fuse_mount_callback))
+		ret = -EINVAL;
+	else
+		ret = fuse_mount_callback(file);
 	if (ret) {
 		sb = root->d_sb;
 		dput(root);
