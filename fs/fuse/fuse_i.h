@@ -45,7 +45,7 @@
 #define FUSE_NAME_MAX 1024
 
 /** Number of dentries for each connection in the control filesystem */
-#define FUSE_CTL_NUM_DENTRIES 9
+#define FUSE_CTL_NUM_DENTRIES 10
 
 /** List of active connections */
 extern struct list_head fuse_conn_list;
@@ -390,6 +390,9 @@ struct fuse_req {
 	/** Used to wake up the task waiting for completion of request*/
 	wait_queue_head_t waitq;
 
+	/** send time*/
+	uint64_t send_time;
+
 #if IS_ENABLED(CONFIG_VIRTIO_FS)
 	/** virtio-fs's physically contiguous buffer for in and out args */
 	void *argbuf;
@@ -544,6 +547,14 @@ struct fuse_fs_context {
 
 	/* fuse_dev pointer to fill in, should contain NULL on entry */
 	void **fudptr;
+};
+
+/**
+ *  Fuse stats for debuging.
+ */
+struct fuse_stats {
+	atomic64_t req_time[FUSE_OP_MAX];
+	atomic64_t req_cnts[FUSE_OP_MAX];
 };
 
 /**
@@ -837,6 +848,9 @@ struct fuse_conn {
 
 	/* fuse connection tag */
 	char tag[FUSE_TAG_NAME_MAX];
+
+	/** fuse stats **/
+	struct fuse_stats stats;
 
 #ifdef CONFIG_FUSE_DAX
 	/* Dax mode */

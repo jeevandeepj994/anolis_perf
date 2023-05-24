@@ -447,6 +447,7 @@ struct fuse_file_lock {
 #define FUSE_ATTR_DAX		(1 << 1)
 
 enum fuse_opcode {
+	FUSE_SUMMARY            = 0,
 	FUSE_LOOKUP		= 1,
 	FUSE_FORGET		= 2,  /* no reply */
 	FUSE_GETATTR		= 3,
@@ -494,6 +495,7 @@ enum fuse_opcode {
 	FUSE_COPY_FILE_RANGE	= 47,
 	FUSE_SETUPMAPPING	= 48,
 	FUSE_REMOVEMAPPING	= 49,
+	FUSE_OP_MAX,
 
 	/* CUSE specific operations */
 	CUSE_INIT		= 4096,
