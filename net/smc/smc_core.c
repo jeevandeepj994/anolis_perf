@@ -2117,8 +2117,8 @@ out:
 	return rc;
 }
 
-#define SMCD_DMBE_SIZES		6 /* 0 -> 16KB, 1 -> 32KB, .. 6 -> 1MB */
-#define SMCR_RMBE_SIZES		5 /* 0 -> 16KB, 1 -> 32KB, .. 5 -> 512KB */
+#define SMCD_DMBE_SIZES		7 /* 0 -> 16KB, 1 -> 32KB, .. 7 -> 2MB */
+#define SMCR_RMBE_SIZES		7 /* 0 -> 16KB, 1 -> 32KB, .. 7 -> 2MB */
 
 /* convert the RMB size into the compressed notation (minimum 16K, see
  * SMCD/R_DMBE_SIZES.
@@ -2127,7 +2127,6 @@ out:
  */
 static u8 smc_compress_bufsize(int size, bool is_smcd, bool is_rmb)
 {
-	const unsigned int max_scat = SG_MAX_SINGLE_ALLOC * PAGE_SIZE;
 	u8 compressed;
 
 	if (size <= SMC_BUF_MIN_SIZE)
@@ -2136,10 +2135,6 @@ static u8 smc_compress_bufsize(int size, bool is_smcd, bool is_rmb)
 	size = (size - 1) >> 14;  /* convert to 16K multiple */
 	compressed = min_t(u8, ilog2(size) + 1,
 			   is_smcd ? SMCD_DMBE_SIZES : SMCR_RMBE_SIZES);
-
-	if (!is_smcd && is_rmb)
-		/* RMBs are backed by & limited to max size of scatterlists */
-		compressed = min_t(u8, compressed, ilog2(max_scat >> 14));
 
 	return compressed;
 }
