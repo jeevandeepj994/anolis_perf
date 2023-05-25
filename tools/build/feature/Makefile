@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: GPL-2.0
+ARCH ?= $(shell uname -m)
 FILES=                                          \
          test-all.bin                           \
          test-backtrace.bin                     \
@@ -41,6 +42,7 @@ FILES=                                          \
          test-libunwind-x86_64.bin              \
          test-libunwind-arm.bin                 \
          test-libunwind-aarch64.bin             \
+         test-libunwind-sw_64.bin               \
          test-libunwind-debug-frame-arm.bin     \
          test-libunwind-debug-frame-aarch64.bin \
          test-pthread-attr-setaffinity-np.bin   \
@@ -181,6 +183,9 @@ $(OUTPUT)test-libunwind-arm.bin:
 $(OUTPUT)test-libunwind-aarch64.bin:
 	$(BUILD) -lelf -lunwind-aarch64
 
+$(OUTPUT)test-libunwind-sw_64.bin:
+	$(BUILD) -lelf -lunwind-sw_64
+
 $(OUTPUT)test-libunwind-debug-frame-arm.bin:
 	$(BUILD) -lelf -lunwind-arm
 
@@ -228,7 +233,11 @@ $(OUTPUT)test-libpython.bin:
 	$(BUILD) $(FLAGS_PYTHON_EMBED)
 
 $(OUTPUT)test-libbfd.bin:
+ifeq ($(ARCH),sw_64)
+	$(BUILD) -DPACKAGE='"perf"' -lbfd -ldl -liberty -lz
+else
 	$(BUILD) -DPACKAGE='"perf"' -lbfd -ldl
+endif
 
 $(OUTPUT)test-libbfd-buildid.bin:
 	$(BUILD) -DPACKAGE='"perf"' -lbfd -ldl
