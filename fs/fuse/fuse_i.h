@@ -31,6 +31,7 @@
 #include <linux/pid_namespace.h>
 #include <linux/refcount.h>
 #include <linux/user_namespace.h>
+#include <linux/miscdevice.h>
 
 /** Default max number of pages that can be used in a single read request */
 #define FUSE_DEFAULT_MAX_PAGES_PER_REQ 32
@@ -1337,5 +1338,17 @@ void fuse_io_end(struct fuse_io_counter *fic, struct fuse_req_stat *req);
 int fuse_io_metrics_show(struct seq_file *s, void *unused);
 void fuse_io_counter_set_latency_target(struct fuse_io_counter *fic,
 					u64 target_ns);
+
+typedef int (*fuse_mount_cb_t)(struct file *file);
+extern fuse_mount_cb_t fuse_mount_callback;
+
+#if IS_ENABLED(CONFIG_VIRT_FUSE)
+static inline bool is_virtfuse_device(struct file *file)
+{
+	return iminor(file_inode(file)) != FUSE_MINOR;
+}
+#else
+static inline bool is_virtfuse_device(struct file *file) { return false; }
+#endif
 
 #endif /* _FS_FUSE_I_H */
