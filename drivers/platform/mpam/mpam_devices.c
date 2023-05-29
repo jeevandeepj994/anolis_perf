@@ -984,6 +984,7 @@ static void __ris_msmon_csu_read(void *arg)
 }
 
 #define MBWU_MASK GENMASK(23, 0)
+#define MBWU_WINWD_MAX GENMASK(22, 0)
 #define MBWU_GET(v) ((v) & MBWU_MASK)
 #define MPAMF_CUST_MBWC_OFFSET 0x08
 #define MPAMF_CUST_WINDW_OFFSET 0x0C
@@ -994,30 +995,21 @@ static void __ris_msmon_mbwu_read(void *arg)
 	struct mon_read *m = arg;
 	u64 mb_val = 0;
 	struct mon_cfg *ctx = m->ctx;
-	bool reset_on_next_read = false;
-	struct mpam_msc_ris *ris = m->ris;
 	struct mpam_msc *msc = m->ris->msc;
-	struct msmon_mbwu_state *mbwu_state;
 	u32 custom_reg_base_addr, cycle, val;
 
 	assert_spin_locked(&msc->lock);
 
-	spin_lock_irqsave(&msc->mon_sel_lock, flags);
+	spin_lock_irqsave(&msc->part_sel_lock, flags);
 
 	__mpam_write_reg(msc, MPAMCFG_PART_SEL, ctx->mon);
-
-	mbwu_state = &ris->mbwu_state[ctx->mon];
-	if (mbwu_state) {
-		reset_on_next_read = mbwu_state->reset_on_next_read;
-		mbwu_state->reset_on_next_read = false;
-	}
 
 	custom_reg_base_addr = __mpam_read_reg(msc, MPAMF_IMPL_IDR);
 
 	cycle = __mpam_read_reg(msc, custom_reg_base_addr + MPAMF_CUST_WINDW_OFFSET);
 	val = __mpam_read_reg(msc, custom_reg_base_addr + MPAMF_CUST_MBWC_OFFSET);
 
-	spin_unlock_irqrestore(&msc->mon_sel_lock, flags);
+	spin_unlock_irqrestore(&msc->part_sel_lock, flags);
 
 	if (val & MSMON___NRDY) {
 		m->err = -EBUSY;
@@ -1028,9 +1020,6 @@ static void __ris_msmon_mbwu_read(void *arg)
 
 	mb_val = mb_val * 32 * ddr_cpufreq * 1000000 / cycle; /* B/s */
 	*(m->val) += mb_val;
-
-	/* Include bandwidth consumed before the last hardware reset */
-	*(m->val) += mbwu_state->correction;
 }
 
 static int _msmon_read(struct mpam_component *comp, struct mon_read *arg)
@@ -1177,6 +1166,7 @@ static void mpam_reprogram_ris_partid(struct mpam_msc_ris *ris, u16 partid,
 	u16 dspri = GENMASK(rprops->dspri_wd, 0);
 	u16 intpri = GENMASK(rprops->intpri_wd, 0);
 	u16 bwa_fract = GENMASK(15, rprops->bwa_wd);
+	u32 custom_reg_base_addr;
 
 	assert_spin_locked(&msc->lock);
 
@@ -1233,6 +1223,12 @@ static void mpam_reprogram_ris_partid(struct mpam_msc_ris *ris, u16 partid,
 			pri_val |= FIELD_PREP(MPAMCFG_PRI_DSPRI, dspri);
 
 		mpam_write_partsel_reg(msc, PRI, pri_val);
+	}
+
+	if (FIELD_GET(MPAMF_IDR_HAS_IMPL_IDR, ris->idr)) {
+		custom_reg_base_addr = __mpam_read_reg(msc, MPAMF_IMPL_IDR);
+		__mpam_write_reg(msc, custom_reg_base_addr + MPAMF_CUST_WINDW_OFFSET,
+				 MBWU_WINWD_MAX);
 	}
 
 	spin_unlock(&msc->part_sel_lock);
