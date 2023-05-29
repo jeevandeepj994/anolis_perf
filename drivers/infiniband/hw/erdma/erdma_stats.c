@@ -74,6 +74,7 @@ static const char *const erdma_stats_names[] = {
 	[ERDMA_STATS_RX_PPS_METER_DROP_CNT] = "hw_rx_pps_limit_drop_cnt",
 };
 
+
 struct rdma_hw_stats *erdma_alloc_hw_stats(struct ib_device *ibdev,
 					   port_t port_num)
 {

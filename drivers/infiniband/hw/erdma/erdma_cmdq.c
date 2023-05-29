@@ -275,7 +275,7 @@ static void *get_next_valid_cmdq_cqe(struct erdma_cmdq *cmdq)
 	__be32 *cqe = get_queue_entry(cmdq->cq.qbuf, cmdq->cq.ci,
 				      cmdq->cq.depth, CQE_SHIFT);
 	u32 owner = FIELD_GET(ERDMA_CQE_HDR_OWNER_MASK,
-			      __be32_to_cpu(READ_ONCE(*cqe)));
+			      be32_to_cpu(READ_ONCE(*cqe)));
 
 	return owner ^ !!(cmdq->cq.ci & cmdq->cq.depth) ? cqe : NULL;
 }
@@ -313,7 +313,6 @@ static int erdma_poll_single_cmd_completion(struct erdma_cmdq *cmdq)
 	__be32 *cqe;
 	u16 ctx_id;
 	u64 *sqe;
-	int i;
 
 	cqe = get_next_valid_cmdq_cqe(cmdq);
 	if (!cqe)
@@ -322,8 +321,8 @@ static int erdma_poll_single_cmd_completion(struct erdma_cmdq *cmdq)
 	cmdq->cq.ci++;
 
 	dma_rmb();
-	hdr0 = __be32_to_cpu(*cqe);
-	sqe_idx = __be32_to_cpu(*(cqe + 1));
+	hdr0 = be32_to_cpu(*cqe);
+	sqe_idx = be32_to_cpu(*(cqe + 1));
 
 	sqe = get_queue_entry(cmdq->sq.qbuf, sqe_idx, cmdq->sq.depth,
 			      SQEBB_SHIFT);
@@ -334,10 +333,8 @@ static int erdma_poll_single_cmd_completion(struct erdma_cmdq *cmdq)
 
 	comp_wait->cmd_status = ERDMA_CMD_STATUS_FINISHED;
 	comp_wait->comp_status = FIELD_GET(ERDMA_CQE_HDR_SYNDROME_MASK, hdr0);
+	be32_to_cpu_array(comp_wait->comp_data, cqe + 2, 4);
 	cmdq->sq.ci += cmdq->sq.wqebb_cnt;
-
-	for (i = 0; i < 4; i++)
-		comp_wait->comp_data[i] = __be32_to_cpu(*(cqe + 2 + i));
 
 	if (cmdq->use_event)
 		complete(&comp_wait->wait_event);
@@ -433,6 +430,7 @@ void erdma_cmdq_build_reqhdr(u64 *hdr, u32 mod, u32 op)
 int erdma_post_cmd_wait(struct erdma_cmdq *cmdq, void *req, u32 req_size,
 			u64 *resp0, u64 *resp1)
 {
+	struct erdma_dev *dev = container_of(cmdq, struct erdma_dev, cmdq);
 	struct erdma_comp_wait *comp_wait;
 	int ret;
 
@@ -476,6 +474,11 @@ int erdma_post_cmd_wait(struct erdma_cmdq *cmdq, void *req, u32 req_size,
 
 out:
 	up(&cmdq->credits);
+
+	if (ret)
+		ibdev_err_ratelimited(&dev->ibdev,
+				      "CMD(hdr 0x%llx) return with error %d\n",
+				      *(u64 *)req, ret);
 
 	return ret;
 }
