@@ -284,10 +284,24 @@ static void erdma_ceq_uninit_one(struct erdma_dev *dev, u16 ceqn)
 
 int erdma_ceqs_init(struct erdma_dev *dev)
 {
+	u64 req_hdr, cap0, cap1;
 	u32 i, j;
 	int err;
 
-	for (i = 0; i < dev->attrs.irq_num - 1; i++) {
+	erdma_cmdq_build_reqhdr(&req_hdr, CMDQ_SUBMOD_RDMA,
+				CMDQ_OPCODE_QUERY_DEVICE);
+
+	err = erdma_post_cmd_wait(&dev->cmdq, &req_hdr, sizeof(req_hdr), &cap0,
+				  &cap1);
+	if (err)
+		return err;
+
+#define ERDMA_GET_CAP(name, cap) FIELD_GET(ERDMA_CMD_DEV_CAP_##name##_MASK, cap)
+
+	dev->attrs.max_ceqs =
+		min((size_t)8 * (size_t)ERDMA_GET_CAP(QBLOCK, cap1), (size_t)dev->attrs.irq_num);
+
+	for (i = 0; i < dev->attrs.max_ceqs - 1; i++) {
 		err = erdma_ceq_init_one(dev, i);
 		if (err)
 			goto out_err;
@@ -314,7 +328,7 @@ void erdma_ceqs_uninit(struct erdma_dev *dev)
 {
 	u32 i;
 
-	for (i = 0; i < dev->attrs.irq_num - 1; i++) {
+	for (i = 0; i < dev->attrs.max_ceqs - 1; i++) {
 		erdma_free_ceq_irq(dev, i);
 		erdma_ceq_uninit_one(dev, i);
 	}

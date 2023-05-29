@@ -6,10 +6,9 @@
 /* Authors: Bernard Metzler <bmt@zurich.ibm.com> */
 /* Copyright (c) 2008-2019, IBM Corporation */
 
+#include "kcompat.h"
 #include "erdma_cm.h"
 #include "erdma_verbs.h"
-
-extern bool compat_mode;
 
 void erdma_qp_llp_close(struct erdma_qp *qp)
 {
@@ -54,21 +53,34 @@ static int erdma_modify_qp_state_to_rts(struct erdma_qp *qp,
 					struct erdma_qp_attrs *attrs,
 					enum erdma_qp_attr_mask mask)
 {
-	int ret;
 	struct erdma_dev *dev = qp->dev;
 	struct erdma_cmdq_modify_qp_req req;
 	struct tcp_sock *tp;
 	struct erdma_cep *cep = qp->cep;
 	struct sockaddr_storage local_addr, remote_addr;
+	int ret;
 
 	if (qp->attrs.connect_without_cm) {
-		req.cookie = qp->ibqp.qp_num;
-		req.dip = htonl(qp->attrs.dip);
-		req.sip = htonl(qp->attrs.sip);
+		req.cookie = FIELD_PREP(ERDMA_CMD_MODIFY_QP_IW_OOB_MASK, 1) |
+			     FIELD_PREP(ERDMA_CMD_MODIFY_QP_RQPN_MASK, qp->attrs.remote_qp_num);
+		if (((struct sockaddr_in *)&qp->attrs.raddr)->sin_family == AF_INET) {
+			req.dip = qp->attrs.raddr.in.sin_addr.s_addr;
+			req.sip = qp->attrs.laddr.in.sin_addr.s_addr;
+		} else if (dev->attrs.cap_flags & ERDMA_DEV_CAP_FLAGS_IPV6) {
+			memcpy(req.ipv6_daddr, &qp->attrs.raddr.in6.sin6_addr.s6_addr,
+			       sizeof(struct in6_addr));
+			memcpy(req.ipv6_saddr, &qp->attrs.laddr.in6.sin6_addr.s6_addr,
+			       sizeof(struct in6_addr));
+			req.cookie |= FIELD_PREP(ERDMA_CMD_MODIFY_QP_IPV6_MASK, 1);
+			req.flow_label = 0;
+		} else {
+			return -EAFNOSUPPORT;
+		}
 		req.dport = htons(qp->attrs.dport);
 		req.sport = htons(qp->attrs.sport);
 		req.send_nxt = 0;
 		req.recv_nxt = 0;
+
 		goto without_cep;
 	}
 	if (!(mask & ERDMA_QP_ATTR_LLP_HANDLE))
@@ -90,10 +102,24 @@ static int erdma_modify_qp_state_to_rts(struct erdma_qp *qp,
 	qp->attrs.remote_cookie = be32_to_cpu(qp->cep->mpa.ext_data.cookie);
 
 	req.cookie = be32_to_cpu(qp->cep->mpa.ext_data.cookie);
-	req.dip = to_sockaddr_in(remote_addr).sin_addr.s_addr;
-	req.sip = to_sockaddr_in(local_addr).sin_addr.s_addr;
-	req.dport = to_sockaddr_in(remote_addr).sin_port;
-	req.sport = to_sockaddr_in(local_addr).sin_port;
+	if (qp->cep->sock->sk->sk_family == AF_INET) {
+		req.dip = to_sockaddr_in(remote_addr).sin_addr.s_addr;
+		req.sip = to_sockaddr_in(local_addr).sin_addr.s_addr;
+		req.dport = to_sockaddr_in(remote_addr).sin_port;
+		req.sport = to_sockaddr_in(local_addr).sin_port;
+	} else if (dev->attrs.cap_flags & ERDMA_DEV_CAP_FLAGS_IPV6) {
+		req.cookie = FIELD_PREP(ERDMA_CMD_MODIFY_QP_IPV6_MASK, 1) |
+			     FIELD_PREP(ERDMA_CMD_MODIFY_QP_RQPN_MASK, req.cookie);
+		memcpy(req.ipv6_daddr, &to_sockaddr_in6(remote_addr).sin6_addr,
+			sizeof(struct in6_addr));
+		memcpy(req.ipv6_saddr, &to_sockaddr_in6(local_addr).sin6_addr,
+			sizeof(struct in6_addr));
+		req.dport = to_sockaddr_in6(remote_addr).sin6_port;
+		req.sport = to_sockaddr_in6(local_addr).sin6_port;
+		req.flow_label = to_sockaddr_in6(remote_addr).sin6_flowinfo;
+	} else {
+		return -EAFNOSUPPORT;
+	}
 
 	req.send_nxt = tp->snd_nxt;
 	/* rsvd tcp seq for mpa-rsp in server. */
@@ -130,30 +156,27 @@ static int erdma_modify_qp_state_to_rts_compat(struct erdma_qp *qp,
 	req.cfg = FIELD_PREP(ERDMA_CMD_MODIFY_QP_STATE_MASK, qp->attrs.state) |
 		  FIELD_PREP(ERDMA_CMD_MODIFY_QP_CC_MASK, qp->attrs.cc) |
 		  FIELD_PREP(ERDMA_CMD_MODIFY_QP_QPN_MASK, QP_ID(qp));
+	req.cookie = FIELD_PREP(ERDMA_CMD_MODIFY_QP_RQPN_MASK, qp->attrs.remote_qp_num);
 
-	req.cookie = qp->attrs.remote_qp_num;
-	req.dip = qp->attrs.raddr.in.sin_addr.s_addr;
-	req.sip = qp->attrs.laddr.in.sin_addr.s_addr;
-
-	if (req.dip < req.sip) {
-		req.dport = COMPAT_PORT_BASE + ((QP_ID(qp) >> 16) & 0xF);
-		req.sport = QP_ID(qp);
-	} else if (req.dip ==
-		   req.sip) { /* if dip == sip, must have lqpn != rqpn */
-		if (QP_ID(qp) < qp->attrs.remote_qp_num) {
-			req.dport =
-				COMPAT_PORT_BASE + ((QP_ID(qp) >> 16) & 0xF);
-			req.sport = QP_ID(qp);
-		} else {
-			req.sport = COMPAT_PORT_BASE +
-				    ((qp->attrs.remote_qp_num >> 16) & 0xF);
-			req.dport = qp->attrs.remote_qp_num;
-		}
+	if (((struct sockaddr_in *)&qp->attrs.raddr)->sin_family == AF_INET) {
+		req.dip = qp->attrs.raddr.in.sin_addr.s_addr;
+		req.sip = qp->attrs.laddr.in.sin_addr.s_addr;
+	} else if (dev->attrs.cap_flags & ERDMA_DEV_CAP_FLAGS_IPV6) {
+		req.cookie |= FIELD_PREP(ERDMA_CMD_MODIFY_QP_IPV6_MASK, 1);
+		memcpy(req.ipv6_daddr, &qp->attrs.raddr.in6.sin6_addr.s6_addr,
+		       sizeof(struct in6_addr));
+		memcpy(req.ipv6_saddr, &qp->attrs.laddr.in6.sin6_addr.s6_addr,
+		       sizeof(struct in6_addr));
+		req.flow_label = 0;
 	} else {
-		req.sport = COMPAT_PORT_BASE +
-			    ((qp->attrs.remote_qp_num >> 16) & 0xF);
-		req.dport = qp->attrs.remote_qp_num;
+		return -EAFNOSUPPORT;
 	}
+
+	erdma_gen_port_from_qpn(req.sip, req.dip, QP_ID(qp),
+				qp->attrs.remote_qp_num, &req.sport,
+				&req.dport);
+	req.sport = htons(req.sport);
+	req.dport = htons(req.dport);
 
 	req.send_nxt = req.sport * 4;
 	req.recv_nxt = req.dport * 4;
@@ -362,15 +385,16 @@ static int erdma_push_one_sqe(struct erdma_qp *qp, u16 *pi,
 	u32 wqe_size, wqebb_cnt, hw_op, flags, sgl_offset;
 	u32 idx = *pi & (qp->attrs.sq_size - 1);
 	enum ib_wr_opcode op = send_wr->opcode;
+	struct erdma_atomic_sqe *atomic_sqe;
 	struct erdma_readreq_sqe *read_sqe;
 	struct erdma_reg_mr_sqe *regmr_sge;
 	struct erdma_write_sqe *write_sqe;
 	struct erdma_send_sqe *send_sqe;
 	struct ib_rdma_wr *rdma_wr;
-	struct erdma_mr *mr;
+	struct erdma_sge *sge;
 	__le32 *length_field;
+	struct erdma_mr *mr;
 	u64 wqe_hdr, *entry;
-	struct ib_sge *sge;
 	u32 attrs;
 	int ret;
 
@@ -437,9 +461,9 @@ static int erdma_push_one_sqe(struct erdma_qp *qp, u16 *pi,
 
 		sge = get_queue_entry(qp->kern_qp.sq_buf, idx + 1,
 				      qp->attrs.sq_size, SQEBB_SHIFT);
-		sge->addr = rdma_wr->remote_addr;
-		sge->lkey = rdma_wr->rkey;
-		sge->length = send_wr->sg_list[0].length;
+		sge->addr = cpu_to_le64(rdma_wr->remote_addr);
+		sge->key = cpu_to_le32(rdma_wr->rkey);
+		sge->length = cpu_to_le32(send_wr->sg_list[0].length);
 		wqe_size = sizeof(struct erdma_readreq_sqe) +
 			   send_wr->num_sge * sizeof(struct ib_sge);
 
@@ -471,10 +495,15 @@ static int erdma_push_one_sqe(struct erdma_qp *qp, u16 *pi,
 
 		mr->access = ERDMA_MR_ACC_LR |
 			     to_erdma_access_flags(reg_wr(send_wr)->access);
+		if (compat_mode)
+			mr->access = mr->access | ERDMA_MR_ACC_RW;
+
 		regmr_sge->addr = cpu_to_le64(mr->ibmr.iova);
 		regmr_sge->length = cpu_to_le32(mr->ibmr.length);
 		regmr_sge->stag = cpu_to_le32(reg_wr(send_wr)->key);
-		attrs = FIELD_PREP(ERDMA_SQE_MR_MODE_MASK, 0) |
+		regmr_sge->attr1 =
+			FIELD_PREP(ERDMA_SQE_MR_PGSZ_MASK, ilog2(mr->ibmr.page_size));
+		attrs = FIELD_PREP(ERDMA_SQE_MR_PGSZ_AVAIL_MASK, 1) |
 			FIELD_PREP(ERDMA_SQE_MR_ACCESS_MASK, mr->access) |
 			FIELD_PREP(ERDMA_SQE_MR_MTT_CNT_MASK,
 				   mr->mem.mtt_nents);
@@ -484,7 +513,7 @@ static int erdma_push_one_sqe(struct erdma_qp *qp, u16 *pi,
 			/* Copy SGLs to SQE content to accelerate */
 			memcpy(get_queue_entry(qp->kern_qp.sq_buf, idx + 1,
 					       qp->attrs.sq_size, SQEBB_SHIFT),
-			       mr->mem.mtt_buf, MTT_SIZE(mr->mem.mtt_nents));
+			       mr->mem.pbl->buf, MTT_SIZE(mr->mem.mtt_nents));
 			wqe_size = sizeof(struct erdma_reg_mr_sqe) +
 				   MTT_SIZE(mr->mem.mtt_nents);
 		} else {
@@ -492,7 +521,7 @@ static int erdma_push_one_sqe(struct erdma_qp *qp, u16 *pi,
 			wqe_size = sizeof(struct erdma_reg_mr_sqe);
 		}
 
-		regmr_sge->attrs = cpu_to_le32(attrs);
+		regmr_sge->attr0 = cpu_to_le32(attrs);
 		goto out;
 	case IB_WR_LOCAL_INV:
 		wqe_hdr |= FIELD_PREP(ERDMA_SQE_HDR_OPCODE_MASK,
@@ -500,6 +529,35 @@ static int erdma_push_one_sqe(struct erdma_qp *qp, u16 *pi,
 		regmr_sge = (struct erdma_reg_mr_sqe *)entry;
 		regmr_sge->stag = cpu_to_le32(send_wr->ex.invalidate_rkey);
 		wqe_size = sizeof(struct erdma_reg_mr_sqe);
+		goto out;
+	case IB_WR_ATOMIC_CMP_AND_SWP:
+	case IB_WR_ATOMIC_FETCH_AND_ADD:
+		atomic_sqe = (struct erdma_atomic_sqe *)entry;
+		if (op == IB_WR_ATOMIC_CMP_AND_SWP) {
+			wqe_hdr |= FIELD_PREP(ERDMA_SQE_HDR_OPCODE_MASK,
+					      ERDMA_OP_ATOMIC_CAS);
+			atomic_sqe->fetchadd_swap_data =
+				cpu_to_le64(atomic_wr(send_wr)->swap);
+			atomic_sqe->cmp_data =
+				cpu_to_le64(atomic_wr(send_wr)->compare_add);
+		} else {
+			wqe_hdr |= FIELD_PREP(ERDMA_SQE_HDR_OPCODE_MASK,
+					      ERDMA_OP_ATOMIC_FAA);
+			atomic_sqe->fetchadd_swap_data =
+				cpu_to_le64(atomic_wr(send_wr)->compare_add);
+		}
+
+		sge = get_queue_entry(qp->kern_qp.sq_buf, idx + 1,
+				      qp->attrs.sq_size, SQEBB_SHIFT);
+		sge->addr = cpu_to_le64(atomic_wr(send_wr)->remote_addr);
+		sge->key = cpu_to_le32(atomic_wr(send_wr)->rkey);
+		sge++;
+
+		sge->addr = cpu_to_le64(send_wr->sg_list[0].addr);
+		sge->key = cpu_to_le32(send_wr->sg_list[0].lkey);
+		sge->length = cpu_to_le32(send_wr->sg_list[0].length);
+
+		wqe_size = sizeof(*atomic_sqe);
 		goto out;
 	default:
 		return -EOPNOTSUPP;
@@ -544,14 +602,15 @@ static void kick_sq_db(struct erdma_qp *qp, u16 pi)
 int erdma_post_send(struct ib_qp *ibqp, const struct ib_send_wr *send_wr,
 		    const struct ib_send_wr **bad_send_wr)
 {
+	const struct ib_send_wr *wr = send_wr;
 	struct erdma_qp *qp = to_eqp(ibqp);
 	int ret = 0;
-	const struct ib_send_wr *wr = send_wr;
 	unsigned long flags;
 	u16 sq_pi;
 
 	if (!send_wr)
 		return -EINVAL;
+
 
 	spin_lock_irqsave(&qp->kern_qp.sq_lock, flags);
 	sq_pi = qp->kern_qp.sq_pi;
@@ -619,6 +678,7 @@ int erdma_post_recv(struct ib_qp *ibqp, const struct ib_recv_wr *recv_wr,
 	struct erdma_qp *qp = to_eqp(ibqp);
 	unsigned long flags;
 	int ret = 0;
+
 
 	spin_lock_irqsave(&qp->kern_qp.rq_lock, flags);
 

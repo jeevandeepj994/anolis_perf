@@ -92,11 +92,11 @@ static int erdma_ioctl_conf_cmd(struct erdma_dev *edev,
 			edev->attrs.cc = msg->in.config_req.value;
 		else
 			msg->out.config_resp.value = edev->attrs.cc;
-	} else if (msg->in.opcode == ERDMA_CONFIG_TYPE_LOGLEVEL) {
+	} else if (msg->in.opcode == ERDMA_CONFIG_TYPE_RETRANS_NUM) {
 		if (msg->in.config_req.is_set)
-			dprint_mask = msg->in.config_req.value;
+			ret = erdma_set_retrans_num(edev, msg->in.config_req.value);
 		else
-			msg->out.config_resp.value = dprint_mask;
+			msg->out.config_resp.value = edev->attrs.retrans_num;
 	}
 
 	msg->out.length = 4;
@@ -167,6 +167,7 @@ static int fill_cq_info(struct erdma_dev *dev, u32 cqn,
 	struct erdma_cmdq_query_cqc_resp resp;
 	struct rdma_restrack_entry *res;
 	struct erdma_cq *cq;
+	struct erdma_mem *mtt;
 	int ret;
 
 	if (cqn == 0) {
@@ -191,19 +192,17 @@ static int fill_cq_info(struct erdma_dev *dev, u32 cqn,
 
 	res = &cq->ibcq.res;
 	info->is_user = !rdma_is_kernel_res(res);
+	mtt = info->is_user ? &cq->user_cq.qbuf_mtt :
+			      &cq->kern_cq.qbuf_mtt;
 
-	if (info->is_user) {
-		info->mtt.page_size = cq->user_cq.qbuf_mtt.page_size;
-		info->mtt.page_offset = cq->user_cq.qbuf_mtt.page_offset;
-		info->mtt.page_cnt = cq->user_cq.qbuf_mtt.page_cnt;
-		info->mtt.mtt_nents = cq->user_cq.qbuf_mtt.mtt_nents;
-		memcpy(info->mtt.mtt_entry, cq->user_cq.qbuf_mtt.mtt_entry,
-		       ERDMA_MAX_INLINE_MTT_ENTRIES * sizeof(__u64));
-		info->mtt.va = cq->user_cq.qbuf_mtt.va;
-		info->mtt.len = cq->user_cq.qbuf_mtt.len;
-		info->mtt_type = cq->user_cq.qbuf_mtt.mtt_type;
-	} else {
-		info->qbuf_dma_addr = cq->kern_cq.qbuf_dma_addr;
+	info->mtt.page_size = mtt->page_size;
+	info->mtt.page_offset = mtt->page_offset;
+	info->mtt.page_cnt = mtt->page_cnt;
+	info->mtt.mtt_nents = mtt->mtt_nents;
+	info->mtt.va = mtt->va;
+	info->mtt.len = mtt->len;
+
+	if (!info->is_user) {
 		info->ci = cq->kern_cq.ci;
 		info->cmdsn = cq->kern_cq.cmdsn;
 		info->notify_cnt = cq->kern_cq.notify_cnt;
@@ -245,9 +244,9 @@ static int erdma_fill_qp_info(struct erdma_dev *dev, u32 qpn,
 {
 	struct erdma_cmdq_query_qpc_resp resp;
 	struct rdma_restrack_entry *res;
-	struct erdma_mem *mtt;
+	struct erdma_mem *sq_mtt, *rq_mtt;
 	struct erdma_qp *qp;
-	int i, ret;
+	int ret;
 
 	if (qpn == 0)
 		goto query_hw_qpc;
@@ -255,6 +254,10 @@ static int erdma_fill_qp_info(struct erdma_dev *dev, u32 qpn,
 	qp = find_qp_by_qpn(dev, qpn);
 	if (!qp)
 		return -EINVAL;
+
+	if (qp->ibqp.qp_type != IB_QPT_RC)
+		return -EINVAL;
+
 	erdma_qp_get(qp);
 
 	qp_info->hw_info_valid = 0;
@@ -298,35 +301,32 @@ static int erdma_fill_qp_info(struct erdma_dev *dev, u32 qpn,
 	if (qp_info->is_user) {
 		qp_info->pid = res->task->pid;
 		get_task_comm(qp_info->buf, res->task);
-		mtt = &qp->user_qp.sq_mtt;
-		qp_info->sq_mtt_type = mtt->mtt_type;
-		qp_info->sq_mtt.page_size = mtt->page_size;
-		qp_info->sq_mtt.page_offset = mtt->page_offset;
-		qp_info->sq_mtt.page_cnt = mtt->page_cnt;
-		qp_info->sq_mtt.mtt_nents = mtt->mtt_nents;
-		qp_info->sq_mtt.va = mtt->va;
-		qp_info->sq_mtt.len = mtt->len;
-		for (i = 0; i < ERDMA_MAX_INLINE_MTT_ENTRIES; i++)
-			qp_info->sq_mtt.mtt_entry[i] = mtt->mtt_entry[i];
+	}
+	sq_mtt = qp_info->is_user ? &qp->user_qp.sq_mtt :
+				    &qp->kern_qp.sq_mtt;
 
-		mtt = &qp->user_qp.rq_mtt;
-		qp_info->rq_mtt_type = mtt->mtt_type;
-		qp_info->rq_mtt.page_size = mtt->page_size;
-		qp_info->rq_mtt.page_offset = mtt->page_offset;
-		qp_info->rq_mtt.page_cnt = mtt->page_cnt;
-		qp_info->rq_mtt.mtt_nents = mtt->mtt_nents;
-		qp_info->rq_mtt.va = mtt->va;
-		qp_info->rq_mtt.len = mtt->len;
-		for (i = 0; i < ERDMA_MAX_INLINE_MTT_ENTRIES; i++)
-			qp_info->rq_mtt.mtt_entry[i] = mtt->mtt_entry[i];
-	} else {
+	qp_info->sq_mtt.page_size = sq_mtt->page_size;
+	qp_info->sq_mtt.page_offset = sq_mtt->page_offset;
+	qp_info->sq_mtt.page_cnt = sq_mtt->page_cnt;
+	qp_info->sq_mtt.mtt_nents = sq_mtt->mtt_nents;
+	qp_info->sq_mtt.va = sq_mtt->va;
+	qp_info->sq_mtt.len = sq_mtt->len;
+
+	rq_mtt = qp_info->is_user ? &qp->user_qp.rq_mtt :
+				    &qp->kern_qp.rq_mtt;
+
+	qp_info->rq_mtt.page_size = rq_mtt->page_size;
+	qp_info->rq_mtt.page_offset = rq_mtt->page_offset;
+	qp_info->rq_mtt.page_cnt = rq_mtt->page_cnt;
+	qp_info->rq_mtt.mtt_nents = rq_mtt->mtt_nents;
+	qp_info->rq_mtt.va = rq_mtt->va;
+	qp_info->rq_mtt.len = rq_mtt->len;
+
+	if (!qp_info->is_user) {
 		qp_info->sqci = qp->kern_qp.sq_ci;
 		qp_info->sqpi = qp->kern_qp.sq_pi;
 		qp_info->rqci = qp->kern_qp.rq_ci;
 		qp_info->rqpi = qp->kern_qp.rq_pi;
-
-		qp_info->sqbuf_dma = qp->kern_qp.sq_buf_dma_addr;
-		qp_info->rqbuf_dma = qp->kern_qp.rq_buf_dma_addr;
 		qp_info->sqdbrec_dma = qp->kern_qp.sq_db_info_dma_addr;
 		qp_info->rqdbrec_dma = qp->kern_qp.rq_db_info_dma_addr;
 	}
