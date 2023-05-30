@@ -219,6 +219,7 @@ static int fuse_dentry_revalidate(struct dentry *entry, unsigned int flags)
 		struct fuse_forget_link *forget;
 		u64 attr_version;
 		u64 wb_version;
+		u64 fo_version;
 
 		/* For negative dentries, always do a fresh lookup */
 		if (!inode)
@@ -237,7 +238,7 @@ static int fuse_dentry_revalidate(struct dentry *entry, unsigned int flags)
 
 		attr_version = fuse_get_attr_version(fc);
 		wb_version = fuse_get_wb_version(fc);
-
+		fo_version = fuse_get_fo_version(fc);
 		parent = dget_parent(entry);
 		fuse_lookup_init(fc, &args, get_node_id(d_inode(parent)),
 				 &entry->d_name, &outarg);
@@ -266,7 +267,7 @@ static int fuse_dentry_revalidate(struct dentry *entry, unsigned int flags)
 		forget_all_cached_acls(inode);
 		fuse_change_attributes(inode, &outarg.attr,
 				       entry_attr_timeout(&outarg),
-				       attr_version, wb_version);
+				       attr_version, wb_version, fo_version);
 		fuse_change_entry_timeout(entry, &outarg);
 		fuse_dentry_set_inval_version(entry, inval_version);
 	} else if (inode) {
@@ -339,6 +340,7 @@ int fuse_lookup_name(struct super_block *sb, u64 nodeid, const struct qstr *name
 	struct fuse_forget_link *forget;
 	u64 attr_version;
 	u64 wb_version;
+	u64 fo_version;
 	int err;
 
 	*inode = NULL;
@@ -354,6 +356,7 @@ int fuse_lookup_name(struct super_block *sb, u64 nodeid, const struct qstr *name
 
 	attr_version = fuse_get_attr_version(fc);
 	wb_version = fuse_get_wb_version(fc);
+	fo_version = fuse_get_fo_version(fc);
 
 	fuse_lookup_init(fc, &args, nodeid, name, outarg);
 	err = fuse_simple_request(fc, &args);
@@ -369,7 +372,7 @@ int fuse_lookup_name(struct super_block *sb, u64 nodeid, const struct qstr *name
 
 	*inode = fuse_iget(sb, outarg->nodeid, outarg->generation,
 			   &outarg->attr, entry_attr_timeout(outarg),
-			   attr_version, wb_version);
+			   attr_version, wb_version, fo_version);
 	err = -ENOMEM;
 	if (!*inode) {
 		fuse_queue_forget(fc, forget, outarg->nodeid, 1);
@@ -451,6 +454,7 @@ static int fuse_create_open(struct inode *dir, struct dentry *entry,
 	struct fuse_inode *fi;
 	struct fuse_file *ff;
 	u64 inval_version = fuse_inval_version(dir);
+	u64 fo_version = fuse_get_fo_version(fc);
 
 	/* Userspace expects S_IFREG in create mode */
 	BUG_ON((mode & S_IFMT) != S_IFREG);
@@ -505,7 +509,7 @@ static int fuse_create_open(struct inode *dir, struct dentry *entry,
 	ff->nodeid = outentry.nodeid;
 	ff->open_flags = outopen.open_flags;
 	inode = fuse_iget(dir->i_sb, outentry.nodeid, outentry.generation,
-			 &outentry.attr, entry_attr_timeout(&outentry), 0, 0);
+			 &outentry.attr, entry_attr_timeout(&outentry), 0, 0, fo_version);
 	if (!inode) {
 		flags &= ~(O_CREAT | O_EXCL | O_TRUNC);
 		fuse_sync_release(NULL, ff, flags);
@@ -594,6 +598,7 @@ static int create_new_entry(struct fuse_conn *fc, struct fuse_args *args,
 	int err;
 	struct fuse_forget_link *forget;
 	u64 inval_version = fuse_inval_version(dir);
+	u64 fo_version = fuse_get_fo_version(fc);
 
 	forget = fuse_alloc_forget();
 	if (!forget)
@@ -616,7 +621,7 @@ static int create_new_entry(struct fuse_conn *fc, struct fuse_args *args,
 		goto out_put_forget_req;
 
 	inode = fuse_iget(dir->i_sb, outarg.nodeid, outarg.generation,
-			  &outarg.attr, entry_attr_timeout(&outarg), 0, 0);
+			  &outarg.attr, entry_attr_timeout(&outarg), 0, 0, fo_version);
 	if (!inode) {
 		fuse_queue_forget(fc, forget, outarg.nodeid, 1);
 		return -ENOMEM;
@@ -950,9 +955,11 @@ static int fuse_do_getattr(struct inode *inode, struct kstat *stat,
 	FUSE_ARGS(args);
 	u64 attr_version;
 	u64 wb_version;
+	u64 fo_version;
 
 	attr_version = fuse_get_attr_version(fc);
 	wb_version = fuse_get_wb_version(fc);
+	fo_version = fuse_get_fo_version(fc);
 
 	memset(&inarg, 0, sizeof(inarg));
 	memset(&outarg, 0, sizeof(outarg));
@@ -980,7 +987,7 @@ static int fuse_do_getattr(struct inode *inode, struct kstat *stat,
 		} else {
 			fuse_change_attributes(inode, &outarg.attr,
 					       attr_timeout(&outarg),
-					       attr_version, wb_version);
+					       attr_version, wb_version, fo_version);
 			if (stat)
 				fuse_fillattr(inode, &outarg.attr, stat);
 		}
@@ -993,6 +1000,7 @@ static int fuse_update_get_attr(struct inode *inode, struct file *file,
 				unsigned int flags)
 {
 	struct fuse_inode *fi = get_fuse_inode(inode);
+	struct fuse_conn *fc = get_fuse_conn(inode);
 	int err = 0;
 	bool sync;
 
@@ -1004,6 +1012,9 @@ static int fuse_update_get_attr(struct inode *inode, struct file *file,
 		sync = true;
 	else
 		sync = time_before64(fi->i_time, get_jiffies_64());
+
+	if (fc->inval_cache_in_failover)
+		sync |= (fi->fo_version != fuse_get_fo_version(fc));
 
 	if (sync) {
 		forget_all_cached_acls(inode);
@@ -1189,7 +1200,8 @@ static int fuse_permission(struct inode *inode, int mask)
 		u32 perm_mask = STATX_MODE | STATX_UID | STATX_GID;
 
 		if (perm_mask & READ_ONCE(fi->inval_mask) ||
-		    time_before64(fi->i_time, get_jiffies_64())) {
+			time_before64(fi->i_time, get_jiffies_64()) ||
+			fi->fo_version != atomic64_read(&fc->fo_version)) {
 			refreshed = true;
 
 			err = fuse_perm_getattr(inode, mask);
@@ -1508,6 +1520,7 @@ int fuse_do_setattr(struct dentry *dentry, struct iattr *attr,
 	int err;
 	bool trust_local_cmtime = is_wb && S_ISREG(inode->i_mode);
 	bool fault_blocked = false;
+	u64 fo_version = fuse_get_fo_version(fc);
 
 	if (!fc->default_permissions)
 		attr->ia_valid |= ATTR_FORCE;
@@ -1615,7 +1628,7 @@ int fuse_do_setattr(struct dentry *dentry, struct iattr *attr,
 	}
 
 	fuse_change_attributes_common(inode, &outarg.attr,
-				      attr_timeout(&outarg));
+				      attr_timeout(&outarg), fo_version);
 	oldsize = inode->i_size;
 	/* see the comment in fuse_change_attributes() */
 	if (!is_wb || is_truncate || !S_ISREG(inode->i_mode))
