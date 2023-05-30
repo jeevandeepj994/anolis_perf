@@ -143,6 +143,9 @@ struct fuse_inode {
 	/** Version of writeback cache*/
 	u64 wb_version;
 
+	/** Version of failover cache*/
+	u64 fo_version;
+
 	/** Version of invalidate */
 	atomic64_t inval_version;
 
@@ -860,6 +863,9 @@ struct fuse_conn {
 	/* Does the filesystem has its own magic? */
 	unsigned int conn_fs_magic:1;
 
+	/* invalidate all cache(attr and dentry) in failover*/
+	unsigned int inval_cache_in_failover:1;
+
 	/* close-to-open consistency */
 	unsigned int close_to_open:1;
 
@@ -895,6 +901,9 @@ struct fuse_conn {
 
 	/** Version counter for writeback changes */
 	atomic64_t wb_version;
+
+	/** Version counter for failover changes */
+	atomic64_t fo_version;
 
 	/** Called on final put */
 	void (*release)(struct fuse_conn *);
@@ -958,6 +967,12 @@ static inline u64 fuse_get_wb_version(struct fuse_conn *fc)
 	return atomic64_read(&fc->wb_version);
 }
 
+
+static inline u64 fuse_get_fo_version(struct fuse_conn *fc)
+{
+	return atomic64_read(&fc->fo_version);
+}
+
 static inline void fuse_invalidate_inval_version(struct inode *inode)
 {
 	struct fuse_inode *fi = get_fuse_inode(inode);
@@ -1000,7 +1015,7 @@ int fuse_inode_eq(struct inode *inode, void *_nodeidp);
 struct inode *fuse_iget(struct super_block *sb, u64 nodeid,
 			int generation, struct fuse_attr *attr,
 			u64 attr_valid, u64 attr_version,
-			u64 wb_version);
+			u64 wb_version, u64 fo_version);
 
 int fuse_lookup_name(struct super_block *sb, u64 nodeid, const struct qstr *name,
 		     struct fuse_entry_out *outarg, struct inode **inode);
@@ -1088,10 +1103,10 @@ void fuse_init_symlink(struct inode *inode);
  */
 void fuse_change_attributes(struct inode *inode, struct fuse_attr *attr,
 			    u64 attr_valid, u64 attr_version,
-			    u64 wb_version);
+			    u64 wb_version, u64 fo_version);
 
 void fuse_change_attributes_common(struct inode *inode, struct fuse_attr *attr,
-				   u64 attr_valid);
+				u64 attr_valid, u64 fo_version);
 
 /**
  * Initialize the client device

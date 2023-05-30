@@ -80,6 +80,7 @@ static struct inode *fuse_alloc_inode(struct super_block *sb)
 	fi->nlookup = 0;
 	fi->attr_version = 0;
 	fi->wb_version = 0;
+	fi->fo_version = 0;
 	fi->writectr = 0;
 	fi->orig_ino = 0;
 	fi->state = 0;
@@ -168,7 +169,7 @@ static ino_t fuse_squash_ino(u64 ino64)
 }
 
 void fuse_change_attributes_common(struct inode *inode, struct fuse_attr *attr,
-				   u64 attr_valid)
+				   u64 attr_valid, u64 fo_version)
 {
 	struct fuse_conn *fc = get_fuse_conn(inode);
 	struct fuse_inode *fi = get_fuse_inode(inode);
@@ -176,6 +177,7 @@ void fuse_change_attributes_common(struct inode *inode, struct fuse_attr *attr,
 	lockdep_assert_held(&fi->lock);
 
 	fi->attr_version = atomic64_inc_return(&fc->attr_version);
+	fi->fo_version = fo_version;
 	fi->i_time = attr_valid;
 	WRITE_ONCE(fi->inval_mask, 0);
 
@@ -266,7 +268,7 @@ static inline bool fuse_inode_has_write_files(struct fuse_inode *fi)
 
 void fuse_change_attributes(struct inode *inode, struct fuse_attr *attr,
 			u64 attr_valid, u64 attr_version,
-			u64 wb_version)
+			u64 wb_version, u64 fo_version)
 {
 	struct fuse_conn *fc = get_fuse_conn(inode);
 	struct fuse_inode *fi = get_fuse_inode(inode);
@@ -282,7 +284,7 @@ void fuse_change_attributes(struct inode *inode, struct fuse_attr *attr,
 	}
 
 	old_mtime = inode->i_mtime;
-	fuse_change_attributes_common(inode, attr, attr_valid);
+	fuse_change_attributes_common(inode, attr, attr_valid, fo_version);
 
 	oldsize = inode->i_size;
 	/*
@@ -385,7 +387,7 @@ static int fuse_inode_set(struct inode *inode, void *_nodeidp)
 struct inode *fuse_iget(struct super_block *sb, u64 nodeid,
 			int generation, struct fuse_attr *attr,
 			u64 attr_valid, u64 attr_version,
-			u64 wb_version)
+			u64 wb_version, u64 fo_version)
 {
 	struct inode *inode;
 	struct fuse_inode *fi;
@@ -414,7 +416,7 @@ struct inode *fuse_iget(struct super_block *sb, u64 nodeid,
 	spin_lock(&fi->lock);
 	fi->nlookup++;
 	spin_unlock(&fi->lock);
-	fuse_change_attributes(inode, attr, attr_valid, attr_version, wb_version);
+	fuse_change_attributes(inode, attr, attr_valid, attr_version, wb_version, fo_version);
 
 	return inode;
 }
@@ -794,6 +796,7 @@ void fuse_conn_init(struct fuse_conn *fc, struct user_namespace *user_ns,
 	fc->connected = 1;
 	atomic64_set(&fc->attr_version, 1);
 	atomic64_set(&fc->wb_version, 1);
+	atomic64_set(&fc->fo_version, 1);
 	get_random_bytes(&fc->scramble_key, sizeof(fc->scramble_key));
 	fc->pid_ns = get_pid_ns(task_active_pid_ns(current));
 	fc->user_ns = get_user_ns(user_ns);
@@ -844,7 +847,7 @@ static struct inode *fuse_get_root_inode(struct super_block *sb, unsigned mode)
 	attr.mode = mode;
 	attr.ino = FUSE_ROOT_ID;
 	attr.nlink = 1;
-	return fuse_iget(sb, 1, 0, &attr, 0, 0, 0);
+	return fuse_iget(sb, 1, 0, &attr, 0, 0, 0, 1);
 }
 
 struct fuse_inode_handle {
@@ -1138,6 +1141,8 @@ static void process_init_reply(struct fuse_conn *fc, struct fuse_req *req)
 				fc->handle_killpriv_v2 = 1;
 				fc->sb->s_flags |= SB_NOSEC;
 			}
+			if (flags & FUSE_INVAL_CACHE_INFAIL)
+				fc->inval_cache_in_failover = 1;
 			if (flags & FUSE_CLOSE_TO_OPEN)
 				fc->close_to_open = 1;
 			if (flags & FUSE_INVALDIR_ALLENTRY)
@@ -1182,7 +1187,8 @@ static void fuse_prepare_init_req(struct fuse_conn *fc, struct fuse_req *req)
 		FUSE_PARALLEL_DIROPS | FUSE_HANDLE_KILLPRIV | FUSE_POSIX_ACL |
 		FUSE_ABORT_ERROR | FUSE_MAX_PAGES | FUSE_CACHE_SYMLINKS |
 		FUSE_HANDLE_KILLPRIV_V2 | FUSE_INIT_EXT |
-		FUSE_CLOSE_TO_OPEN | FUSE_INVALDIR_ALLENTRY;
+		FUSE_INVAL_CACHE_INFAIL | FUSE_CLOSE_TO_OPEN |
+		FUSE_INVALDIR_ALLENTRY;
 #ifdef CONFIG_FUSE_DAX
 	if (fc->dax)
 		flags |= FUSE_MAP_ALIGNMENT;
