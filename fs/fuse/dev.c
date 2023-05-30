@@ -2363,6 +2363,12 @@ void fuse_resend_pqueue(struct fuse_conn *fc)
 		return;
 	}
 
+	/*
+	 * resend means connect failover happened, cached inodes
+	 * should be revalidated later
+	 */
+	atomic64_inc(&fc->fo_version);
+
 	list_for_each_entry(fud, &fc->devices, entry) {
 		struct fuse_pqueue *fpq = &fud->pq;
 
