@@ -212,6 +212,18 @@ void fuse_finish_open(struct inode *inode, struct file *file)
 	}
 	if ((file->f_mode & FMODE_WRITE) && fc->writeback_cache)
 		fuse_link_write_file(file);
+
+	/*
+	 * for close-to-open consistency
+	 */
+	if (fc->close_to_open && fc->writeback_cache && S_ISREG(inode->i_mode)) {
+		struct fuse_inode *fi = get_fuse_inode(inode);
+
+		spin_lock(&fi->lock);
+		fi->attr_version = atomic64_inc_return(&fc->attr_version);
+		spin_unlock(&fi->lock);
+		fuse_invalidate_attr(inode);
+	}
 }
 
 int fuse_open_common(struct inode *inode, struct file *file, bool isdir)
@@ -1832,6 +1844,7 @@ static void fuse_writepage_end(struct fuse_mount *fm, struct fuse_args *args,
 		 */
 		fuse_send_writepage(fm, next, inarg->offset + inarg->size);
 	}
+	fi->wb_version = atomic64_inc_return(&fc->wb_version);
 	fi->writectr--;
 	fuse_writepage_finish(fm, wpa);
 	spin_unlock(&fi->lock);
