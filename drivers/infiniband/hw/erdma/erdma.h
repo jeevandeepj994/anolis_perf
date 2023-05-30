@@ -7,29 +7,22 @@
 #ifndef __ERDMA_H__
 #define __ERDMA_H__
 
+#include "kcompat.h"
 #include <linux/bitfield.h>
 #include <linux/netdevice.h>
 #include <linux/pci.h>
 #include <linux/xarray.h>
 #include <rdma/ib_verbs.h>
 
-#include "erdma_debug.h"
 #include "erdma_hw.h"
 #include "erdma_ioctl.h"
 #include "erdma_stats.h"
 
-#ifndef RDMA_DRIVER_ERDMA
-#define RDMA_DRIVER_ERDMA 19
-#endif
-
-#define ERDMA_MAJOR_VER 0
-#define ERDMA_MEDIUM_VER 2
-#define ERDMA_MINOR_VER 35
 
 #define DRV_MODULE_NAME "erdma"
 #define ERDMA_NODE_DESC "Elastic RDMA(iWARP) stack"
 
-typedef u8 port_t;
+extern bool compat_mode;
 
 struct erdma_stats {
 	atomic64_t value[ERDMA_STATS_MAX];
@@ -143,11 +136,14 @@ struct erdma_devattr {
 	u32 fw_version;
 
 	unsigned char peer_addr[ETH_ALEN];
+	unsigned long cap_flags;
 
 	int numa_node;
 	enum erdma_cc_alg cc;
-	u8 flags;
+	u8 retrans_num;
+	u8 rsvd;
 	u32 grp_num;
+	u32 max_ceqs;
 	int irq_num;
 
 	bool disable_dwqe;

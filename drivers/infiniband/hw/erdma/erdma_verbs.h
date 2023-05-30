@@ -20,6 +20,7 @@
 #define ERDMA_MAX_RECV_SGE 1
 #define ERDMA_MAX_INLINE (sizeof(struct erdma_sge) * (ERDMA_MAX_SEND_SGE))
 #define ERDMA_MAX_FRMR_PA 512
+#define ERDMA_DEFAULT_RETRANS_NUM 24
 
 enum {
 	ERDMA_MMAP_IO_NC = 0, /* no cache */
@@ -59,7 +60,7 @@ struct erdma_pd {
  * MemoryRegion definition.
  */
 #define ERDMA_MAX_INLINE_MTT_ENTRIES 4
-#define MTT_SIZE(mtt_cnt) (mtt_cnt << 3) /* per mtt takes 8 Bytes. */
+#define MTT_SIZE(mtt_cnt) ((mtt_cnt) << 3) /* per mtt takes 8 Bytes. */
 #define ERDMA_MR_MAX_MTT_CNT 524288
 #define ERDMA_MTT_ENTRY_SIZE 8
 
@@ -84,19 +85,48 @@ static inline u8 to_erdma_access_flags(int access)
 	       (access & IB_ACCESS_REMOTE_ATOMIC ? ERDMA_MR_ACC_RA : 0);
 }
 
+struct erdma_pbl {
+	u64 *buf;
+	size_t size;
+
+	bool continuous;
+	union {
+		dma_addr_t buf_dma;
+		struct {
+			struct scatterlist *sglist;
+			u32 nsg;
+			u32 level;
+		};
+	};
+
+	struct erdma_pbl *low_level;
+};
+
+enum erdma_mem_type {
+	ERDMA_UMEM = 0,
+	ERDMA_KMEM = 1,
+};
+
+struct erdma_kmem {
+	struct scatterlist *sgl;
+	u64 nmap;
+};
+
 struct erdma_mem {
-	struct ib_umem *umem;
-	void *mtt_buf;
-	u32 mtt_type;
+	enum erdma_mem_type type;
+	union {
+		struct ib_umem *umem;
+		struct erdma_kmem *kmem;
+	};
 	u32 page_size;
 	u32 page_offset;
 	u32 page_cnt;
 	u32 mtt_nents;
 
+	struct erdma_pbl *pbl;
+
 	u64 va;
 	u64 len;
-
-	u64 mtt_entry[ERDMA_MAX_INLINE_MTT_ENTRIES];
 };
 
 struct erdma_mr {
@@ -133,7 +163,6 @@ struct erdma_kqp {
 	u64 *swr_tbl;
 	void *hw_sq_db;
 	void *sq_buf;
-	dma_addr_t sq_buf_dma_addr;
 	void *sq_db_info;
 
 	spinlock_t rq_lock ____cacheline_aligned;
@@ -142,8 +171,10 @@ struct erdma_kqp {
 	u64 *rwr_tbl;
 	void *hw_rq_db;
 	void *rq_buf;
-	dma_addr_t rq_buf_dma_addr;
 	void *rq_db_info;
+
+	struct erdma_mem sq_mtt;
+	struct erdma_mem rq_mtt;
 
 	dma_addr_t sq_db_info_dma_addr;
 	dma_addr_t rq_db_info_dma_addr;
@@ -162,11 +193,6 @@ enum erdma_qp_state {
 	ERDMA_QP_STATE_COUNT = 8
 };
 
-enum erdma_qp_flags {
-	ERDMA_QP_IN_DESTROY = (1 << 0),
-	ERDMA_QP_IN_FLUSHING = (1 << 1),
-};
-
 enum erdma_qp_attr_mask {
 	ERDMA_QP_ATTR_STATE = (1 << 0),
 	ERDMA_QP_ATTR_LLP_HANDLE = (1 << 2),
@@ -175,6 +201,11 @@ enum erdma_qp_attr_mask {
 	ERDMA_QP_ATTR_SQ_SIZE = (1 << 5),
 	ERDMA_QP_ATTR_RQ_SIZE = (1 << 6),
 	ERDMA_QP_ATTR_MPA = (1 << 7)
+};
+
+enum erdma_qp_flags {
+	ERDMA_QP_IN_DESTROY = (1 << 0),
+	ERDMA_QP_IN_FLUSHING = (1 << 1),
 };
 
 struct erdma_qp_attrs {
@@ -195,8 +226,6 @@ struct erdma_qp_attrs {
 	u8 qp_type;
 	u8 pd_len;
 	bool connect_without_cm;
-	__u32 sip;
-	__u32 dip;
 	__u16 sport;
 	__u16 dport;
 	union {
@@ -216,6 +245,9 @@ struct erdma_qp {
 	struct erdma_cep *cep;
 	struct rw_semaphore state_lock;
 
+	unsigned long flags;
+	struct delayed_work reflush_dwork;
+
 	union {
 		struct erdma_kqp kern_qp;
 		struct erdma_uqp user_qp;
@@ -225,14 +257,13 @@ struct erdma_qp {
 	struct erdma_cq *rcq;
 
 	struct erdma_qp_attrs attrs;
-	unsigned long flags;
-	struct delayed_work reflush_dwork;
 
 };
 
 struct erdma_kcq_info {
 	void *qbuf;
-	dma_addr_t qbuf_dma_addr;
+	struct erdma_mem qbuf_mtt;
+	dma_addr_t db_info_dma_addr;
 	u32 ci;
 	u32 cmdsn;
 	u32 notify_cnt;
@@ -265,6 +296,7 @@ struct erdma_cq {
 		struct erdma_kcq_info kern_cq;
 		struct erdma_ucq_info user_cq;
 	};
+
 	struct erdma_dim dim;
 };
 
@@ -365,16 +397,18 @@ int erdma_map_mr_sg(struct ib_mr *ibmr, struct scatterlist *sg, int sg_nents,
 void erdma_disassociate_ucontext(struct ib_ucontext *ibcontext);
 void erdma_port_event(struct erdma_dev *dev, enum ib_event_type reason);
 void erdma_set_mtu(struct erdma_dev *dev, u32 mtu);
+int erdma_set_retrans_num(struct erdma_dev *dev, u32 retrans_num);
 
 struct net_device *erdma_get_netdev(struct ib_device *device, port_t port_num);
 enum rdma_link_layer erdma_get_link_layer(struct ib_device *dev,
 					  port_t port_num);
 int erdma_query_pkey(struct ib_device *ibdev, port_t port, u16 index,
 		     u16 *pkey);
-
-void erdma_destroy_ah(struct ib_ah *ibah, u32 flags);
 int erdma_modify_cq(struct ib_cq *ibcq, u16 cq_count, u16 cq_period);
 
 int erdma_query_hw_stats(struct erdma_dev *dev);
+const struct cpumask *erdma_get_vector_affinity(struct ib_device *ibdev, int comp_vector);
+
+#include "erdma_compat.h"
 
 #endif
