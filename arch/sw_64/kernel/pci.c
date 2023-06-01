@@ -64,6 +64,14 @@ DECLARE_PCI_FIXUP_HEADER(PCI_VENDOR_ID_INTEL, PCI_DEVICE_ID_INTEL_82378, quirk_i
 #define MB			(1024*KB)
 #define GB			(1024*MB)
 
+resource_size_t pcibios_default_alignment(void)
+{
+	if (is_in_guest())
+		return PAGE_SIZE;
+	else
+		return 0;
+}
+
 resource_size_t pcibios_align_resource(void *data, const struct resource *res,
 		resource_size_t size, resource_size_t align)
 {
@@ -225,13 +233,11 @@ void __init common_init_pci(void)
 		hose->busn_space->start = last_bus;
 		init_busnr = (0xff << 16) + ((last_bus + 1) << 8) + (last_bus);
 		write_rc_conf(hose->node, hose->index, RC_PRIMARY_BUS, init_busnr);
-		if (is_in_host()) {
-			offset = hose->mem_space->start - PCI_32BIT_MEMIO;
+		offset = hose->mem_space->start - PCI_32BIT_MEMIO;
+		if (is_in_host())
 			hose->first_busno = last_bus + 1;
-		} else {
-			offset = hose->mem_space->start - PCI_32BIT_VT_MEMIO;
+		else
 			hose->first_busno = last_bus;
-		}
 		pci_add_resource_offset(&bridge->windows, hose->mem_space, offset);
 		pci_add_resource_offset(&bridge->windows, hose->io_space, hose->io_space->start);
 		pci_add_resource_offset(&bridge->windows, hose->pre_mem_space, 0);
@@ -352,12 +358,8 @@ asmlinkage long sys_pciconfig_iobase(long which, unsigned long bus, unsigned lon
 	return -EOPNOTSUPP;
 }
 
-/* Destroy an __iomem token.  Not copied from lib/iomap.c.  */
-
 void pci_iounmap(struct pci_dev *dev, void __iomem *addr)
 {
-	if (__is_mmio(addr))
-		iounmap(addr);
 }
 EXPORT_SYMBOL(pci_iounmap);
 
@@ -396,7 +398,7 @@ int sw6_pcie_read_rc_cfg(struct pci_bus *bus, unsigned int devfn,
 {
 	u32 data;
 	struct pci_controller *hose = bus->sysdata;
-	void __iomem *cfg_iobase = (void *)hose->rc_config_space_base;
+	void __iomem *cfg_iobase = hose->rc_config_space_base;
 
 	if (IS_ENABLED(CONFIG_PCI_DEBUG))
 		pr_debug("rc read addr:%px bus %d, devfn %#x, where %#x size=%d\t",
@@ -547,9 +549,8 @@ static void __iomem *sw6_pcie_map_bus(struct pci_bus *bus,
 		return NULL;
 
 	relbus = (bus->number << 24) | (devfn << 16) | where;
-	relbus |= PCI_EP_CFG;
 
-	cfg_iobase = (void *)(hose->ep_config_space_base | relbus);
+	cfg_iobase = hose->ep_config_space_base + relbus;
 
 	if (IS_ENABLED(CONFIG_PCI_DEBUG))
 		pr_debug("addr:%px bus %d, devfn %d, where %d\n",
@@ -599,6 +600,16 @@ sw64_init_host(unsigned long node, unsigned long index)
 	}
 }
 
+static void set_devint_wken(int node)
+{
+	unsigned long val;
+
+	/* enable INTD wakeup */
+	val = 0x80;
+	sw64_io_write(node, DEVINT_WKEN, val);
+	sw64_io_write(node, DEVINTWK_INTEN, val);
+}
+
 void __init sw64_init_arch(void)
 {
 	if (IS_ENABLED(CONFIG_PCI)) {
@@ -611,6 +622,7 @@ void __init sw64_init_arch(void)
 		cpu_num = sw64_chip->get_cpu_num();
 
 		for (node = 0; node < cpu_num; node++) {
+			set_devint_wken(node);
 			rc_enable = sw64_chip_init->pci_init.get_rc_enable(node);
 			if (rc_enable == 0) {
 				printk("PCIe is disabled on node %ld\n", node);
@@ -652,11 +664,13 @@ static void __init sw64_init_intx(struct pci_controller *hose)
 		val_node = next_node_in(node, node_online_map);
 	else
 		val_node = node;
-	irq = irq_alloc_descs_from(NR_IRQS_LEGACY, 1, val_node);
+	irq = irq_alloc_descs_from(NR_IRQS_LEGACY, 2, val_node);
 	WARN_ON(irq < 0);
 	irq_set_chip_and_handler(irq, &dummy_irq_chip, handle_level_irq);
 	irq_set_status_flags(irq, IRQ_LEVEL);
 	hose->int_irq = irq;
+	irq_set_chip_and_handler(irq + 1, &dummy_irq_chip, handle_level_irq);
+	hose->service_irq = irq + 1;
 	rcid = cpu_to_rcid(0);
 
 	printk_once(KERN_INFO "INTx are directed to node %d core %d.\n",
@@ -664,6 +678,9 @@ static void __init sw64_init_intx(struct pci_controller *hose)
 	int_conf = 1UL << 62 | rcid; /* rebase all intx on the first logical cpu */
 	if (sw64_chip_init->pci_init.set_intx)
 		sw64_chip_init->pci_init.set_intx(node, index, int_conf);
+
+	write_piu_ior0(node, index, PMEINTCONFIG, PME_ENABLE_INTD_CORE0);
+	write_piu_ior0(node, index, AERERRINTCONFIG, AER_ENABLE_INTD_CORE0);
 }
 
 void __init sw64_init_irq(void)

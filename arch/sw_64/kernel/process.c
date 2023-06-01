@@ -11,6 +11,7 @@
 #include <linux/random.h>
 
 #include <asm/fpu.h>
+#include <asm/switch_to.h>
 
 #include "proto.h"
 
@@ -109,7 +110,7 @@ void
 show_regs(struct pt_regs *regs)
 {
 	show_regs_print_info(KERN_DEFAULT);
-	dik_show_regs(regs, NULL);
+	dik_show_regs(regs);
 }
 
 /*
@@ -143,6 +144,13 @@ release_thread(struct task_struct *dead_task)
 {
 }
 
+int arch_dup_task_struct(struct task_struct *dst, struct task_struct *src)
+{
+	fpstate_save(src);
+	*dst = *src;
+	return 0;
+}
+
 /*
  * Copy architecture-specific thread state
  */
@@ -158,19 +166,16 @@ copy_thread(unsigned long clone_flags, unsigned long usp,
 	struct thread_info *childti = task_thread_info(p);
 	struct pt_regs *childregs = task_pt_regs(p);
 	struct pt_regs *regs = current_pt_regs();
-	struct switch_stack *childstack, *stack;
 
-	childstack = ((struct switch_stack *) childregs) - 1;
-	childti->pcb.ksp = (unsigned long) childstack;
+	childti->pcb.ksp = (unsigned long) childregs;
 	childti->pcb.flags = 7;	/* set FEN, clear everything else */
 
 	if (unlikely(p->flags & PF_KTHREAD)) {
 		/* kernel thread */
-		memset(childstack, 0,
-			sizeof(struct switch_stack) + sizeof(struct pt_regs));
-		childstack->r26 = (unsigned long) ret_from_kernel_thread;
-		childstack->r9 = usp;	/* function */
-		childstack->r10 = kthread_arg;
+		memset(childregs, 0, sizeof(struct pt_regs));
+		p->thread.ra = (unsigned long) ret_from_kernel_thread;
+		p->thread.s[0] = usp;	/* function */
+		p->thread.s[1] = kthread_arg;
 		childti->pcb.usp = 0;
 		return 0;
 	}
@@ -189,10 +194,7 @@ copy_thread(unsigned long clone_flags, unsigned long usp,
 	*childregs = *regs;
 	childregs->r0 = 0;
 	childregs->r19 = 0;
-	stack = ((struct switch_stack *) regs) - 1;
-	*childstack = *stack;
-	p->thread = current->thread;
-	childstack->r26 = (unsigned long) ret_from_fork;
+	p->thread.ra = (unsigned long) ret_from_fork;
 	return 0;
 }
 
@@ -202,9 +204,6 @@ copy_thread(unsigned long clone_flags, unsigned long usp,
 void
 dump_elf_thread(elf_greg_t *dest, struct pt_regs *pt, struct thread_info *ti)
 {
-	/* switch stack follows right below pt_regs: */
-	struct switch_stack *sw = ((struct switch_stack *) pt) - 1;
-
 	dest[0] = pt->r0;
 	dest[1] = pt->r1;
 	dest[2] = pt->r2;
@@ -214,13 +213,13 @@ dump_elf_thread(elf_greg_t *dest, struct pt_regs *pt, struct thread_info *ti)
 	dest[6] = pt->r6;
 	dest[7] = pt->r7;
 	dest[8] = pt->r8;
-	dest[9] = sw->r9;
-	dest[10] = sw->r10;
-	dest[11] = sw->r11;
-	dest[12] = sw->r12;
-	dest[13] = sw->r13;
-	dest[14] = sw->r14;
-	dest[15] = sw->r15;
+	dest[9] = pt->r9;
+	dest[10] = pt->r10;
+	dest[11] = pt->r11;
+	dest[12] = pt->r12;
+	dest[13] = pt->r13;
+	dest[14] = pt->r14;
+	dest[15] = pt->r15;
 	dest[16] = pt->r16;
 	dest[17] = pt->r17;
 	dest[18] = pt->r18;
@@ -263,13 +262,6 @@ dump_elf_task_fp(elf_fpreg_t *dest, struct task_struct *task)
 EXPORT_SYMBOL(dump_elf_task_fp);
 
 /*
- * Return saved PC of a blocked thread.  This assumes the frame
- * pointer is the 6th saved long on the kernel stack and that the
- * saved return address is the first long in the frame.  This all
- * holds provided the thread blocked through a call to schedule() ($15
- * is the frame pointer in schedule() and $15 is saved at offset 48 by
- * entry.S:do_switch_stack).
- *
  * Under heavy swap load I've seen this lose in an ugly way.  So do
  * some extra sanity checking on the ranges we expect these pointers
  * to be in so that we can fail gracefully.  This is just for ps after
@@ -279,14 +271,14 @@ EXPORT_SYMBOL(dump_elf_task_fp);
 unsigned long
 thread_saved_pc(struct task_struct *t)
 {
-	unsigned long base = (unsigned long)task_stack_page(t);
-	unsigned long fp, sp = task_thread_info(t)->pcb.ksp;
+	unsigned long top, fp, sp;
 
-	if (sp > base && sp+6*8 < base + 16*1024) {
-		fp = ((unsigned long *)sp)[6];
-		if (fp > sp && fp < base + 16*1024)
-			return *(unsigned long *)fp;
-	}
+	top = (unsigned long)task_stack_page(t) + 2 * PAGE_SIZE;
+	sp = task_thread_info(t)->pcb.ksp;
+	fp = t->thread.s[6];
+
+	if (fp > sp && fp < top)
+		return *(unsigned long *)fp;
 
 	return 0;
 }
@@ -295,7 +287,7 @@ unsigned long
 get_wchan(struct task_struct *p)
 {
 	unsigned long schedule_frame;
-	unsigned long pc, base, sp;
+	unsigned long pc, top, sp;
 
 	if (!p || p == current || p->state == TASK_RUNNING)
 		return 0;
@@ -311,10 +303,10 @@ get_wchan(struct task_struct *p)
 
 	pc = thread_saved_pc(p);
 	if (in_sched_functions(pc)) {
-		base = (unsigned long)task_stack_page(p);
+		top = (unsigned long)task_stack_page(p) + 2 * PAGE_SIZE;
 		sp = task_thread_info(p)->pcb.ksp;
-		schedule_frame = ((unsigned long *)sp)[6];
-		if (schedule_frame > sp && schedule_frame < base + 16*1024)
+		schedule_frame = p->thread.s[6];
+		if (schedule_frame > sp && schedule_frame < top)
 			return ((unsigned long *)schedule_frame)[12];
 	}
 	return pc;

@@ -34,13 +34,14 @@ struct pci_controller {
 	unsigned long dense_io_base;
 
 	/* This one's for the kernel only.  It's in KSEG somewhere.  */
-	unsigned long ep_config_space_base;
-	unsigned long rc_config_space_base;
+	void __iomem *ep_config_space_base;
+	void __iomem *rc_config_space_base;
 
 	unsigned long index;
 	unsigned long node;
 	DECLARE_BITMAP(piu_msiconfig, 256);
 	int int_irq;
+	int service_irq;
 	/* For compatibility with current (as of July 2003) pciutils
 	 * and XFree86. Eventually will be removed.
 	 */
