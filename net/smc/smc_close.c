@@ -20,11 +20,15 @@
 #include "smc_wr.h"
 #include "smc_cdc.h"
 #include "smc_close.h"
+#include "smc_inet.h"
 
 /* release the clcsock that is assigned to the smc_sock */
 void smc_clcsock_release(struct smc_sock *smc)
 {
 	struct socket *tcp;
+
+	if (smc_sock_is_inet_sock(&smc->sk))
+		return;
 
 	if (smc->listen_smc && current_work() != &smc->smc_listen_work)
 		cancel_work_sync(&smc->smc_listen_work);
@@ -139,11 +143,19 @@ void smc_close_active_abort(struct smc_sock *smc)
 	struct sock *sk = &smc->sk;
 	bool release_clcsock = false;
 
-	if (smc_sk_state(sk) != SMC_INIT && smc->clcsock && smc->clcsock->sk) {
-		sk->sk_err = ECONNABORTED;
-		if (smc->clcsock && smc->clcsock->sk)
+	if (smc_sk_state(sk) != SMC_INIT) {
+		/* sock locked */
+		if (smc_sock_is_inet_sock(sk)) {
+			sk->sk_err = ECONNABORTED;
+			/* This barrier is coupled with smp_rmb() in tcp_poll() */
+			smp_wmb();
+			sk->sk_error_report(sk);
+		} else if (smc->clcsock && smc->clcsock->sk) {
+			sk->sk_err = ECONNABORTED;
 			tcp_abort(smc->clcsock->sk, ECONNABORTED);
+		}
 	}
+
 	switch (smc_sk_state(sk)) {
 	case SMC_ACTIVE:
 	case SMC_APPCLOSEWAIT1:
