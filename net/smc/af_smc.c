@@ -3109,12 +3109,117 @@ static int __smc_setsockopt(struct socket *sock, int level, int optname,
 	return rc;
 }
 
+/* When an unsupported sockopt is found,
+ * SMC should try it best to fallback. If fallback is not possible,
+ * an error should be explicitly returned.
+ */
+static inline bool smc_is_unsupport_tcp_sockopt(int optname)
+{
+	switch (optname) {
+	case TCP_FASTOPEN:
+	case TCP_FASTOPEN_CONNECT:
+	case TCP_FASTOPEN_KEY:
+	case TCP_FASTOPEN_NO_COOKIE:
+	case TCP_ULP:
+		return true;
+	}
+	return false;
+}
+
+/* Return true if smc might modify the semantics of
+ * the imcoming TCP options. Specifically, it includes
+ * unsupported TCP options.
+ */
+static inline bool smc_need_override_tcp_sockopt(struct sock *sk, int optname)
+{
+	switch (optname) {
+	case TCP_NODELAY:
+	case TCP_CORK:
+		if (smc_sk_state(sk) == SMC_INIT ||
+		    smc_sk_state(sk) == SMC_LISTEN ||
+		    smc_sk_state(sk) == SMC_CLOSED)
+			return false;
+		fallthrough;
+	case TCP_DEFER_ACCEPT:
+		return true;
+	default:
+		break;
+	}
+	return smc_is_unsupport_tcp_sockopt(optname);
+}
+
+static int smc_setsockopt_takeover(struct socket *sock, int level, int optname,
+				   sockptr_t optval, unsigned int optlen)
+{
+	struct sock *sk = sock->sk;
+	struct smc_sock *smc;
+	int val, rc = 0;
+
+	smc = smc_sk(sk);
+
+	/* Obviously, the logic bellow requires the level to be TCP_SOL */
+	if (level != SOL_TCP)
+		return 0;
+
+	/* fast path, just go away if no extra action needed */
+	if (!smc_need_override_tcp_sockopt(sk, optname))
+		return 0;
+
+	if (optlen < sizeof(int))
+		return -EINVAL;
+	if (copy_from_sockptr(&val, optval, sizeof(int)))
+		return -EFAULT;
+
+	lock_sock(sk);
+	if (smc->use_fallback)
+		goto out;
+	switch (optname) {
+	case TCP_NODELAY:
+		if (smc_sk_state(sk) != SMC_INIT &&
+		    smc_sk_state(sk) != SMC_LISTEN &&
+		    smc_sk_state(sk) != SMC_CLOSED) {
+			if (val) {
+				SMC_STAT_INC(smc, ndly_cnt);
+				smc_tx_pending(&smc->conn);
+				cancel_delayed_work(&smc->conn.tx_work);
+			}
+		}
+		break;
+	case TCP_CORK:
+		if (smc_sk_state(sk) != SMC_INIT &&
+		    smc_sk_state(sk) != SMC_LISTEN &&
+		    smc_sk_state(sk) != SMC_CLOSED) {
+			if (!val) {
+				SMC_STAT_INC(smc, cork_cnt);
+				smc_tx_pending(&smc->conn);
+				cancel_delayed_work(&smc->conn.tx_work);
+			}
+		}
+		break;
+	case TCP_DEFER_ACCEPT:
+		smc->sockopt_defer_accept = val;
+		break;
+	default:
+		if (smc_is_unsupport_tcp_sockopt(optname)) {
+			/* option not supported by SMC */
+			if (smc_sk_state(sk) == SMC_INIT && !smc->connect_nonblock)
+				rc = smc_switch_to_fallback(smc, SMC_CLC_DECL_OPTUNSUPP);
+			else
+				rc = -EINVAL;
+		}
+		break;
+	}
+out:
+	release_sock(sk);
+	return rc;
+}
+
 static int smc_setsockopt(struct socket *sock, int level, int optname,
 			  sockptr_t optval, unsigned int optlen)
 {
 	struct sock *sk = sock->sk;
 	struct smc_sock *smc;
-	int val, rc;
+	int rc;
 
 	if (level == SOL_TCP && optname == TCP_ULP)
 		return -EOPNOTSUPP;
@@ -3142,57 +3247,7 @@ static int smc_setsockopt(struct socket *sock, int level, int optname,
 	}
 	mutex_unlock(&smc->clcsock_release_lock);
 
-	if (optlen < sizeof(int))
-		return -EINVAL;
-	if (copy_from_sockptr(&val, optval, sizeof(int)))
-		return -EFAULT;
-
-	lock_sock(sk);
-	if (rc || smc->use_fallback)
-		goto out;
-	switch (optname) {
-	case TCP_FASTOPEN:
-	case TCP_FASTOPEN_CONNECT:
-	case TCP_FASTOPEN_KEY:
-	case TCP_FASTOPEN_NO_COOKIE:
-		/* option not supported by SMC */
-		if (smc_sk_state(sk) == SMC_INIT && !smc->connect_nonblock)
-			rc = smc_switch_to_fallback(smc, SMC_CLC_DECL_OPTUNSUPP);
-		else
-			rc = -EINVAL;
-		break;
-	case TCP_NODELAY:
-		if (smc_sk_state(sk) != SMC_INIT &&
-		    smc_sk_state(sk) != SMC_LISTEN &&
-		    smc_sk_state(sk) != SMC_CLOSED) {
-			if (val) {
-				SMC_STAT_INC(smc, ndly_cnt);
-				smc_tx_pending(&smc->conn);
-				cancel_delayed_work(&smc->conn.tx_work);
-			}
-		}
-		break;
-	case TCP_CORK:
-		if (smc_sk_state(sk) != SMC_INIT &&
-		    smc_sk_state(sk) != SMC_LISTEN &&
-		    smc_sk_state(sk) != SMC_CLOSED) {
-			if (!val) {
-				SMC_STAT_INC(smc, cork_cnt);
-				smc_tx_pending(&smc->conn);
-				cancel_delayed_work(&smc->conn.tx_work);
-			}
-		}
-		break;
-	case TCP_DEFER_ACCEPT:
-		smc->sockopt_defer_accept = val;
-		break;
-	default:
-		break;
-	}
-out:
-	release_sock(sk);
-
-	return rc;
+	return rc ?: smc_setsockopt_takeover(sock, level, optname, optval, optlen);
 }
 
 static int smc_getsockopt(struct socket *sock, int level, int optname,
