@@ -282,16 +282,6 @@ int smc_inet_sock_init(void)
 	return 0;
 }
 
-struct sock *smc_inet_csk_accept(struct sock *sk, int flags, int *err, bool kern)
-{
-	return NULL;
-}
-
-int smc_inet_listen(struct socket *sock, int backlog)
-{
-	return -EOPNOTSUPP;
-}
-
 static int smc_inet_clcsock_sendmsg(struct socket *sock, struct msghdr *msg, size_t len)
 {
 	struct sock *sk = sock->sk;
