@@ -35,8 +35,26 @@ extern struct proto smc_proto6;
 extern bool reserve_mode;
 extern u16 rsvd_ports_base;
 
-#define smc_sk_state(sk)			((sk)->sk_state)
-#define smc_sk_set_state(sk, state)		(smc_sk_state(sk) = (state))
+static __always_inline bool smc_sock_is_inet_sock(struct sock *sk)
+{
+	return inet_sk(sk)->is_icsk;
+}
+
+#define smc_sk_state(sk)	({				\
+	struct sock *__sk = (sk);				\
+	smc_sock_is_inet_sock(__sk) ?			\
+		smc_sk(__sk)->smc_state : (__sk)->sk_state;	\
+})
+
+#define smc_sk_set_state(sk, state)		do {		\
+	struct sock *__sk = (sk);				\
+	unsigned char __state = (state);			\
+	if (smc_sock_is_inet_sock(__sk))				\
+		smc_sk(__sk)->smc_state = (__state);		\
+	else							\
+		(__sk)->sk_state = (__state);			\
+} while (0)
+
 
 enum smc_state {		/* possible states of an SMC socket */
 	SMC_ACTIVE	= 1,

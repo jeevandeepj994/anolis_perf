@@ -16,6 +16,7 @@
 #include <linux/spinlock.h>
 #include <linux/types.h>
 #include <linux/wait.h>
+#include <net/tcp.h>
 #include "linux/ism.h"
 
 struct sock;
@@ -278,8 +279,12 @@ struct smc_connection {
 };
 
 struct smc_sock {				/* smc sock container */
-	struct sock		sk;
-	struct socket		*clcsock;	/* internal tcp socket */
+	union {
+		struct tcp_sock	tpsk;
+		struct sock	sk;
+	};
+	struct socket	*clcsock;	/* internal tcp socket */
+	unsigned char	smc_state;	/* smc state used in smc via inet_sk */
 	void			(*clcsk_state_change)(struct sock *sk);
 						/* original stat_change fct. */
 	void			(*clcsk_data_ready)(struct sock *sk);
