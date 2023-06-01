@@ -222,6 +222,9 @@ static __always_inline void smc_inet_sock_init_accompany_socket(struct sock *sk)
 #define smc_call_inet_sock_ops(sk, inet, inet6, ...)	inet(__VA_ARGS__)
 #endif
 
+#define SMC_REQSK_SMC	0x01
+#define SMC_REQSK_TCP	0x02
+
 /* This function initializes the inet related structures.
  * If initialization is successful, it returns 0;
  * otherwise, it returns a non-zero value.

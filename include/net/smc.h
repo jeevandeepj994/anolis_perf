@@ -287,6 +287,10 @@ struct smc_sock {				/* smc sock container */
 	unsigned char	smc_state;	/* smc state used in smc via inet_sk */
 	unsigned int	isck_smc_negotiation;
 	struct socket	accompany_socket;
+	struct request_sock	*tail_0;
+	struct request_sock	*tail_1;
+	struct request_sock	*reqsk;
+	unsigned int	queued_cnt;
 	void			(*clcsk_state_change)(struct sock *sk);
 						/* original stat_change fct. */
 	void			(*clcsk_data_ready)(struct sock *sk);
@@ -329,6 +333,7 @@ struct smc_sock {				/* smc sock container */
 						/* non-blocking connect in
 						 * flight
 						 */
+	u8			ordered : 1;
 	struct mutex            clcsock_release_lock;
 						/* protects clcsock of a listen
 						 * socket
