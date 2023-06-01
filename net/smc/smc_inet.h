@@ -1,0 +1,157 @@
+/* SPDX-License-Identifier: GPL-2.0 */
+/*
+ *  Shared Memory Communications over RDMA (SMC-R) and RoCE
+ *
+ *  Definitions for the SMC module (socket related)
+ *
+ *  Copyright IBM Corp. 2016
+ *
+ */
+#ifndef __SMC_INET
+#define __SMC_INET
+
+#include <net/smc.h>
+#include "smc.h"
+
+enum smc_inet_sock_negotiation_state {
+	/* When creating an AF_SMC sock, the state field will be initialized to 0 by default,
+	 * which is only for logical compatibility with that situation
+	 * and will never be used.
+	 */
+	SMC_NEGOTIATION_COMPATIBLE_WITH_AF_SMC = 0,
+
+	/* This connection is still uncertain whether it is an SMC connection or not,
+	 * It always appears when actively open SMC connection, because it's unclear
+	 * whether the server supports the SMC protocol and has willing to use SMC.
+	 */
+	SMC_NEGOTIATION_TBD = 0x10,
+
+	/* This state indicates that this connection is definitely not an SMC connection.
+	 * and it is absolutely impossible to become an SMC connection again. A fina
+	 * state.
+	 */
+	SMC_NEGOTIATION_NO_SMC = 0x20,
+
+	/* This state indicates that this connection is an SMC connection. and it is
+	 * absolutely impossible to become an not-SMC connection again. A final state.
+	 */
+	SMC_NEGOTIATION_SMC = 0x40,
+
+	/* This state indicates that this connection is in the process of SMC handshake.
+	 * It is mainly used to eliminate the ambiguity of syn_smc, because when syn_smc is 1,
+	 * It may represent remote has support for SMC, or it may just indicate that itself has
+	 * supports for SMC.
+	 */
+	SMC_NEGOTIATION_PREPARE_SMC = 0x80,
+
+	/* flags */
+	SMC_NEGOTIATION_LISTEN_FLAG = 0x01,
+};
+
+static __always_inline void isck_smc_negotiation_store(struct smc_sock *smc,
+						       enum smc_inet_sock_negotiation_state state)
+{
+	smc->isck_smc_negotiation = (state | (smc->isck_smc_negotiation & 0x0f));
+}
+
+static __always_inline int isck_smc_negotiation_load(struct smc_sock *smc)
+{
+	return smc->isck_smc_negotiation & 0xf0;
+}
+
+static __always_inline void isck_smc_negotiation_set_flags(struct smc_sock *smc, int flags)
+{
+	smc->isck_smc_negotiation = (smc->isck_smc_negotiation | (flags & 0x0f));
+}
+
+static __always_inline int isck_smc_negotiation_get_flags(struct smc_sock *smc)
+{
+	return smc->isck_smc_negotiation & 0x0f;
+}
+
+static inline int smc_inet_sock_set_syn_smc(struct sock *sk)
+{
+	int rc = 0;
+
+    /* already set */
+	if (unlikely(tcp_sk(sk)->syn_smc))
+		return 1;
+
+	read_lock_bh(&sk->sk_callback_lock);
+	/* Only set syn_smc when negotiation still be SMC_NEGOTIATION_TBD,
+	 * it can prevent sock that have already been fallback from being enabled again.
+	 * For example, setsockopt might actively fallback before call connect().
+	 */
+	if (isck_smc_negotiation_load(smc_sk(sk)) == SMC_NEGOTIATION_TBD) {
+		tcp_sk(sk)->syn_smc = 1;
+		rc = 1;
+	}
+	read_unlock_bh(&sk->sk_callback_lock);
+	return rc;
+}
+
+static inline int smc_inet_sock_try_fallback_fast(struct sock *sk, int abort)
+{
+	struct smc_sock *smc = smc_sk(sk);
+	int syn_smc = 1;
+
+	write_lock_bh(&sk->sk_callback_lock);
+	switch (isck_smc_negotiation_load(smc)) {
+	case SMC_NEGOTIATION_TBD:
+		if (!abort && tcp_sk(sk)->syn_smc)
+			break;
+		/* fallback is meanless for listen socks */
+		if (unlikely(inet_sk_state_load(sk) == TCP_LISTEN))
+			break;
+		/* In the implementation of INET sock, syn_smc will only be determined after
+		 * smc_inet_connect or smc_inet_listen, which means that if there is
+		 * no syn_smc set, we can easily fallback.
+		 */
+		isck_smc_negotiation_store(smc, SMC_NEGOTIATION_NO_SMC);
+		fallthrough;
+	case SMC_NEGOTIATION_NO_SMC:
+		if (smc->clcsk_state_change)
+			sk->sk_state_change = smc->clcsk_state_change;
+		syn_smc = 0;
+	default:
+		break;
+	}
+	write_unlock_bh(&sk->sk_callback_lock);
+
+	return syn_smc;
+}
+
+static __always_inline bool smc_inet_sock_check_smc(struct sock *sk)
+{
+	if (!tcp_sk(sk)->syn_smc)
+		return false;
+
+	return isck_smc_negotiation_load(smc_sk(sk)) == SMC_NEGOTIATION_SMC;
+}
+
+static __always_inline bool smc_inet_sock_check_fallback_fast(struct sock *sk)
+{
+	return !tcp_sk(sk)->syn_smc;
+}
+
+static __always_inline bool smc_inet_sock_check_fallback(struct sock *sk)
+{
+	return isck_smc_negotiation_load(smc_sk(sk)) == SMC_NEGOTIATION_NO_SMC;
+}
+
+static inline int smc_inet_sock_access_before(struct sock *sk)
+{
+	if (smc_inet_sock_check_fallback(sk))
+		return 0;
+
+	if (unlikely(isck_smc_negotiation_load(smc_sk(sk)) == SMC_NEGOTIATION_TBD))
+		return smc_inet_sock_try_fallback_fast(sk, /* try best */ 0);
+
+	return 1;
+}
+
+static __always_inline bool smc_inet_sock_is_active_open(struct sock *sk)
+{
+	return !(isck_smc_negotiation_get_flags(smc_sk(sk)) & SMC_NEGOTIATION_LISTEN_FLAG);
+}
+#endif // __SMC_INET
