@@ -186,6 +186,19 @@ static __always_inline struct proto *smc_inet_get_tcp_prot(int family)
 	return NULL;
 }
 
+int smc_inet_sock_switch_negotiation_state_locked(struct sock *sk, int except, int target);
+
+static __always_inline int smc_inet_sock_switch_negotiation_state(struct sock *sk,
+								  int except, int target)
+{
+	int rc;
+
+	write_lock_bh(&sk->sk_callback_lock);
+	rc = smc_inet_sock_switch_negotiation_state_locked(sk, except, target);
+	write_unlock_bh(&sk->sk_callback_lock);
+	return rc;
+}
+
 /* This function initializes the inet related structures.
  * If initialization is successful, it returns 0;
  * otherwise, it returns a non-zero value.
