@@ -286,6 +286,7 @@ struct smc_sock {				/* smc sock container */
 	struct socket	*clcsock;	/* internal tcp socket */
 	unsigned char	smc_state;	/* smc state used in smc via inet_sk */
 	unsigned int	isck_smc_negotiation;
+	struct socket	accompany_socket;
 	void			(*clcsk_state_change)(struct sock *sk);
 						/* original stat_change fct. */
 	void			(*clcsk_data_ready)(struct sock *sk);

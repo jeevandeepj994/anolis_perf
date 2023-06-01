@@ -29,6 +29,8 @@ extern const struct proto_ops smc_inet6_stream_ops;
 extern struct inet_protosw smc_inet_protosw;
 extern struct inet_protosw smc_inet6_protosw;
 
+extern const struct proto_ops smc_inet_clcsock_ops;
+
 enum smc_inet_sock_negotiation_state {
 	/* When creating an AF_SMC sock, the state field will be initialized to 0 by default,
 	 * which is only for logical compatibility with that situation
@@ -197,6 +199,18 @@ static __always_inline int smc_inet_sock_switch_negotiation_state(struct sock *s
 	rc = smc_inet_sock_switch_negotiation_state_locked(sk, except, target);
 	write_unlock_bh(&sk->sk_callback_lock);
 	return rc;
+}
+
+static __always_inline void smc_inet_sock_init_accompany_socket(struct sock *sk)
+{
+	struct smc_sock *smc = smc_sk(sk);
+
+	smc->accompany_socket.sk = sk;
+	init_waitqueue_head(&smc->accompany_socket.wq.wait);
+	smc->accompany_socket.ops = &smc_inet_clcsock_ops;
+	smc->accompany_socket.state = SS_UNCONNECTED;
+
+	smc->clcsock = &smc->accompany_socket;
 }
 
 /* This function initializes the inet related structures.
