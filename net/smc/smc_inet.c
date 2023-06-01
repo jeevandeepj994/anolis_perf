@@ -199,6 +199,48 @@ struct inet_protosw smc_inet6_protosw = {
 };
 #endif
 
+int smc_inet_sock_switch_negotiation_state_locked(struct sock *sk, int except, int target)
+{
+	struct smc_sock *smc = smc_sk(sk);
+	int cur;
+
+	cur = isck_smc_negotiation_load(smc);
+	if (cur != except)
+		return cur;
+
+	switch (cur) {
+	case SMC_NEGOTIATION_TBD:
+		switch (target) {
+		case SMC_NEGOTIATION_PREPARE_SMC:
+			/* same as passive closing */
+			sock_hold(sk);
+			fallthrough;
+		case SMC_NEGOTIATION_NO_SMC:
+			isck_smc_negotiation_store(smc, target);
+			return target;
+		default:
+			break;
+		}
+		break;
+	case SMC_NEGOTIATION_PREPARE_SMC:
+		switch (target) {
+		case SMC_NEGOTIATION_NO_SMC:
+			sock_put(sk);	/* sock hold in SMC_NEGOTIATION_PREPARE_SMC */
+			fallthrough;
+		case SMC_NEGOTIATION_SMC:
+			isck_smc_negotiation_store(smc, target);
+			return target;
+		default:
+			break;
+		}
+		break;
+	default:
+		break;
+	}
+
+	return cur;
+}
+
 int smc_inet_sock_init(void)
 {
 	struct proto *tcp_v4prot;
