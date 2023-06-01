@@ -106,6 +106,7 @@ DECLARE_STATIC_KEY_FALSE(run_mode_emul_key);
 
 #define is_in_host()		static_branch_likely(&run_mode_host_key)
 #define is_in_guest()		static_branch_unlikely(&run_mode_guest_key)
+#define is_in_emul()		static_branch_unlikely(&run_mode_emul_key)
 #define is_guest_or_emul()	!static_branch_likely(&run_mode_host_key)
 
 #define CPU_SW3231		0x31
@@ -167,5 +168,6 @@ DECLARE_STATIC_KEY_FALSE(run_mode_emul_key);
 #define CACHE_INDEX_BITS_MASK	(0x3fUL << CACHE_INDEX_BITS_SHIFT)
 #define CACHE_INDEX_BITS(val)	\
 	(((val) & CACHE_INDEX_BITS_MASK) >> CACHE_INDEX_BITS_SHIFT)
+#define current_cpu_data cpu_data[smp_processor_id()]
 
 #endif /* HW_INIT_H */

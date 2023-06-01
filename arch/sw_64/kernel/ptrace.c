@@ -5,47 +5,15 @@
 /* mangled further by Bob Manson (manson@santafe.edu) */
 /* more mutilation by David Mosberger (davidm@azstarnet.com) */
 
-#include <linux/kernel.h>
-#include <linux/sched.h>
-#include <linux/mm.h>
-#include <linux/smp.h>
-#include <linux/errno.h>
-#include <linux/ptrace.h>
-#include <linux/user.h>
-#include <linux/security.h>
-#include <linux/signal.h>
 #include <linux/tracehook.h>
-#include <linux/seccomp.h>
 #include <linux/audit.h>
-#include <linux/uaccess.h>
 
-#include <asm/pgtable.h>
-#include <asm/fpu.h>
-#include <asm/core.h>
+#include <asm/reg.h>
+
 #include "proto.h"
 
 #define CREATE_TRACE_POINTS
 #include <trace/events/syscalls.h>
-
-#define DEBUG	DBG_MEM
-#undef DEBUG
-
-#define DEBUG  0
-
-#ifdef DEBUG
-enum {
-	DBG_MEM = (1 << 0),
-	DBG_BPT = (1 << 1),
-	DBG_MEM_ALL = (1 << 2)
-};
-#define DBG(fac, args)		\
-{				\
-	if ((fac) & DEBUG)	\
-		printk args;	\
-}
-#else
-#define DBG(fac, args)
-#endif
 
 #define BREAKINST	0x00000080 /* sys_call bpt */
 
@@ -243,15 +211,12 @@ ptrace_set_bpt(struct task_struct *child)
 		if (displ) /* guard against unoptimized code */
 			task_thread_info(child)->bpt_addr[nsaved++]
 				= pc + 4 + displ;
-		DBG(DBG_BPT, ("execing branch\n"));
 		/*call ret jmp*/
 	} else if (op_code >= 0x1 && op_code <= 0x3) {
 		reg_b = (insn >> 16) & 0x1f;
 		task_thread_info(child)->bpt_addr[nsaved++] = get_reg(child, reg_b);
-		DBG(DBG_BPT, ("execing jump\n"));
 	} else {
 		task_thread_info(child)->bpt_addr[nsaved++] = pc + 4;
-		DBG(DBG_BPT, ("execing normal insn\n"));
 	}
 
 	/* install breakpoints: */
@@ -261,8 +226,6 @@ ptrace_set_bpt(struct task_struct *child)
 		if (res < 0)
 			return res;
 		task_thread_info(child)->bpt_insn[i] = insn;
-		DBG(DBG_BPT, ("    -> next_pc=%lx\n",
-					task_thread_info(child)->bpt_addr[i]));
 		res = write_int(child, task_thread_info(child)->bpt_addr[i],
 				BREAKINST);
 		if (res < 0)
@@ -451,7 +414,6 @@ long arch_ptrace(struct task_struct *child, long request,
 	case PTRACE_PEEKUSR:
 		force_successful_syscall_return();
 		ret = get_reg(child, addr);
-		DBG(DBG_MEM, ("peek $%lu->%#lx\n", addr, ret));
 		break;
 
 	/* When I and D space are separate, this will have to be fixed.  */
@@ -461,7 +423,6 @@ long arch_ptrace(struct task_struct *child, long request,
 		break;
 
 	case PTRACE_POKEUSR: /* write the specified register */
-		DBG(DBG_MEM, ("poke $%lu<-%#lx\n", addr, data));
 		ret = put_reg(child, addr, data);
 		break;
 	case PTRACE_GETREGS:
@@ -647,8 +608,8 @@ struct pt_regs_offset {
 	int offset;
 };
 
-#define REG_OFFSET_NAME(reg, r) {				\
-	.name = #reg,						\
+#define REG_OFFSET_NAME(r) {					\
+	.name = #r,						\
 	.offset = offsetof(struct pt_regs, r)			\
 }
 
@@ -658,37 +619,38 @@ struct pt_regs_offset {
 }
 
 static const struct pt_regs_offset regoffset_table[] = {
-	REG_OFFSET_NAME(r0, r0),
-	REG_OFFSET_NAME(r1, r1),
-	REG_OFFSET_NAME(r2, r2),
-	REG_OFFSET_NAME(r3, r3),
-	REG_OFFSET_NAME(r4, r4),
-	REG_OFFSET_NAME(r5, r5),
-	REG_OFFSET_NAME(r6, r6),
-	REG_OFFSET_NAME(r7, r7),
-	REG_OFFSET_NAME(r8, r8),
-	REG_OFFSET_NAME(r19, r19),
-	REG_OFFSET_NAME(r20, r20),
-	REG_OFFSET_NAME(r21, r21),
-	REG_OFFSET_NAME(r22, r22),
-	REG_OFFSET_NAME(r23, r23),
-	REG_OFFSET_NAME(r24, r24),
-	REG_OFFSET_NAME(r25, r25),
-	REG_OFFSET_NAME(r26, r26),
-	REG_OFFSET_NAME(r27, r27),
-	REG_OFFSET_NAME(r28, r28),
-	REG_OFFSET_NAME(hae, hae),
-	REG_OFFSET_NAME(trap_a0, trap_a0),
-	REG_OFFSET_NAME(trap_a1, trap_a1),
-	REG_OFFSET_NAME(trap_a2, trap_a2),
-	REG_OFFSET_NAME(ps, ps),
-	REG_OFFSET_NAME(pc, pc),
-	REG_OFFSET_NAME(gp, gp),
-	REG_OFFSET_NAME(r16, r16),
-	REG_OFFSET_NAME(r17, r17),
-	REG_OFFSET_NAME(r18, r18),
+	REG_OFFSET_NAME(r0),
+	REG_OFFSET_NAME(r1),
+	REG_OFFSET_NAME(r2),
+	REG_OFFSET_NAME(r3),
+	REG_OFFSET_NAME(r4),
+	REG_OFFSET_NAME(r5),
+	REG_OFFSET_NAME(r6),
+	REG_OFFSET_NAME(r7),
+	REG_OFFSET_NAME(r8),
+	REG_OFFSET_NAME(r19),
+	REG_OFFSET_NAME(r20),
+	REG_OFFSET_NAME(r21),
+	REG_OFFSET_NAME(r22),
+	REG_OFFSET_NAME(r23),
+	REG_OFFSET_NAME(r24),
+	REG_OFFSET_NAME(r25),
+	REG_OFFSET_NAME(r26),
+	REG_OFFSET_NAME(r27),
+	REG_OFFSET_NAME(r28),
+	REG_OFFSET_NAME(hae),
+	REG_OFFSET_NAME(trap_a0),
+	REG_OFFSET_NAME(trap_a1),
+	REG_OFFSET_NAME(trap_a2),
+	REG_OFFSET_NAME(ps),
+	REG_OFFSET_NAME(pc),
+	REG_OFFSET_NAME(gp),
+	REG_OFFSET_NAME(r16),
+	REG_OFFSET_NAME(r17),
+	REG_OFFSET_NAME(r18),
 	REG_OFFSET_END,
 };
+
 /**
  * regs_query_register_offset() - query register offset from its name
  * @name:       the name of a register
@@ -704,4 +666,30 @@ int regs_query_register_offset(const char *name)
 		if (!strcmp(roff->name, name))
 			return roff->offset;
 	return -EINVAL;
+}
+
+static int regs_within_kernel_stack(struct pt_regs *regs, unsigned long addr)
+{
+	unsigned long ksp = kernel_stack_pointer(regs);
+
+	return (addr & ~(THREAD_SIZE - 1)) == (ksp & ~(THREAD_SIZE - 1));
+}
+
+/**
+ * regs_get_kernel_stack_nth() - get Nth entry of the stack
+ * @regs:pt_regs which contains kernel stack pointer.
+ * @n:stack entry number.
+ *
+ * regs_get_kernel_stack_nth() returns @n th entry of the kernel stack which
+ * is specifined by @regs. If the @n th entry is NOT in the kernel stack,
+ * this returns 0.
+ */
+unsigned long regs_get_kernel_stack_nth(struct pt_regs *regs, unsigned int n)
+{
+	unsigned long addr;
+
+	addr = kernel_stack_pointer(regs) + n * sizeof(long);
+	if (!regs_within_kernel_stack(regs, addr))
+		return 0;
+	return *(unsigned long *)addr;
 }

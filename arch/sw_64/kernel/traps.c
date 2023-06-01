@@ -9,29 +9,16 @@
  * This file initializes the trap entry points
  */
 
-#include <linux/jiffies.h>
-#include <linux/mm.h>
-#include <linux/sched/signal.h>
-#include <linux/sched/debug.h>
-#include <linux/tty.h>
-#include <linux/delay.h>
 #include <linux/extable.h>
-#include <linux/kallsyms.h>
-#include <linux/ratelimit.h>
-#include <linux/uaccess.h>
 #include <linux/perf_event.h>
 #include <linux/kdebug.h>
 #include <linux/kexec.h>
 
 #include <asm/gentrap.h>
-#include <asm/unaligned.h>
-#include <asm/sysinfo.h>
 #include <asm/mmu_context.h>
-#include <asm/special_insns.h>
 #include <asm/fpu.h>
 #include <asm/kprobes.h>
 #include <asm/uprobes.h>
-#include <asm/core.h>
 
 #include "proto.h"
 
@@ -193,7 +180,7 @@ do_entArith(unsigned long summary, unsigned long write_mask,
 	}
 	die_if_kernel("Arithmetic fault", regs, 0, NULL);
 
-	send_sig_fault(SIGFPE, si_code, (void __user *) regs->pc, 0, current);
+	force_sig_fault(SIGFPE, si_code, (void __user *)regs->pc, 0);
 }
 
 asmlinkage void
@@ -226,13 +213,11 @@ do_entIF(unsigned long inst_type, struct pt_regs *regs)
 		if (ptrace_cancel_bpt(current))
 			regs->pc -= 4;	/* make pc point to former bpt */
 
-		send_sig_fault(SIGTRAP, TRAP_BRKPT, (void __user *)regs->pc, 0,
-				current);
+		force_sig_fault(SIGTRAP, TRAP_BRKPT, (void __user *)regs->pc, 0);
 		return;
 
 	case 1: /* bugcheck */
-		send_sig_fault(SIGTRAP, TRAP_UNK, (void __user *)regs->pc, 0,
-				current);
+		force_sig_fault(SIGTRAP, TRAP_UNK, (void __user *)regs->pc, 0);
 		return;
 
 	case 2: /* gentrap */
@@ -293,8 +278,7 @@ do_entIF(unsigned long inst_type, struct pt_regs *regs)
 			break;
 		}
 
-		send_sig_fault(signo, code, (void __user *)regs->pc, 0,
-				current);
+		force_sig_fault(signo, code, (void __user *)regs->pc, regs->r16);
 		return;
 
 	case 4: /* opDEC */
@@ -337,8 +321,7 @@ do_entIF(unsigned long inst_type, struct pt_regs *regs)
 		break;
 	}
 
-	send_sig_fault(SIGILL, ILL_ILLOPC, (void __user *)regs->pc, 0,
-			current);
+	force_sig_fault(SIGILL, ILL_ILLOPC, (void __user *)regs->pc, 0);
 }
 
 /*
@@ -456,10 +439,9 @@ do_entUna(void *va, unsigned long opcode, unsigned long reg,
 		__asm__ __volatile__(
 		"	zap	%6, 2, %1\n"
 		"	srl	%6, 8, %2\n"
-		"	stb	%1, 0x0(%5)\n"
-		"	stb	%2, 0x1(%5)\n"
+		"1:	stb	%1, 0x0(%5)\n"
+		"2:	stb	%2, 0x1(%5)\n"
 		"3:\n"
-
 		".section __ex_table, \"a\"\n"
 		"	.long	1b - .\n"
 		"	ldi	%2, 3b-1b(%0)\n"
@@ -990,20 +972,16 @@ do_entUnaUser(void __user *va, unsigned long opcode,
 		sw64_read_simd_fp_m_s(reg, fp);
 		if ((unsigned long)va<<61 == 0) {
 			__asm__ __volatile__(
-			"1:	bis	%4, %4, %1\n"
-			"2:	bis	%5, %5, %2\n"
-			"3:	stl	%1, 0(%3)\n"
-			"4:	stl	%2, 8(%3)\n"
-			"5:\n"
+			"	bis	%4, %4, %1\n"
+			"	bis	%5, %5, %2\n"
+			"1:	stl	%1, 0(%3)\n"
+			"2:	stl	%2, 8(%3)\n"
+			"3:\n"
 			".section __ex_table, \"a\"\n\t"
 			"	.long	1b - .\n"
-			"	ldi	%1, 5b-1b(%0)\n"
+			"	ldi	$31, 3b-1b(%0)\n"
 			"	.long	2b - .\n"
-			"	ldi	%2, 5b-2b(%0)\n"
-			"	.long	3b - .\n"
-			"	ldi	$31, 5b-3b(%0)\n"
-			"	.long	4b - .\n"
-			"	ldi	$31, 5b-4b(%0)\n"
+			"	ldi	$31, 3b-2b(%0)\n"
 			".previous"
 			: "=r"(error), "=&r"(tmp1), "=&r"(tmp2)
 			: "r"(va), "r"(fp[0]), "r"(fp[1]), "0"(0));
@@ -1123,20 +1101,16 @@ do_entUnaUser(void __user *va, unsigned long opcode,
 		sw64_read_simd_fp_m_d(reg, fp);
 		if ((unsigned long)va<<61 == 0) {
 			__asm__ __volatile__(
-			"1:	bis	%4, %4, %1\n"
-			"2:	bis	%5, %5, %2\n"
-			"3:	stl	%1, 0(%3)\n"
-			"4:	stl	%2, 8(%3)\n"
-			"5:\n"
+			"	bis	%4, %4, %1\n"
+			"	bis	%5, %5, %2\n"
+			"1:	stl	%1, 0(%3)\n"
+			"2:	stl	%2, 8(%3)\n"
+			"3:\n"
 			".section __ex_table, \"a\"\n\t"
 			"	.long	1b - .\n"
-			"	ldi	%1, 5b-1b(%0)\n"
+			"	ldi	$31, 3b-1b(%0)\n"
 			"	.long	2b - .\n"
-			"	ldi	%2, 5b-2b(%0)\n"
-			"	.long	3b - .\n"
-			"	ldi	$31, 5b-3b(%0)\n"
-			"	.long	4b - .\n"
-			"	ldi	$31, 5b-4b(%0)\n"
+			"	ldi	$31, 3b-2b(%0)\n"
 			".previous"
 			: "=r"(error), "=&r"(tmp1), "=&r"(tmp2)
 			: "r"(va), "r"(fp[0]), "r"(fp[1]), "0"(0));
@@ -1148,20 +1122,16 @@ do_entUnaUser(void __user *va, unsigned long opcode,
 
 
 			__asm__ __volatile__(
-			"1:	bis	%4, %4, %1\n"
-			"2:	bis	%5, %5, %2\n"
-			"3:	stl	%1, 0(%3)\n"
-			"4:	stl	%2, 8(%3)\n"
-			"5:\n"
+			"	bis	%4, %4, %1\n"
+			"	bis	%5, %5, %2\n"
+			"1:	stl	%1, 0(%3)\n"
+			"2:	stl	%2, 8(%3)\n"
+			"3:\n"
 			".section __ex_table, \"a\"\n\t"
 			"	.long	1b - .\n"
-			"	ldi	%1, 5b-1b(%0)\n"
+			"	ldi	$31, 3b-1b(%0)\n"
 			"	.long	2b - .\n"
-			"	ldi	%2, 5b-2b(%0)\n"
-			"	.long	3b - .\n"
-			"	ldi	$31, 5b-3b(%0)\n"
-			"	.long	4b - .\n"
-			"	ldi	$31, 5b-4b(%0)\n"
+			"	ldi	$31, 3b-2b(%0)\n"
 			".previous"
 			: "=r"(error), "=&r"(tmp1), "=&r"(tmp2)
 			: "r"(vb), "r"(fp[2]), "r"(fp[3]), "0"(0));
@@ -1489,10 +1459,9 @@ do_entUnaUser(void __user *va, unsigned long opcode,
 		__asm__ __volatile__(
 		"	zap	%6, 2, %1\n"
 		"	srl	%6, 8, %2\n"
-		"	stb	%1, 0x0(%5)\n"
-		"	stb	%2, 0x1(%5)\n"
+		"1:	stb	%1, 0x0(%5)\n"
+		"2:	stb	%2, 0x1(%5)\n"
 		"3:\n"
-
 		".section __ex_table, \"a\"\n"
 		"	.long	1b - .\n"
 		"	ldi	%2, 3b-1b(%0)\n"
@@ -1628,12 +1597,12 @@ give_sigsegv:
 			si_code = SEGV_MAPERR;
 		up_read(&mm->mmap_lock);
 	}
-	send_sig_fault(SIGBUS, si_code, va, 0, current);
+	force_sig_fault(SIGSEGV, si_code, va, 0);
 	return;
 
 give_sigbus:
 	regs->pc -= 4;
-	send_sig_fault(SIGBUS, BUS_ADRALN, va, 0, current);
+	force_sig_fault(SIGBUS, BUS_ADRALN, va, 0);
 }
 
 void

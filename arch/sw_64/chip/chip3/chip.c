@@ -1,16 +1,12 @@
 // SPDX-License-Identifier: GPL-2.0
 #include <linux/pci.h>
-#include <linux/seq_file.h>
 #include <linux/clocksource.h>
-#include <linux/msi.h>
-#include <linux/delay.h>
+
 #include <asm/sw64_init.h>
 #include <asm/sw64io.h>
 #include <asm/pci.h>
-#include <asm/core.h>
 #include <asm/irq_impl.h>
 #include <asm/wrperfmon.h>
-#include <asm/hw_init.h>
 #include "../../../../drivers/pci/pci.h"
 
 static u64 read_longtime(struct clocksource *cs)
@@ -58,14 +54,9 @@ static struct clocksource clocksource_longtime = {
 static u64 read_vtime(struct clocksource *cs)
 {
 	u64 result;
-	unsigned long node;
 	unsigned long vtime_addr = PAGE_OFFSET | IO_BASE | LONG_TIME;
 
-	if (is_in_guest())
-		result = rdio64(vtime_addr);
-	else
-		result = sw64_io_read(node, LONG_TIME);
-
+	result = rdio64(vtime_addr);
 	return result;
 }
 
@@ -131,6 +122,19 @@ static unsigned long chip3_get_node_mem(int nodeid)
 	node_mem = mc_cap * mc_num;
 
 	return node_mem;
+}
+
+static void chip3_setup_vt_core_start(struct cpumask *cpumask)
+{
+	int i;
+	unsigned long coreonline;
+
+	coreonline = sw64_io_read(0, CORE_ONLINE);
+
+	for (i = 0; i < 64 ; i++) {
+		if (coreonline & (1UL << i))
+			cpumask_set_cpu(i, cpumask);
+	}
 }
 
 static void chip3_setup_core_start(struct cpumask *cpumask)
@@ -574,6 +578,7 @@ static void chip3_hose_init(struct pci_controller *hose)
 static void chip3_init_ops_fixup(void)
 {
 	if (is_guest_or_emul()) {
+		sw64_chip_init->early_init.setup_core_start = chip3_setup_vt_core_start;
 		sw64_chip_init->early_init.get_node_mem = chip3_get_vt_node_mem;
 		sw64_chip_init->pci_init.check_pci_linkup = chip3_check_pci_vt_linkup;
 	}

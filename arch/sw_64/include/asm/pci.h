@@ -42,7 +42,8 @@ struct pci_controller {
 	DECLARE_BITMAP(piu_msiconfig, 256);
 	int int_irq;
 	/* For compatibility with current (as of July 2003) pciutils
-	   and XFree86. Eventually will be removed. */
+	 * and XFree86. Eventually will be removed.
+	 */
 	unsigned int need_domain_info;
 	bool iommu_enable;
 	struct sunway_iommu *pci_iommu;
@@ -76,6 +77,7 @@ extern struct pci_controller *hose_head;
 extern struct syscore_ops iommu_cpu_syscore_ops;
 #endif
 
+#ifdef CONFIG_PCI_DOMAINS
 static inline int pci_domain_nr(struct pci_bus *bus) { return 0; }
 
 static inline int pci_proc_domain(struct pci_bus *bus)
@@ -84,6 +86,7 @@ static inline int pci_proc_domain(struct pci_bus *bus)
 
 	return hose->need_domain_info;
 }
+#endif
 
 #ifdef CONFIG_NUMA
 static inline int __pcibus_to_node(const struct pci_bus *bus)

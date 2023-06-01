@@ -3,7 +3,11 @@
 #define _ASM_SW64_PTRACE_H
 
 #include <uapi/asm/ptrace.h>
-
+#include <linux/sched/task_stack.h>
+#include <asm/hmcall.h>
+#include <asm/thread_info.h>
+#include <asm/processor.h>
+#include <asm/page.h>
 
 #define arch_has_single_step()		(1)
 #define user_mode(regs) (((regs)->ps & 8) != 0)
@@ -41,6 +45,8 @@ static inline u64 regs_get_register(struct pt_regs *regs, unsigned int offset)
 	return *(unsigned long *)((unsigned long)regs + offset);
 }
 extern int regs_query_register_offset(const char *name);
+extern unsigned long regs_get_kernel_stack_nth(struct pt_regs *regs,
+					       unsigned int n);
 
 static inline unsigned long regs_return_value(struct pt_regs *regs)
 {

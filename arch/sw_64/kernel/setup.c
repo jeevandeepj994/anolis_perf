@@ -9,31 +9,13 @@
  * Bootup setup stuff.
  */
 
-#include <linux/sched.h>
-#include <linux/kernel.h>
-#include <linux/mm.h>
-#include <linux/stddef.h>
-#include <linux/unistd.h>
-#include <linux/ptrace.h>
-#include <linux/slab.h>
-#include <linux/user.h>
 #include <linux/screen_info.h>
 #include <linux/delay.h>
 #include <linux/kexec.h>
 #include <linux/console.h>
-#include <linux/cpu.h>
-#include <linux/errno.h>
-#include <linux/init.h>
-#include <linux/string.h>
-#include <linux/ioport.h>
-#include <linux/platform_device.h>
 #include <linux/memblock.h>
-#include <linux/pci.h>
-#include <linux/seq_file.h>
 #include <linux/root_dev.h>
 #include <linux/initrd.h>
-#include <linux/eisa.h>
-#include <linux/pfn.h>
 #ifdef CONFIG_MAGIC_SYSRQ
 #include <linux/sysrq.h>
 #include <linux/reboot.h>
@@ -41,26 +23,12 @@
 #ifdef CONFIG_DEBUG_FS
 #include <linux/debugfs.h>
 #endif
-#include <linux/notifier.h>
-#include <linux/log2.h>
-#include <linux/export.h>
 #include <linux/of_fdt.h>
 #include <linux/of_platform.h>
-#include <linux/uaccess.h>
-#include <linux/cma.h>
 #include <linux/genalloc.h>
 #include <linux/acpi.h>
-#include <asm/setup.h>
-#include <asm/smp.h>
+
 #include <asm/sw64_init.h>
-#include <asm/pgtable.h>
-#include <asm/dma.h>
-#include <asm/mmu_context.h>
-#include <asm/console.h>
-#include <asm/core.h>
-#include <asm/hw_init.h>
-#include <asm/mmzone.h>
-#include <asm/memory.h>
 #include <asm/efi.h>
 #include <asm/kvm_cma.h>
 
@@ -81,8 +49,8 @@ DEFINE_PER_CPU(unsigned long, hard_node_id) = { 0 };
 struct cma *sw64_kvm_cma;
 EXPORT_SYMBOL(sw64_kvm_cma);
 
-static phys_addr_t size_cmdline;
-static phys_addr_t base_cmdline;
+static phys_addr_t kvm_mem_size;
+static phys_addr_t kvm_mem_base;
 
 struct gen_pool *sw64_kvm_pool;
 EXPORT_SYMBOL(sw64_kvm_pool);
@@ -179,7 +147,8 @@ static void __init kexec_control_page_init(void)
 {
 	phys_addr_t addr;
 
-	addr = memblock_alloc_base(KEXEC_CONTROL_PAGE_SIZE, PAGE_SIZE, KTEXT_MAX);
+	addr = memblock_phys_alloc_range(KEXEC_CONTROL_PAGE_SIZE, PAGE_SIZE,
+					0, KTEXT_MAX);
 	kexec_control_page = (void *)(__START_KERNEL_map + addr);
 }
 
@@ -748,17 +717,17 @@ static int __init early_kvm_reserved_mem(char *p)
 		return -EINVAL;
 	}
 
-	size_cmdline = memparse(p, &p);
+	kvm_mem_size = memparse(p, &p);
 	if (*p != '@')
 		return -EINVAL;
-	base_cmdline = memparse(p + 1, &p);
+	kvm_mem_base = memparse(p + 1, &p);
 	return 0;
 }
 early_param("kvm_mem", early_kvm_reserved_mem);
 
 void __init sw64_kvm_reserve(void)
 {
-	kvm_cma_declare_contiguous(base_cmdline, size_cmdline, 0,
+	kvm_cma_declare_contiguous(kvm_mem_base, kvm_mem_size, 0,
 			PAGE_SIZE, 0, "sw64_kvm_cma", &sw64_kvm_cma);
 }
 #endif
@@ -957,6 +926,7 @@ c_start(struct seq_file *f, loff_t *pos)
 static void *
 c_next(struct seq_file *f, void *v, loff_t *pos)
 {
+	(*pos)++;
 	return NULL;
 }
 
@@ -1030,14 +1000,14 @@ static int __init sw64_kvm_pool_init(void)
 	if (!sw64_kvm_cma)
 		goto out;
 
-	kvm_pool_virt = (unsigned long)base_cmdline;
+	kvm_pool_virt = (unsigned long)kvm_mem_base;
 
 	sw64_kvm_pool = gen_pool_create(PAGE_SHIFT, -1);
 	if (!sw64_kvm_pool)
 		goto out;
 
-	status = gen_pool_add_virt(sw64_kvm_pool, kvm_pool_virt, base_cmdline,
-			size_cmdline, -1);
+	status = gen_pool_add_virt(sw64_kvm_pool, kvm_pool_virt, kvm_mem_base,
+			kvm_mem_size, -1);
 	if (status < 0) {
 		pr_err("failed to add memory chunks to sw64 kvm pool\n");
 		gen_pool_destroy(sw64_kvm_pool);
@@ -1046,13 +1016,14 @@ static int __init sw64_kvm_pool_init(void)
 	}
 	gen_pool_set_algo(sw64_kvm_pool, gen_pool_best_fit, NULL);
 
-	base_page = pfn_to_page(base_cmdline >> PAGE_SHIFT);
-	end_page  = pfn_to_page((base_cmdline + size_cmdline) >> PAGE_SHIFT);
+	base_page = pfn_to_page(kvm_mem_base >> PAGE_SHIFT);
+	end_page  = pfn_to_page((kvm_mem_base + kvm_mem_size - 1) >> PAGE_SHIFT);
 
 	p = base_page;
 	while (page_ref_count(p) == 0 &&
 			(unsigned long)p <= (unsigned long)end_page) {
 		set_page_count(p, 1);
+		page_mapcount_reset(p);
 		SetPageReserved(p);
 		p++;
 	}

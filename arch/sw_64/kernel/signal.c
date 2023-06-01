@@ -7,24 +7,11 @@
  *  1997-11-02  Modified for POSIX.1b signals by Richard Henderson
  */
 
-#include <linux/sched.h>
-#include <linux/kernel.h>
 #include <linux/signal.h>
 #include <linux/errno.h>
-#include <linux/wait.h>
-#include <linux/ptrace.h>
-#include <linux/unistd.h>
-#include <linux/mm.h>
-#include <linux/smp.h>
-#include <linux/stddef.h>
-#include <linux/tty.h>
-#include <linux/binfmts.h>
-#include <linux/bitops.h>
-#include <linux/syscalls.h>
 #include <linux/tracehook.h>
-#include <linux/uaccess.h>
+#include <linux/syscalls.h>
 
-#include <asm/sigcontext.h>
 #include <asm/ucontext.h>
 #include <asm/vdso.h>
 
@@ -37,6 +24,21 @@
 
 asmlinkage void ret_from_sys_call(void);
 
+SYSCALL_DEFINE2(odd_sigprocmask, int, how, unsigned long, newmask)
+{
+	sigset_t oldmask;
+	sigset_t mask;
+	unsigned long res;
+
+	siginitset(&mask, newmask & _BLOCKABLE);
+	res = sigprocmask(how, &mask, &oldmask);
+	if (!res) {
+		force_successful_syscall_return();
+		res = oldmask.sig[0];
+	}
+	return res;
+}
+
 /*
  * Do a signal return; undo the signal stack.
  */
@@ -48,7 +50,6 @@ asmlinkage void ret_from_sys_call(void);
 struct rt_sigframe {
 	struct siginfo info;
 	struct ucontext uc;
-	unsigned int retcode[3];
 };
 
 /*
@@ -58,10 +59,6 @@ struct rt_sigframe {
  */
 extern char compile_time_assert
 	[offsetof(struct rt_sigframe, uc.uc_mcontext) == 176 ? 1 : -1];
-
-#define INSN_MOV_R30_R16	0x47fe0410
-#define INSN_LDI_R0		0x201f0000
-#define INSN_CALLSYS		0x00000083
 
 static long
 restore_sigcontext(struct sigcontext __user *sc, struct pt_regs *regs)
@@ -140,8 +137,8 @@ do_sigreturn(struct sigcontext __user *sc)
 
 	/* Send SIGTRAP if we're single-stepping: */
 	if (ptrace_cancel_bpt(current)) {
-		send_sig_fault(SIGTRAP, TRAP_BRKPT, (void __user *) regs->pc, 0,
-			       current);
+		force_sig_fault(SIGTRAP, TRAP_BRKPT,
+				(void __user *)regs->pc, 0);
 	}
 	return;
 
@@ -171,8 +168,8 @@ do_rt_sigreturn(struct rt_sigframe __user *frame)
 
 	/* Send SIGTRAP if we're single-stepping: */
 	if (ptrace_cancel_bpt(current)) {
-		send_sig_fault(SIGTRAP, TRAP_BRKPT, (void __user *) regs->pc, 0,
-			       current);
+		force_sig_fault(SIGTRAP, TRAP_BRKPT,
+				(void __user *)regs->pc, 0);
 	}
 	return;
 
@@ -259,7 +256,8 @@ setup_rt_frame(struct ksignal *ksig, sigset_t *set, struct pt_regs *regs)
 	if (!access_ok(frame, sizeof(*frame)))
 		return -EFAULT;
 
-	err |= copy_siginfo_to_user(&frame->info, &ksig->info);
+	if (ksig->ka.sa.sa_flags & SA_SIGINFO)
+		err |= copy_siginfo_to_user(&frame->info, &ksig->info);
 
 	/* Create the ucontext.  */
 	err |= __put_user(0, &frame->uc.uc_flags);
@@ -277,15 +275,19 @@ setup_rt_frame(struct ksignal *ksig, sigset_t *set, struct pt_regs *regs)
 	 */
 	r26 = VDSO_SYMBOL(current->mm->context.vdso, rt_sigreturn);
 
-	if (err)
-		return -EFAULT;
-
 	/* "Return" to the handler */
 	regs->r26 = r26;
 	regs->r27 = regs->pc = (unsigned long) ksig->ka.sa.sa_handler;
 	regs->r16 = ksig->sig;                    /* a0: signal number */
-	regs->r17 = (unsigned long) &frame->info; /* a1: siginfo pointer */
-	regs->r18 = (unsigned long) &frame->uc;   /* a2: ucontext pointer */
+	if (ksig->ka.sa.sa_flags & SA_SIGINFO) {
+		/* a1: siginfo pointer, a2: ucontext pointer */
+		regs->r17 = (unsigned long) &frame->info;
+		regs->r18 = (unsigned long) &frame->uc;
+	} else {
+		/* a1: exception code, a2: sigcontext pointer */
+		regs->r17 = 0;
+		regs->r18 = (unsigned long) &frame->uc.uc_mcontext;
+	}
 	wrusp((unsigned long) frame);
 
 #if DEBUG_SIG

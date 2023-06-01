@@ -5,31 +5,18 @@
  * linhn <linhn@example.com>
  */
 
-#include <linux/cpu.h>
 #include <linux/errno.h>
-#include <linux/err.h>
 #include <linux/kvm_host.h>
 #include <linux/module.h>
-#include <linux/vmalloc.h>
-#include <linux/fs.h>
 #include <linux/mman.h>
 #include <linux/sched/signal.h>
-#include <linux/freezer.h>
-#include <linux/smp.h>
 #include <linux/kvm.h>
 #include <linux/uaccess.h>
-#include <linux/genalloc.h>
-#include <asm/kvm_emulate.h>
-#include <asm/kvm_asm.h>
-#include <asm/sw64io.h>
 
 #include <asm/kvm_timer.h>
-#include <asm/kvm_host.h>
 #include <asm/kvm_emulate.h>
 
-#include <asm/page.h>
 #include "../kernel/pci_impl.h"
-
 #include "vmem.c"
 
 bool set_msi_flag;
@@ -37,7 +24,6 @@ unsigned long sw64_kvm_last_vpn[NR_CPUS];
 #define cpu_last_vpn(cpuid) sw64_kvm_last_vpn[cpuid]
 
 #ifdef CONFIG_SUBARCH_C3B
-#define MAX_VPN			255
 #define WIDTH_HARDWARE_VPN	8
 #endif
 
@@ -80,7 +66,7 @@ static unsigned long __get_new_vpn_context(struct kvm_vcpu *vcpu, long cpu)
 	unsigned long vpn = cpu_last_vpn(cpu);
 	unsigned long next = vpn + 1;
 
-	if ((vpn & HARDWARE_VPN_MASK) >= MAX_VPN) {
+	if ((vpn & HARDWARE_VPN_MASK) >= HARDWARE_VPN_MASK) {
 		tbia();
 		next = (vpn & ~HARDWARE_VPN_MASK) + VPN_FIRST_VERSION + 1; /* bypass 0 */
 	}
@@ -298,6 +284,9 @@ int kvm_arch_prepare_memory_region(struct kvm *kvm,
 		ret = vm_mmap(vm_file, mem->userspace_addr, mem->memory_size,
 				PROT_READ | PROT_WRITE,
 				MAP_SHARED | MAP_FIXED, 0);
+		if ((long)ret < 0)
+			return ret;
+
 		vma = find_vma(current->mm, mem->userspace_addr);
 		if (!vma)
 			return -ENOMEM;
@@ -309,11 +298,8 @@ int kvm_arch_prepare_memory_region(struct kvm *kvm,
 		vma->vm_ops = &vmem_vm_ops;
 		vma->vm_ops->open(vma);
 
-		remap_pfn_range(vma, mem->userspace_addr,
-				addr >> PAGE_SHIFT,
-				mem->memory_size, vma->vm_page_prot);
-
-		if ((long)ret < 0)
+		ret = vmem_vm_insert_page(vma);
+		if ((int)ret < 0)
 			return ret;
 	} else {
 		info = vm_file->private_data;
@@ -322,9 +308,8 @@ int kvm_arch_prepare_memory_region(struct kvm *kvm,
 
 	pr_info("guest phys addr = %#lx, size = %#lx\n",
 			addr, vma->vm_end - vma->vm_start);
-	kvm->arch.mem.membank[0].guest_phys_addr = 0;
-	kvm->arch.mem.membank[0].host_phys_addr = (u64)addr;
-	kvm->arch.mem.membank[0].size = round_up(mem->memory_size, 8<<20);
+	kvm->arch.host_phys_addr = (u64)addr;
+	kvm->arch.size = round_up(mem->memory_size, 8<<20);
 
 	memset((void *)(PAGE_OFFSET + addr), 0, 0x2000000);
 
@@ -343,7 +328,6 @@ int kvm_arch_vcpu_create(struct kvm_vcpu *vcpu)
 	/* For guest kernel "sys_call HMC_whami", indicate virtual cpu id */
 	vcpu->arch.vcb.whami = vcpu->vcpu_id;
 	vcpu->arch.vcb.vcpu_irq_disabled = 1;
-	vcpu->arch.vcb.pcbb = vcpu->kvm->arch.mem.membank[0].host_phys_addr;
 	vcpu->arch.pcpu_id = -1; /* force flush tlb for the first time */
 
 	return 0;
@@ -351,11 +335,10 @@ int kvm_arch_vcpu_create(struct kvm_vcpu *vcpu)
 
 int kvm_arch_vcpu_reset(struct kvm_vcpu *vcpu)
 {
-	unsigned long addr = vcpu->kvm->arch.mem.membank[0].host_phys_addr;
+	unsigned long addr = vcpu->kvm->arch.host_phys_addr;
 
 	vcpu->arch.vcb.whami = vcpu->vcpu_id;
 	vcpu->arch.vcb.vcpu_irq_disabled = 1;
-	vcpu->arch.vcb.pcbb = vcpu->kvm->arch.mem.membank[0].host_phys_addr;
 	vcpu->arch.pcpu_id = -1; /* force flush tlb for the first time */
 	vcpu->arch.power_off = 0;
 	memset(&vcpu->arch.irqs_pending, 0, sizeof(vcpu->arch.irqs_pending));
@@ -448,7 +431,7 @@ int kvm_arch_vcpu_ioctl_set_guest_debug(struct kvm_vcpu *vcpu, struct kvm_guest_
 void _debug_printk_vcpu(struct kvm_vcpu *vcpu)
 {
 	unsigned long pc = vcpu->arch.regs.pc;
-	unsigned long offset = vcpu->kvm->arch.mem.membank[0].host_phys_addr;
+	unsigned long offset = vcpu->kvm->arch.host_phys_addr;
 	unsigned long pc_phys = PAGE_OFFSET | ((pc & 0x7fffffffUL) + offset);
 	unsigned int insn;
 	int opc, ra, disp16;
@@ -482,7 +465,7 @@ int kvm_arch_vcpu_ioctl_run(struct kvm_vcpu *vcpu)
 	/* vpn will update later when vcpu is running */
 	if (vcpu->arch.vcb.vpcr == 0) {
 		vcpu->arch.vcb.vpcr
-			= get_vpcr(vcpu->kvm->arch.mem.membank[0].host_phys_addr, vcpu->kvm->arch.mem.membank[0].size, 0);
+			= get_vpcr(vcpu->kvm->arch.host_phys_addr, vcpu->kvm->arch.size, 0);
 		vcpu->arch.vcb.upcr = 0x7;
 	}
 

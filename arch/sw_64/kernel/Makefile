@@ -44,6 +44,8 @@ endif
 
 # Core logic support
 obj-$(CONFIG_SW64)	+= core.o timer.o
+obj-$(CONFIG_SW64_CPUFREQ) += platform.o clock.o
+obj-$(CONFIG_SW64_CPUAUTOPLUG) += cpuautoplug.o
 
 obj-$(CONFIG_CRASH_DUMP)    += crash_dump.o
 obj-$(CONFIG_KEXEC)		+= machine_kexec.o relocate_kernel.o
