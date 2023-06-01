@@ -294,6 +294,7 @@ struct smc_sock {				/* smc sock container */
 						/* original write_space fct. */
 	void			(*clcsk_error_report)(struct sock *sk);
 						/* original error_report fct. */
+	void			(*original_sk_destruct)(struct sock *sk);
 	struct smc_connection	conn;		/* smc connection */
 	struct smc_sock		*listen_smc;	/* listen parent */
 	struct work_struct	connect_work;	/* handle non-blocking connect*/

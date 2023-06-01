@@ -378,6 +378,9 @@ out:
 
 static void smc_destruct(struct sock *sk)
 {
+	if (smc_sk(sk)->original_sk_destruct)
+		smc_sk(sk)->original_sk_destruct(sk);
+
 	if (smc_sk_state(sk) != SMC_CLOSED)
 		return;
 	if (!sock_flag(sk, SOCK_DEAD))
@@ -386,10 +389,57 @@ static void smc_destruct(struct sock *sk)
 	sk_refcnt_debug_dec(sk);
 }
 
+static inline void smc_sock_init_common(struct sock *sk)
+{
+	struct smc_sock *smc = smc_sk(sk);
+
+	smc_sk_set_state(sk, SMC_INIT);
+	INIT_DELAYED_WORK(&smc->conn.tx_work, smc_tx_work);
+	spin_lock_init(&smc->conn.send_lock);
+	mutex_init(&smc->clcsock_release_lock);
+}
+
+static void smc_sock_init_passive(struct sock *par, struct sock *sk)
+{
+	struct smc_sock *parent = smc_sk(par);
+	struct sock *clcsk;
+
+	smc_sock_init_common(sk);
+	smc_sk(sk)->listen_smc = parent;
+
+	clcsk = smc_sock_is_inet_sock(sk) ? sk : smc_sk(sk)->clcsock->sk;
+
+	if (tcp_sk(clcsk)->syn_smc) {
+		smc_sk(sk)->smc_negotiated = 1;
+		atomic_inc(&parent->queued_smc_hs);
+		/* memory barrier */
+		smp_mb__after_atomic();
+	}
+}
+
+static void smc_sock_init(struct sock *sk, struct net *net)
+{
+	struct smc_sock *smc = smc_sk(sk);
+
+	smc_sock_init_common(sk);
+	INIT_WORK(&smc->connect_work, smc_connect_work);
+	INIT_WORK(&smc->tcp_listen_work, smc_tcp_listen_work);
+	INIT_LIST_HEAD(&smc->accept_q);
+	spin_lock_init(&smc->accept_q_lock);
+	WRITE_ONCE(sk->sk_sndbuf, READ_ONCE(net->smc.sysctl_wmem));
+	WRITE_ONCE(sk->sk_rcvbuf, READ_ONCE(net->smc.sysctl_rmem));
+	smc->limit_smc_hs = net->smc.limit_smc_hs;
+
+	/* already set (for inet sock), save the original */
+	if (sk->sk_destruct)
+		smc->original_sk_destruct = sk->sk_destruct;
+	sk_refcnt_debug_inc(sk);
+	sk->sk_destruct = smc_destruct;
+}
+
 static struct sock *smc_sock_alloc(struct net *net, struct socket *sock,
 				   int protocol)
 {
-	struct smc_sock *smc;
 	struct proto *prot;
 	struct sock *sk;
 
@@ -399,23 +449,9 @@ static struct sock *smc_sock_alloc(struct net *net, struct socket *sock,
 		return NULL;
 
 	sock_init_data(sock, sk); /* sets sk_refcnt to 1 */
-	smc_sk_set_state(sk, SMC_INIT);
-	sk->sk_destruct = smc_destruct;
 	sk->sk_protocol = protocol;
-	WRITE_ONCE(sk->sk_sndbuf, READ_ONCE(net->smc.sysctl_wmem));
-	WRITE_ONCE(sk->sk_rcvbuf, READ_ONCE(net->smc.sysctl_rmem));
-	smc = smc_sk(sk);
-	INIT_WORK(&smc->tcp_listen_work, smc_tcp_listen_work);
-	INIT_WORK(&smc->connect_work, smc_connect_work);
-	INIT_DELAYED_WORK(&smc->conn.tx_work, smc_tx_work);
-	INIT_LIST_HEAD(&smc->accept_q);
-	spin_lock_init(&smc->accept_q_lock);
-	spin_lock_init(&smc->conn.send_lock);
+	smc_sock_init(sk, net);
 	sk->sk_prot->hash(sk);
-	sk_refcnt_debug_inc(sk);
-	mutex_init(&smc->clcsock_release_lock);
-	smc_init_saved_callbacks(smc);
-
 	return sk;
 }
 
@@ -2641,14 +2677,8 @@ static void smc_tcp_listen_work(struct work_struct *work)
 		if (!new_smc)
 			continue;
 
-		if (tcp_sk(new_smc->clcsock->sk)->syn_smc) {
-			new_smc->smc_negotiated = 1;
-			atomic_inc(&lsmc->queued_smc_hs);
-			/* memory barrier */
-			smp_mb__after_atomic();
-		}
+		smc_sock_init_passive(lsk, &new_smc->sk);
 
-		new_smc->listen_smc = lsmc;
 		new_smc->use_fallback = lsmc->use_fallback;
 		new_smc->fallback_rsn = lsmc->fallback_rsn;
 		sock_hold(lsk); /* sock_put in smc_listen_work */
@@ -3487,9 +3517,6 @@ static int smc_create(struct net *net, struct socket *sock, int protocol,
 	smc = smc_sk(sk);
 	smc->use_fallback = false; /* assume rdma capability first */
 	smc->fallback_rsn = 0;
-
-	/* default behavior from limit_smc_hs in every net namespace */
-	smc->limit_smc_hs = net->smc.limit_smc_hs;
 
 	rc = sock_create_kern(net, family, SOCK_STREAM, IPPROTO_TCP,
 			      &smc->clcsock);
