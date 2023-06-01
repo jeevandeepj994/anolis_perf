@@ -282,79 +282,12 @@ int smc_inet_sock_init(void)
 	return 0;
 }
 
-int smc_inet_init_sock(struct sock *sk) { return  0; }
-
-void smc_inet_sock_proto_release_cb(struct sock *sk) {}
-
-int smc_inet_connect(struct socket *sock, struct sockaddr *addr,
-		     int alen, int flags)
-{
-	return -EOPNOTSUPP;
-}
-
-int smc_inet_setsockopt(struct socket *sock, int level, int optname,
-			sockptr_t optval, unsigned int optlen)
-{
-	return -EOPNOTSUPP;
-}
-
-int smc_inet_getsockopt(struct socket *sock, int level, int optname,
-			char __user *optval, int __user *optlen)
-{
-	return -EOPNOTSUPP;
-}
-
-int smc_inet_ioctl(struct socket *sock, unsigned int cmd,
-		   unsigned long arg)
-{
-	return -EOPNOTSUPP;
-}
-
-int smc_inet_sendmsg(struct socket *sock, struct msghdr *msg, size_t len)
-{
-	return -EOPNOTSUPP;
-}
-
-int smc_inet_recvmsg(struct socket *sock, struct msghdr *msg, size_t len,
-		     int flags)
-{
-	return -EOPNOTSUPP;
-}
-
-ssize_t smc_inet_sendpage(struct socket *sock, struct page *page,
-			  int offset, size_t size, int flags)
-{
-	return -EOPNOTSUPP;
-}
-
-ssize_t smc_inet_splice_read(struct socket *sock, loff_t *ppos,
-			     struct pipe_inode_info *pipe, size_t len,
-			     unsigned int flags)
-{
-	return -EOPNOTSUPP;
-}
-
-__poll_t smc_inet_poll(struct file *file, struct socket *sock, poll_table *wait)
-{
-	return 0;
-}
-
 struct sock *smc_inet_csk_accept(struct sock *sk, int flags, int *err, bool kern)
 {
 	return NULL;
 }
 
 int smc_inet_listen(struct socket *sock, int backlog)
-{
-	return -EOPNOTSUPP;
-}
-
-int smc_inet_shutdown(struct socket *sock, int how)
-{
-	return -EOPNOTSUPP;
-}
-
-int smc_inet_release(struct socket *sock)
 {
 	return -EOPNOTSUPP;
 }

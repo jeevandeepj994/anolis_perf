@@ -213,6 +213,15 @@ static __always_inline void smc_inet_sock_init_accompany_socket(struct sock *sk)
 	smc->clcsock = &smc->accompany_socket;
 }
 
+#if IS_ENABLED(CONFIG_IPV6)
+#define smc_call_inet_sock_ops(sk, inet, inet6, ...) ({		\
+	(sk)->sk_family == PF_INET ? inet(__VA_ARGS__) :	\
+		inet6(__VA_ARGS__);				\
+})
+#else
+#define smc_call_inet_sock_ops(sk, inet, inet6, ...)	inet(__VA_ARGS__)
+#endif
+
 /* This function initializes the inet related structures.
  * If initialization is successful, it returns 0;
  * otherwise, it returns a non-zero value.
