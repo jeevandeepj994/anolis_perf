@@ -871,10 +871,6 @@ int smc_pnet_net_init(struct net *net)
 	rwlock_init(&pnetids_ndev->lock);
 
 	smc_pnet_create_pnetids_list(net);
-
-	/* disable handshake limitation by default */
-	net->smc.limit_smc_hs = 0;
-
 	return 0;
 }
 
