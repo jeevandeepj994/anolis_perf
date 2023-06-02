@@ -3499,9 +3499,6 @@ static void migrate_pages_copy(struct list_head *pages,
 {
 	struct page *page, *newpage;
 
-	if (migrate_use_dma() && !dma_migrate_pages_copy(pages, new_pages))
-		return;
-
 	newpage = list_first_entry(new_pages, struct page, lru);
 	list_for_each_entry(page, pages, lru) {
 		if (PageHuge(page) || PageTransHuge(page))

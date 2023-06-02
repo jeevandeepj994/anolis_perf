@@ -192,28 +192,6 @@ done:
 }
 
 #ifdef CONFIG_SYSFS
-static ssize_t batch_migrate_enabled_show(struct kobject *kobj,
-					  struct kobj_attribute *attr, char *buf)
-{
-	return sysfs_emit(buf, "%d\n", !!static_branch_unlikely(&batch_migrate_enabled_key));
-}
-static ssize_t batch_migrate_enabled_store(struct kobject *kobj,
-					   struct kobj_attribute *attr,
-					   const char *buf, size_t count)
-{
-	if (!strncmp(buf, "1", 1))
-		static_branch_enable(&batch_migrate_enabled_key);
-	else if (!strncmp(buf, "0", 1))
-		static_branch_disable(&batch_migrate_enabled_key);
-	else
-		return -EINVAL;
-
-	return count;
-}
-static struct kobj_attribute batch_migrate_enabled_attr =
-	__ATTR(batch_migrate_enabled, 0644, batch_migrate_enabled_show,
-	       batch_migrate_enabled_store);
-
 static ssize_t dma_migrate_enabled_show(struct kobject *kobj,
 					struct kobj_attribute *attr, char *buf)
 {
@@ -284,7 +262,6 @@ static struct kobj_attribute dma_migrate_polling_attr =
 	       migrate_dma_polling_store);
 
 static struct attribute *migrate_attrs[] = {
-	&batch_migrate_enabled_attr.attr,
 	&dma_migrate_enabled_attr.attr,
 	&dma_migrate_segment_attr.attr,
 	&dma_migrate_polling_attr.attr,
