@@ -1475,10 +1475,6 @@ int migrate_pages(struct list_head *from, new_page_t get_new_page,
 	LIST_HEAD(ret_pages);
 	bool nosplit = (reason == MR_NUMA_MISPLACED);
 
-	if (batch_migrate_enabled())
-		return migrate_pages_in_batch(from, get_new_page, put_new_page,
-					      private, mode, reason);
-
 	if (!swapwrite)
 		current->flags |= PF_SWAPWRITE;
 
@@ -3814,15 +3810,3 @@ out:
 
 	return rc;
 }
-
-DEFINE_STATIC_KEY_FALSE(batch_migrate_enabled_key);
-
-static int __init setup_batch_migrate(char *s)
-{
-	if (!strcmp(s, "1"))
-		static_branch_enable(&batch_migrate_enabled_key);
-	else if (!strcmp(s, "0"))
-		static_branch_disable(&batch_migrate_enabled_key);
-	return 1;
-}
-__setup("batch_migrate=", setup_batch_migrate);
