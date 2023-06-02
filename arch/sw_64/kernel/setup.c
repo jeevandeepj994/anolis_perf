@@ -28,9 +28,10 @@
 #include <linux/genalloc.h>
 #include <linux/acpi.h>
 
-#include <asm/sw64_init.h>
 #include <asm/efi.h>
 #include <asm/kvm_cma.h>
+#include <asm/mmu_context.h>
+#include <asm/sw64_init.h>
 
 #include "proto.h"
 #include "pci_impl.h"
@@ -136,6 +137,17 @@ struct screen_info screen_info = {
 	.orig_video_points = 16
 };
 EXPORT_SYMBOL(screen_info);
+
+/*
+ * Move global data into per-processor storage.
+ */
+void store_cpu_data(int cpu)
+{
+	cpu_data[cpu].loops_per_jiffy = loops_per_jiffy;
+	cpu_data[cpu].last_asn = ASN_FIRST_VERSION;
+	cpu_data[cpu].need_new_asn = 0;
+	cpu_data[cpu].asn_lock = 0;
+}
 
 #ifdef CONFIG_KEXEC
 
@@ -560,22 +572,20 @@ static void __init setup_machine_fdt(void)
 #ifdef CONFIG_USE_OF
 	void *dt_virt;
 	const char *name;
-	unsigned long phys_addr;
 
 	/* Give a chance to select kernel builtin DTB firstly */
 	if (IS_ENABLED(CONFIG_SW64_BUILTIN_DTB))
 		dt_virt = (void *)__dtb_start;
 	else {
 		dt_virt = (void *)sunway_boot_params->dtb_start;
-		if (dt_virt < (void *)__bss_stop) {
+		if (virt_to_phys(dt_virt) < virt_to_phys(__bss_stop)) {
 			pr_emerg("BUG: DTB has been corrupted by kernel image!\n");
 			while (true)
 				cpu_relax();
 		}
 	}
 
-	phys_addr = __phys_addr((unsigned long)dt_virt);
-	if (!phys_addr_valid(phys_addr) ||
+	if (!phys_addr_valid(virt_to_phys(dt_virt)) ||
 			!early_init_dt_scan(dt_virt)) {
 		pr_crit("\n"
 			"Error: invalid device tree blob at virtual address %px\n"
@@ -861,13 +871,12 @@ setup_arch(char **cmdline_p)
 	/* Default root filesystem to sda2.  */
 	ROOT_DEV = Root_SDA2;
 
-	/*
-	 * Identify the flock of penguins.
-	 */
-
 #ifdef CONFIG_SMP
 	setup_smp();
+#else
+	store_cpu_data(0);
 #endif
+
 #ifdef CONFIG_NUMA
 	cpu_set_node();
 #endif
@@ -907,7 +916,7 @@ show_cpuinfo(struct seq_file *f, void *slot)
 				"physical id\t: %d\n"
 				"bogomips\t: %lu.%02lu\n",
 				cpu_freq, cpu_data[i].tcache.size >> 10,
-				cpu_to_rcid(i),
+				cpu_topology[i].package_id,
 				loops_per_jiffy / (500000/HZ),
 				(loops_per_jiffy / (5000/HZ)) % 100);
 
@@ -978,7 +987,7 @@ static int __init debugfs_sw64(void)
 {
 	struct dentry *d;
 
-	d = debugfs_create_dir("sw_64", NULL);
+	d = debugfs_create_dir("sw64", NULL);
 	if (!d)
 		return -ENOMEM;
 	sw64_debugfs_dir = d;
@@ -1026,8 +1035,7 @@ static int __init sw64_kvm_pool_init(void)
 	end_page  = pfn_to_page((kvm_mem_base + kvm_mem_size - 1) >> PAGE_SHIFT);
 
 	p = base_page;
-	while (page_ref_count(p) == 0 &&
-			(unsigned long)p <= (unsigned long)end_page) {
+	while (p <= end_page && page_ref_count(p) == 0) {
 		set_page_count(p, 1);
 		page_mapcount_reset(p);
 		SetPageReserved(p);

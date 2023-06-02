@@ -4,6 +4,9 @@
 #include <linux/delay.h>
 #include <linux/time.h>
 #include <linux/clk-provider.h>
+#ifndef CONFIG_SMP
+#include <linux/clocksource.h>
+#endif
 
 #include <asm/debug.h>
 
@@ -93,10 +96,6 @@ void setup_clocksource(void)
 }
 #endif /* !CONFIG_SMP */
 
-void __init common_init_rtc(void)
-{
-	setup_timer();
-}
 
 void __init
 time_init(void)
@@ -111,7 +110,7 @@ time_init(void)
 	setup_clocksource();
 	of_clk_init(NULL);
 	/* Startup the timer source. */
-	common_init_rtc();
+	setup_timer();
 }
 
 void calibrate_delay(void)

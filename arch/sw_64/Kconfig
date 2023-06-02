@@ -7,14 +7,13 @@ config SW64
 	select HAVE_OPROFILE
 	select HAVE_PCSPKR_PLATFORM
 	select HAVE_PERF_EVENTS
-	select HAVE_GENERIC_GUP
+	select HAVE_FAST_GUP
 	select GENERIC_CLOCKEVENTS
 	select GENERIC_IRQ_PROBE
 	select GENERIC_IRQ_LEGACY
 	select GENERIC_IRQ_SHOW
 	select ARCH_WANT_IPC_PARSE_VERSION
 	select ARCH_HAVE_NMI_SAFE_CMPXCHG
-	select ARCH_MIGHT_HAVE_PC_SERIO
 	select ARCH_NO_PREEMPT
 	select ARCH_USE_CMPXCHG_LOCKREF
 	select GENERIC_SMP_IDLE_THREAD
@@ -69,6 +68,7 @@ config SW64
 	select ARCH_HAS_SG_CHAIN
 	select IRQ_FORCED_THREADING
 	select GENERIC_IRQ_MIGRATION if SMP
+	select HAVE_ARCH_TRACEHOOK
 	select HAVE_FUNCTION_TRACER
 	select HAVE_DYNAMIC_FTRACE
 	select HAVE_FTRACE_MCOUNT_RECORD
@@ -92,11 +92,14 @@ config SW64
 	select ACPI_REDUCED_HARDWARE_ONLY
 	select GENERIC_TIME_VSYSCALL
 	select SET_FS
+	select HAVE_PCI
+	select GENERIC_PCI_IOMAP if PCI
 	select PCI_MSI_ARCH_FALLBACKS
 	select DMA_OPS if PCI
 	select HAVE_REGS_AND_STACK_ACCESS_API
 	select ARCH_HAS_PTE_SPECIAL
 	select HARDIRQS_SW_RESEND
+	select MEMORY_HOTPLUG_SPARSE if MEMORY_HOTPLUG
 
 config LOCKDEP_SUPPORT
 	def_bool y
@@ -234,10 +237,16 @@ config PLATFORM_XUELANG
 	depends on SW64_CHIP3
 	select SPARSE_IRQ
 	select SYS_HAS_EARLY_PRINTK
+	select SW64_INTC_V2
 	help
 	  Sunway chip3 board chipset
 
 endchoice
+
+config MIGHT_HAVE_PC_SERIO
+	bool "Use PC serio device i8042"
+	select ARCH_MIGHT_HAVE_PC_SERIO
+	default n
 
 endmenu
 
@@ -508,17 +517,6 @@ config ISA_DMA_API
 	bool
 	default y
 
-config PCI
-	bool "PCI Support"
-	depends on SW64
-	select GENERIC_PCI_IOMAP
-	default y
-	help
-	  Find out whether you have a PCI motherboard. PCI is the name of a
-	  bus system, i.e. the way the CPU talks to the other stuff inside
-	  your box. Other bus systems are ISA, EISA, MicroChannel (MCA) or
-	  VESA. If you have PCI, say Y, otherwise N.
-
 config PCI_DOMAINS
 	def_bool PCI
 
@@ -723,7 +721,6 @@ config HZ
 	int "HZ of the short timer"
 	default 500
 
-source "drivers/pci/Kconfig"
 source "drivers/eisa/Kconfig"
 
 source "drivers/pcmcia/Kconfig"
@@ -736,15 +733,10 @@ endmenu
 
 menu "Boot options"
 
-config SW64_IRQ_CHIP
-	bool
-
 config USE_OF
 	bool "Flattened Device Tree support"
-	select GENERIC_IRQ_CHIP
-	select IRQ_DOMAIN
-	select SW64_IRQ_CHIP
 	select OF
+	select IRQ_DOMAIN
 	help
 	  Include support for flattened device tree machine descriptions.
 

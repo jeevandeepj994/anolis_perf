@@ -12,18 +12,29 @@
 #include <linux/extable.h>
 #include <linux/perf_event.h>
 #include <linux/kdebug.h>
+#include <linux/sched.h>
 #include <linux/kexec.h>
+#include <linux/kallsyms.h>
+#include <linux/sched/task_stack.h>
+#include <linux/sched/debug.h>
+#include <linux/spinlock.h>
+#include <linux/module.h>
 
 #include <asm/gentrap.h>
 #include <asm/mmu_context.h>
 #include <asm/fpu.h>
 #include <asm/kprobes.h>
 #include <asm/uprobes.h>
+#include <asm/stacktrace.h>
+#include <asm/processor.h>
+#include <asm/ptrace.h>
 
 #include "proto.h"
 
-void dik_show_regs(struct pt_regs *regs)
+void show_regs(struct pt_regs *regs)
 {
+	show_regs_print_info(KERN_DEFAULT);
+
 	printk("pc = [<%016lx>]  ra = [<%016lx>]  ps = %04lx    %s\n",
 	       regs->pc, regs->r26, regs->ps, print_tainted());
 	printk("pc is at %pSR\n", (void *)regs->pc);
@@ -53,8 +64,7 @@ void dik_show_regs(struct pt_regs *regs)
 	printk("gp = %016lx  sp = %p\n", regs->gp, regs+1);
 }
 
-static void
-dik_show_code(unsigned int *pc)
+static void show_code(unsigned int *pc)
 {
 	long i;
 	unsigned int insn;
@@ -68,80 +78,43 @@ dik_show_code(unsigned int *pc)
 	printk("\n");
 }
 
-static void
-dik_show_trace(unsigned long *sp, const char *loglvl)
+static DEFINE_SPINLOCK(die_lock);
+
+void die(char *str, struct pt_regs *regs, long err)
 {
-	long i = 0;
-	unsigned long tmp;
+	static int die_counter;
+	unsigned long flags;
+	int ret;
 
-	printk("%sTrace:\n", loglvl);
-	while (0x1ff8 & (unsigned long)sp) {
-		tmp = *sp;
-		sp++;
-		if (!__kernel_text_address(tmp))
-			continue;
-		printk("%s[<%lx>] %pSR\n", loglvl, tmp, (void *)tmp);
-		if (i > 40) {
-			printk("%s ...", loglvl);
-			break;
-		}
-	}
-	printk("\n");
-}
+	oops_enter();
 
-static int kstack_depth_to_print = 24;
+	spin_lock_irqsave(&die_lock, flags);
+	console_verbose();
+	bust_spinlocks(1);
 
-void show_stack(struct task_struct *task, unsigned long *sp, const char *loglvl)
-{
-	unsigned long *stack;
-	int i;
+	pr_emerg("%s [#%d]\n", str, ++die_counter);
 
-	/*
-	 * debugging aid: "show_stack(NULL, NULL, KERN_EMERG);" prints the
-	 * back trace for this cpu.
-	 */
-	if (sp == NULL)
-		sp = (unsigned long *)&sp;
+	ret = notify_die(DIE_OOPS, str, regs, err, 0, SIGSEGV);
 
-	stack = sp;
-	for (i = 0; i < kstack_depth_to_print; i++) {
-		if (((long) stack & (THREAD_SIZE-1)) == 0)
-			break;
-		if (i && ((i % 4) == 0))
-			printk("%s       ", loglvl);
-		printk("%016lx ", *stack++);
-	}
-	printk("\n");
-	dik_show_trace(sp, loglvl);
-}
+	print_modules();
+	show_regs(regs);
+	show_code((unsigned int *)regs->pc);
+	show_stack(current, NULL, KERN_EMERG);
 
-void die_if_kernel(char *str, struct pt_regs *regs, long err)
-{
-	if (regs->ps & 8)
-		return;
-#ifdef CONFIG_SMP
-	printk("CPU %d ", hard_smp_processor_id());
-#endif
-	printk("%s(%d): %s %ld\n", current->comm, task_pid_nr(current), str, err);
-	dik_show_regs(regs);
+	bust_spinlocks(0);
 	add_taint(TAINT_DIE, LOCKDEP_NOW_UNRELIABLE);
-	dik_show_trace((unsigned long *)(regs+1), KERN_DEFAULT);
-	dik_show_code((unsigned int *)regs->pc);
-
-	if (test_and_set_thread_flag(TIF_DIE_IF_KERNEL)) {
-		printk("die_if_kernel recursion detected.\n");
-		local_irq_enable();
-		while (1)
-			asm("nop");
-	}
+	spin_unlock_irqrestore(&die_lock, flags);
+	oops_exit();
 
 	if (kexec_should_crash(current))
 		crash_kexec(regs);
-
+	if (in_interrupt())
+		panic("Fatal exception in interrupt");
 	if (panic_on_oops)
 		panic("Fatal exception");
 
-	do_exit(SIGSEGV);
+	if (ret != NOTIFY_STOP)
+		do_exit(SIGSEGV);
 }
 
 #ifndef CONFIG_MATHEMU
@@ -175,7 +148,9 @@ do_entArith(unsigned long summary, unsigned long write_mask,
 		if (si_code == 0)
 			return;
 	}
-	die_if_kernel("Arithmetic fault", regs, 0);
+
+	if (!user_mode(regs))
+		die("Arithmetic fault", regs, 0);
 
 	force_sig_fault(SIGFPE, si_code, (void __user *)regs->pc, 0);
 }
@@ -189,7 +164,7 @@ do_entIF(unsigned long inst_type, struct pt_regs *regs)
 	type = inst_type & 0xffffffff;
 	inst = inst_type >> 32;
 
-	if ((regs->ps & ~IPL_MAX) == 0 && type != 4) {
+	if (!user_mode(regs) && type != 4) {
 		if (type == 1) {
 			const unsigned int *data
 				= (const unsigned int *) regs->pc;
@@ -201,7 +176,7 @@ do_entIF(unsigned long inst_type, struct pt_regs *regs)
 			notify_die(0, "kgdb trap", regs, 0, 0, SIGTRAP);
 			return;
 		}
-		die_if_kernel((type == 1 ? "Kernel Bug" : "Instruction fault"),
+		die((type == 1 ? "Kernel Bug" : "Instruction fault"),
 				regs, type);
 	}
 
@@ -293,8 +268,8 @@ do_entIF(unsigned long inst_type, struct pt_regs *regs)
 			if (notify_die(DIE_UPROBE_XOL, "uprobe_xol", regs, 0, 0, SIGTRAP) == NOTIFY_STOP)
 				return;
 		}
-		if ((regs->ps & ~IPL_MAX) == 0)
-			die_if_kernel("Instruction fault", regs, type);
+		if (!user_mode(regs))
+			die("Instruction fault", regs, type);
 		break;
 
 	case 3: /* FEN fault */
@@ -320,11 +295,6 @@ do_entIF(unsigned long inst_type, struct pt_regs *regs)
 	force_sig_fault(SIGILL, ILL_ILLOPC, (void __user *)regs->pc, 0);
 }
 
-struct unaligned_stat {
-	unsigned long count, va, pc;
-} unaligned[2];
-
-
 asmlinkage void
 do_entUna(void *va, unsigned long opcode, unsigned long reg,
 	  struct pt_regs *regs)
@@ -333,10 +303,6 @@ do_entUna(void *va, unsigned long opcode, unsigned long reg,
 	unsigned long tmp1, tmp2, tmp3, tmp4, tmp5, tmp6, tmp7, tmp8;
 	unsigned long pc = regs->pc - 4;
 	const struct exception_table_entry *fixup;
-
-	unaligned[0].count++;
-	unaligned[0].va = (unsigned long) va;
-	unaligned[0].pc = pc;
 
 	/*
 	 * We don't want to use the generic get/put unaligned macros as
@@ -539,21 +505,7 @@ got_exception:
 	 * Since the registers are in a weird format, dump them ourselves.
 	 */
 
-	printk("%s(%d): unhandled unaligned exception\n",
-	       current->comm, task_pid_nr(current));
-
-	dik_show_regs(regs);
-	dik_show_code((unsigned int *)pc);
-	dik_show_trace((unsigned long *)(regs+1), KERN_DEFAULT);
-
-	if (test_and_set_thread_flag(TIF_DIE_IF_KERNEL)) {
-		printk("die_if_kernel recursion detected.\n");
-		local_irq_enable();
-		while (1)
-			asm("nop");
-	}
-	do_exit(SIGSEGV);
-
+	die("Unhandled unaligned exception", regs, error);
 }
 
 /*
@@ -665,10 +617,6 @@ do_entUnaUser(void __user *va, unsigned long opcode,
 	 */
 	if ((unsigned long)va >= TASK_SIZE)
 		goto give_sigsegv;
-
-	++unaligned[1].count;
-	unaligned[1].va = (unsigned long)va;
-	unaligned[1].pc = regs->pc - 4;
 
 	if ((1L << opcode) & OP_INT_MASK) {
 		/* it's an integer load/store */

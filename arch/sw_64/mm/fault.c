@@ -31,8 +31,8 @@ static inline int notify_page_fault(struct pt_regs *regs, unsigned long mmcsr)
 }
 #endif
 
-extern void die_if_kernel(char *, struct pt_regs *, long);
-extern void dik_show_regs(struct pt_regs *regs);
+extern void die(char *, struct pt_regs *, long);
+extern void show_regs(struct pt_regs *regs);
 
 void show_all_vma(void)
 {
@@ -64,13 +64,7 @@ void show_all_vma(void)
 /*
  * Force a new ASN for a task.
  */
-
-#ifndef CONFIG_SMP
-unsigned long last_asn = ASN_FIRST_VERSION;
-#endif
-
-void
-__load_new_mm_context(struct mm_struct *next_mm)
+void __load_new_mm_context(struct mm_struct *next_mm)
 {
 	unsigned long mmc;
 	struct pcb_struct *pcb;
@@ -84,7 +78,6 @@ __load_new_mm_context(struct mm_struct *next_mm)
 
 	__reload_thread(pcb);
 }
-
 
 /*
  * This routine handles page faults.  It determines the address,
@@ -301,7 +294,7 @@ good_area:
 	 */
 	pr_alert("Unable to handle kernel paging request at virtual address %016lx\n",
 	       address);
-	die_if_kernel("Oops", regs, cause);
+	die("Oops", regs, cause);
 	do_exit(SIGKILL);
 
 	/*
@@ -332,7 +325,7 @@ good_area:
 	if (unlikely(segv_debug_enabled)) {
 		pr_info("fault: want to send_segv: pid %d, cause = %#lx, mmcsr = %#lx, address = %#lx, pc %#lx\n",
 				current->pid, cause, mmcsr, address, regs->pc);
-		dik_show_regs(regs);
+		show_regs(regs);
 		show_all_vma();
 	}
 

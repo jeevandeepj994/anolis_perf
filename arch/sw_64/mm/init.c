@@ -10,6 +10,7 @@
 #include <linux/memblock.h>
 #include <linux/swiotlb.h>
 #include <linux/acpi.h>
+#include <linux/memory.h>
 
 #include <asm/mmu_context.h>
 
@@ -32,6 +33,16 @@ static pud_t vmalloc_pud[1024]	__attribute__((__aligned__(PAGE_SIZE)));
 
 static phys_addr_t mem_start;
 static phys_addr_t mem_size_limit;
+
+#ifdef CONFIG_MEMORY_HOTPLUG_SPARSE
+unsigned long memory_block_size_bytes(void)
+{
+	if (is_in_guest())
+		return MIN_MEMORY_BLOCK_SIZE_VM_MEMHP;
+	else
+		return MIN_MEMORY_BLOCK_SIZE;
+}
+#endif /* CONFIG_MEMORY_HOTPLUG_SPARSE */
 
 static int __init setup_mem_size(char *p)
 {

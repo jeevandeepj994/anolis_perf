@@ -32,6 +32,7 @@ enum sw64_irq_type {
 	INT_RTC		= 9,
 	INT_FAULT	= 10,
 	INT_VT_SERIAL	= 12,
+	INT_VT_HOTPLUG	= 13,
 	INT_DEV		= 17,
 	INT_NMI		= 18,
 	INT_LEGACY	= 31,
@@ -40,10 +41,8 @@ enum sw64_irq_type {
 extern struct irqaction timer_irqaction;
 extern void init_rtc_irq(irq_handler_t handler);
 extern void handle_irq(int irq);
-extern void handle_ipi(struct pt_regs *);
+extern void handle_ipi(struct pt_regs *regs);
 extern void __init sw64_init_irq(void);
 extern irqreturn_t timer_interrupt(int irq, void *dev);
-extern void handle_chip_irq(unsigned long type, unsigned long vector,
-			    unsigned long irq_arg, struct pt_regs *regs);
 
 #endif
