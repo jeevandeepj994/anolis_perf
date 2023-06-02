@@ -116,6 +116,8 @@ int __net_init smc_sysctl_net_init(struct net *net)
 	net->smc.sysctl_wmem = 262144; /* 256 KiB */
 	net->smc.sysctl_rmem = 262144; /* 256 KiB */
 	net->smc.sysctl_tcp2smc = 0;
+	/* enable handshake limitation by default */
+	net->smc.limit_smc_hs = 1;
 	return 0;
 
 err_reg:
