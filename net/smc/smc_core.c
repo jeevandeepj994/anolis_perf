@@ -471,6 +471,9 @@ static int smc_nl_fill_lgr_link(struct smc_link_group *lgr,
 	if (nla_put_u64_64bit(skb, SMC_NLA_LINK_RWC_CNT,
 			      stats->r_wc_cnt, SMC_NLA_LINK_UNSPEC))
 		goto errstats;
+	if (nla_put_u64_64bit(skb, SMC_NLA_LINK_WWR_CNT,
+			      stats->rw_wr_cnt, SMC_NLA_LINK_UNSPEC))
+		goto errstats;
 	if (nla_put_u64_64bit(skb, SMC_NLA_LINK_WWC_CNT,
 			      stats->rw_wc_cnt, SMC_NLA_LINK_UNSPEC))
 		goto errstats;
