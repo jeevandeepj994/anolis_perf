@@ -357,6 +357,8 @@ static int smc_tx_rdma_write(struct smc_connection *conn, int peer_rmbe_offset,
 	rc = ib_post_send(link->roce_qp, &rdma_wr->wr, NULL);
 	if (rc)
 		smcr_link_down_cond_sched(link);
+	else if (lgr->use_rwwi)
+		SMC_LINK_STAT_WR(&lgr->lnk_stats[link->link_idx], rdma_wr->wr.opcode, 0);
 	return rc;
 }
 
