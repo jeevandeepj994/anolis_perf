@@ -82,9 +82,12 @@ static struct inode *fuse_alloc_inode(struct super_block *sb)
 	fi->nodeid = 0;
 	fi->nlookup = 0;
 	fi->attr_version = 0;
+	fi->wb_version = 0;
+	fi->fo_version = 0;
 	fi->writectr = 0;
 	fi->orig_ino = 0;
 	fi->state = 0;
+	atomic64_set(&fi->inval_version, 0);
 	INIT_LIST_HEAD(&fi->write_files);
 	INIT_LIST_HEAD(&fi->queued_writes);
 	INIT_LIST_HEAD(&fi->writepages);
@@ -169,7 +172,7 @@ static ino_t fuse_squash_ino(u64 ino64)
 }
 
 void fuse_change_attributes_common(struct inode *inode, struct fuse_attr *attr,
-				   u64 attr_valid)
+				   u64 attr_valid, u64 fo_version)
 {
 	struct fuse_conn *fc = get_fuse_conn(inode);
 	struct fuse_inode *fi = get_fuse_inode(inode);
@@ -177,6 +180,7 @@ void fuse_change_attributes_common(struct inode *inode, struct fuse_attr *attr,
 	lockdep_assert_held(&fi->lock);
 
 	fi->attr_version = atomic64_inc_return(&fc->attr_version);
+	fi->fo_version = fo_version;
 	fi->i_time = attr_valid;
 	WRITE_ONCE(fi->inval_mask, 0);
 
@@ -194,6 +198,20 @@ void fuse_change_attributes_common(struct inode *inode, struct fuse_attr *attr,
 		inode->i_mtime.tv_nsec  = attr->mtimensec;
 		inode->i_ctime.tv_sec   = attr->ctime;
 		inode->i_ctime.tv_nsec  = attr->ctimensec;
+	}
+
+	/* Use latest mtime/ctime in writeback mode in close_to_open */
+	if (fc->close_to_open && fc->writeback_cache && S_ISREG(inode->i_mode)) {
+		if (inode->i_mtime.tv_sec * NSEC_PER_SEC + inode->i_mtime.tv_nsec
+			< attr->mtime * NSEC_PER_SEC + attr->mtimensec) {
+			inode->i_mtime.tv_sec = attr->mtime;
+			inode->i_mtime.tv_nsec = attr->mtimensec;
+		}
+		if (inode->i_ctime.tv_sec * NSEC_PER_SEC + inode->i_ctime.tv_nsec
+			< attr->ctime * NSEC_PER_SEC + attr->ctimensec) {
+			inode->i_ctime.tv_sec = attr->ctime;
+			inode->i_ctime.tv_nsec = attr->ctimensec;
+		}
 	}
 
 	if (attr->blksize != 0)
@@ -223,8 +241,37 @@ void fuse_change_attributes_common(struct inode *inode, struct fuse_attr *attr,
 	inode->i_flags &= ~S_NOSEC;
 }
 
+/* This is called under fi->lock */
+static inline bool fuse_inode_is_writeback(struct inode *inode, u64 wb_version)
+{
+	struct fuse_inode *fi = get_fuse_inode(inode);
+	/*
+	 * write-back happened during get attr, size may staled
+	 */
+	if (fi->wb_version > wb_version)
+		return true;
+	/* write-back inflight */
+	if (fi->writectr != 0)
+		return true;
+	/* inode dirty */
+	if (inode->i_state & I_SYNC || inode->i_state & I_DIRTY_PAGES)
+		return true;
+	return false;
+}
+
+static inline bool fuse_inode_has_write_files(struct fuse_inode *fi)
+{
+	bool has;
+
+	spin_lock(&fi->lock);
+	has = !list_empty(&fi->write_files);
+	spin_unlock(&fi->lock);
+	return has;
+}
+
 void fuse_change_attributes(struct inode *inode, struct fuse_attr *attr,
-			    u64 attr_valid, u64 attr_version)
+			u64 attr_valid, u64 attr_version,
+			u64 wb_version, u64 fo_version)
 {
 	struct fuse_conn *fc = get_fuse_conn(inode);
 	struct fuse_inode *fi = get_fuse_inode(inode);
@@ -240,7 +287,7 @@ void fuse_change_attributes(struct inode *inode, struct fuse_attr *attr,
 	}
 
 	old_mtime = inode->i_mtime;
-	fuse_change_attributes_common(inode, attr, attr_valid);
+	fuse_change_attributes_common(inode, attr, attr_valid, fo_version);
 
 	oldsize = inode->i_size;
 	/*
@@ -250,9 +297,21 @@ void fuse_change_attributes(struct inode *inode, struct fuse_attr *attr,
 	 */
 	if (!is_wb || !S_ISREG(inode->i_mode))
 		i_size_write(inode, attr->size);
+
+	/*
+	 * In writeback mode, trust server size if file grown bigger
+	 * or we don't have any outstanding writes
+	 */
+	if (fc->close_to_open && is_wb && S_ISREG(inode->i_mode)) {
+		if (!fuse_inode_is_writeback(inode, wb_version) || attr->size > inode->i_size)
+			i_size_write(inode, attr->size);
+		else
+			oldsize = attr->size;
+	}
+
 	spin_unlock(&fi->lock);
 
-	if (!is_wb && S_ISREG(inode->i_mode)) {
+	if ((!is_wb || fc->close_to_open) && S_ISREG(inode->i_mode)) {
 		bool inval = false;
 
 		if (oldsize != attr->size) {
@@ -268,8 +327,16 @@ void fuse_change_attributes(struct inode *inode, struct fuse_attr *attr,
 			 * Auto inval mode also checks and invalidates if mtime
 			 * has changed.
 			 */
-			if (!timespec64_equal(&old_mtime, &new_mtime))
-				inval = true;
+			if (!timespec64_equal(&old_mtime, &new_mtime)) {
+				/*
+				 * in writeback mode, mtime may changed by ourselves,
+				 * don't invalid mapping frequently
+				 */
+				if (fc->close_to_open && is_wb && fuse_inode_has_write_files(fi))
+					inval = false;
+				else
+					inval = true;
+			}
 		}
 
 		if (inval)
@@ -322,7 +389,8 @@ static int fuse_inode_set(struct inode *inode, void *_nodeidp)
 
 struct inode *fuse_iget(struct super_block *sb, u64 nodeid,
 			int generation, struct fuse_attr *attr,
-			u64 attr_valid, u64 attr_version)
+			u64 attr_valid, u64 attr_version,
+			u64 wb_version, u64 fo_version)
 {
 	struct inode *inode;
 	struct fuse_inode *fi;
@@ -351,7 +419,7 @@ struct inode *fuse_iget(struct super_block *sb, u64 nodeid,
 	spin_lock(&fi->lock);
 	fi->nlookup++;
 	spin_unlock(&fi->lock);
-	fuse_change_attributes(inode, attr, attr_valid, attr_version);
+	fuse_change_attributes(inode, attr, attr_valid, attr_version, wb_version, fo_version);
 
 	return inode;
 }
@@ -369,6 +437,7 @@ int fuse_reverse_inval_inode(struct super_block *sb, u64 nodeid,
 
 	fuse_invalidate_attr(inode);
 	forget_all_cached_acls(inode);
+	fuse_invalidate_inval_version(inode);
 	if (offset >= 0) {
 		pg_start = offset >> PAGE_SHIFT;
 		if (len <= 0)
@@ -729,6 +798,8 @@ void fuse_conn_init(struct fuse_conn *fc, struct user_namespace *user_ns,
 	fc->initialized = 0;
 	fc->connected = 1;
 	atomic64_set(&fc->attr_version, 1);
+	atomic64_set(&fc->wb_version, 1);
+	atomic64_set(&fc->fo_version, 1);
 	get_random_bytes(&fc->scramble_key, sizeof(fc->scramble_key));
 	fc->pid_ns = get_pid_ns(task_active_pid_ns(current));
 	fc->user_ns = get_user_ns(user_ns);
@@ -737,6 +808,12 @@ void fuse_conn_init(struct fuse_conn *fc, struct user_namespace *user_ns,
 	fc->conn_fs_magic = 0;
 }
 EXPORT_SYMBOL_GPL(fuse_conn_init);
+
+void fuse_conn_fill_tag(struct fuse_conn *fc, const char *tag)
+{
+	strncpy(fc->tag, tag, FUSE_TAG_NAME_MAX - 1);
+}
+EXPORT_SYMBOL_GPL(fuse_conn_fill_tag);
 
 void fuse_conn_put(struct fuse_conn *fc)
 {
@@ -773,7 +850,7 @@ static struct inode *fuse_get_root_inode(struct super_block *sb, unsigned mode)
 	attr.mode = mode;
 	attr.ino = FUSE_ROOT_ID;
 	attr.nlink = 1;
-	return fuse_iget(sb, 1, 0, &attr, 0, 0);
+	return fuse_iget(sb, 1, 0, &attr, 0, 0, 0, 1);
 }
 
 struct fuse_inode_handle {
@@ -1067,6 +1144,12 @@ static void process_init_reply(struct fuse_conn *fc, struct fuse_req *req)
 				fc->handle_killpriv_v2 = 1;
 				fc->sb->s_flags |= SB_NOSEC;
 			}
+			if (flags & FUSE_INVAL_CACHE_INFAIL)
+				fc->inval_cache_in_failover = 1;
+			if (flags & FUSE_CLOSE_TO_OPEN)
+				fc->close_to_open = 1;
+			if (flags & FUSE_INVALDIR_ALLENTRY)
+				fc->invaldir_allentry = 1;
 		} else {
 			ra_pages = fc->max_read / PAGE_SIZE;
 			fc->no_lock = 1;
@@ -1090,7 +1173,7 @@ static void process_init_reply(struct fuse_conn *fc, struct fuse_req *req)
 	wake_up_all(&fc->blocked_waitq);
 }
 
-void fuse_send_init(struct fuse_conn *fc, struct fuse_req *req)
+static void fuse_prepare_init_req(struct fuse_conn *fc, struct fuse_req *req)
 {
 	struct fuse_init_in *arg = &req->misc.init_in;
 	u64 flags;
@@ -1106,7 +1189,9 @@ void fuse_send_init(struct fuse_conn *fc, struct fuse_req *req)
 		FUSE_WRITEBACK_CACHE | FUSE_NO_OPEN_SUPPORT |
 		FUSE_PARALLEL_DIROPS | FUSE_HANDLE_KILLPRIV | FUSE_POSIX_ACL |
 		FUSE_ABORT_ERROR | FUSE_MAX_PAGES | FUSE_CACHE_SYMLINKS |
-		FUSE_HANDLE_KILLPRIV_V2 | FUSE_INIT_EXT;
+		FUSE_HANDLE_KILLPRIV_V2 | FUSE_INIT_EXT |
+		FUSE_INVAL_CACHE_INFAIL | FUSE_CLOSE_TO_OPEN |
+		FUSE_INVALDIR_ALLENTRY;
 #ifdef CONFIG_FUSE_DAX
 	if (fc->dax)
 		flags |= FUSE_MAP_ALIGNMENT;
@@ -1128,9 +1213,45 @@ void fuse_send_init(struct fuse_conn *fc, struct fuse_req *req)
 	req->out.args[0].size = sizeof(struct fuse_init_out);
 	req->out.args[0].value = &req->misc.init_out;
 	req->end = process_init_reply;
+}
+
+void fuse_send_init(struct fuse_conn *fc, struct fuse_req *req)
+{
+	fuse_prepare_init_req(fc, req);
 	fuse_request_send_background(fc, req);
 }
 EXPORT_SYMBOL_GPL(fuse_send_init);
+
+void fuse_resend_init(struct fuse_conn *fc, struct fuse_req *req)
+{
+	fuse_prepare_init_req(fc, req);
+
+	spin_lock(&fc->lock);
+	if (fc->connected) {
+		struct fuse_iqueue *fiq = &fc->iq;
+
+		if (!test_bit(FR_WAITING, &req->flags)) {
+			__set_bit(FR_WAITING, &req->flags);
+			atomic_inc(&fc->num_waiting);
+		}
+		__set_bit(FR_ISREPLY, &req->flags);
+		spin_lock(&fiq->lock);
+		if (!fiq->connected) {
+			spin_unlock(&fiq->lock);
+			goto out;
+		} else {
+			req->in.h.unique = fuse_get_unique(fiq);
+			fuse_queue_init(fiq, req);
+			spin_unlock(&fc->lock);
+		}
+	} else {
+out:
+		spin_unlock(&fc->lock);
+		req->out.h.error = -ENOTCONN;
+		req->end(fc, req);
+		fuse_put_request(fc, req);
+	}
+}
 
 static void fuse_free_conn(struct fuse_conn *fc)
 {
@@ -1277,6 +1398,8 @@ int fuse_fill_super_common(struct super_block *sb,
 
 	fuse_conn_init(fc, sb->s_user_ns, mount_data->fiq_ops,
 		       mount_data->fiq_priv);
+	if (mount_data->tag_present)
+		fuse_conn_fill_tag(fc, mount_data->tag);
 	fc->release = fuse_free_conn;
 
 	if (IS_ENABLED(CONFIG_FUSE_DAX)) {
@@ -1361,6 +1484,20 @@ int fuse_fill_super_common(struct super_block *sb,
 }
 EXPORT_SYMBOL_GPL(fuse_fill_super_common);
 
+static bool fuse_find_instance(const char *tag)
+{
+	struct fuse_conn *fc;
+
+	mutex_lock(&fuse_mutex);
+	list_for_each_entry(fc, &fuse_conn_list, entry) {
+		if (!strncmp(fc->tag, tag, FUSE_TAG_NAME_MAX - 1))
+			return true;
+	}
+	mutex_unlock(&fuse_mutex);
+
+	return false;
+}
+
 static int fuse_fill_super(struct super_block *sb, void *data, int silent)
 {
 	struct fuse_mount_data d;
@@ -1372,12 +1509,25 @@ static int fuse_fill_super(struct super_block *sb, void *data, int silent)
 	err = -EINVAL;
 	if (!parse_fuse_opt(data, &d, is_bdev, sb->s_user_ns, false))
 		goto err;
-	if (!d.fd_present)
+
+	if (!d.fd_present) {
+		pr_err("fuse: missing fd option\n");
 		goto err;
+	}
+
+	if (d.tag_present) {
+		if (fuse_find_instance(d.tag)) {
+			err = -EEXIST;
+			pr_err("fuse: tag %s already exist\n", d.tag);
+			goto err;
+		}
+	}
 
 	file = fget(d.fd);
-	if (!file)
+	if (!file) {
+		pr_err("fuse: invalid fd option\n");
 		goto err;
+	}
 
 	/*
 	 * Require mount to happen from the same user namespace which

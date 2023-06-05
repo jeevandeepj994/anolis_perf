@@ -137,6 +137,26 @@ For each connection the following files exist within this directory:
   no filesystem activity and 'waiting' is non-zero, then the
   filesystem is hung or deadlocked.
 
+ 'resend'
+
+  Resend the requests which are waiting to be transferred
+  to userspace or being processed by the filesystem daemon. This is used
+  in fail-over handling, when filesystem daemon restart, the old
+  requests will be never replied, which causes io-hang. Resend old
+  requests and they got new chances to be processed.
+
+ 'stats'
+
+  The statistics about the historical request processed by filesystem
+  daemon, including total request count and processing time, grouped
+  by different fuse opcodes.
+
+ 'waiting_debug'
+
+  Detailed information about requests which are waiting to be transferred
+  to userspace or being processed by the filesystem daemon.
+  This is usually useful for debugging.
+
  'abort'
 
   Writing anything into this file will abort the filesystem

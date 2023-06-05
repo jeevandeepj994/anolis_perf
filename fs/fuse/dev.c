@@ -36,6 +36,11 @@ static struct fuse_dev *fuse_get_dev(struct file *file)
 	return READ_ONCE(file->private_data);
 }
 
+static inline uint64_t get_time_now_us(void)
+{
+	return ktime_to_us(ktime_get());
+}
+
 static void fuse_request_init(struct fuse_req *req, struct page **pages,
 			      struct fuse_page_desc *page_descs,
 			      unsigned npages)
@@ -361,6 +366,15 @@ __releases(fiq->lock)
 	fiq->ops->wake_pending_and_unlock(fiq);
 }
 
+void fuse_queue_init(struct fuse_iqueue *fiq, struct fuse_req *req)
+__releases(fiq->lock)
+{
+	req->in.h.len = sizeof(struct fuse_in_header) +
+		fuse_len_args(req->in.numargs, (struct fuse_arg *) req->in.args);
+	list_add(&req->list, &fiq->pending);
+	fiq->ops->wake_pending_and_unlock(fiq);
+}
+
 void fuse_queue_forget(struct fuse_conn *fc, struct fuse_forget_link *forget,
 		       u64 nodeid, u64 nlookup)
 {
@@ -397,6 +411,19 @@ static void flush_bg_queue(struct fuse_conn *fc)
 	}
 }
 
+static void fuse_update_stats(struct fuse_conn *fc, int opcode, uint64_t send_time)
+{
+	uint64_t delta_time;
+
+	delta_time = get_time_now_us() - send_time;
+
+	atomic64_add(delta_time, &fc->stats.req_time[FUSE_SUMMARY]);
+	atomic64_add(delta_time, &fc->stats.req_time[opcode]);
+
+	atomic64_inc(&fc->stats.req_cnts[FUSE_SUMMARY]);
+	atomic64_inc(&fc->stats.req_cnts[opcode]);
+}
+
 /*
  * This function is called when a request is finished.  Either a reply
  * has arrived or it was aborted (and not yet sent) or some error
@@ -418,6 +445,8 @@ void fuse_request_end(struct fuse_conn *fc, struct fuse_req *req)
 	WARN_ON(test_bit(FR_PENDING, &req->flags));
 	WARN_ON(test_bit(FR_SENT, &req->flags));
 	if (test_bit(FR_BACKGROUND, &req->flags)) {
+		fuse_update_stats(fc, req->in.h.opcode, req->send_time);
+
 		spin_lock(&fc->bg_lock);
 		clear_bit(FR_BACKGROUND, &req->flags);
 		if (fc->num_background == fc->max_background) {
@@ -521,6 +550,7 @@ static void __fuse_request_send(struct fuse_conn *fc, struct fuse_req *req)
 		spin_unlock(&fiq->lock);
 		req->out.h.error = -ENOTCONN;
 	} else {
+		req->send_time = get_time_now_us();
 		req->in.h.unique = fuse_get_unique(fiq);
 		/*
 		 * acquire extra reference, since request is still
@@ -532,6 +562,8 @@ static void __fuse_request_send(struct fuse_conn *fc, struct fuse_req *req)
 		request_wait_answer(fc, req);
 		/* Pairs with smp_wmb() in fuse_request_end() */
 		smp_rmb();
+
+		fuse_update_stats(fc, req->in.h.opcode, req->send_time);
 	}
 }
 
@@ -621,6 +653,9 @@ bool fuse_request_queue_background(struct fuse_conn *fc, struct fuse_req *req)
 		atomic_inc(&fc->num_waiting);
 	}
 	__set_bit(FR_ISREPLY, &req->flags);
+
+	req->send_time = get_time_now_us();
+
 	spin_lock(&fc->bg_lock);
 	if (likely(fc->connected)) {
 		fc->num_background++;
@@ -2303,6 +2338,66 @@ void fuse_flush_pq(struct fuse_conn *fc)
 
 	end_requests(fc, &to_end);
 }
+/**
+ * Resend all processing queue requests.
+ *
+ * When a FUSE daemon panics and fails over, we want to reuse the existing FUSE
+ * connection and avoid affecting applications as little as possible. During
+ * FUSE daemon failover, the FUSE processing queue requests are waiting for
+ * replies from user space daemon that never come back and applications would
+ * stuck forever.
+ *
+ * Besides flushing the processing queue requests like being done in fuse_flush_pq(),
+ * we can also resend these requests to user space daemon so that they can be
+ * processed properly again. Such strategy can only be done for idempotent requests
+ * or if the user space daemon takes good care to record and avoid processing
+ * duplicated non-idempotent requests.
+ */
+void fuse_resend_pqueue(struct fuse_conn *fc)
+{
+	struct fuse_dev *fud;
+	struct fuse_req *req, *next;
+	struct fuse_iqueue *fiq = &fc->iq;
+	LIST_HEAD(to_queue);
+
+	spin_lock(&fc->lock);
+	if (!fc->connected) {
+		spin_unlock(&fc->lock);
+		return;
+	}
+
+	/*
+	 * resend means connect failover happened, cached inodes
+	 * should be revalidated later
+	 */
+	atomic64_inc(&fc->fo_version);
+
+	list_for_each_entry(fud, &fc->devices, entry) {
+		struct fuse_pqueue *fpq = &fud->pq;
+
+		spin_lock(&fpq->lock);
+		list_for_each_entry_safe(req, next, &fpq->io, list) {
+			spin_lock(&req->waitq.lock);
+			if (!test_bit(FR_LOCKED, &req->flags)) {
+				__fuse_get_request(req);
+				list_move(&req->list, &to_queue);
+			}
+			spin_unlock(&req->waitq.lock);
+		}
+		list_splice_tail_init(&fpq->processing, &to_queue);
+		spin_unlock(&fpq->lock);
+	}
+	spin_unlock(&fc->lock);
+
+	list_for_each_entry_safe(req, next, &to_queue, list) {
+		__set_bit(FR_PENDING, &req->flags);
+	}
+
+	spin_lock(&fiq->lock);
+	/* iq and pq requests are both oldest to newest */
+	list_splice(&to_queue, &fiq->pending);
+	spin_unlock(&fiq->lock);
+}
 
 static int fuse_dev_fasync(int fd, struct file *file, int on)
 {
@@ -2332,12 +2427,29 @@ static int fuse_device_clone(struct fuse_conn *fc, struct file *new)
 	return 0;
 }
 
+void fuse_reset_conn(struct fuse_conn *fc)
+{
+	struct fuse_iqueue *fiq;
+
+	spin_lock(&fc->lock);
+	fiq = &fc->iq;
+	spin_lock(&fiq->lock);
+	fiq->connected = 1;
+	spin_unlock(&fiq->lock);
+	fc->connected = 1;
+	spin_unlock(&fc->lock);
+}
+EXPORT_SYMBOL_GPL(fuse_reset_conn);
+
 static long fuse_dev_ioctl(struct file *file, unsigned int cmd,
 			   unsigned long arg)
 {
 	int res;
 	int oldfd;
 	struct fuse_dev *fud = NULL;
+	struct fuse_ioctl_attach attach_info;
+	struct fuse_conn *fc;
+	struct fuse_req *init_req;
 
 	switch (cmd) {
 	case FUSE_DEV_IOC_CLONE:
@@ -2363,6 +2475,66 @@ static long fuse_dev_ioctl(struct file *file, unsigned int cmd,
 				fput(old);
 			}
 		}
+		break;
+	case FUSE_DEV_IOC_ATTACH:
+		if (copy_from_user(&attach_info, (__u32 __user *)arg, sizeof(attach_info))) {
+			res = -EFAULT;
+			goto out;
+		}
+
+		if (attach_info.tag[0] == '\0') {
+			res = -EINVAL;
+			goto out;
+		}
+
+		if (!file) {
+			res = -EBADF;
+			goto out;
+		}
+
+		if (file->f_op != &fuse_dev_operations || file->private_data) {
+			res = -EBADF;
+			goto out;
+		}
+
+		res = -EINVAL;
+		mutex_lock(&fuse_mutex);
+		list_for_each_entry(fc, &fuse_conn_list, entry) {
+			if (!strncmp(fc->tag, attach_info.tag, FUSE_TAG_NAME_MAX - 1)) {
+				attach_info.dev = fc->dev;
+				if (copy_to_user((void __user *)arg,
+						&attach_info, sizeof(attach_info))) {
+					res = -EFAULT;
+					mutex_unlock(&fuse_mutex);
+					goto out;
+				}
+
+				init_req = fuse_request_alloc(0);
+				if (!init_req) {
+					res = -ENOMEM;
+					mutex_unlock(&fuse_mutex);
+					goto out;
+				}
+
+				fud = fuse_dev_alloc_install(fc);
+				if (!fud) {
+					res = -ENOMEM;
+					mutex_unlock(&fuse_mutex);
+					fuse_request_free(init_req);
+					goto out;
+				}
+
+				res = 0;
+				file->private_data = fud;
+				atomic_inc(&fc->dev_count);
+				fuse_reset_conn(fc);
+				mutex_unlock(&fuse_mutex);
+				fuse_resend_init(fc, init_req);
+				goto out;
+			}
+		}
+		mutex_unlock(&fuse_mutex);
+out:
 		break;
 	default:
 		res = -ENOTTY;

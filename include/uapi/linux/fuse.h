@@ -316,6 +316,9 @@ struct fuse_file_lock {
 #define FUSE_INIT_RESERVED	(1 << 31)
 /* bits 32..63 get shifted down 32 bits into the flags2 field */
 #define FUSE_HAS_INODE_DAX	(1ULL << 33)
+#define FUSE_INVAL_CACHE_INFAIL	(1ULL << 60)
+#define FUSE_CLOSE_TO_OPEN	(1ULL << 61)
+#define FUSE_INVALDIR_ALLENTRY	(1ULL << 62)
 
 /**
  * CUSE INIT request/reply flags
@@ -399,6 +402,7 @@ struct fuse_file_lock {
 #define FUSE_OPEN_KILL_SUIDGID	(1 << 0)
 
 enum fuse_opcode {
+	FUSE_SUMMARY            = 0,
 	FUSE_LOOKUP	   	= 1,
 	FUSE_FORGET	   	= 2,  /* no reply */
 	FUSE_GETATTR	   	= 3,
@@ -446,6 +450,7 @@ enum fuse_opcode {
 	FUSE_COPY_FILE_RANGE	= 47,
 	FUSE_SETUPMAPPING	= 48,
 	FUSE_REMOVEMAPPING	= 49,
+	FUSE_OP_MAX,
 
 	/* CUSE specific operations */
 	CUSE_INIT          	= 4096,
@@ -743,6 +748,13 @@ struct fuse_ioctl_out {
 	uint32_t	out_iovs;
 };
 
+#define FUSE_TAG_NAME_MAX		128
+
+struct fuse_ioctl_attach {
+	unsigned char	tag[FUSE_TAG_NAME_MAX];
+	uint64_t		dev;
+};
+
 struct fuse_poll_in {
 	uint64_t	fh;
 	uint64_t	kh;
@@ -855,6 +867,7 @@ struct fuse_notify_retrieve_in {
 /* Device ioctls: */
 #define FUSE_DEV_IOC_MAGIC		229
 #define FUSE_DEV_IOC_CLONE		_IOR(FUSE_DEV_IOC_MAGIC, 0, uint32_t)
+#define FUSE_DEV_IOC_ATTACH            _IOWR(FUSE_DEV_IOC_MAGIC, 200, struct fuse_ioctl_attach)
 
 struct fuse_lseek_in {
 	uint64_t	fh;
