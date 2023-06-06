@@ -3541,20 +3541,9 @@ static inline void fixup_vma(struct vm_area_struct *vma)
 
 #ifdef CONFIG_UNACCEPTED_MEMORY
 
-/*
- * To make sure kernel could be built successfully in case
- * CONFIG_UNACCEPTED_MEMORY is selected, implement them as fake
- * as this this has not been implemented yet.
- * Re-declare them again in the implement patch
- */
-static inline bool range_contains_unaccepted_memory(phys_addr_t start,
-					    phys_addr_t end)
-{
-	return false;
-}
-static inline void accept_memory(phys_addr_t start, phys_addr_t end)
-{
-}
+bool range_contains_unaccepted_memory(phys_addr_t start, phys_addr_t end);
+
+void accept_memory(phys_addr_t start, phys_addr_t end);
 
 #else
 
