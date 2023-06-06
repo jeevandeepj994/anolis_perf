@@ -143,10 +143,7 @@ EXPORT_SYMBOL(screen_info);
  */
 void store_cpu_data(int cpu)
 {
-	cpu_data[cpu].loops_per_jiffy = loops_per_jiffy;
 	cpu_data[cpu].last_asn = ASN_FIRST_VERSION;
-	cpu_data[cpu].need_new_asn = 0;
-	cpu_data[cpu].asn_lock = 0;
 }
 
 #ifdef CONFIG_KEXEC
@@ -788,7 +785,7 @@ setup_arch(char **cmdline_p)
 		strlcat(boot_command_line, " ", COMMAND_LINE_SIZE);
 		strlcat(boot_command_line, builtin_cmdline, COMMAND_LINE_SIZE);
 	}
-#endif	/* CMDLINE_EXTEND */
+#endif /* CMDLINE_EXTEND */
 #endif
 	if (IS_ENABLED(CONFIG_SW64_CHIP3_ASIC_DEBUG) &&
 			IS_ENABLED(CONFIG_SW64_CHIP3)) {

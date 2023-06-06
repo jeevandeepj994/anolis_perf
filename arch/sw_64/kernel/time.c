@@ -60,7 +60,7 @@ void arch_irq_work_raise(void)
 	set_irq_work_pending_flag();
 }
 
-#else  /* CONFIG_IRQ_WORK */
+#else /* CONFIG_IRQ_WORK */
 
 #define test_irq_work_pending()      0
 #define clear_irq_work_pending()
@@ -111,14 +111,8 @@ time_init(void)
 	of_clk_init(NULL);
 	/* Startup the timer source. */
 	setup_timer();
-}
-
-void calibrate_delay(void)
-{
-	loops_per_jiffy = get_cpu_freq() / HZ;
-	pr_info("Clock rate yields %lu.%02lu BogoMIPS (lpj=%lu)\n",
-			loops_per_jiffy / (500000 / HZ),
-			(loops_per_jiffy / (5000 / HZ)) % 100, loops_per_jiffy);
+	/* Calibrate the delay loop directly */
+	lpj_fine = cycle_freq / HZ;
 }
 
 static void __init calibrate_sched_clock(void)

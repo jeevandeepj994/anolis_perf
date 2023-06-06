@@ -18,10 +18,7 @@ struct cache_desc {
 };
 
 struct cpuinfo_sw64 {
-	unsigned long loops_per_jiffy;
 	unsigned long last_asn;
-	int need_new_asn;
-	int asn_lock;
 	unsigned long ipi_count;
 	struct cache_desc icache; /* Primary I-cache */
 	struct cache_desc dcache; /* Primary D or combined I/D cache */
@@ -85,12 +82,11 @@ static inline unsigned long get_cpu_freq(void)
 	return cpu_desc.frequency;
 }
 
-static inline bool icache_is_vivt_no_ictag(void)
+static inline void update_cpu_freq(unsigned long freq)
 {
-	/*
-	 * Icache of C3B is vivt with ICtag. C4 will be vipt.
-	 */
-	return (cpu_desc.arch_var == 0x3 && cpu_desc.arch_rev == 0x1);
+	freq = freq * 1000000;
+	if (cpu_desc.frequency != freq)
+		cpu_desc.frequency = freq;
 }
 
 #define EMUL_FLAG	(0x1UL << 63)
@@ -166,4 +162,4 @@ DECLARE_STATIC_KEY_FALSE(run_mode_emul_key);
 	(((val) & CACHE_INDEX_BITS_MASK) >> CACHE_INDEX_BITS_SHIFT)
 #define current_cpu_data cpu_data[smp_processor_id()]
 
-#endif /* HW_INIT_H */
+#endif /* _ASM_SW64_HW_INIT_H */

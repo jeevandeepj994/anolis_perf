@@ -7,10 +7,6 @@
 #include <asm/pgtable.h>
 #include <asm/sw64io.h>
 
-/* ptrace.c */
-extern int ptrace_set_bpt(struct task_struct *child);
-extern int ptrace_cancel_bpt(struct task_struct *child);
-
 /* traps.c */
 extern void show_regs(struct pt_regs *regs);
 extern void die(char *str, struct pt_regs *regs, long err);
@@ -23,4 +19,4 @@ extern void __init setup_sched_clock(void);
 extern void __init sw64_sched_clock_init(void);
 #endif
 
-#endif /* _SW64_PROTO_H */
+#endif /* _SW64_KERNEL_PROTO_H */
