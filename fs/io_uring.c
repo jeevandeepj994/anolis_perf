@@ -632,6 +632,7 @@ enum {
 	REQ_F_WORK_INITIALIZED_BIT,
 	REQ_F_LTIMEOUT_ACTIVE_BIT,
 	REQ_F_COMPLETE_INLINE_BIT,
+	REQ_F_CQE32_INIT_BIT,
 
 	/* not a real bit, just to check we're not overflowing the space */
 	__REQ_F_LAST_BIT,
@@ -679,6 +680,8 @@ enum {
 	REQ_F_LTIMEOUT_ACTIVE	= BIT(REQ_F_LTIMEOUT_ACTIVE_BIT),
 	/* completion is deferred through io_comp_state */
 	REQ_F_COMPLETE_INLINE	= BIT(REQ_F_COMPLETE_INLINE_BIT),
+	/* ->extra1 and ->extra2 are initialised */
+	REQ_F_CQE32_INIT	= BIT(REQ_F_CQE32_INIT_BIT),
 };
 
 struct async_poll {
@@ -754,7 +757,13 @@ struct io_kiocb {
 		struct callback_head	task_work;
 	};
 	/* for polled requests, i.e. IORING_OP_POLL_ADD and async armed poll */
-	struct hlist_node		hash_node;
+	union {
+		struct hlist_node	hash_node;
+		struct {
+			u64		extra1;
+			u64		extra2;
+		};
+	};
 	struct async_poll		*apoll;
 	struct io_wq_work		work;
 };
@@ -1727,7 +1736,11 @@ static inline bool io_sqring_full(struct io_ring_ctx *ctx)
 static struct io_uring_cqe *io_get_cqring(struct io_ring_ctx *ctx)
 {
 	struct io_rings *rings = ctx->rings;
+	unsigned int shift = 0;
 	unsigned tail;
+
+	if (ctx->flags & IORING_SETUP_CQE32)
+		shift = 1;
 
 	tail = ctx->cached_cq_tail;
 	/*
@@ -1739,7 +1752,7 @@ static struct io_uring_cqe *io_get_cqring(struct io_ring_ctx *ctx)
 		return NULL;
 
 	ctx->cached_cq_tail++;
-	return &rings->cqes[tail & ctx->cq_mask];
+	return &rings->cqes[(tail & ctx->cq_mask) << shift];
 }
 
 static inline bool io_should_trigger_evfd(struct io_ring_ctx *ctx)
@@ -1810,6 +1823,10 @@ static bool __io_cqring_overflow_flush(struct io_ring_ctx *ctx, bool force,
 			WRITE_ONCE(cqe->user_data, req->user_data);
 			WRITE_ONCE(cqe->res, req->result);
 			WRITE_ONCE(cqe->flags, req->compl.cflags);
+			if ((ctx->flags & IORING_SETUP_CQE32)) {
+				WRITE_ONCE(cqe->big_cqe[0], req->extra1);
+				WRITE_ONCE(cqe->big_cqe[1], req->extra2);
+			}
 		} else {
 			ctx->cached_cq_overflow++;
 			WRITE_ONCE(ctx->rings->cq_overflow,
@@ -1856,20 +1873,48 @@ static void __io_cqring_fill_event(struct io_kiocb *req, long res,
 	struct io_ring_ctx *ctx = req->ctx;
 	struct io_uring_cqe *cqe;
 
-	trace_io_uring_complete(ctx, req->user_data, res);
+	if (!(ctx->flags & IORING_SETUP_CQE32)) {
+		trace_io_uring_complete(ctx, req->user_data, res, cflags, 0, 0);
 
-	/*
-	 * If we can't get a cq entry, userspace overflowed the
-	 * submission (by quite a lot). Increment the overflow count in
-	 * the ring.
-	 */
-	cqe = io_get_cqring(ctx);
-	if (likely(cqe)) {
-		WRITE_ONCE(cqe->user_data, req->user_data);
-		WRITE_ONCE(cqe->res, res);
-		WRITE_ONCE(cqe->flags, cflags);
-	} else if (ctx->cq_overflow_flushed ||
-		   atomic_read(&req->task->io_uring->in_idle)) {
+		/*
+		 * If we can't get a cq entry, userspace overflowed the
+		 * submission (by quite a lot). Increment the overflow count in
+		 * the ring.
+		 */
+		cqe = io_get_cqring(ctx);
+		if (likely(cqe)) {
+			WRITE_ONCE(cqe->user_data, req->user_data);
+			WRITE_ONCE(cqe->res, res);
+			WRITE_ONCE(cqe->flags, cflags);
+			return;
+		}
+	} else {
+		u64 extra1 = 0, extra2 = 0;
+
+		if (req->flags & REQ_F_CQE32_INIT) {
+			extra1 = req->extra1;
+			extra2 = req->extra2;
+		}
+
+		trace_io_uring_complete(ctx, req->user_data, res, cflags, extra1, extra2);
+
+		/*
+		 * If we can't get a cq entry, userspace overflowed the
+		 * submission (by quite a lot). Increment the overflow count in
+		 * the ring.
+		 */
+		cqe = io_get_cqring(ctx);
+		if (likely(cqe)) {
+			WRITE_ONCE(cqe->user_data, req->user_data);
+			WRITE_ONCE(cqe->res, res);
+			WRITE_ONCE(cqe->flags, cflags);
+			WRITE_ONCE(cqe->big_cqe[0], extra1);
+			WRITE_ONCE(cqe->big_cqe[1], extra2);
+			return;
+		}
+	}
+
+	if (ctx->cq_overflow_flushed || atomic_read(&req->task->io_uring->in_idle)) {
 		/*
 		 * If we're in ring overflow flush mode, or in task cancel mode,
 		 * then we cannot store the request for later flushing, we need
@@ -3952,6 +3997,14 @@ void io_uring_cmd_complete_in_task(struct io_uring_cmd *ioucmd,
 }
 EXPORT_SYMBOL_GPL(io_uring_cmd_complete_in_task);
 
+static inline void io_req_set_cqe32_extra(struct io_kiocb *req,
+					  u64 extra1, u64 extra2)
+{
+	req->extra1 = extra1;
+	req->extra2 = extra2;
+	req->flags |= REQ_F_CQE32_INIT;
+}
+
 /*
  * Called by consumers of io_uring_cmd, if they originally returned
  * -EIOCBQUEUED upon receiving the command.
@@ -3962,6 +4015,8 @@ void io_uring_cmd_done(struct io_uring_cmd *ioucmd, ssize_t ret, ssize_t res2)
 
 	if (ret < 0)
 		req_set_fail_links(req);
+	if (req->ctx->flags & IORING_SETUP_CQE32)
+		io_req_set_cqe32_extra(req, res2, 0);
 	io_req_complete(req, ret);
 }
 EXPORT_SYMBOL_GPL(io_uring_cmd_done);
@@ -8611,7 +8666,7 @@ static void *io_mem_alloc(size_t size)
 }
 
 static unsigned long rings_size(unsigned sq_entries, unsigned cq_entries,
-				size_t *sq_offset)
+				size_t *sq_offset,  unsigned int flags)
 {
 	struct io_rings *rings;
 	size_t off, sq_array_size;
@@ -8619,6 +8674,10 @@ static unsigned long rings_size(unsigned sq_entries, unsigned cq_entries,
 	off = struct_size(rings, cqes, cq_entries);
 	if (off == SIZE_MAX)
 		return SIZE_MAX;
+	if (flags & IORING_SETUP_CQE32) {
+		if (check_shl_overflow(off, 1, &off))
+			return SIZE_MAX;
+	}
 
 #ifdef CONFIG_SMP
 	off = ALIGN(off, SMP_CACHE_BYTES);
@@ -8645,7 +8704,7 @@ static unsigned long ring_pages(unsigned sq_entries, unsigned cq_entries,
 	size_t pages;
 
 	pages = (size_t)1 << get_order(
-		rings_size(sq_entries, cq_entries, NULL));
+		rings_size(sq_entries, cq_entries, NULL, flags));
 	if (flags & IORING_SETUP_SQE128)
 		pages += (size_t)1 << get_order(
 			array_size(2 * sizeof(struct io_uring_sqe), sq_entries));
@@ -9768,8 +9827,66 @@ static int io_uring_show_cred(struct seq_file *m, unsigned int id,
 static void __io_uring_show_fdinfo(struct io_ring_ctx *ctx, struct seq_file *m)
 {
 	struct io_sq_data *sq = NULL;
+	struct io_rings *r = ctx->rings;
+	unsigned int sq_mask = ctx->sq_entries - 1, cq_mask = ctx->cq_entries - 1;
+	unsigned int sq_head = READ_ONCE(r->sq.head);
+	unsigned int sq_tail = READ_ONCE(r->sq.tail);
+	unsigned int cq_head = READ_ONCE(r->cq.head);
+	unsigned int cq_tail = READ_ONCE(r->cq.tail);
+	unsigned int cq_shift = 0;
+	unsigned int sq_entries, cq_entries;
 	bool has_lock;
-	int i;
+	bool is_cqe32 = (ctx->flags & IORING_SETUP_CQE32);
+	unsigned int i;
+
+	if (is_cqe32)
+		cq_shift = 1;
+
+	/*
+	 * we may get imprecise sqe and cqe info if uring is actively running
+	 * since we get cached_sq_head and cached_cq_tail without uring_lock
+	 * and sq_tail and cq_head are changed by userspace. But it's ok since
+	 * we usually use these info when it is stuck.
+	 */
+	seq_printf(m, "SqMask:\t\t0x%x\n", sq_mask);
+	seq_printf(m, "SqHead:\t%u\n", sq_head);
+	seq_printf(m, "SqTail:\t%u\n", sq_tail);
+	seq_printf(m, "CachedSqHead:\t%u\n", ctx->cached_sq_head);
+	seq_printf(m, "CqMask:\t0x%x\n", cq_mask);
+	seq_printf(m, "CqHead:\t%u\n", cq_head);
+	seq_printf(m, "CqTail:\t%u\n", cq_tail);
+	seq_printf(m, "CachedCqTail:\t%u\n", ctx->cached_cq_tail);
+	seq_printf(m, "SQEs:\t%u\n", sq_tail - ctx->cached_sq_head);
+	sq_entries = min(sq_tail - sq_head, ctx->sq_entries);
+	for (i = 0; i < sq_entries; i++) {
+		unsigned int entry = i + sq_head;
+		unsigned int sq_idx = READ_ONCE(ctx->sq_array[entry & sq_mask]);
+		struct io_uring_sqe *sqe = &ctx->sq_sqes[sq_idx];
+
+		if (sq_idx > sq_mask)
+			continue;
+		sqe = &ctx->sq_sqes[sq_idx];
+		seq_printf(m, "%5u: opcode:%d, fd:%d, flags:%x, user_data:%llu\n",
+			   sq_idx, sqe->opcode, sqe->fd, sqe->flags,
+			   sqe->user_data);
+	}
+	seq_printf(m, "CQEs:\t%u\n", cq_tail - cq_head);
+	cq_entries = min(cq_tail - cq_head, ctx->cq_entries);
+	for (i = 0; i < cq_entries; i++) {
+		unsigned int entry = i + cq_head;
+		struct io_uring_cqe *cqe = &r->cqes[(entry & cq_mask) << cq_shift];
+
+		if (!is_cqe32) {
+			seq_printf(m, "%5u: user_data:%llu, res:%d, flag:%x\n",
+			   entry & cq_mask, cqe->user_data, cqe->res,
+			   cqe->flags);
+		} else {
+			seq_printf(m, "%5u: user_data:%llu, res:%d, flag:%x, "
+				"extra1:%llu, extra2:%llu\n",
+				entry & cq_mask, cqe->user_data, cqe->res,
+				cqe->flags, cqe->big_cqe[0], cqe->big_cqe[1]);
+		}
+	}
 
 	/*
 	 * Avoid ABBA deadlock between the seq lock and the io_uring mutex,
@@ -9862,7 +9979,7 @@ static int io_allocate_scq_urings(struct io_ring_ctx *ctx,
 	ctx->sq_entries = p->sq_entries;
 	ctx->cq_entries = p->cq_entries;
 
-	size = rings_size(p->sq_entries, p->cq_entries, &sq_array_offset);
+	size = rings_size(p->sq_entries, p->cq_entries, &sq_array_offset, p->flags);
 	if (size == SIZE_MAX)
 		return -EOVERFLOW;
 
@@ -10170,7 +10287,8 @@ static long io_uring_setup(u32 entries, struct io_uring_params __user *params)
 			IORING_SETUP_SQ_AFF | IORING_SETUP_CQSIZE |
 			IORING_SETUP_CLAMP | IORING_SETUP_ATTACH_WQ |
 			IORING_SETUP_R_DISABLED | IORING_SETUP_SQE128 |
-			IORING_SETUP_SQPOLL_PERCPU | IORING_SETUP_IDLE_US))
+			IORING_SETUP_CQE32 | IORING_SETUP_SQPOLL_PERCPU |
+			IORING_SETUP_IDLE_US))
 		return -EINVAL;
 
 	return  io_uring_create(entries, &p, params);
