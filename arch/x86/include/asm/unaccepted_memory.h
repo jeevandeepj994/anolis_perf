@@ -4,13 +4,6 @@
 #include <linux/efi.h>
 #include <asm/tdx.h>
 
-#ifndef tdx_accept_memory
-static inline bool tdx_accept_memory(phys_addr_t start, phys_addr_t end)
-{
-	return true;
-}
-#endif
-
 static inline void arch_accept_memory(phys_addr_t start, phys_addr_t end)
 {
 	/* Platform-specific memory-acceptance call goes here */
