@@ -372,6 +372,9 @@ struct fuse_file_lock {
 #define FUSE_INIT_RESERVED	(1 << 31)
 /* bits 32..63 get shifted down 32 bits into the flags2 field */
 #define FUSE_HAS_INODE_DAX	(1ULL << 33)
+#define FUSE_INVAL_CACHE_INFAIL	(1ULL << 60)
+#define FUSE_CLOSE_TO_OPEN	(1ULL << 61)
+#define FUSE_INVALDIR_ALLENTRY	(1ULL << 62)
 #define FUSE_PASSTHROUGH	(1ULL << 63)
 
 /**
@@ -467,6 +470,7 @@ struct fuse_file_lock {
 #define FUSE_OPEN_KILL_SUIDGID	(1 << 0)
 
 enum fuse_opcode {
+	FUSE_SUMMARY            = 0,
 	FUSE_LOOKUP		= 1,
 	FUSE_FORGET		= 2,  /* no reply */
 	FUSE_GETATTR		= 3,
@@ -514,6 +518,7 @@ enum fuse_opcode {
 	FUSE_COPY_FILE_RANGE	= 47,
 	FUSE_SETUPMAPPING	= 48,
 	FUSE_REMOVEMAPPING	= 49,
+	FUSE_OP_MAX,
 
 	/* CUSE specific operations */
 	CUSE_INIT		= 4096,

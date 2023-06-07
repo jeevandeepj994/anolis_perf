@@ -46,7 +46,7 @@
 #define FUSE_NAME_MAX 1024
 
 /** Number of dentries for each connection in the control filesystem */
-#define FUSE_CTL_NUM_DENTRIES 9
+#define FUSE_CTL_NUM_DENTRIES 11
 
 /** List of active connections */
 extern struct list_head fuse_conn_list;
@@ -57,6 +57,15 @@ extern struct mutex fuse_mutex;
 /** Module parameters */
 extern unsigned max_user_bgreq;
 extern unsigned max_user_congthresh;
+
+union fuse_dentry {
+	struct{
+		u64 time;
+		u64 fo_version;
+		u64 inval_version;
+	} info;
+	struct rcu_head rcu;
+};
 
 /* One forget request */
 struct fuse_forget_link {
@@ -94,6 +103,15 @@ struct fuse_inode {
 
 	/** Version of last attribute change */
 	u64 attr_version;
+
+	/** Version of writeback cache*/
+	u64 wb_version;
+
+	/** Version of failover cache*/
+	u64 fo_version;
+
+	/** Version of invalidate */
+	atomic64_t inval_version;
 
 	union {
 		/* Write related fields (regular file only) */
@@ -391,6 +409,9 @@ struct fuse_req {
 	/** Used to wake up the task waiting for completion of request*/
 	wait_queue_head_t waitq;
 
+	/** send time*/
+	uint64_t send_time;
+
 #if IS_ENABLED(CONFIG_VIRTIO_FS)
 	/** virtio-fs's physically contiguous buffer for in and out args */
 	void *argbuf;
@@ -545,6 +566,14 @@ struct fuse_fs_context {
 
 	/* fuse_dev pointer to fill in, should contain NULL on entry */
 	void **fudptr;
+};
+
+/**
+ *  Fuse stats for debuging.
+ */
+struct fuse_stats {
+	atomic64_t req_time[FUSE_OP_MAX];
+	atomic64_t req_cnts[FUSE_OP_MAX];
 };
 
 /**
@@ -799,6 +828,15 @@ struct fuse_conn {
 	/** Passthrough mode for read/write IO */
 	unsigned int passthrough:1;
 
+	/* invalidate all cache(attr and dentry) in failover*/
+	unsigned int inval_cache_in_failover:1;
+
+	/* close-to-open consistency */
+	unsigned int close_to_open:1;
+
+	/* meta strong consistency */
+	unsigned int invaldir_allentry:1;
+
 	/** The number of requests waiting for completion */
 	atomic_t num_waiting;
 
@@ -823,6 +861,12 @@ struct fuse_conn {
 	/** Version counter for attribute changes */
 	atomic64_t attr_version;
 
+	/** Version counter for writeback changes */
+	atomic64_t wb_version;
+
+	/** Version counter for failover changes */
+	atomic64_t fo_version;
+
 	/** Called on final put */
 	void (*release)(struct fuse_conn *);
 
@@ -846,6 +890,9 @@ struct fuse_conn {
 
 	/* fuse connection tag */
 	char tag[FUSE_TAG_NAME_MAX];
+
+	/** fuse stats **/
+	struct fuse_stats stats;
 
 #ifdef CONFIG_FUSE_DAX
 	/* Dax mode */
@@ -945,6 +992,52 @@ static inline bool fuse_is_bad(struct inode *inode)
 	return unlikely(test_bit(FUSE_I_BAD, &get_fuse_inode(inode)->state));
 }
 
+static inline u64 fuse_get_wb_version(struct fuse_conn *fc)
+{
+	return atomic64_read(&fc->wb_version);
+}
+
+
+static inline u64 fuse_get_fo_version(struct fuse_conn *fc)
+{
+	return atomic64_read(&fc->fo_version);
+}
+
+static inline void fuse_invalidate_inval_version(struct inode *inode)
+{
+	struct fuse_inode *fi = get_fuse_inode(inode);
+
+	atomic64_inc(&fi->inval_version);
+}
+
+static inline u64 fuse_inval_version(struct inode *inode)
+{
+	struct fuse_inode *fi = get_fuse_inode(inode);
+
+	return atomic64_read(&fi->inval_version);
+}
+
+static inline u64 fuse_dentry_inval_version(struct dentry *entry)
+{
+	return ((union fuse_dentry *) entry->d_fsdata)->info.inval_version;
+}
+
+static inline void fuse_dentry_set_inval_version(struct dentry *entry, u64 inval_version)
+{
+	((union fuse_dentry *) entry->d_fsdata)
+		->info.inval_version = inval_version;
+}
+
+static inline u64 fuse_dentry_fo_version(struct dentry *entry)
+{
+	return ((union fuse_dentry *) entry->d_fsdata)->info.fo_version;
+}
+
+static inline void fuse_dentry_set_fo_version(struct dentry *entry, u64 fo_version)
+{
+	((union fuse_dentry *) entry->d_fsdata)->info.fo_version = fo_version;
+}
+
 /** Device operations */
 extern const struct file_operations fuse_dev_operations;
 
@@ -956,7 +1049,8 @@ extern const struct dentry_operations fuse_root_dentry_operations;
  */
 struct inode *fuse_iget(struct super_block *sb, u64 nodeid,
 			int generation, struct fuse_attr *attr,
-			u64 attr_valid, u64 attr_version);
+			u64 attr_valid, u64 attr_version,
+			u64 wb_version, u64 fo_version);
 
 int fuse_lookup_name(struct super_block *sb, u64 nodeid, const struct qstr *name,
 		     struct fuse_entry_out *outarg, struct inode **inode);
@@ -1053,10 +1147,11 @@ void fuse_init_symlink(struct inode *inode);
  * Change attributes of an inode
  */
 void fuse_change_attributes(struct inode *inode, struct fuse_attr *attr,
-			    u64 attr_valid, u64 attr_version);
+			    u64 attr_valid, u64 attr_version,
+			    u64 wb_version, u64 fo_version);
 
 void fuse_change_attributes_common(struct inode *inode, struct fuse_attr *attr,
-				   u64 attr_valid);
+				u64 attr_valid, u64 fo_version);
 
 /**
  * Initialize the client device

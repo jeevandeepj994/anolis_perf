@@ -85,8 +85,11 @@ static struct inode *fuse_alloc_inode(struct super_block *sb)
 	fi->nodeid = 0;
 	fi->nlookup = 0;
 	fi->attr_version = 0;
+	fi->wb_version = 0;
+	fi->fo_version = 0;
 	fi->orig_ino = 0;
 	fi->state = 0;
+	atomic64_set(&fi->inval_version, 0);
 	mutex_init(&fi->mutex);
 	init_rwsem(&fi->i_mmap_sem);
 	spin_lock_init(&fi->lock);
@@ -168,7 +171,7 @@ static ino_t fuse_squash_ino(u64 ino64)
 }
 
 void fuse_change_attributes_common(struct inode *inode, struct fuse_attr *attr,
-				   u64 attr_valid)
+				   u64 attr_valid, u64 fo_version)
 {
 	struct fuse_conn *fc = get_fuse_conn(inode);
 	struct fuse_inode *fi = get_fuse_inode(inode);
@@ -176,6 +179,7 @@ void fuse_change_attributes_common(struct inode *inode, struct fuse_attr *attr,
 	lockdep_assert_held(&fi->lock);
 
 	fi->attr_version = atomic64_inc_return(&fc->attr_version);
+	fi->fo_version = fo_version;
 	fi->i_time = attr_valid;
 	WRITE_ONCE(fi->inval_mask, 0);
 
@@ -199,6 +203,20 @@ void fuse_change_attributes_common(struct inode *inode, struct fuse_attr *attr,
 		inode->i_mtime.tv_nsec  = attr->mtimensec;
 		inode->i_ctime.tv_sec   = attr->ctime;
 		inode->i_ctime.tv_nsec  = attr->ctimensec;
+	}
+
+	/* Use latest mtime/ctime in writeback mode in close_to_open */
+	if (fc->close_to_open && fc->writeback_cache && S_ISREG(inode->i_mode)) {
+		if (inode->i_mtime.tv_sec * NSEC_PER_SEC + inode->i_mtime.tv_nsec
+			< attr->mtime * NSEC_PER_SEC + attr->mtimensec) {
+			inode->i_mtime.tv_sec = attr->mtime;
+			inode->i_mtime.tv_nsec = attr->mtimensec;
+		}
+		if (inode->i_ctime.tv_sec * NSEC_PER_SEC + inode->i_ctime.tv_nsec
+			< attr->ctime * NSEC_PER_SEC + attr->ctimensec) {
+			inode->i_ctime.tv_sec = attr->ctime;
+			inode->i_ctime.tv_nsec = attr->ctimensec;
+		}
 	}
 
 	if (attr->blksize != 0)
@@ -228,8 +246,37 @@ void fuse_change_attributes_common(struct inode *inode, struct fuse_attr *attr,
 	inode->i_flags &= ~S_NOSEC;
 }
 
+/* This is called under fi->lock */
+static inline bool fuse_inode_is_writeback(struct inode *inode, u64 wb_version)
+{
+	struct fuse_inode *fi = get_fuse_inode(inode);
+	/*
+	 * write-back happened during get attr, size may staled
+	 */
+	if (fi->wb_version > wb_version)
+		return true;
+	/* write-back inflight */
+	if (fi->writectr != 0)
+		return true;
+	/* inode dirty */
+	if (inode->i_state & I_SYNC || inode->i_state & I_DIRTY_PAGES)
+		return true;
+	return false;
+}
+
+static inline bool fuse_inode_has_write_files(struct fuse_inode *fi)
+{
+	bool has;
+
+	spin_lock(&fi->lock);
+	has = !list_empty(&fi->write_files);
+	spin_unlock(&fi->lock);
+	return has;
+}
+
 void fuse_change_attributes(struct inode *inode, struct fuse_attr *attr,
-			    u64 attr_valid, u64 attr_version)
+			u64 attr_valid, u64 attr_version,
+			u64 wb_version, u64 fo_version)
 {
 	struct fuse_conn *fc = get_fuse_conn(inode);
 	struct fuse_inode *fi = get_fuse_inode(inode);
@@ -245,7 +292,7 @@ void fuse_change_attributes(struct inode *inode, struct fuse_attr *attr,
 	}
 
 	old_mtime = inode->i_mtime;
-	fuse_change_attributes_common(inode, attr, attr_valid);
+	fuse_change_attributes_common(inode, attr, attr_valid, fo_version);
 
 	oldsize = inode->i_size;
 	/*
@@ -255,9 +302,21 @@ void fuse_change_attributes(struct inode *inode, struct fuse_attr *attr,
 	 */
 	if (!is_wb || !S_ISREG(inode->i_mode))
 		i_size_write(inode, attr->size);
+
+	/*
+	 * In writeback mode, trust server size if file grown bigger
+	 * or we don't have any outstanding writes
+	 */
+	if (fc->close_to_open && is_wb && S_ISREG(inode->i_mode)) {
+		if (!fuse_inode_is_writeback(inode, wb_version) || attr->size > inode->i_size)
+			i_size_write(inode, attr->size);
+		else
+			oldsize = attr->size;
+	}
+
 	spin_unlock(&fi->lock);
 
-	if (!is_wb && S_ISREG(inode->i_mode)) {
+	if ((!is_wb || fc->close_to_open) && S_ISREG(inode->i_mode)) {
 		bool inval = false;
 
 		if (oldsize != attr->size) {
@@ -274,8 +333,16 @@ void fuse_change_attributes(struct inode *inode, struct fuse_attr *attr,
 			 * Auto inval mode also checks and invalidates if mtime
 			 * has changed.
 			 */
-			if (!timespec64_equal(&old_mtime, &new_mtime))
-				inval = true;
+			if (!timespec64_equal(&old_mtime, &new_mtime)) {
+				/*
+				 * in writeback mode, mtime may changed by ourselves,
+				 * don't invalid mapping frequently
+				 */
+				if (fc->close_to_open && is_wb && fuse_inode_has_write_files(fi))
+					inval = false;
+				else
+					inval = true;
+			}
 		}
 
 		if (inval)
@@ -328,7 +395,8 @@ static int fuse_inode_set(struct inode *inode, void *_nodeidp)
 
 struct inode *fuse_iget(struct super_block *sb, u64 nodeid,
 			int generation, struct fuse_attr *attr,
-			u64 attr_valid, u64 attr_version)
+			u64 attr_valid, u64 attr_version,
+			u64 wb_version, u64 fo_version)
 {
 	struct inode *inode;
 	struct fuse_inode *fi;
@@ -376,7 +444,7 @@ done:
 	spin_lock(&fi->lock);
 	fi->nlookup++;
 	spin_unlock(&fi->lock);
-	fuse_change_attributes(inode, attr, attr_valid, attr_version);
+	fuse_change_attributes(inode, attr, attr_valid, attr_version, wb_version, fo_version);
 
 	return inode;
 }
@@ -422,6 +490,7 @@ int fuse_reverse_inval_inode(struct fuse_conn *fc, u64 nodeid,
 
 	fuse_invalidate_attr(inode);
 	forget_all_cached_acls(inode);
+	fuse_invalidate_inval_version(inode);
 	if (offset >= 0) {
 		pg_start = offset >> PAGE_SHIFT;
 		if (len <= 0)
@@ -737,6 +806,8 @@ void fuse_conn_init(struct fuse_conn *fc, struct fuse_mount *fm,
 	fc->initialized = 0;
 	fc->connected = 1;
 	atomic64_set(&fc->attr_version, 1);
+	atomic64_set(&fc->wb_version, 1);
+	atomic64_set(&fc->fo_version, 1);
 	get_random_bytes(&fc->scramble_key, sizeof(fc->scramble_key));
 	fc->pid_ns = get_pid_ns(task_active_pid_ns(current));
 	fc->user_ns = get_user_ns(user_ns);
@@ -798,7 +869,7 @@ static struct inode *fuse_get_root_inode(struct super_block *sb, unsigned mode)
 	attr.mode = mode;
 	attr.ino = FUSE_ROOT_ID;
 	attr.nlink = 1;
-	return fuse_iget(sb, 1, 0, &attr, 0, 0);
+	return fuse_iget(sb, 1, 0, &attr, 0, 0, 0, 1);
 }
 
 struct fuse_inode_handle {
@@ -1113,6 +1184,12 @@ static void process_init_reply(struct fuse_mount *fm, struct fuse_args *args,
 				 */
 				fm->sb->s_stack_depth = 1;
 			}
+			if (flags & FUSE_INVAL_CACHE_INFAIL)
+				fc->inval_cache_in_failover = 1;
+			if (flags & FUSE_CLOSE_TO_OPEN)
+				fc->close_to_open = 1;
+			if (flags & FUSE_INVALDIR_ALLENTRY)
+				fc->invaldir_allentry = 1;
 		} else {
 			ra_pages = fc->max_read / PAGE_SIZE;
 			fc->no_lock = 1;
@@ -1155,7 +1232,9 @@ static void fuse_prepare_send_init(struct fuse_mount *fm,
 		FUSE_PARALLEL_DIROPS | FUSE_HANDLE_KILLPRIV | FUSE_POSIX_ACL |
 		FUSE_ABORT_ERROR | FUSE_MAX_PAGES | FUSE_CACHE_SYMLINKS |
 		FUSE_NO_OPENDIR_SUPPORT | FUSE_EXPLICIT_INVAL_DATA |
-		FUSE_HANDLE_KILLPRIV_V2 | FUSE_INIT_EXT | FUSE_PASSTHROUGH;
+		FUSE_HANDLE_KILLPRIV_V2 | FUSE_INIT_EXT | FUSE_PASSTHROUGH |
+		FUSE_INVAL_CACHE_INFAIL | FUSE_CLOSE_TO_OPEN |
+		FUSE_INVALDIR_ALLENTRY;
 #ifdef CONFIG_FUSE_DAX
 	if (fm->fc->dax)
 		flags |= FUSE_MAP_ALIGNMENT;
@@ -1393,7 +1472,7 @@ int fuse_fill_super_submount(struct super_block *sb,
 		return -ENOMEM;
 
 	fuse_fill_attr_from_inode(&root_attr, parent_fi);
-	root = fuse_iget(sb, parent_fi->nodeid, 0, &root_attr, 0, 0);
+	root = fuse_iget(sb, parent_fi->nodeid, 0, &root_attr, 0, 0, 0, 1);
 	/*
 	 * This inode is just a duplicate, so it is not looked up and
 	 * its nlookup should not be incremented.  fuse_iget() does
