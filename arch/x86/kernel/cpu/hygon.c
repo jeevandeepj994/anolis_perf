@@ -88,6 +88,7 @@ static void hygon_get_topology(struct cpuinfo_x86 *c)
 			c->phys_proc_id = c->apicid >> APICID_SOCKET_ID_BIT;
 			break;
 		case 0x4:
+		case 0x5:
 			/*
 			 * In case leaf 0xB is available, use it to derive
 			 * topology information.
