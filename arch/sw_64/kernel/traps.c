@@ -28,6 +28,7 @@
 #include <asm/stacktrace.h>
 #include <asm/processor.h>
 #include <asm/ptrace.h>
+#include <asm/efi.h>
 
 #include "proto.h"
 
@@ -69,7 +70,8 @@ void show_regs(struct pt_regs *regs)
 	       regs->r22, regs->r23, regs->r24);
 	printk("t11= %016lx  pv = %016lx  at = %016lx\n",
 	       regs->r25, regs->r27, regs->r28);
-	printk("gp = %016lx  sp = %p\n", regs->gp, regs+1);
+	printk("gp = %016lx  sp = %px\n", regs->gp,
+	       user_mode(regs) ? (void *)rdusp() : (regs + 1));
 }
 
 static void show_code(unsigned int *pc)
@@ -260,18 +262,22 @@ do_entIF(unsigned long inst_type, struct pt_regs *regs)
 
 	case IF_OPDEC:
 		switch (inst) {
+#ifdef CONFIG_KPROBES
 		case BREAK_KPROBE:
 			if (notify_die(DIE_BREAK, "kprobe", regs, 0, 0, SIGTRAP) == NOTIFY_STOP)
 				return;
 		case BREAK_KPROBE_SS:
 			if (notify_die(DIE_SSTEPBP, "single_step", regs, 0, 0, SIGTRAP) == NOTIFY_STOP)
 				return;
+#endif
+#ifdef CONFIG_UPROBES
 		case UPROBE_BRK_UPROBE:
 			if (notify_die(DIE_UPROBE, "uprobe", regs, 0, 0, SIGTRAP) == NOTIFY_STOP)
-				return;
+				return sw64_fix_uretprobe(regs);
 		case UPROBE_BRK_UPROBE_XOL:
 			if (notify_die(DIE_UPROBE_XOL, "uprobe_xol", regs, 0, 0, SIGTRAP) == NOTIFY_STOP)
-				return;
+				return sw64_fix_uretprobe(regs);
+#endif
 		}
 
 		if (user_mode(regs))
@@ -502,44 +508,6 @@ got_exception:
 }
 
 /*
- * Convert an s-floating point value in memory format to the
- * corresponding value in register format. The exponent
- * needs to be remapped to preserve non-finite values
- * (infinities, not-a-numbers, denormals).
- */
-static inline unsigned long
-s_mem_to_reg(unsigned long s_mem)
-{
-	unsigned long frac = (s_mem >> 0) & 0x7fffff;
-	unsigned long sign = (s_mem >> 31) & 0x1;
-	unsigned long exp_msb = (s_mem >> 30) & 0x1;
-	unsigned long exp_low = (s_mem >> 23) & 0x7f;
-	unsigned long exp;
-
-	exp = (exp_msb << 10) | exp_low;	/* common case */
-	if (exp_msb) {
-		if (exp_low == 0x7f)
-			exp = 0x7ff;
-	} else {
-		if (exp_low == 0x00)
-			exp = 0x000;
-		else
-			exp |= (0x7 << 7);
-	}
-	return (sign << 63) | (exp << 52) | (frac << 29);
-}
-
-/*
- * Convert an s-floating point value in register format to the
- * corresponding value in memory format.
- */
-static inline unsigned long
-s_reg_to_mem(unsigned long s_reg)
-{
-	return ((s_reg >> 62) << 30) | ((s_reg << 5) >> 34);
-}
-
-/*
  * Handle user-level unaligned fault. Handling user-level unaligned
  * faults is *extremely* slow and produces nasty messages. A user
  * program *should* fix unaligned faults ASAP.
@@ -562,10 +530,6 @@ s_reg_to_mem(unsigned long s_reg)
 			 1L << 0x23 | 1L << 0x2b | /* ldl stl */	\
 			 1L << 0x21 | 1L << 0x29 | /* ldhu sth */	\
 			 1L << 0x20 | 1L << 0x28)  /* ldbu stb */
-
-#define OP_WRITE_MASK	(1L << 0x26 | 1L << 0x27 | /* fsts fstd */	\
-			 1L << 0x2c | 1L << 0x2d | /* stw stl */	\
-			 1L << 0x0d | 1L << 0x0e)  /* sth stb */
 
 asmlinkage void
 do_entUnaUser(void __user *va, unsigned long opcode,
@@ -1266,7 +1230,7 @@ do_entUnaUser(void __user *va, unsigned long opcode,
 		: "r"(va), "0"(0));
 		if (error)
 			goto give_sigsegv;
-		sw64_write_fp_reg(reg, s_mem_to_reg((int)(tmp1 | tmp2)));
+		sw64_write_fp_reg_s(reg, tmp1 | tmp2);
 		return;
 
 	case 0x27: /* fldd */
@@ -1355,7 +1319,7 @@ do_entUnaUser(void __user *va, unsigned long opcode,
 		return;
 
 	case 0x2e: /* fsts*/
-		fake_reg = s_reg_to_mem(sw64_read_fp_reg(reg));
+		fake_reg = sw64_read_fp_reg_s(reg);
 		/* FALLTHRU */
 
 	case 0x2a: /* stw with stb*/
@@ -1495,4 +1459,5 @@ trap_init(void)
 	wrent(entIF, 3);
 	wrent(entUna, 4);
 	wrent(entSys, 5);
+	wrent((void *)entSuspend, 6);
 }

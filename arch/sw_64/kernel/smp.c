@@ -50,30 +50,11 @@ enum ipi_message_type {
 	IPI_CPU_STOP,
 };
 
-/* Set to a secondary's cpuid when it comes online.  */
-static int smp_secondary_alive;
-
 int smp_num_cpus = 1;		/* Number that came online.  */
 EXPORT_SYMBOL(smp_num_cpus);
 
 #define send_sleep_interrupt(cpu)	send_ipi((cpu), II_SLEEP)
 #define send_wakeup_interrupt(cpu)	send_ipi((cpu), II_WAKE)
-
-
-static void __init wait_boot_cpu_to_stop(int cpuid)
-{
-	unsigned long stop = jiffies + 10*HZ;
-
-	while (time_before(jiffies, stop)) {
-		if (!smp_secondary_alive)
-			return;
-		barrier();
-	}
-
-	printk("%s: FAILED on CPU %d, hanging now\n", __func__, cpuid);
-	for (;;)
-		barrier();
-}
 
 void __weak enable_chip_int(void) { }
 
@@ -121,16 +102,6 @@ void smp_callin(void)
 
 	/* Must have completely accurate bogos.  */
 	local_irq_enable();
-
-	/* Wait boot CPU to stop with irq enabled before running
-	 * calibrate_delay.
-	 */
-	wait_boot_cpu_to_stop(cpuid);
-	mb();
-
-	/* Allow master to continue only after we written loops_per_jiffy.  */
-	wmb();
-	smp_secondary_alive = 1;
 
 	DBGS("%s: commencing CPU %d (RCID: %d)current %p active_mm %p\n",
 		__func__, cpuid, cpu_to_rcid(cpuid), current, current->active_mm);
@@ -191,40 +162,9 @@ started:
  */
 static int smp_boot_one_cpu(int cpuid, struct task_struct *idle)
 {
-	unsigned long timeout;
-
-	/* Signal the secondary to wait a moment.  */
-	smp_secondary_alive = -1;
-
 	per_cpu(cpu_state, cpuid) = CPU_UP_PREPARE;
 
-	/* Whirrr, whirrr, whirrrrrrrrr... */
-	if (secondary_cpu_start(cpuid, idle))
-		return -1;
-
-	/* Notify the secondary CPU it can run calibrate_delay.  */
-	mb();
-	smp_secondary_alive = 0;
-
-	/* We've been acked by the console; wait one second for
-	 * the task to start up for real.
-	 */
-	timeout = jiffies + 1*HZ;
-	while (time_before(jiffies, timeout)) {
-		if (smp_secondary_alive == 1)
-			goto alive;
-		udelay(10);
-		barrier();
-	}
-
-	/* We failed to boot the CPU.  */
-
-	pr_err("SMP: Processor %d is stuck.\n", cpuid);
-	return -1;
-
-alive:
-	/* Another "Red Snapper". */
-	return 0;
+	return secondary_cpu_start(cpuid, idle);
 }
 
 static void __init process_nr_cpu_ids(void)
@@ -426,10 +366,7 @@ void handle_ipi(struct pt_regs *regs)
 
 			case IPI_CPU_STOP:
 				local_irq_disable();
-				pr_crit("other core panic, now halt...\n");
-				while (1)
-					asm("nop");
-				halt();
+				asm("halt");
 
 			default:
 				pr_crit("Unknown IPI on CPU %d: %lu\n", this_cpu, which);
@@ -478,7 +415,7 @@ void native_send_call_func_single_ipi(int cpu)
 
 static void ipi_flush_tlb_all(void *ignored)
 {
-	tbiv();
+	local_flush_tlb_all();
 }
 
 void flush_tlb_all(void)
@@ -491,107 +428,101 @@ void flush_tlb_all(void)
 
 static void ipi_flush_tlb_mm(void *x)
 {
-	struct mm_struct *mm = (struct mm_struct *) x;
-
-	if (mm == current->mm)
-		flush_tlb_current(mm);
-	else
-		flush_tlb_other(mm);
+	local_flush_tlb_mm((struct mm_struct *)x);
 }
 
 void flush_tlb_mm(struct mm_struct *mm)
 {
-	preempt_disable();
 
 	/* happens as a result of exit_mmap()
 	 * Shall we clear mm->context.asid[] here?
 	 */
 	if (atomic_read(&mm->mm_users) == 0) {
-		preempt_enable();
 		return;
 	}
 
-	if (mm == current->mm) {
-		flush_tlb_current(mm);
-		if (atomic_read(&mm->mm_users) == 1) {
-			int cpu, this_cpu = smp_processor_id();
+	preempt_disable();
 
-			for (cpu = 0; cpu < NR_CPUS; cpu++) {
-				if (!cpu_online(cpu) || cpu == this_cpu)
-					continue;
-				if (mm->context.asid[cpu])
-					mm->context.asid[cpu] = 0;
-			}
-			preempt_enable();
-			return;
+	if (atomic_read(&mm->mm_users) != 1 || mm != current->mm) {
+		on_each_cpu_mask(mm_cpumask(mm), ipi_flush_tlb_mm, mm, 1);
+	} else {
+		int cpu, this_cpu = smp_processor_id();
+
+		for_each_online_cpu(cpu) {
+			if (cpu != this_cpu && mm->context.asid[cpu])
+				mm->context.asid[cpu] = 0;
 		}
-	} else
-		flush_tlb_other(mm);
-
-	smp_call_function(ipi_flush_tlb_mm, mm, 1);
+		local_flush_tlb_mm(mm);
+	}
 
 	preempt_enable();
 }
 EXPORT_SYMBOL(flush_tlb_mm);
 
-struct flush_tlb_page_struct {
+struct flush_tlb_info {
 	struct vm_area_struct *vma;
-	struct mm_struct *mm;
 	unsigned long addr;
+#define start addr
+	unsigned long end;
 };
 
 static void ipi_flush_tlb_page(void *x)
 {
-	struct flush_tlb_page_struct *data = (struct flush_tlb_page_struct *)x;
-	struct mm_struct *mm = data->mm;
+	struct flush_tlb_info *info = x;
 
-	if (mm == current->mm)
-		flush_tlb_current_page(mm, data->vma, data->addr);
-	else
-		flush_tlb_other(mm);
-
+	local_flush_tlb_page(info->vma, info->addr);
 }
 
 void flush_tlb_page(struct vm_area_struct *vma, unsigned long addr)
 {
-	struct flush_tlb_page_struct data;
 	struct mm_struct *mm = vma->vm_mm;
 
 	preempt_disable();
 
-	if (mm == current->mm) {
-		flush_tlb_current_page(mm, vma, addr);
-		if (atomic_read(&mm->mm_users) == 1) {
-			int cpu, this_cpu = smp_processor_id();
+	if (atomic_read(&mm->mm_users) != 1 || mm != current->mm) {
+		struct flush_tlb_info info = {
+			.vma = vma,
+			.addr = addr,
+		};
+		on_each_cpu_mask(mm_cpumask(mm), ipi_flush_tlb_page, &info, 1);
+	} else {
+		int cpu, this_cpu = smp_processor_id();
 
-			for (cpu = 0; cpu < NR_CPUS; cpu++) {
-				if (!cpu_online(cpu) || cpu == this_cpu)
-					continue;
-				if (mm->context.asid[cpu])
-					mm->context.asid[cpu] = 0;
-			}
-			preempt_enable();
-			return;
+		for_each_online_cpu(cpu) {
+			if (cpu != this_cpu && mm->context.asid[cpu])
+				mm->context.asid[cpu] = 0;
 		}
-	} else
-		flush_tlb_other(mm);
-
-	data.vma = vma;
-	data.mm = mm;
-	data.addr = addr;
-
-	smp_call_function(ipi_flush_tlb_page, &data, 1);
+		local_flush_tlb_page(vma, addr);
+	}
 
 	preempt_enable();
 }
 EXPORT_SYMBOL(flush_tlb_page);
 
+/* It always flush the whole user tlb by now. To be optimized. */
 void flush_tlb_range(struct vm_area_struct *vma, unsigned long start, unsigned long end)
 {
-	/* On the SW we always flush the whole user tlb.  */
 	flush_tlb_mm(vma->vm_mm);
 }
 EXPORT_SYMBOL(flush_tlb_range);
+
+static void ipi_flush_tlb_kernel_range(void *x)
+{
+	struct flush_tlb_info *info = x;
+
+	local_flush_tlb_kernel_range(info->start, info->end);
+}
+
+void flush_tlb_kernel_range(unsigned long start, unsigned long end)
+{
+	struct flush_tlb_info info = {
+		.start = start,
+		.end = end,
+	};
+
+	on_each_cpu(ipi_flush_tlb_kernel_range, &info, 1);
+}
+EXPORT_SYMBOL(flush_tlb_kernel_range);
 
 int native_cpu_disable(void)
 {
