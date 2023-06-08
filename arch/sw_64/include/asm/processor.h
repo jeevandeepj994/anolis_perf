@@ -12,7 +12,7 @@
 #include <asm/ptrace.h>
 
 #define task_pt_regs(task) \
-	((struct pt_regs *) (task_stack_page(task) + 2 * PAGE_SIZE) - 1)
+	((struct pt_regs *) (task->stack + THREAD_SIZE) - 1)
 
 /*
  * Returns current instruction pointer ("program counter").
@@ -96,4 +96,8 @@ static inline void spin_lock_prefetch(const void *ptr)
 }
 #endif
 
+static inline void wait_for_interrupt(void)
+{
+	__asm__ __volatile__ ("halt");
+}
 #endif /* _ASM_SW64_PROCESSOR_H */

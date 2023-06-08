@@ -2,13 +2,15 @@
 #ifndef _ASM_SW64_SMP_H
 #define _ASM_SW64_SMP_H
 
-#include <linux/threads.h>
-#include <linux/cpumask.h>
-#include <linux/bitops.h>
-#include <asm/hmcall.h>
-#include <asm/hcall.h>
 #include <asm/core.h>
+#include <asm/current.h>
+#include <asm/hcall.h>
+#include <asm/hmcall.h>
 #include <asm/hw_init.h>
+
+#include <linux/bitops.h>
+#include <linux/cpumask.h>
+#include <linux/threads.h>
 
 /* HACK: Cabrio WHAMI return value is bogus if more than 8 bits used.. :-( */
 
@@ -55,7 +57,13 @@ struct smp_rcb_struct {
 #define INIT_SMP_RCB ((struct smp_rcb_struct *) __va(0x820000UL))
 
 #define hard_smp_processor_id()	__hard_smp_processor_id()
-#define raw_smp_processor_id()	(current_thread_info()->cpu)
+
+#ifdef GENERATING_ASM_OFFSETS
+#define raw_smp_processor_id() (0)
+#else
+#include <asm/asm-offsets.h>
+#define raw_smp_processor_id() (*((unsigned int *)((void *)current + TASK_CPU)))
+#endif
 
 /* The map from sequential logical cpu number to hard cid.  */
 extern int __cpu_to_rcid[NR_CPUS];
@@ -70,92 +78,15 @@ extern int __rcid_to_cpu[NR_CPUS];
 #define cpu_physical_id(cpu)    __cpu_to_rcid[cpu]
 
 extern unsigned long tidle_pcb[NR_CPUS];
+extern void arch_send_call_function_single_ipi(int cpu);
+extern void arch_send_call_function_ipi_mask(const struct cpumask *mask);
 
-struct smp_ops {
-	void (*smp_prepare_boot_cpu)(void);
-	void (*smp_prepare_cpus)(unsigned int max_cpus);
-	void (*smp_cpus_done)(unsigned int max_cpus);
-
-	void (*stop_other_cpus)(int wait);
-	void (*smp_send_reschedule)(int cpu);
-
-	int (*cpu_up)(unsigned int cpu, struct task_struct *tidle);
-	int (*cpu_disable)(void);
-	void (*cpu_die)(unsigned int cpu);
-	void (*play_dead)(void);
-
-	void (*send_call_func_ipi)(const struct cpumask *mask);
-	void (*send_call_func_single_ipi)(int cpu);
-};
-
-extern struct smp_ops smp_ops;
-
-static inline void smp_send_stop(void)
-{
-	smp_ops.stop_other_cpus(0);
-}
-
-static inline void stop_other_cpus(void)
-{
-	smp_ops.stop_other_cpus(1);
-}
-
-static inline void smp_prepare_boot_cpu(void)
-{
-	smp_ops.smp_prepare_boot_cpu();
-}
-
-static inline void smp_prepare_cpus(unsigned int max_cpus)
-{
-	smp_ops.smp_prepare_cpus(max_cpus);
-}
-
-static inline void smp_cpus_done(unsigned int max_cpus)
-{
-	smp_ops.smp_cpus_done(max_cpus);
-}
-
-static inline int __cpu_up(unsigned int cpu, struct task_struct *tidle)
-{
-	return smp_ops.cpu_up(cpu, tidle);
-}
-
-static inline int __cpu_disable(void)
-{
-	return smp_ops.cpu_disable();
-}
-
-static inline void __cpu_die(unsigned int cpu)
-{
-	smp_ops.cpu_die(cpu);
-}
-
-static inline void play_dead(void)
-{
-	smp_ops.play_dead();
-}
-
-static inline void smp_send_reschedule(int cpu)
-{
-	smp_ops.smp_send_reschedule(cpu);
-}
-
-static inline void arch_send_call_function_single_ipi(int cpu)
-{
-	smp_ops.send_call_func_single_ipi(cpu);
-}
-
-static inline void arch_send_call_function_ipi_mask(const struct cpumask *mask)
-{
-	smp_ops.send_call_func_ipi(mask);
-}
-
+#ifdef CONFIG_HOTPLUG_CPU
+int __cpu_disable(void);
+void __cpu_die(unsigned int cpu);
+#endif /* CONFIG_HOTPLUG_CPU */
 
 #else /* CONFIG_SMP */
-static inline void play_dead(void)
-{
-	BUG(); /*Fixed me*/
-}
 #define hard_smp_processor_id()		0
 #define smp_call_function_on_cpu(func, info, wait, cpu)    ({ 0; })
 #define cpu_to_rcid(cpu)	((int)whami())

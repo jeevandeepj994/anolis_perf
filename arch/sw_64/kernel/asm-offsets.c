@@ -5,6 +5,7 @@
  * and format the required data.
  */
 
+#define GENERATING_ASM_OFFSETS  /* asm/smp.h */
 #include <linux/stddef.h>
 #include <linux/sched.h>
 #include <linux/kbuild.h>
@@ -15,11 +16,11 @@
 
 #include "traps.c"
 
+
 void foo(void)
 {
-	DEFINE(TI_TASK, offsetof(struct thread_info, task));
+	DEFINE(ASM_THREAD_SIZE, THREAD_SIZE);
 	DEFINE(TI_FLAGS, offsetof(struct thread_info, flags));
-	DEFINE(TI_CPU, offsetof(struct thread_info, cpu));
 	BLANK();
 
 	DEFINE(TASK_BLOCKED, offsetof(struct task_struct, blocked));
@@ -27,11 +28,16 @@ void foo(void)
 	DEFINE(TASK_REAL_PARENT, offsetof(struct task_struct, real_parent));
 	DEFINE(TASK_GROUP_LEADER, offsetof(struct task_struct, group_leader));
 	DEFINE(TASK_TGID, offsetof(struct task_struct, tgid));
+	DEFINE(TASK_STACK, offsetof(struct task_struct, stack));
+#ifdef CONFIG_SMP
+	DEFINE(TASK_CPU, offsetof(struct task_struct, cpu));
+#endif
 	BLANK();
 
 	OFFSET(PSTATE_REGS, processor_state, regs);
 	OFFSET(PSTATE_FPREGS, processor_state, fpregs);
 	OFFSET(PSTATE_FPCR, processor_state, fpcr);
+	OFFSET(PSTATE_KTP, processor_state, ktp);
 #ifdef CONFIG_HIBERNATION
 	OFFSET(PSTATE_SP, processor_state, sp);
 #endif
@@ -78,6 +84,9 @@ void foo(void)
 	DEFINE(PT_REGS_R13, offsetof(struct pt_regs, r13));
 	DEFINE(PT_REGS_R14, offsetof(struct pt_regs, r14));
 	DEFINE(PT_REGS_R15, offsetof(struct pt_regs, r15));
+	DEFINE(PT_REGS_R16, offsetof(struct pt_regs, r16));
+	DEFINE(PT_REGS_R17, offsetof(struct pt_regs, r17));
+	DEFINE(PT_REGS_R18, offsetof(struct pt_regs, r18));
 	DEFINE(PT_REGS_R19, offsetof(struct pt_regs, r19));
 	DEFINE(PT_REGS_R20, offsetof(struct pt_regs, r20));
 	DEFINE(PT_REGS_R21, offsetof(struct pt_regs, r21));
@@ -88,12 +97,16 @@ void foo(void)
 	DEFINE(PT_REGS_R26, offsetof(struct pt_regs, r26));
 	DEFINE(PT_REGS_R27, offsetof(struct pt_regs, r27));
 	DEFINE(PT_REGS_R28, offsetof(struct pt_regs, r28));
-	DEFINE(PT_REGS_PS, offsetof(struct pt_regs, ps));
-	DEFINE(PT_REGS_PC, offsetof(struct pt_regs, pc));
 	DEFINE(PT_REGS_GP, offsetof(struct pt_regs, gp));
-	DEFINE(PT_REGS_R16, offsetof(struct pt_regs, r16));
-	DEFINE(PT_REGS_R17, offsetof(struct pt_regs, r17));
-	DEFINE(PT_REGS_R18, offsetof(struct pt_regs, r18));
+	DEFINE(PT_REGS_SP, offsetof(struct pt_regs, sp));
+	DEFINE(PT_REGS_PC, offsetof(struct pt_regs, pc));
+	DEFINE(PT_REGS_PS, offsetof(struct pt_regs, ps));
+	DEFINE(PT_REGS_HM_PS, offsetof(struct pt_regs, hm_ps));
+	DEFINE(PT_REGS_HM_PC, offsetof(struct pt_regs, hm_pc));
+	DEFINE(PT_REGS_HM_GP, offsetof(struct pt_regs, hm_gp));
+	DEFINE(PT_REGS_HM_R16, offsetof(struct pt_regs, hm_r16));
+	DEFINE(PT_REGS_HM_R17, offsetof(struct pt_regs, hm_r17));
+	DEFINE(PT_REGS_HM_R18, offsetof(struct pt_regs, hm_r18));
 	BLANK();
 
 	DEFINE(KVM_REGS_SIZE, sizeof(struct kvm_regs));
