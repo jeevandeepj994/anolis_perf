@@ -89,6 +89,7 @@ static void hygon_get_topology(struct cpuinfo_x86 *c)
 			break;
 		case 0x4:
 		case 0x5:
+		case 0x6:
 			/*
 			 * In case leaf 0xB is available, use it to derive
 			 * topology information.
