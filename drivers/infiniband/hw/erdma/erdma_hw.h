@@ -153,6 +153,9 @@ enum CMDQ_COMMON_OPCODE {
 	CMDQ_OPCODE_GET_STATS = 4,
 	CMDQ_OPCODE_QUERY_EQC = 6,
 	CMDQ_OPCODE_SET_RETRANS_NUM = 7,
+
+	CMDQ_OPCODE_SET_EXT_ATTR = 10,
+	CMDQ_OPCODE_GET_EXT_ATTR = 11,
 };
 
 /* cmdq-SQE HDR */
@@ -198,6 +201,13 @@ struct erdma_cmdq_config_mtu_req {
 struct erdma_cmdq_set_retrans_num_req {
 	u64 hdr;
 	u32 retrans_num;
+};
+
+#define ERDMA_CMDQ_SET_EXT_ATTR_DACK_COUNT_MASK BIT(0)
+struct erdma_cmdq_set_ext_attr_req {
+	u64 hdr;
+	u32 attr_mask;
+	u8 dack_count;
 };
 
 /* create_cq cfg0 */
@@ -689,6 +699,15 @@ struct erdma_cmdq_query_eqc_resp {
 	u64 cn_addr;
 	u64 cn_db_addr;
 	u64 eq_db_record;
+};
+
+struct erdma_cmdq_query_ext_attr_resp {
+	struct erdma_cmdq_query_resp_hdr hdr;
+
+	u32 cap_mask;
+	u32 attr_mask;
+
+	u8 dack_count;
 };
 
 struct erdma_cmdq_dump_addr_req {

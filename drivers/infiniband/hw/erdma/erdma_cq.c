@@ -160,10 +160,6 @@ static int erdma_poll_one_cqe(struct erdma_cq *cq, struct ib_wc *wc)
 	} else {
 		id_table = kern_qp->rwr_tbl;
 		depth = qp->attrs.rq_size;
-		/* Prevent rqe out of range from HW */
-		if (kern_qp->rq_pi - wqe_idx == 0 ||
-		    (u16)(kern_qp->rq_pi - wqe_idx) > depth)
-			syndrome = ERDMA_WC_GENERAL_ERR;
 	}
 	wc->wr_id = id_table[wqe_idx & (depth - 1)];
 	wc->byte_len = be32_to_cpu(cqe->size);

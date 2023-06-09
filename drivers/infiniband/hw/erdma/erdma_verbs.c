@@ -27,8 +27,6 @@ bool rand_qpn;
 module_param(rand_qpn, bool, 0444);
 MODULE_PARM_DESC(rand_qpn, "randomized qpn");
 
-extern bool compat_mode;
-
 static void assemble_qbuf_mtt_for_cmd(struct erdma_mem *mtt, u32 *cfg,
 				      u64 *addr0, u64 *addr1)
 {
@@ -46,41 +44,12 @@ static void assemble_qbuf_mtt_for_cmd(struct erdma_mem *mtt, u32 *cfg,
 	}
 }
 
-static void create_qp_mtt_cfg(struct erdma_cmdq_create_qp_req *req,
-			      struct erdma_mem *sq_mtt, struct erdma_mem *rq_mtt,
-			      u32 scqn, u32 rcqn)
-{
-	req->sq_cqn_mtt_cfg = FIELD_PREP(
-		ERDMA_CMD_CREATE_QP_PAGE_SIZE_MASK,
-		ilog2(sq_mtt->page_size) - ERDMA_HW_PAGE_SHIFT);
-	req->sq_cqn_mtt_cfg |=
-		FIELD_PREP(ERDMA_CMD_CREATE_QP_CQN_MASK, scqn);
-
-	req->rq_cqn_mtt_cfg = FIELD_PREP(
-		ERDMA_CMD_CREATE_QP_PAGE_SIZE_MASK,
-		ilog2(rq_mtt->page_size) - ERDMA_HW_PAGE_SHIFT);
-	req->rq_cqn_mtt_cfg |=
-		FIELD_PREP(ERDMA_CMD_CREATE_QP_CQN_MASK, rcqn);
-
-	req->sq_mtt_cfg = sq_mtt->page_offset;
-	req->sq_mtt_cfg |= FIELD_PREP(ERDMA_CMD_CREATE_QP_MTT_CNT_MASK,
-				      sq_mtt->mtt_nents);
-
-	req->rq_mtt_cfg = rq_mtt->page_offset;
-	req->rq_mtt_cfg |= FIELD_PREP(ERDMA_CMD_CREATE_QP_MTT_CNT_MASK,
-				      rq_mtt->mtt_nents);
-
-	assemble_qbuf_mtt_for_cmd(sq_mtt, &req->sq_mtt_cfg,
-				  &req->sq_buf_addr, req->sq_mtt_entry);
-	assemble_qbuf_mtt_for_cmd(rq_mtt, &req->rq_mtt_cfg,
-				  &req->rq_buf_addr, req->rq_mtt_entry);
-}
-
 static int create_qp_cmd(struct erdma_dev *dev, struct erdma_qp *qp,
 			 bool is_user)
 {
 	struct erdma_pd *pd = to_epd(qp->ibqp.pd);
 	struct erdma_cmdq_create_qp_req req;
+	struct erdma_uqp *user_qp;
 	u64 resp0, resp1;
 	int err;
 
@@ -94,14 +63,59 @@ static int create_qp_cmd(struct erdma_dev *dev, struct erdma_qp *qp,
 			      ilog2(qp->attrs.rq_size)) |
 		   FIELD_PREP(ERDMA_CMD_CREATE_QP_PD_MASK, pd->pdn);
 
-	create_qp_mtt_cfg(&req, is_user ? &qp->user_qp.sq_mtt : &qp->kern_qp.sq_mtt,
-			  is_user ? &qp->user_qp.rq_mtt : &qp->kern_qp.rq_mtt,
-			  qp->scq->cqn, qp->rcq->cqn);
+	if (!is_user) {
+		u32 pgsz_range = ilog2(SZ_1M) - ERDMA_HW_PAGE_SHIFT;
 
-	req.sq_db_info_dma_addr = is_user ? qp->user_qp.sq_db_info_dma_addr :
-					    qp->kern_qp.sq_db_info_dma_addr;
-	req.rq_db_info_dma_addr = is_user ? qp->user_qp.rq_db_info_dma_addr :
-					    qp->kern_qp.rq_db_info_dma_addr;
+		req.sq_cqn_mtt_cfg =
+			FIELD_PREP(ERDMA_CMD_CREATE_QP_PAGE_SIZE_MASK,
+				   pgsz_range) |
+			FIELD_PREP(ERDMA_CMD_CREATE_QP_CQN_MASK, qp->scq->cqn);
+		req.rq_cqn_mtt_cfg =
+			FIELD_PREP(ERDMA_CMD_CREATE_QP_PAGE_SIZE_MASK,
+				   pgsz_range) |
+			FIELD_PREP(ERDMA_CMD_CREATE_QP_CQN_MASK, qp->rcq->cqn);
+
+		req.sq_mtt_cfg =
+			FIELD_PREP(ERDMA_CMD_CREATE_QP_PAGE_OFFSET_MASK, 0) |
+			FIELD_PREP(ERDMA_CMD_CREATE_QP_MTT_CNT_MASK, 1) |
+			FIELD_PREP(ERDMA_CMD_CREATE_QP_MTT_TYPE_MASK,
+				   ERDMA_MR_INLINE_MTT);
+		req.rq_mtt_cfg = req.sq_mtt_cfg;
+
+		req.rq_buf_addr = qp->kern_qp.rq_buf_dma_addr;
+		req.sq_buf_addr = qp->kern_qp.sq_buf_dma_addr;
+		req.sq_db_info_dma_addr = qp->kern_qp.sq_db_info_dma_addr;
+		req.rq_db_info_dma_addr = qp->kern_qp.rq_db_info_dma_addr;
+	} else {
+		user_qp = &qp->user_qp;
+		req.sq_cqn_mtt_cfg = FIELD_PREP(
+			ERDMA_CMD_CREATE_QP_PAGE_SIZE_MASK,
+			ilog2(user_qp->sq_mtt.page_size) - ERDMA_HW_PAGE_SHIFT);
+		req.sq_cqn_mtt_cfg |=
+			FIELD_PREP(ERDMA_CMD_CREATE_QP_CQN_MASK, qp->scq->cqn);
+
+		req.rq_cqn_mtt_cfg = FIELD_PREP(
+			ERDMA_CMD_CREATE_QP_PAGE_SIZE_MASK,
+			ilog2(user_qp->rq_mtt.page_size) - ERDMA_HW_PAGE_SHIFT);
+		req.rq_cqn_mtt_cfg |=
+			FIELD_PREP(ERDMA_CMD_CREATE_QP_CQN_MASK, qp->rcq->cqn);
+
+		req.sq_mtt_cfg = user_qp->sq_mtt.page_offset;
+		req.sq_mtt_cfg |= FIELD_PREP(ERDMA_CMD_CREATE_QP_MTT_CNT_MASK,
+					     user_qp->sq_mtt.mtt_nents);
+
+		req.rq_mtt_cfg = user_qp->rq_mtt.page_offset;
+		req.rq_mtt_cfg |= FIELD_PREP(ERDMA_CMD_CREATE_QP_MTT_CNT_MASK,
+					     user_qp->rq_mtt.mtt_nents);
+
+		assemble_qbuf_mtt_for_cmd(&user_qp->sq_mtt, &req.sq_mtt_cfg,
+					  &req.sq_buf_addr, req.sq_mtt_entry);
+		assemble_qbuf_mtt_for_cmd(&user_qp->rq_mtt, &req.rq_mtt_cfg,
+					  &req.rq_buf_addr, req.rq_mtt_entry);
+
+		req.sq_db_info_dma_addr = user_qp->sq_db_info_dma_addr;
+		req.rq_db_info_dma_addr = user_qp->rq_db_info_dma_addr;
+	}
 
 	err = erdma_post_cmd_wait(&dev->cmdq, &req, sizeof(req), &resp0,
 				  &resp1);
@@ -180,8 +194,8 @@ static int create_cq_cmd(struct erdma_dev *dev, struct erdma_cq *cq,
 			 bool is_user)
 {
 	struct erdma_cmdq_create_cq_req req;
-	struct erdma_mem *mtt = is_user ? &cq->user_cq.qbuf_mtt :
-					  &cq->kern_cq.qbuf_mtt;
+	struct erdma_mem *mtt;
+	u32 page_size;
 
 	erdma_cmdq_build_reqhdr(&req.hdr, CMDQ_SUBMOD_RDMA,
 				CMDQ_OPCODE_CREATE_CQ);
@@ -190,25 +204,44 @@ static int create_cq_cmd(struct erdma_dev *dev, struct erdma_cq *cq,
 		   FIELD_PREP(ERDMA_CMD_CREATE_CQ_DEPTH_MASK, ilog2(cq->depth));
 	req.cfg1 = FIELD_PREP(ERDMA_CMD_CREATE_CQ_EQN_MASK, cq->assoc_eqn);
 
-	req.cfg0 |= FIELD_PREP(ERDMA_CMD_CREATE_CQ_PAGESIZE_MASK,
-			ilog2(mtt->page_size) - ERDMA_HW_PAGE_SHIFT);
-	if (mtt->mtt_nents == 1) {
-		req.qbuf_addr_l = lower_32_bits(mtt->pbl->buf[0]);
-		req.qbuf_addr_h = upper_32_bits(mtt->pbl->buf[0]);
-		req.cfg1 |= FIELD_PREP(ERDMA_CMD_CREATE_CQ_MTT_TYPE_MASK,
-				       ERDMA_MR_INLINE_MTT);
-	} else {
-		req.qbuf_addr_l = lower_32_bits(mtt->pbl->buf_dma);
-		req.qbuf_addr_h = upper_32_bits(mtt->pbl->buf_dma);
-		req.cfg1 |= FIELD_PREP(ERDMA_CMD_CREATE_CQ_MTT_TYPE_MASK,
-				       ERDMA_MR_INDIRECT_MTT);
-	}
-	req.cfg1 |= FIELD_PREP(ERDMA_CMD_CREATE_CQ_MTT_CNT_MASK,
-			       mtt->mtt_nents);
+	if (!is_user) {
+		page_size = SZ_32M;
+		req.cfg0 |= FIELD_PREP(ERDMA_CMD_CREATE_CQ_PAGESIZE_MASK,
+				       ilog2(page_size) - ERDMA_HW_PAGE_SHIFT);
+		req.qbuf_addr_l = lower_32_bits(cq->kern_cq.qbuf_dma_addr);
+		req.qbuf_addr_h = upper_32_bits(cq->kern_cq.qbuf_dma_addr);
 
-	req.first_page_offset = mtt->page_offset;
-	req.cq_db_info_addr = is_user ? cq->user_cq.db_info_dma_addr :
-					cq->kern_cq.db_info_dma_addr;
+		req.cfg1 |= FIELD_PREP(ERDMA_CMD_CREATE_CQ_MTT_CNT_MASK, 1) |
+			    FIELD_PREP(ERDMA_CMD_CREATE_CQ_MTT_TYPE_MASK,
+				       ERDMA_MR_INLINE_MTT);
+
+		req.first_page_offset = 0;
+		req.cq_db_info_addr =
+			cq->kern_cq.qbuf_dma_addr + (cq->depth << CQE_SHIFT);
+	} else {
+		mtt = &cq->user_cq.qbuf_mtt;
+		req.cfg0 |=
+			FIELD_PREP(ERDMA_CMD_CREATE_CQ_PAGESIZE_MASK,
+				   ilog2(mtt->page_size) - ERDMA_HW_PAGE_SHIFT);
+		if (mtt->mtt_nents == 1) {
+			req.qbuf_addr_l = lower_32_bits(mtt->pbl->buf[0]);
+			req.qbuf_addr_h = upper_32_bits(mtt->pbl->buf[0]);
+			req.cfg1 |=
+				FIELD_PREP(ERDMA_CMD_CREATE_CQ_MTT_TYPE_MASK,
+					   ERDMA_MR_INLINE_MTT);
+		} else {
+			req.qbuf_addr_l = lower_32_bits(mtt->pbl->buf_dma);
+			req.qbuf_addr_h = upper_32_bits(mtt->pbl->buf_dma);
+			req.cfg1 |=
+				FIELD_PREP(ERDMA_CMD_CREATE_CQ_MTT_TYPE_MASK,
+					   ERDMA_MR_INDIRECT_MTT);
+		}
+		req.cfg1 |= FIELD_PREP(ERDMA_CMD_CREATE_CQ_MTT_CNT_MASK,
+				       mtt->mtt_nents);
+
+		req.first_page_offset = mtt->page_offset;
+		req.cq_db_info_addr = cq->user_cq.db_info_dma_addr;
+	}
 
 	return erdma_post_cmd_wait(&dev->cmdq, &req, sizeof(req), NULL, NULL);
 }
@@ -464,6 +497,34 @@ static int erdma_qp_validate_attr(struct erdma_dev *dev,
 	return 0;
 }
 
+static void free_kernel_qp(struct erdma_qp *qp)
+{
+	struct erdma_dev *dev = qp->dev;
+
+	vfree(qp->kern_qp.swr_tbl);
+	vfree(qp->kern_qp.rwr_tbl);
+
+	if (qp->kern_qp.sq_buf)
+		dma_free_coherent(&dev->pdev->dev,
+				  qp->attrs.sq_size << SQEBB_SHIFT,
+				  qp->kern_qp.sq_buf,
+				  qp->kern_qp.sq_buf_dma_addr);
+
+	if (qp->kern_qp.rq_buf)
+		dma_free_coherent(&dev->pdev->dev,
+				  qp->attrs.rq_size << RQE_SHIFT,
+				  qp->kern_qp.rq_buf,
+				  qp->kern_qp.rq_buf_dma_addr);
+
+	if (qp->kern_qp.sq_db_info)
+		dma_pool_free(dev->db_pool, qp->kern_qp.sq_db_info,
+			      qp->kern_qp.sq_db_info_dma_addr);
+
+	if (qp->kern_qp.rq_db_info)
+		dma_pool_free(dev->db_pool, qp->kern_qp.rq_db_info,
+			      qp->kern_qp.rq_db_info_dma_addr);
+}
+
 static int update_kernel_qp_oob_attr(struct erdma_qp *qp, struct ib_qp_attr *attr, int attr_mask)
 {
 	struct iw_ext_conn_param *param =
@@ -499,6 +560,83 @@ static int update_kernel_qp_oob_attr(struct erdma_qp *qp, struct ib_qp_attr *att
 	return 0;
 }
 
+static int init_kernel_qp(struct erdma_dev *dev, struct erdma_qp *qp,
+			  struct ib_qp_init_attr *attrs)
+{
+	struct erdma_kqp *kqp = &qp->kern_qp;
+	int ret = -ENOMEM;
+
+	if (attrs->sq_sig_type == IB_SIGNAL_ALL_WR)
+		kqp->sig_all = 1;
+
+	kqp->sq_pi = 0;
+	kqp->sq_ci = 0;
+	kqp->rq_pi = 0;
+	kqp->rq_ci = 0;
+	kqp->hw_sq_db = dev->func_bar +
+			(ERDMA_SDB_SHARED_PAGE_INDEX << ERDMA_HW_PAGE_SHIFT);
+	kqp->hw_rq_db = dev->func_bar + ERDMA_BAR_RQDB_SPACE_OFFSET;
+
+	kqp->swr_tbl = vmalloc(qp->attrs.sq_size * sizeof(u64));
+	kqp->rwr_tbl = vmalloc(qp->attrs.rq_size * sizeof(u64));
+	if (!kqp->swr_tbl || !kqp->rwr_tbl)
+		goto err_out;
+
+	kqp->sq_buf = dma_alloc_coherent(&dev->pdev->dev,
+					 qp->attrs.sq_size << SQEBB_SHIFT,
+					 &kqp->sq_buf_dma_addr, GFP_KERNEL);
+	if (!kqp->sq_buf)
+		goto err_out;
+
+	kqp->rq_buf = dma_alloc_coherent(&dev->pdev->dev,
+					 qp->attrs.rq_size << RQE_SHIFT,
+					 &kqp->rq_buf_dma_addr, GFP_KERNEL);
+	if (!kqp->rq_buf)
+		goto err_out;
+
+	kqp->sq_db_info = dma_pool_alloc(dev->db_pool, GFP_KERNEL,
+					 &kqp->sq_db_info_dma_addr);
+	if (!kqp->sq_db_info)
+		goto err_out;
+
+	kqp->rq_db_info = dma_pool_alloc(dev->db_pool, GFP_KERNEL,
+					 &kqp->rq_db_info_dma_addr);
+	if (!kqp->rq_db_info)
+		goto err_out;
+
+	if (attrs->create_flags & IB_QP_CREATE_IWARP_WITHOUT_CM) {
+		struct iw_ext_conn_param *param =
+			(struct iw_ext_conn_param *)(attrs->qp_context);
+
+		if (param == NULL) {
+			ret = -EINVAL;
+			goto err_out;
+		}
+		if (param->sk_addr.family != PF_INET) {
+			ibdev_err_ratelimited(
+				&dev->ibdev,
+				"IPv4 address is required for connection without CM.\n");
+			ret = -EINVAL;
+			goto err_out;
+		}
+		qp->attrs.connect_without_cm = true;
+		((struct sockaddr_in *)&qp->attrs.raddr)->sin_family = AF_INET;
+		((struct sockaddr_in *)&qp->attrs.laddr)->sin_family = AF_INET;
+		qp->attrs.raddr.in.sin_addr.s_addr = param->sk_addr.daddr_v4;
+		qp->attrs.laddr.in.sin_addr.s_addr = param->sk_addr.saddr_v4;
+		qp->attrs.dport = ntohs(param->sk_addr.dport);
+		qp->attrs.sport = param->sk_addr.sport;
+	}
+	spin_lock_init(&kqp->sq_lock);
+	spin_lock_init(&kqp->rq_lock);
+
+	return 0;
+
+err_out:
+	free_kernel_qp(qp);
+	return ret;
+}
+
 static struct erdma_pbl *erdma_create_cont_pbl(struct erdma_dev *dev,
 					       size_t size)
 {
@@ -531,17 +669,21 @@ err_free_pbl:
 	return ERR_PTR(ret);
 }
 
-static u32 vmalloc_to_sgl(struct erdma_dev *dev, struct scatterlist **sgl_ptr,
-			  void *buf, u64 len)
+static int erdma_create_pbl_buf_sg(struct erdma_dev *dev, struct erdma_pbl *pbl)
 {
-	u32 npages, i, nsg;
 	struct scatterlist *sglist;
+	void *buf = pbl->buf;
+	u32 npages, i, nsg;
 	struct page *pg;
 
-	npages = DIV_ROUND_UP(len, PAGE_SIZE);
-	sglist = vzalloc(npages * sizeof(struct scatterlist));
+	/* Failed if buf is not page aligned */
+	if ((uintptr_t)buf & ~PAGE_MASK)
+		return -EINVAL;
+
+	npages = DIV_ROUND_UP(pbl->size, PAGE_SIZE);
+	sglist = vzalloc(npages * sizeof(*sglist));
 	if (!sglist)
-		return 0;
+		return -ENOMEM;
 
 	sg_init_table(sglist, npages);
 	for (i = 0; i < npages; i++) {
@@ -552,39 +694,19 @@ static u32 vmalloc_to_sgl(struct erdma_dev *dev, struct scatterlist **sgl_ptr,
 		buf += PAGE_SIZE;
 	}
 
-	nsg = dma_map_sg(&dev->pdev->dev, sglist, npages, DMA_BIDIRECTIONAL);
+	nsg = dma_map_sg(&dev->pdev->dev, sglist, npages, DMA_TO_DEVICE);
 	if (!nsg)
 		goto err;
-
-	if (nsg != npages)
-		ibdev_warn(&dev->ibdev, "sgl len before DMA: %u sgl len after DMA: %u\n",
-			   npages, nsg);
-
-	*sgl_ptr = sglist;
-	return nsg;
-
-err:
-	vfree(sglist);
-	return 0;
-}
-
-static int erdma_create_pbl_buf_sg(struct erdma_dev *dev, struct erdma_pbl *pbl)
-{
-	struct scatterlist *sglist;
-	u32 nsg;
-
-	/* Failed if buf is not page aligned */
-	if ((uintptr_t)pbl->buf & ~PAGE_MASK)
-		return -EINVAL;
-
-	nsg = vmalloc_to_sgl(dev, &sglist, pbl->buf, pbl->size);
-	if (!nsg)
-		return -ENOMEM;
 
 	pbl->sglist = sglist;
 	pbl->nsg = nsg;
 
 	return 0;
+
+err:
+	vfree(sglist);
+
+	return -ENOMEM;
 }
 
 static void erdma_destroy_pbl_buf_sg(struct erdma_dev *dev,
@@ -700,44 +822,14 @@ err_free_pbl:
 	return ERR_PTR(ret);
 }
 
-static void fill_mtt_entries_with_sgl(struct scatterlist *sgl, u64 *page_list,
-				      u64 nents)
-{
-	u32 i, entry, chunk_pages, idx = 0;
-	u64 pg_addr;
-	struct scatterlist *sg;
-
-	for_each_sg(sgl, sg, nents, entry) {
-		chunk_pages = sg_dma_len(sg) >> PAGE_SHIFT;
-		for (i = 0; i < chunk_pages; i++) {
-			pg_addr = sg_dma_address(sg) + (i << PAGE_SHIFT);
-
-			if ((entry + i) == 0)
-				page_list[idx] = pg_addr & PAGE_MASK;
-			else if (!(pg_addr & ~PAGE_MASK))
-				page_list[idx] = pg_addr;
-			else
-				continue;
-			idx++;
-		}
-	}
-}
-
 static void erdma_init_pbl_leaf(struct erdma_mem *mem, struct erdma_pbl *pbl)
 {
 	u64 *page_list = pbl->buf;
-	bool is_user = !mem->type;
-	u32 idx = 0;
 	struct ib_block_iter biter;
+	u32 idx = 0;
 
-	if (is_user && mem->umem) {
-		rdma_umem_for_each_dma_block(mem->umem, &biter, mem->page_size)
-			page_list[idx++] = rdma_block_iter_dma_address(&biter);
-		return;
-	}
-
-	fill_mtt_entries_with_sgl(is_user ? mem->umem->sg_head.sgl : mem->kmem->sgl,
-				  page_list, is_user ? mem->umem->nmap : mem->kmem->nmap);
+	rdma_umem_for_each_dma_block(mem->umem, &biter, mem->page_size)
+		page_list[idx++] = rdma_block_iter_dma_address(&biter);
 }
 
 static void erdma_init_bottom_pbl(struct erdma_dev *dev, struct erdma_mem *mem)
@@ -768,76 +860,26 @@ static void erdma_destroy_pbl(struct erdma_dev *dev, struct erdma_pbl *pbl)
 	}
 }
 
-static void erdma_mem_free(struct erdma_dev *dev, struct erdma_mem *mem)
-{
-	switch (mem->type) {
-	case ERDMA_UMEM:
-		if (mem->umem) {
-			ib_umem_release(mem->umem);
-			mem->umem = NULL;
-		}
-		break;
-	case ERDMA_KMEM:
-		if (mem->kmem) {
-			if (mem->kmem->sgl) {
-				dma_unmap_sg(&dev->pdev->dev, mem->kmem->sgl,
-					     mem->kmem->nmap, DMA_TO_DEVICE);
-				vfree(mem->kmem->sgl);
-				mem->kmem->sgl = NULL;
-			}
-			kfree(mem->kmem);
-			mem->kmem = NULL;
-		}
-		break;
-	default:
-		break;
-	}
-}
-
-static u32 range_num_blocks(u64 start, u64 len, u64 blk_sz)
-{
-	return (ALIGN(start + len, blk_sz) - ALIGN_DOWN(start, blk_sz)) / blk_sz;
-}
-
-static int get_mtt_entries(void *data, struct erdma_ucontext *ctx,
+static int get_mtt_entries(struct ib_udata *udata, struct erdma_ucontext *ctx,
 			   struct erdma_mem *mem, u64 start, u64 len,
 			   int access, u64 virt, unsigned long req_page_size,
 			   bool is_mr)
 {
+	struct erdma_dev *dev = to_edev(ctx->ibucontext.device);
 	int ret;
-	bool is_user = ctx ? true : false;
-	struct erdma_dev *dev = is_user ? to_edev(ctx->ibucontext.device) :
-					  (struct erdma_dev *)data;
 
-	if (is_user) {
-		mem->type = ERDMA_UMEM;
-			mem->umem = ib_umem_get(&dev->ibdev, start, len, access);
-		if (IS_ERR(mem->umem)) {
-			ret = PTR_ERR(mem->umem);
-			mem->umem = NULL;
-			return ret;
-		}
-	} else {
-		mem->type = ERDMA_KMEM;
-		mem->kmem = kzalloc(sizeof(struct erdma_kmem), GFP_KERNEL);
-		if (!mem->kmem)
-			return -ENOMEM;
-
-		mem->kmem->nmap = vmalloc_to_sgl(dev, &mem->kmem->sgl, (void *)start, len);
-		if (!mem->kmem->nmap) {
-			kfree(mem->kmem);
-			mem->kmem = NULL;
-			return -ENOMEM;
-		}
+	mem->umem = ib_umem_get(&dev->ibdev, start, len, access);
+	if (IS_ERR(mem->umem)) {
+		ret = PTR_ERR(mem->umem);
+		mem->umem = NULL;
+		return ret;
 	}
 
 	mem->va = virt;
 	mem->len = len;
-	mem->page_size = is_user ? ib_umem_find_best_pgsz(mem->umem, req_page_size, virt) :
-				   PAGE_SIZE;
+	mem->page_size = ib_umem_find_best_pgsz(mem->umem, req_page_size, virt);
 	mem->page_offset = start & (mem->page_size - 1);
-	mem->mtt_nents = is_user ? ib_umem_num_dma_blocks(mem->umem, mem->page_size) :
-				   range_num_blocks(mem->va, mem->len, mem->page_size);
+	mem->mtt_nents = ib_umem_num_dma_blocks(mem->umem, mem->page_size);
 	mem->page_cnt = mem->mtt_nents;
 
 	ibdev_dbg(&dev->ibdev, "page_size:%u, page_offset:%u, mtt_nents:%u\n",
@@ -854,132 +896,23 @@ static int get_mtt_entries(void *data, struct erdma_ucontext *ctx,
 	return 0;
 
 error_ret:
-	erdma_mem_free(dev, mem);
+	if (mem->umem) {
+		ib_umem_release(mem->umem);
+		mem->umem = NULL;
+	}
 
 	return ret;
 }
 
 static void put_mtt_entries(struct erdma_dev *dev, struct erdma_mem *mem)
 {
-	if (mem->pbl) {
+	if (mem->pbl)
 		erdma_destroy_pbl(dev, mem->pbl);
-		mem->pbl = NULL;
+
+	if (mem->umem) {
+		ib_umem_release(mem->umem);
+		mem->umem = NULL;
 	}
-
-	erdma_mem_free(dev, mem);
-}
-
-static void free_kernel_qp(struct erdma_qp *qp)
-{
-	struct erdma_dev *dev = qp->dev;
-
-	vfree(qp->kern_qp.swr_tbl);
-	vfree(qp->kern_qp.rwr_tbl);
-
-	if (qp->kern_qp.sq_buf) {
-		put_mtt_entries(dev, &qp->kern_qp.sq_mtt);
-		vfree(qp->kern_qp.sq_buf);
-		qp->kern_qp.sq_buf = NULL;
-	}
-
-	if (qp->kern_qp.rq_buf) {
-		put_mtt_entries(dev, &qp->kern_qp.rq_mtt);
-		vfree(qp->kern_qp.rq_buf);
-		qp->kern_qp.rq_buf = NULL;
-	}
-
-	if (qp->kern_qp.sq_db_info)
-		dma_pool_free(dev->db_pool, qp->kern_qp.sq_db_info,
-			      qp->kern_qp.sq_db_info_dma_addr);
-
-	if (qp->kern_qp.rq_db_info)
-		dma_pool_free(dev->db_pool, qp->kern_qp.rq_db_info,
-			      qp->kern_qp.rq_db_info_dma_addr);
-}
-
-static int init_kernel_qp(struct erdma_dev *dev, struct erdma_qp *qp,
-			  struct ib_qp_init_attr *attrs)
-{
-	struct erdma_kqp *kqp = &qp->kern_qp;
-	int ret = -ENOMEM;
-
-	if (attrs->sq_sig_type == IB_SIGNAL_ALL_WR)
-		kqp->sig_all = 1;
-
-	kqp->sq_pi = 0;
-	kqp->sq_ci = 0;
-	kqp->rq_pi = 0;
-	kqp->rq_ci = 0;
-	kqp->hw_sq_db = dev->func_bar +
-			(ERDMA_SDB_SHARED_PAGE_INDEX << ERDMA_HW_PAGE_SHIFT);
-	kqp->hw_rq_db = dev->func_bar + ERDMA_BAR_RQDB_SPACE_OFFSET;
-
-	kqp->swr_tbl = vmalloc(qp->attrs.sq_size * sizeof(u64));
-	kqp->rwr_tbl = vmalloc(qp->attrs.rq_size * sizeof(u64));
-	if (!kqp->swr_tbl || !kqp->rwr_tbl)
-		goto err_out;
-
-	kqp->sq_buf = vmalloc(qp->attrs.sq_size << SQEBB_SHIFT);
-	if (!kqp->sq_buf)
-		goto err_out;
-
-	ret = get_mtt_entries(dev, NULL, &kqp->sq_mtt, (u64)kqp->sq_buf,
-			      qp->attrs.sq_size << SQEBB_SHIFT, 0,
-			      (u64)kqp->sq_buf, 0, false);
-	if (ret)
-		goto err_out;
-
-	kqp->rq_buf = vmalloc(qp->attrs.rq_size << RQE_SHIFT);
-	if (!kqp->rq_buf)
-		goto err_out;
-
-	ret = get_mtt_entries(dev, NULL, &kqp->rq_mtt, (u64)kqp->rq_buf,
-			      qp->attrs.rq_size << RQE_SHIFT, 0, (u64)kqp->rq_buf,
-			      0, false);
-	if (ret)
-		goto err_out;
-
-	kqp->sq_db_info = dma_pool_alloc(dev->db_pool, GFP_KERNEL,
-					 &kqp->sq_db_info_dma_addr);
-	if (!kqp->sq_db_info)
-		goto err_out;
-
-	kqp->rq_db_info = dma_pool_alloc(dev->db_pool, GFP_KERNEL,
-					 &kqp->rq_db_info_dma_addr);
-	if (!kqp->rq_db_info)
-		goto err_out;
-
-	if (attrs->create_flags & IB_QP_CREATE_IWARP_WITHOUT_CM) {
-		struct iw_ext_conn_param *param =
-			(struct iw_ext_conn_param *)(attrs->qp_context);
-
-		if (param == NULL) {
-			ret = -EINVAL;
-			goto err_out;
-		}
-		if (param->sk_addr.family != PF_INET) {
-			ibdev_err_ratelimited(
-				&dev->ibdev,
-				"IPv4 address is required for connection without CM.\n");
-			ret = -EINVAL;
-			goto err_out;
-		}
-		qp->attrs.connect_without_cm = true;
-		((struct sockaddr_in *)&qp->attrs.raddr)->sin_family = AF_INET;
-		((struct sockaddr_in *)&qp->attrs.laddr)->sin_family = AF_INET;
-		qp->attrs.raddr.in.sin_addr.s_addr = param->sk_addr.daddr_v4;
-		qp->attrs.laddr.in.sin_addr.s_addr = param->sk_addr.saddr_v4;
-		qp->attrs.dport = ntohs(param->sk_addr.dport);
-		qp->attrs.sport = param->sk_addr.sport;
-	}
-	spin_lock_init(&kqp->sq_lock);
-	spin_lock_init(&kqp->rq_lock);
-
-	return 0;
-
-err_out:
-	free_kernel_qp(qp);
-	return ret;
 }
 
 static int erdma_map_user_dbrecords(struct ib_udata *udata,
@@ -1492,21 +1425,6 @@ int erdma_dereg_mr(struct ib_mr *ibmr, struct ib_udata *udata)
 	return 0;
 }
 
-static void free_kernel_cq(struct erdma_dev *dev, struct erdma_kcq_info *kcq)
-{
-	if (kcq->qbuf) {
-		put_mtt_entries(dev, &kcq->qbuf_mtt);
-		vfree(kcq->qbuf);
-		kcq->qbuf = NULL;
-	}
-
-	if (kcq->db_record) {
-		dma_pool_free(dev->db_pool, kcq->db_record,
-			      kcq->db_info_dma_addr);
-		kcq->db_record = NULL;
-	}
-}
-
 int erdma_destroy_cq(struct ib_cq *ibcq, struct ib_udata *udata)
 {
 	struct erdma_cq *cq = to_ecq(ibcq);
@@ -1535,7 +1453,9 @@ int erdma_destroy_cq(struct ib_cq *ibcq, struct ib_udata *udata)
 		return err;
 	}
 	if (rdma_is_kernel_res(&cq->ibcq.res)) {
-		free_kernel_cq(dev, &cq->kern_cq);
+		dma_free_coherent(&dev->pdev->dev,
+				  WARPPED_BUFSIZE(cq->depth << CQE_SHIFT),
+				  cq->kern_cq.qbuf, cq->kern_cq.qbuf_dma_addr);
 	} else {
 		erdma_unmap_user_dbrecords(ctx, &cq->user_cq.user_dbr_page);
 		put_mtt_entries(dev, &cq->user_cq.qbuf_mtt);
@@ -1989,41 +1909,22 @@ static int erdma_init_user_cq(struct ib_udata *udata,
 
 static int erdma_init_kernel_cq(struct erdma_cq *cq)
 {
-	int ret;
-	u64 cq_sz = cq->depth << CQE_SHIFT;
 	struct erdma_dev *dev = to_edev(cq->ibcq.device);
 
-	cq->kern_cq.qbuf = vzalloc(cq_sz);
-	if (!cq->kern_cq.qbuf) {
-		ret = -ENOMEM;
-		goto err_out;
-	}
+	cq->kern_cq.qbuf =
+		dma_alloc_coherent(&dev->pdev->dev,
+				   WARPPED_BUFSIZE(cq->depth << CQE_SHIFT),
+				   &cq->kern_cq.qbuf_dma_addr, GFP_KERNEL);
+	if (!cq->kern_cq.qbuf)
+		return -ENOMEM;
 
-	ret = get_mtt_entries(dev, NULL, &cq->kern_cq.qbuf_mtt, (u64)cq->kern_cq.qbuf,
-			      cq_sz, 0, (u64)cq->kern_cq.qbuf, 0, false);
-	if (ret)
-		goto err_free_qbuf;
-
-	cq->kern_cq.db_record = dma_pool_alloc(dev->db_pool, GFP_KERNEL,
-					       &cq->kern_cq.db_info_dma_addr);
-	if (!cq->kern_cq.db_record) {
-		ret = -ENOMEM;
-		goto err_free_mtt;
-	}
-
+	cq->kern_cq.db_record =
+		(u64 *)(cq->kern_cq.qbuf + (cq->depth << CQE_SHIFT));
 	spin_lock_init(&cq->kern_cq.lock);
 	/* use default cqdb addr */
 	cq->kern_cq.db = dev->func_bar + ERDMA_BAR_CQDB_SPACE_OFFSET;
 
 	return 0;
-
-err_free_mtt:
-	put_mtt_entries(dev, &cq->kern_cq.qbuf_mtt);
-err_free_qbuf:
-	vfree(cq->kern_cq.qbuf);
-	cq->kern_cq.qbuf = NULL;
-err_out:
-	return ret;
 }
 
 int erdma_create_cq(struct ib_cq *ibcq, const struct ib_cq_init_attr *attr,
@@ -2099,7 +2000,9 @@ err_free_res:
 		erdma_unmap_user_dbrecords(uctx, &cq->user_cq.user_dbr_page);
 		put_mtt_entries(dev, &cq->user_cq.qbuf_mtt);
 	} else {
-		free_kernel_cq(dev, &cq->kern_cq);
+		dma_free_coherent(&dev->pdev->dev,
+				  WARPPED_BUFSIZE(depth << CQE_SHIFT),
+				  cq->kern_cq.qbuf, cq->kern_cq.qbuf_dma_addr);
 	}
 
 err_out_xa:

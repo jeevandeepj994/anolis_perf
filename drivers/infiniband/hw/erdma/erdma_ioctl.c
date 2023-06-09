@@ -21,6 +21,37 @@ static dev_t erdma_char_dev;
 
 #define ERDMA_CHRDEV_NAME "erdma"
 
+int erdma_set_ext_attr(struct erdma_dev *dev, struct erdma_ext_attr *attr)
+{
+	struct erdma_cmdq_set_ext_attr_req req;
+	int ret;
+
+	erdma_cmdq_build_reqhdr(&req.hdr, CMDQ_SUBMOD_COMMON,
+				CMDQ_OPCODE_SET_EXT_ATTR);
+
+	if (attr->attr_mask & ERDMA_EXT_ATTR_DACK_COUNT_MASK)
+		req.dack_count = attr->dack_count;
+
+	req.attr_mask = attr->attr_mask;
+
+	ret = erdma_post_cmd_wait(&dev->cmdq, &req, sizeof(req), NULL, NULL);
+
+	return ret;
+}
+
+int erdma_set_dack_count(struct erdma_dev *dev, u32 value)
+{
+	struct erdma_ext_attr attr;
+
+	if (value > 0xff)
+		return -EINVAL;
+
+	attr.attr_mask = ERDMA_EXT_ATTR_DACK_COUNT_MASK;
+	attr.dack_count = (u8)value;
+
+	return erdma_set_ext_attr(dev, &attr);
+}
+
 static int erdma_query_resource(struct erdma_dev *dev, u32 mod, u32 op,
 				u32 index, void *out, u32 len)
 {
@@ -82,6 +113,16 @@ static int erdma_query_eqc(struct erdma_dev *dev, u32 eqn, void *out)
 				    sizeof(struct erdma_cmdq_query_eqc_resp));
 }
 
+static int erdma_query_ext_attr(struct erdma_dev *dev, void *out)
+{
+	BUILD_BUG_ON(sizeof(struct erdma_cmdq_query_ext_attr_resp) >
+		     ERDMA_HW_RESP_SIZE);
+
+	return erdma_query_resource(dev, CMDQ_SUBMOD_COMMON,
+				    CMDQ_OPCODE_GET_EXT_ATTR, 0, out,
+				    sizeof(struct erdma_cmdq_query_ext_attr_resp));
+}
+
 static int erdma_ioctl_conf_cmd(struct erdma_dev *edev,
 				struct erdma_ioctl_msg *msg)
 {
@@ -97,6 +138,11 @@ static int erdma_ioctl_conf_cmd(struct erdma_dev *edev,
 			ret = erdma_set_retrans_num(edev, msg->in.config_req.value);
 		else
 			msg->out.config_resp.value = edev->attrs.retrans_num;
+	} else if (msg->in.opcode == ERDMA_CONFIG_TYPE_DACK_COUNT) {
+		if (msg->in.config_req.is_set)
+			ret = erdma_set_dack_count(edev, msg->in.config_req.value);
+		else
+			ret = -EINVAL;
 	}
 
 	msg->out.length = 4;
@@ -167,7 +213,6 @@ static int fill_cq_info(struct erdma_dev *dev, u32 cqn,
 	struct erdma_cmdq_query_cqc_resp resp;
 	struct rdma_restrack_entry *res;
 	struct erdma_cq *cq;
-	struct erdma_mem *mtt;
 	int ret;
 
 	if (cqn == 0) {
@@ -192,17 +237,16 @@ static int fill_cq_info(struct erdma_dev *dev, u32 cqn,
 
 	res = &cq->ibcq.res;
 	info->is_user = !rdma_is_kernel_res(res);
-	mtt = info->is_user ? &cq->user_cq.qbuf_mtt :
-			      &cq->kern_cq.qbuf_mtt;
 
-	info->mtt.page_size = mtt->page_size;
-	info->mtt.page_offset = mtt->page_offset;
-	info->mtt.page_cnt = mtt->page_cnt;
-	info->mtt.mtt_nents = mtt->mtt_nents;
-	info->mtt.va = mtt->va;
-	info->mtt.len = mtt->len;
-
-	if (!info->is_user) {
+	if (info->is_user) {
+		info->mtt.page_size = cq->user_cq.qbuf_mtt.page_size;
+		info->mtt.page_offset = cq->user_cq.qbuf_mtt.page_offset;
+		info->mtt.page_cnt = cq->user_cq.qbuf_mtt.page_cnt;
+		info->mtt.mtt_nents = cq->user_cq.qbuf_mtt.mtt_nents;
+		info->mtt.va = cq->user_cq.qbuf_mtt.va;
+		info->mtt.len = cq->user_cq.qbuf_mtt.len;
+	} else {
+		info->qbuf_dma_addr = cq->kern_cq.qbuf_dma_addr;
 		info->ci = cq->kern_cq.ci;
 		info->cmdsn = cq->kern_cq.cmdsn;
 		info->notify_cnt = cq->kern_cq.notify_cnt;
@@ -230,6 +274,23 @@ query_hw_cqc:
 	return 0;
 }
 
+static int fill_ext_attr_info(struct erdma_dev *dev,
+			struct erdma_ioctl_msg *msg)
+{
+	struct erdma_ext_attr_info *info = &msg->out.ext_attr_info;
+	struct erdma_cmdq_query_ext_attr_resp resp;
+	int ret = 0;
+
+	ret = erdma_query_ext_attr(dev, &resp);
+
+	info->cap = dev->attrs.cap_flags;
+	info->ext_cap = resp.cap_mask;
+	info->attr_mask = resp.attr_mask;
+	info->dack_count = resp.dack_count;
+
+	return ret;
+}
+
 static int erdma_ioctl_ver_cmd(struct erdma_dev *edev,
 			       struct erdma_ioctl_msg *msg)
 {
@@ -244,7 +305,7 @@ static int erdma_fill_qp_info(struct erdma_dev *dev, u32 qpn,
 {
 	struct erdma_cmdq_query_qpc_resp resp;
 	struct rdma_restrack_entry *res;
-	struct erdma_mem *sq_mtt, *rq_mtt;
+	struct erdma_mem *mtt;
 	struct erdma_qp *qp;
 	int ret;
 
@@ -301,32 +362,29 @@ static int erdma_fill_qp_info(struct erdma_dev *dev, u32 qpn,
 	if (qp_info->is_user) {
 		qp_info->pid = res->task->pid;
 		get_task_comm(qp_info->buf, res->task);
-	}
-	sq_mtt = qp_info->is_user ? &qp->user_qp.sq_mtt :
-				    &qp->kern_qp.sq_mtt;
+		mtt = &qp->user_qp.sq_mtt;
+		qp_info->sq_mtt.page_size = mtt->page_size;
+		qp_info->sq_mtt.page_offset = mtt->page_offset;
+		qp_info->sq_mtt.page_cnt = mtt->page_cnt;
+		qp_info->sq_mtt.mtt_nents = mtt->mtt_nents;
+		qp_info->sq_mtt.va = mtt->va;
+		qp_info->sq_mtt.len = mtt->len;
 
-	qp_info->sq_mtt.page_size = sq_mtt->page_size;
-	qp_info->sq_mtt.page_offset = sq_mtt->page_offset;
-	qp_info->sq_mtt.page_cnt = sq_mtt->page_cnt;
-	qp_info->sq_mtt.mtt_nents = sq_mtt->mtt_nents;
-	qp_info->sq_mtt.va = sq_mtt->va;
-	qp_info->sq_mtt.len = sq_mtt->len;
-
-	rq_mtt = qp_info->is_user ? &qp->user_qp.rq_mtt :
-				    &qp->kern_qp.rq_mtt;
-
-	qp_info->rq_mtt.page_size = rq_mtt->page_size;
-	qp_info->rq_mtt.page_offset = rq_mtt->page_offset;
-	qp_info->rq_mtt.page_cnt = rq_mtt->page_cnt;
-	qp_info->rq_mtt.mtt_nents = rq_mtt->mtt_nents;
-	qp_info->rq_mtt.va = rq_mtt->va;
-	qp_info->rq_mtt.len = rq_mtt->len;
-
-	if (!qp_info->is_user) {
+		mtt = &qp->user_qp.rq_mtt;
+		qp_info->rq_mtt.page_size = mtt->page_size;
+		qp_info->rq_mtt.page_offset = mtt->page_offset;
+		qp_info->rq_mtt.page_cnt = mtt->page_cnt;
+		qp_info->rq_mtt.mtt_nents = mtt->mtt_nents;
+		qp_info->rq_mtt.va = mtt->va;
+		qp_info->rq_mtt.len = mtt->len;
+	} else {
 		qp_info->sqci = qp->kern_qp.sq_ci;
 		qp_info->sqpi = qp->kern_qp.sq_pi;
 		qp_info->rqci = qp->kern_qp.rq_ci;
 		qp_info->rqpi = qp->kern_qp.rq_pi;
+
+		qp_info->sqbuf_dma = qp->kern_qp.sq_buf_dma_addr;
+		qp_info->rqbuf_dma = qp->kern_qp.rq_buf_dma_addr;
 		qp_info->sqdbrec_dma = qp->kern_qp.sq_db_info_dma_addr;
 		qp_info->rqdbrec_dma = qp->kern_qp.rq_db_info_dma_addr;
 	}
@@ -446,6 +504,9 @@ static int erdma_ioctl_info_cmd(struct erdma_dev *edev,
 		break;
 	case ERDMA_INFO_TYPE_CQ:
 		ret = fill_cq_info(edev, msg->in.info_req.qn, msg);
+		break;
+	case ERDMA_INFO_TYPE_EXT_ATTR:
+		ret = fill_ext_attr_info(edev, msg);
 		break;
 	default:
 		pr_info("unknown opcode:%u\n", msg->in.opcode);
