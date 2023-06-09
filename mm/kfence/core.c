@@ -638,6 +638,7 @@ static struct page *kfence_guarded_alloc_page(int node)
 	addr = (void *)meta->addr;
 	page = virt_to_page(addr);
 	__ClearPageSlab(page);
+	page->mapping = NULL;
 #ifdef CONFIG_DEBUG_VM
 	atomic_set(&page->_refcount, 0);
 #endif
