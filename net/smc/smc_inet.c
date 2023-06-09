@@ -68,6 +68,7 @@ struct proto smc_inet_prot = {
 	.no_autobind		= true,
 	.diag_destroy		= tcp_abort,
 };
+EXPORT_SYMBOL_GPL(smc_inet_prot);
 
 const struct proto_ops smc_inet_stream_ops = {
 	.family		   = PF_INET,
@@ -155,6 +156,7 @@ struct proto smc_inet6_prot = {
 	.no_autobind		= true,
 	.diag_destroy		= tcp_abort,
 };
+EXPORT_SYMBOL_GPL(smc_inet6_prot);
 
 const struct proto_ops smc_inet6_stream_ops = {
 	.family		   = PF_INET6,
