@@ -102,22 +102,8 @@ struct erdma_pbl {
 	struct erdma_pbl *low_level;
 };
 
-enum erdma_mem_type {
-	ERDMA_UMEM = 0,
-	ERDMA_KMEM = 1,
-};
-
-struct erdma_kmem {
-	struct scatterlist *sgl;
-	u64 nmap;
-};
-
 struct erdma_mem {
-	enum erdma_mem_type type;
-	union {
-		struct ib_umem *umem;
-		struct erdma_kmem *kmem;
-	};
+	struct ib_umem *umem;
 	u32 page_size;
 	u32 page_offset;
 	u32 page_cnt;
@@ -163,6 +149,7 @@ struct erdma_kqp {
 	u64 *swr_tbl;
 	void *hw_sq_db;
 	void *sq_buf;
+	dma_addr_t sq_buf_dma_addr;
 	void *sq_db_info;
 
 	spinlock_t rq_lock ____cacheline_aligned;
@@ -171,10 +158,8 @@ struct erdma_kqp {
 	u64 *rwr_tbl;
 	void *hw_rq_db;
 	void *rq_buf;
+	dma_addr_t rq_buf_dma_addr;
 	void *rq_db_info;
-
-	struct erdma_mem sq_mtt;
-	struct erdma_mem rq_mtt;
 
 	dma_addr_t sq_db_info_dma_addr;
 	dma_addr_t rq_db_info_dma_addr;
@@ -262,8 +247,7 @@ struct erdma_qp {
 
 struct erdma_kcq_info {
 	void *qbuf;
-	struct erdma_mem qbuf_mtt;
-	dma_addr_t db_info_dma_addr;
+	dma_addr_t qbuf_dma_addr;
 	u32 ci;
 	u32 cmdsn;
 	u32 notify_cnt;
