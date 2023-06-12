@@ -53,12 +53,12 @@ static int erdma_modify_qp_state_to_rts(struct erdma_qp *qp,
 					struct erdma_qp_attrs *attrs,
 					enum erdma_qp_attr_mask mask)
 {
+	int ret;
 	struct erdma_dev *dev = qp->dev;
 	struct erdma_cmdq_modify_qp_req req;
 	struct tcp_sock *tp;
 	struct erdma_cep *cep = qp->cep;
 	struct sockaddr_storage local_addr, remote_addr;
-	int ret;
 
 	if (qp->attrs.connect_without_cm) {
 		req.cookie = FIELD_PREP(ERDMA_CMD_MODIFY_QP_IW_OOB_MASK, 1) |
