@@ -265,13 +265,24 @@ int blkdev_compat_ptr_ioctl(struct block_device *bdev, fmode_t mode,
 EXPORT_SYMBOL(blkdev_compat_ptr_ioctl);
 #endif
 
-static int blkdev_pr_register(struct block_device *bdev,
+static bool blkdev_pr_allowed(struct block_device *bdev, fmode_t mode)
+{
+	if (capable(CAP_SYS_ADMIN))
+		return true;
+	/*
+	 * Only allow unprivileged reservations if the file descriptor is open
+	 * for writing.
+	 */
+	return mode & FMODE_WRITE;
+}
+
+static int blkdev_pr_register(struct block_device *bdev, fmode_t mode,
 		struct pr_registration __user *arg)
 {
 	const struct pr_ops *ops = bdev->bd_disk->fops->pr_ops;
 	struct pr_registration reg;
 
-	if (!capable(CAP_SYS_ADMIN))
+	if (!blkdev_pr_allowed(bdev, mode))
 		return -EPERM;
 	if (!ops || !ops->pr_register)
 		return -EOPNOTSUPP;
@@ -283,13 +294,13 @@ static int blkdev_pr_register(struct block_device *bdev,
 	return ops->pr_register(bdev, reg.old_key, reg.new_key, reg.flags);
 }
 
-static int blkdev_pr_reserve(struct block_device *bdev,
+static int blkdev_pr_reserve(struct block_device *bdev, fmode_t mode,
 		struct pr_reservation __user *arg)
 {
 	const struct pr_ops *ops = bdev->bd_disk->fops->pr_ops;
 	struct pr_reservation rsv;
 
-	if (!capable(CAP_SYS_ADMIN))
+	if (!blkdev_pr_allowed(bdev, mode))
 		return -EPERM;
 	if (!ops || !ops->pr_reserve)
 		return -EOPNOTSUPP;
@@ -301,13 +312,13 @@ static int blkdev_pr_reserve(struct block_device *bdev,
 	return ops->pr_reserve(bdev, rsv.key, rsv.type, rsv.flags);
 }
 
-static int blkdev_pr_release(struct block_device *bdev,
+static int blkdev_pr_release(struct block_device *bdev, fmode_t mode,
 		struct pr_reservation __user *arg)
 {
 	const struct pr_ops *ops = bdev->bd_disk->fops->pr_ops;
 	struct pr_reservation rsv;
 
-	if (!capable(CAP_SYS_ADMIN))
+	if (!blkdev_pr_allowed(bdev, mode))
 		return -EPERM;
 	if (!ops || !ops->pr_release)
 		return -EOPNOTSUPP;
@@ -319,13 +330,13 @@ static int blkdev_pr_release(struct block_device *bdev,
 	return ops->pr_release(bdev, rsv.key, rsv.type);
 }
 
-static int blkdev_pr_preempt(struct block_device *bdev,
+static int blkdev_pr_preempt(struct block_device *bdev, fmode_t mode,
 		struct pr_preempt __user *arg, bool abort)
 {
 	const struct pr_ops *ops = bdev->bd_disk->fops->pr_ops;
 	struct pr_preempt p;
 
-	if (!capable(CAP_SYS_ADMIN))
+	if (!blkdev_pr_allowed(bdev, mode))
 		return -EPERM;
 	if (!ops || !ops->pr_preempt)
 		return -EOPNOTSUPP;
@@ -337,13 +348,13 @@ static int blkdev_pr_preempt(struct block_device *bdev,
 	return ops->pr_preempt(bdev, p.old_key, p.new_key, p.type, abort);
 }
 
-static int blkdev_pr_clear(struct block_device *bdev,
+static int blkdev_pr_clear(struct block_device *bdev, fmode_t mode,
 		struct pr_clear __user *arg)
 {
 	const struct pr_ops *ops = bdev->bd_disk->fops->pr_ops;
 	struct pr_clear c;
 
-	if (!capable(CAP_SYS_ADMIN))
+	if (!blkdev_pr_allowed(bdev, mode))
 		return -EPERM;
 	if (!ops || !ops->pr_clear)
 		return -EOPNOTSUPP;
@@ -564,17 +575,17 @@ static int blkdev_common_ioctl(struct block_device *bdev, fmode_t mode,
 	case BLKTRACETEARDOWN:
 		return blk_trace_ioctl(bdev, cmd, argp);
 	case IOC_PR_REGISTER:
-		return blkdev_pr_register(bdev, argp);
+		return blkdev_pr_register(bdev, mode, argp);
 	case IOC_PR_RESERVE:
-		return blkdev_pr_reserve(bdev, argp);
+		return blkdev_pr_reserve(bdev, mode, argp);
 	case IOC_PR_RELEASE:
-		return blkdev_pr_release(bdev, argp);
+		return blkdev_pr_release(bdev, mode, argp);
 	case IOC_PR_PREEMPT:
-		return blkdev_pr_preempt(bdev, argp, false);
+		return blkdev_pr_preempt(bdev, mode, argp, false);
 	case IOC_PR_PREEMPT_ABORT:
-		return blkdev_pr_preempt(bdev, argp, true);
+		return blkdev_pr_preempt(bdev, mode, argp, true);
 	case IOC_PR_CLEAR:
-		return blkdev_pr_clear(bdev, argp);
+		return blkdev_pr_clear(bdev, mode, argp);
 	default:
 		return -ENOIOCTLCMD;
 	}
