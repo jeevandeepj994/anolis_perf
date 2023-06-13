@@ -166,7 +166,6 @@ void output_thread_fpu_defines(void)
 
 	OFFSET(THREAD_FCSR, loongarch_fpu, fcsr);
 	OFFSET(THREAD_FCC,  loongarch_fpu, fcc);
-	OFFSET(THREAD_VCSR, loongarch_fpu, vcsr);
 	BLANK();
 }
 
@@ -189,12 +188,6 @@ void output_mm_defines(void)
 	DEFINE(_PMD_T_LOG2, PMD_T_LOG2);
 #endif
 	DEFINE(_PTE_T_LOG2, PTE_T_LOG2);
-	BLANK();
-	DEFINE(_PGD_ORDER, PGD_ORDER);
-#ifndef __PAGETABLE_PMD_FOLDED
-	DEFINE(_PMD_ORDER, PMD_ORDER);
-#endif
-	DEFINE(_PTE_ORDER, PTE_ORDER);
 	BLANK();
 	DEFINE(_PMD_SHIFT, PMD_SHIFT);
 	DEFINE(_PGDIR_SHIFT, PGDIR_SHIFT);
