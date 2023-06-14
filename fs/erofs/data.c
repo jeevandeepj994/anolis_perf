@@ -23,11 +23,21 @@ void erofs_unmap_metabuf(struct erofs_buf *buf)
 
 void erofs_put_metabuf(struct erofs_buf *buf)
 {
+	pgoff_t index;
+
 	if (!buf->page)
 		return;
 	erofs_unmap_metabuf(buf);
+
+	index = buf->page->index;
 	put_page(buf->page);
 	buf->page = NULL;
+
+	if (buf->mapping) {
+		buf->mapping->a_ops->endpfn(buf->mapping, index,
+				&buf->iomap, 0);
+		buf->mapping = NULL;
+	}
 }
 
 /*
@@ -49,9 +59,16 @@ void *__erofs_bread(struct super_block *sb, struct erofs_buf *buf,
 			unsigned int nofs_flag;
 
 			nofs_flag = memalloc_nofs_save();
-			page = read_cache_page(mapping, index,
+			if (IS_DAX(inode)) {
+				page = mapping->a_ops->startpfn(mapping, index,
+								&buf->iomap);
+				if (!IS_ERR(page))
+					buf->mapping = mapping;
+			} else {
+				page = read_cache_page(mapping, index,
 					       (filler_t *)mapping->a_ops->readpage,
 					       EROFS_SB(sb)->bootstrap);
+			}
 			memalloc_nofs_restore(nofs_flag);
 		} else {
 			page = read_cache_page_gfp(mapping, index,
