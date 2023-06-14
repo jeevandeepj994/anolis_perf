@@ -68,6 +68,10 @@ void *erofs_bread(struct erofs_buf *buf, struct inode *inode,
 void *erofs_read_metabuf(struct erofs_buf *buf, struct super_block *sb,
 			 erofs_blk_t blkaddr, enum erofs_kmap_type type)
 {
+	if (EROFS_SB(sb)->bootstrap)
+		return erofs_bread(buf, EROFS_SB(sb)->bootstrap->f_inode,
+				   blkaddr, type);
+
 	if (erofs_is_fscache_mode(sb))
 		return erofs_bread(buf, EROFS_SB(sb)->s_fscache->inode,
 				   blkaddr, type);
@@ -75,8 +79,7 @@ void *erofs_read_metabuf(struct erofs_buf *buf, struct super_block *sb,
 	return erofs_bread(buf, sb->s_bdev->bd_inode, blkaddr, type);
 }
 
-static int erofs_map_blocks_flatmode(struct inode *inode,
-				     struct erofs_map_blocks *map)
+int erofs_map_blocks_flatmode(struct inode *inode, struct erofs_map_blocks *map)
 {
 	erofs_blk_t nblocks, lastblk;
 	u64 offset = map->m_la;
@@ -199,6 +202,7 @@ int erofs_map_dev(struct super_block *sb, struct erofs_map_dev *map)
 	int id;
 
 	map->m_bdev = sb->s_bdev;
+	map->m_fp = EROFS_SB(sb)->bootstrap;
 	map->m_fscache = EROFS_SB(sb)->s_fscache;
 
 	if (map->m_deviceid) {
