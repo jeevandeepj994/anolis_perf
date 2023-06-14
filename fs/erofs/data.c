@@ -236,6 +236,7 @@ int erofs_map_dev(struct super_block *sb, struct erofs_map_dev *map)
 			return 0;
 		}
 		map->m_bdev = dif->bdev;
+		map->m_fp = dif->blobfile;
 		map->m_fscache = dif->fscache;
 		up_read(&devs->rwsem);
 	} else if (devs->extra_devices && !devs->flatdev) {
@@ -252,6 +253,7 @@ int erofs_map_dev(struct super_block *sb, struct erofs_map_dev *map)
 			    map->m_pa < startoff + length) {
 				map->m_pa -= startoff;
 				map->m_bdev = dif->bdev;
+				map->m_fp = dif->blobfile;
 				map->m_fscache = dif->fscache;
 				break;
 			}

@@ -51,6 +51,7 @@ struct erofs_device_info {
 	char *path;
 	struct erofs_fscache *fscache;
 	struct block_device *bdev;
+	struct file *blobfile;
 
 	u32 blocks;
 	u32 mapped_blkaddr;
@@ -81,6 +82,7 @@ struct erofs_fs_context {
 	char *fsid;
 	char *domain_id;
 	char *bootstrap_path;
+	char *blob_dir_path;
 };
 
 struct erofs_domain {
@@ -113,8 +115,10 @@ struct erofs_sb_info {
 	/* pseudo inode to manage cached pages */
 	struct inode *managed_cache;
 #endif	/* CONFIG_EROFS_FS_ZIP */
+	struct path blob_dir;
 	struct file *bootstrap;
 	char *bootstrap_path;
+	char *blob_dir_path;
 	struct erofs_dev_context *devs;
 	u64 total_blocks;
 	u32 primarydevice_blocks;
