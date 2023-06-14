@@ -6,6 +6,7 @@
  */
 #include <linux/module.h>
 #include <linux/buffer_head.h>
+#include <linux/namei.h>
 #include <linux/statfs.h>
 #include <linux/parser.h>
 #include <linux/seq_file.h>
@@ -156,6 +157,16 @@ static int erofs_init_device(struct erofs_buf *buf, struct super_block *sb,
 		if (IS_ERR(fscache))
 			return PTR_ERR(fscache);
 		dif->fscache = fscache;
+	} else if (sbi->blob_dir_path) {
+		struct file *f;
+
+		f = file_open_root(sbi->blob_dir.dentry, sbi->blob_dir.mnt,
+				   dif->path, O_RDONLY | O_LARGEFILE, 0);
+		if (IS_ERR(f)) {
+			erofs_err(sb, "failed to open blob id %s", dif->path);
+			return PTR_ERR(f);
+		}
+		dif->blobfile = f;
 	} else if (!sbi->devs->flatdev) {
 		bdev = blkdev_get_by_path(dif->path, FMODE_READ | FMODE_EXCL,
 					  sb->s_type);
@@ -328,6 +339,7 @@ enum {
 	Opt_fsid,
 	Opt_domain_id,
 	Opt_bootstrap_path,
+	Opt_blob_dir_path,
 	Opt_opt_creds,
 	Opt_err
 };
@@ -348,6 +360,7 @@ static const struct fs_parameter_spec erofs_fs_parameters[] = {
 	fsparam_string("fsid",			Opt_fsid),
 	fsparam_string("domain_id",		Opt_domain_id),
 	fsparam_string("bootstrap_path",	Opt_bootstrap_path),
+	fsparam_string("blob_dir_path",		Opt_blob_dir_path),
 	fsparam_string("opt_creds",		Opt_opt_creds),
 	{}
 };
@@ -438,6 +451,13 @@ static int erofs_fc_parse_param(struct fs_context *fc,
 		if (!ctx->bootstrap_path)
 			return -ENOMEM;
 		infofc(fc, "RAFS bootstrap_path %s", ctx->bootstrap_path);
+		break;
+	case Opt_blob_dir_path:
+		kfree(ctx->blob_dir_path);
+		ctx->blob_dir_path = kstrdup(param->string, GFP_KERNEL);
+		if (!ctx->blob_dir_path)
+			return -ENOMEM;
+		infofc(fc, "RAFS blob_dir_path %s", ctx->blob_dir_path);
 		break;
 	case Opt_opt_creds:
 		if (!strcmp(param->string, "on")) {
@@ -572,7 +592,17 @@ static int rafs_v6_fill_super(struct super_block *sb)
 			return PTR_ERR(f);
 		sbi->bootstrap = f;
 	}
-	/* TODO: open each blobfiles */
+	if (sbi->blob_dir_path) {
+		int ret = kern_path(sbi->blob_dir_path,
+				LOOKUP_FOLLOW | LOOKUP_DIRECTORY,
+				&sbi->blob_dir);
+
+		if (ret) {
+			kfree(sbi->blob_dir_path);
+			sbi->blob_dir_path = NULL;
+			return ret;
+		}
+	}
 	return 0;
 }
 
@@ -602,6 +632,8 @@ static int erofs_fc_fill_super(struct super_block *sb, struct fs_context *fc)
 	ctx->domain_id = NULL;
 	sbi->bootstrap_path = ctx->bootstrap_path;
 	ctx->bootstrap_path = NULL;
+	sbi->blob_dir_path = ctx->blob_dir_path;
+	ctx->blob_dir_path = NULL;
 
 	sbi->blkszbits = PAGE_SHIFT;
 	if (erofs_is_fscache_mode(sb)) {
@@ -702,7 +734,7 @@ static int erofs_fc_get_tree(struct fs_context *fc)
 	if (IS_ENABLED(CONFIG_EROFS_FS_ONDEMAND) && ctx->fsid)
 		return get_tree_nodev(fc, erofs_fc_fill_super);
 
-	if (ctx->bootstrap_path)
+	if (ctx->bootstrap_path && ctx->blob_dir_path)
 		return get_tree_nodev(fc, erofs_fc_fill_super);
 
 	return get_tree_bdev(fc, erofs_fc_fill_super);
@@ -741,6 +773,8 @@ static int erofs_release_device_info(int id, void *ptr, void *data)
 
 	if (dif->bdev)
 		blkdev_put(dif->bdev, FMODE_READ | FMODE_EXCL);
+	if (dif->blobfile)
+		filp_close(dif->blobfile, NULL);
 	erofs_fscache_unregister_cookie(dif->fscache);
 	dif->fscache = NULL;
 	kfree(dif->path);
@@ -832,6 +866,10 @@ static void erofs_kill_sb(struct super_block *sb)
 	erofs_free_dev_context(sbi->devs);
 	if (sbi->bootstrap)
 		filp_close(sbi->bootstrap, NULL);
+	if (sbi->blob_dir_path) {
+		path_put(&sbi->blob_dir);
+		kfree(sbi->blob_dir_path);
+	}
 	kfree(sbi->bootstrap_path);
 	erofs_fscache_unregister_fs(sb);
 	kfree(sbi->fsid);
