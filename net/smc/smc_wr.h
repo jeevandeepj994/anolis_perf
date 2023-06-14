@@ -51,7 +51,7 @@ struct smc_wr_rx_handler {
  */
 static inline long smc_wr_tx_get_next_wr_id(struct smc_link *link)
 {
-	return atomic_long_add_return(2, &link->wr_tx_id);
+	return atomic_long_inc_return(&link->wr_tx_id);
 }
 
 static inline void smc_wr_tx_set_wr_id(atomic_long_t *wr_tx_id, long val)
@@ -86,26 +86,16 @@ static inline void smc_wr_wakeup_reg_wait(struct smc_link *lnk)
 /* post a new receive work request to fill a completed old work request entry */
 static inline int smc_wr_rx_post(struct smc_link *link)
 {
-	struct smc_link_stats *lnk_stats =
-		&link->lgr->lnk_stats[link->link_idx];
 	int rc;
 	u64 wr_id, temp_wr_id;
 	u32 index;
 
-	link->wr_rx_id += 2;
-	wr_id = link->wr_rx_id; /* tasklet context, thus not atomic */
-	temp_wr_id = wr_id / 2;
+	wr_id = ++link->wr_rx_id; /* tasklet context, thus not atomic */
+	temp_wr_id = wr_id;
 	index = do_div(temp_wr_id, link->wr_rx_cnt);
 	link->wr_rx_ibs[index].wr_id = wr_id;
 	rc = ib_post_recv(link->roce_qp, &link->wr_rx_ibs[index], NULL);
-	if (!rc)
-		SMC_LINK_STAT_WR(lnk_stats, 0, 1);
 	return rc;
-}
-
-static inline bool smc_wr_id_is_rx(u64 wr_id)
-{
-	return wr_id % 2;
 }
 
 int smc_wr_create_link(struct smc_link *lnk);
@@ -134,11 +124,12 @@ int smc_wr_tx_v2_send(struct smc_link *link,
 		      struct smc_wr_tx_pend_priv *priv, int len);
 int smc_wr_tx_send_wait(struct smc_link *link, struct smc_wr_tx_pend_priv *priv,
 			unsigned long timeout);
-void smc_wr_cq_handler(struct ib_cq *ib_cq, void *cq_context);
+void smc_wr_tx_cq_handler(struct ib_cq *ib_cq, void *cq_context);
 void smc_wr_tx_wait_no_pending_sends(struct smc_link *link);
 
 int smc_wr_rx_register_handler(struct smc_wr_rx_handler *handler);
 int smc_wr_rx_post_init(struct smc_link *link);
+void smc_wr_rx_cq_handler(struct ib_cq *ib_cq, void *cq_context);
 int smc_wr_reg_send(struct smc_link *link, struct ib_mr *mr);
 
 #endif /* SMC_WR_H */

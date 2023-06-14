@@ -28,15 +28,13 @@ static void smc_cdc_tx_handler(struct smc_wr_tx_pend_priv *pnd_snd,
 {
 	struct smc_cdc_tx_pend *cdcpend = (struct smc_cdc_tx_pend *)pnd_snd;
 	struct smc_connection *conn = cdcpend->conn;
-	struct smc_buf_desc *sndbuf_desc;
 	struct smc_sock *smc;
 	int diff;
 
-	sndbuf_desc = conn->sndbuf_desc;
 	smc = container_of(conn, struct smc_sock, conn);
 	bh_lock_sock(&smc->sk);
-	if (!wc_status && sndbuf_desc) {
-		diff = smc_curs_diff(sndbuf_desc->len,
+	if (!wc_status) {
+		diff = smc_curs_diff(cdcpend->conn->sndbuf_desc->len,
 				     &cdcpend->conn->tx_curs_fin,
 				     &cdcpend->cursor);
 		/* sndbuf_space is decreased in smc_sendmsg */
@@ -360,8 +358,7 @@ static void smc_cdc_msg_recv_action(struct smc_sock *smc,
 	}
 
 	/* trigger sndbuf consumer: RDMA write into peer RMBE and CDC */
-	if ((diff_cons && smc_tx_prepared_sends(conn) &&
-	     conn->local_tx_ctrl.prod_flags.write_blocked) ||
+	if ((diff_cons && smc_tx_prepared_sends(conn)) ||
 	    conn->local_rx_ctrl.prod_flags.cons_curs_upd_req ||
 	    conn->local_rx_ctrl.prod_flags.urg_data_pending) {
 		if (!sock_owned_by_user(&smc->sk))
