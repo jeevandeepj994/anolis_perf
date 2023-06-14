@@ -101,6 +101,13 @@ static int erdma_enum_and_get_netdev(struct erdma_dev *dev)
 	return ret;
 }
 
+static void erdma_device_unregister(struct erdma_dev *dev)
+{
+	unregister_netdevice_notifier(&dev->netdev_nb);
+
+	ib_unregister_device(&dev->ibdev);
+}
+
 static int erdma_device_register(struct erdma_dev *dev)
 {
 	struct ib_device *ibdev = &dev->ibdev;
@@ -277,20 +284,24 @@ static int erdma_device_init(struct erdma_dev *dev, struct pci_dev *pdev)
 	int ret;
 
 	erdma_dwqe_resource_init(dev);
+
 	ret = erdma_hw_resp_pool_init(dev);
 	if (ret)
 		return ret;
 
 	ret = dma_set_mask_and_coherent(&pdev->dev,
 					DMA_BIT_MASK(ERDMA_PCI_WIDTH));
-	if (ret) {
-		erdma_hw_resp_pool_destroy(dev);
-		return ret;
-	}
+	if (ret)
+		goto destroy_pool;
 
 	dma_set_max_seg_size(&pdev->dev, UINT_MAX);
 
 	return 0;
+
+destroy_pool:
+	erdma_hw_resp_pool_destroy(dev);
+
+	return ret;
 }
 
 static void erdma_device_uninit(struct erdma_dev *dev)
@@ -752,10 +763,16 @@ static int erdma_ib_device_add(struct pci_dev *pdev)
 	if (ret)
 		goto free_wq;
 
+	ret = erdma_debugfs_files_create(dev);
+	if (ret)
+		goto device_unregister;
+
 	dev->ibdev.use_cq_dim = true;
 
 	return 0;
 
+device_unregister:
+	erdma_device_unregister(dev);
 free_wq:
 	destroy_workqueue(dev->reflush_wq);
 free_pool:
@@ -777,7 +794,8 @@ static void erdma_ib_device_remove(struct pci_dev *pdev)
 
 	unregister_netdevice_notifier(&dev->netdev_nb);
 
-	ib_unregister_device(&dev->ibdev);
+	erdma_debugfs_files_destroy(dev);
+	erdma_device_unregister(dev);
 
 	WARN_ON(atomic_read(&dev->num_ctx));
 	WARN_ON(atomic_read(&dev->num_cep));
@@ -827,6 +845,8 @@ static __init int erdma_init_module(void)
 {
 	int ret;
 
+	erdma_debugfs_register();
+
 	ret = erdma_compat_init();
 	if (ret)
 		return ret;
@@ -863,6 +883,7 @@ static void __exit erdma_exit_module(void)
 	erdma_chrdev_destroy();
 	erdma_cm_exit();
 	erdma_compat_exit();
+	erdma_debugfs_unregister();
 }
 
 module_init(erdma_init_module);
