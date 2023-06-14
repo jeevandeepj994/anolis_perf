@@ -80,6 +80,7 @@ struct erofs_fs_context {
 	struct erofs_dev_context *devs;
 	char *fsid;
 	char *domain_id;
+	char *bootstrap_path;
 };
 
 struct erofs_domain {
@@ -112,6 +113,8 @@ struct erofs_sb_info {
 	/* pseudo inode to manage cached pages */
 	struct inode *managed_cache;
 #endif	/* CONFIG_EROFS_FS_ZIP */
+	struct file *bootstrap;
+	char *bootstrap_path;
 	struct erofs_dev_context *devs;
 	u64 total_blocks;
 	u32 primarydevice_blocks;
@@ -300,6 +303,7 @@ struct erofs_inode {
 
 	unsigned int xattr_shared_count;
 	unsigned int *xattr_shared_xattrs;
+	const struct vm_operations_struct *lower_vm_ops;
 
 	union {
 		erofs_blk_t raw_blkaddr;
@@ -424,6 +428,7 @@ static inline int z_erofs_map_blocks_iter(struct inode *inode,
 struct erofs_map_dev {
 	struct erofs_fscache *m_fscache;
 	struct block_device *m_bdev;
+	struct file *m_fp;
 
 	erofs_off_t m_pa;
 	unsigned int m_deviceid;

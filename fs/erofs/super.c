@@ -327,6 +327,7 @@ enum {
 	Opt_device,
 	Opt_fsid,
 	Opt_domain_id,
+	Opt_bootstrap_path,
 	Opt_opt_creds,
 	Opt_err
 };
@@ -339,14 +340,15 @@ static const struct constant_table erofs_param_cache_strategy[] = {
 };
 
 static const struct fs_parameter_spec erofs_fs_parameters[] = {
-	fsparam_flag_no("user_xattr",	Opt_user_xattr),
-	fsparam_flag_no("acl",		Opt_acl),
-	fsparam_enum("cache_strategy",	Opt_cache_strategy,
+	fsparam_flag_no("user_xattr",		Opt_user_xattr),
+	fsparam_flag_no("acl",			Opt_acl),
+	fsparam_enum("cache_strategy",		Opt_cache_strategy,
 		     erofs_param_cache_strategy),
-	fsparam_string("device",	Opt_device),
-	fsparam_string("fsid",		Opt_fsid),
-	fsparam_string("domain_id",	Opt_domain_id),
-	fsparam_string("opt_creds",	Opt_opt_creds),
+	fsparam_string("device",		Opt_device),
+	fsparam_string("fsid",			Opt_fsid),
+	fsparam_string("domain_id",		Opt_domain_id),
+	fsparam_string("bootstrap_path",	Opt_bootstrap_path),
+	fsparam_string("opt_creds",		Opt_opt_creds),
 	{}
 };
 
@@ -429,6 +431,13 @@ static int erofs_fc_parse_param(struct fs_context *fc,
 #else
 		errorfc(fc, "domain_id option not supported");
 #endif
+		break;
+	case Opt_bootstrap_path:
+		kfree(ctx->bootstrap_path);
+		ctx->bootstrap_path = kstrdup(param->string, GFP_KERNEL);
+		if (!ctx->bootstrap_path)
+			return -ENOMEM;
+		infofc(fc, "RAFS bootstrap_path %s", ctx->bootstrap_path);
 		break;
 	case Opt_opt_creds:
 		if (!strcmp(param->string, "on")) {
@@ -551,6 +560,22 @@ static int erofs_fc_fill_pseudo_super(struct super_block *sb, struct fs_context 
 	return simple_fill_super(sb, EROFS_SUPER_MAGIC, &empty_descr);
 }
 
+static int rafs_v6_fill_super(struct super_block *sb)
+{
+	struct erofs_sb_info *sbi = EROFS_SB(sb);
+
+	if (sbi->bootstrap_path) {
+		struct file *f;
+
+		f = filp_open(sbi->bootstrap_path, O_RDONLY, 0644);
+		if (IS_ERR(f))
+			return PTR_ERR(f);
+		sbi->bootstrap = f;
+	}
+	/* TODO: open each blobfiles */
+	return 0;
+}
+
 static int erofs_fc_fill_super(struct super_block *sb, struct fs_context *fc)
 {
 	struct inode *inode;
@@ -575,6 +600,8 @@ static int erofs_fc_fill_super(struct super_block *sb, struct fs_context *fc)
 	ctx->fsid = NULL;
 	sbi->domain_id = ctx->domain_id;
 	ctx->domain_id = NULL;
+	sbi->bootstrap_path = ctx->bootstrap_path;
+	ctx->bootstrap_path = NULL;
 
 	sbi->blkszbits = PAGE_SHIFT;
 	if (erofs_is_fscache_mode(sb)) {
@@ -604,11 +631,18 @@ static int erofs_fc_fill_super(struct super_block *sb, struct fs_context *fc)
 			errorfc(fc, "unsupported blksize for fscache mode");
 			return -EINVAL;
 		}
-		if (!sb_set_blocksize(sb, 1 << sbi->blkszbits)) {
+		if (sb->s_bdev && !sb_set_blocksize(sb, 1 << sbi->blkszbits)) {
 			errorfc(fc, "failed to set erofs blksize");
 			return -EINVAL;
+		} else {
+			sb->s_blocksize =  1 << sbi->blkszbits;
+			sb->s_blocksize_bits = sbi->blkszbits;
 		}
 	}
+
+	err = rafs_v6_fill_super(sb);
+	if (err)
+		return err;
 
 	sb->s_time_gran = 1;
 	sb->s_xattr = erofs_xattr_handlers;
@@ -666,6 +700,9 @@ static int erofs_fc_get_tree(struct fs_context *fc)
 	struct erofs_fs_context *ctx = fc->fs_private;
 
 	if (IS_ENABLED(CONFIG_EROFS_FS_ONDEMAND) && ctx->fsid)
+		return get_tree_nodev(fc, erofs_fc_fill_super);
+
+	if (ctx->bootstrap_path)
 		return get_tree_nodev(fc, erofs_fc_fill_super);
 
 	return get_tree_bdev(fc, erofs_fc_fill_super);
@@ -784,10 +821,10 @@ static void erofs_kill_sb(struct super_block *sb)
 		return;
 	}
 
-	if (erofs_is_fscache_mode(sb))
-		kill_anon_super(sb);
-	else
+	if (sb->s_bdev)
 		kill_block_super(sb);
+	else
+		kill_anon_super(sb);
 
 	sbi = EROFS_SB(sb);
 	if (!sbi)
@@ -807,6 +844,9 @@ static void erofs_put_super(struct super_block *sb)
 
 	DBG_BUGON(!sbi);
 
+	if (sbi->bootstrap)
+		filp_close(sbi->bootstrap, NULL);
+	kfree(sbi->bootstrap_path);
 	erofs_shrinker_unregister(sb);
 #ifdef CONFIG_EROFS_FS_ZIP
 	iput(sbi->managed_cache);
@@ -889,7 +929,7 @@ static int erofs_statfs(struct dentry *dentry, struct kstatfs *buf)
 	struct erofs_sb_info *sbi = EROFS_SB(sb);
 	u64 id = 0;
 
-	if (!erofs_is_fscache_mode(sb))
+	if (sb->s_bdev)
 		id = huge_encode_dev(sb->s_bdev->bd_dev);
 
 	buf->f_type = sb->s_magic;
