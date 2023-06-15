@@ -1371,8 +1371,7 @@ int __sock_create(struct net *net, int family, int type, int protocol,
 	if (!kern && (family == AF_INET || family == AF_INET6) &&
 	    type == SOCK_STREAM && (protocol == IPPROTO_IP ||
 	    protocol == IPPROTO_TCP) && net->smc.sysctl_tcp2smc) {
-		protocol = (family == AF_INET) ? SMCPROTO_SMC : SMCPROTO_SMC6;
-		family = AF_SMC;
+		protocol = IPPROTO_SMC;
 	}
 #endif
 
