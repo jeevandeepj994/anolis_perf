@@ -179,7 +179,8 @@ drop:
 
 static bool smc_hs_congested(const struct sock *sk)
 {
-	const struct smc_sock *smc;
+	struct smc_sock *smc;
+	int tcp_cnt, smc_cnt;
 
 	smc = smc_clcsock_user_data(sk);
 
@@ -189,6 +190,22 @@ static bool smc_hs_congested(const struct sock *sk)
 	if (workqueue_congested(WORK_CPU_UNBOUND, smc_hs_wq))
 		return true;
 
+	/* only works for inet sock */
+	if (smc_sock_is_inet_sock(&smc->sk)) {
+		__smc_inet_sock_sort_csk_queue(&smc->sk, &tcp_cnt, &smc_cnt);
+		smc_cnt += atomic_read(&smc->queued_smc_hs);
+		if (!smc_inet_sock_is_under_presure(&smc->sk)) {
+			if (smc_cnt > (sk->sk_max_ack_backlog >> 1)) {
+				smc_inet_sock_under_presure(&smc->sk);
+				return true;
+			}
+		} else {
+			if (smc_cnt > (sk->sk_max_ack_backlog >> 2))
+				return true;
+			/* leave the presure state */
+			smc_inet_sock_leave_presure(&smc->sk);
+		}
+	}
 	return false;
 }
 
@@ -2820,13 +2837,15 @@ static inline void smc_init_listen(struct smc_sock *smc)
 			       smc_clcsock_data_ready, &smc->clcsk_data_ready);
 	write_unlock_bh(&clcsk->sk_callback_lock);
 
-	/* save original ops */
-	smc->ori_af_ops = inet_csk(clcsk)->icsk_af_ops;
+	if (!smc_sock_is_inet_sock(&smc->sk)) {
+		/* save original ops */
+		smc->ori_af_ops = inet_csk(clcsk)->icsk_af_ops;
 
-	smc->af_ops = *smc->ori_af_ops;
-	smc->af_ops.syn_recv_sock = smc_tcp_syn_recv_sock;
+		smc->af_ops = *smc->ori_af_ops;
+		smc->af_ops.syn_recv_sock = smc_tcp_syn_recv_sock;
 
-	inet_csk(clcsk)->icsk_af_ops = &smc->af_ops;
+		inet_csk(clcsk)->icsk_af_ops = &smc->af_ops;
+	}
 
 	if (smc->limit_smc_hs)
 		tcp_sk(clcsk)->smc_hs_congested = smc_hs_congested;
