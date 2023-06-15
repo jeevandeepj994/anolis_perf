@@ -62,6 +62,19 @@ unsigned long transparent_hugepage_flags __read_mostly =
 
 static struct shrinker deferred_split_shrinker;
 
+#ifdef CONFIG_MEMCG
+/*
+ * Zero subpages reclaim for huge pages only works when memcg defined.
+ */
+int global_thp_reclaim = THP_RECLAIM_MEMCG;
+int thp_reclaim_proactive;
+unsigned int thp_reclaim_proactive_sleep_ms = THP_RECLAIM_PROACTIVE_SLEEP_MS;
+unsigned int thp_reclaim_proactive_scan = 100;
+static DEFINE_MUTEX(thp_reclaim_proactive_mutex);
+struct delayed_work thp_reclaim_proactive_dwork;
+static void thp_reclaim_proactive_func(struct work_struct *work);
+#endif
+
 static atomic_t huge_zero_refcount;
 struct page *huge_zero_page __read_mostly;
 unsigned long huge_zero_pfn __read_mostly = ~0UL;
@@ -402,6 +415,139 @@ static struct kobj_attribute hugetext_pad_threshold_attr =
 			hugetext_pad_threshold_store);
 #endif /* CONFIG_HUGETEXT */
 
+#ifdef CONFIG_MEMCG
+static ssize_t reclaim_show(struct kobject *kobj,
+			    struct kobj_attribute *attr, char *buf)
+{
+	int thp_reclaim = READ_ONCE(global_thp_reclaim);
+
+	if (thp_reclaim == THP_RECLAIM_MEMCG)
+		return sprintf(buf, "[memcg] reclaim swap disable\n");
+	else if (thp_reclaim == THP_RECLAIM_ZSR)
+		return sprintf(buf, "memcg [reclaim] swap disable\n");
+	else if (thp_reclaim == THP_RECLAIM_SWAP)
+		return sprintf(buf, "memcg reclaim [swap] disable\n");
+	else
+		return sprintf(buf, "memcg reclaim swap [disable]\n");
+}
+
+static ssize_t reclaim_store(struct kobject *kobj,
+			     struct kobj_attribute *attr,
+			     const char *buf, size_t count)
+{
+	if (!memcmp("memcg", buf,
+		    min(sizeof("memcg")-1, count)))
+		WRITE_ONCE(global_thp_reclaim, THP_RECLAIM_MEMCG);
+	else if (!memcmp("reclaim", buf,
+		    min(sizeof("reclaim")-1, count)))
+		WRITE_ONCE(global_thp_reclaim, THP_RECLAIM_ZSR);
+	else if (!memcmp("swap", buf,
+		    min(sizeof("swap")-1, count)))
+		WRITE_ONCE(global_thp_reclaim, THP_RECLAIM_SWAP);
+	else if (!memcmp("disable", buf,
+		    min(sizeof("disable")-1, count)))
+		WRITE_ONCE(global_thp_reclaim, THP_RECLAIM_DISABLE);
+	else
+		return -EINVAL;
+
+	return count;
+}
+
+static struct kobj_attribute reclaim_attr =
+	__ATTR(reclaim, 0644, reclaim_show, reclaim_store);
+
+static ssize_t reclaim_proactive_show(struct kobject *kobj,
+				      struct kobj_attribute *attr,
+				      char *buf)
+{
+	return sprintf(buf, "%d\n", READ_ONCE(thp_reclaim_proactive));
+}
+
+static ssize_t reclaim_proactive_store(struct kobject *kobj,
+				       struct kobj_attribute *attr,
+				       const char *buf, size_t count)
+{
+	int ret, proactive;
+
+	ret = kstrtouint(buf, 0, &proactive);
+	if (ret || (proactive != 0 && proactive != 1))
+		return -EINVAL;
+
+	mutex_lock(&thp_reclaim_proactive_mutex);
+	if (proactive == thp_reclaim_proactive)
+		goto unlock;
+
+	thp_reclaim_proactive = proactive;
+	if (thp_reclaim_proactive)
+		schedule_delayed_work(&thp_reclaim_proactive_dwork,
+			msecs_to_jiffies(thp_reclaim_proactive_sleep_ms));
+	else
+		cancel_delayed_work_sync(&thp_reclaim_proactive_dwork);
+unlock:
+	mutex_unlock(&thp_reclaim_proactive_mutex);
+
+	return count;
+}
+
+static struct kobj_attribute reclaim_proactive_attr =
+	__ATTR(reclaim_proactive, 0644, reclaim_proactive_show,
+	       reclaim_proactive_store);
+
+static ssize_t reclaim_proactive_sleep_ms_show(struct kobject *kobj,
+					struct kobj_attribute *attr, char *buf)
+{
+	return sprintf(buf, "%u\n", thp_reclaim_proactive_sleep_ms);
+}
+
+static ssize_t reclaim_proactive_sleep_ms_store(struct kobject *kobj,
+						struct kobj_attribute *attr,
+						const char *buf, size_t count)
+{
+	unsigned long msecs;
+	int ret;
+
+	ret = kstrtoul(buf, 10, &msecs);
+	if (ret || msecs > UINT_MAX)
+		return -EINVAL;
+
+	WRITE_ONCE(thp_reclaim_proactive_sleep_ms, msecs);
+
+	return count;
+}
+
+static struct kobj_attribute reclaim_proactive_sleep_ms_attr =
+	__ATTR(reclaim_proactive_sleep_ms, 0644,
+	       reclaim_proactive_sleep_ms_show,
+	       reclaim_proactive_sleep_ms_store);
+
+static ssize_t reclaim_proactive_scan_show(struct kobject *kobj,
+					struct kobj_attribute *attr, char *buf)
+{
+	return sprintf(buf, "%u\n", READ_ONCE(thp_reclaim_proactive_scan));
+}
+
+static ssize_t reclaim_proactive_scan_store(struct kobject *kobj,
+						struct kobj_attribute *attr,
+						const char *buf, size_t count)
+{
+	unsigned long scan;
+	int ret;
+
+	ret = kstrtoul(buf, 10, &scan);
+	if (ret || scan > UINT_MAX)
+		return -EINVAL;
+
+	WRITE_ONCE(thp_reclaim_proactive_scan, scan);
+
+	return count;
+}
+
+static struct kobj_attribute reclaim_proactive_scan_attr =
+	__ATTR(reclaim_proactive_scan, 0644,
+	       reclaim_proactive_scan_show,
+	       reclaim_proactive_scan_store);
+#endif
+
 static struct attribute *hugepage_attr[] = {
 	&enabled_attr.attr,
 	&defrag_attr.attr,
@@ -413,6 +559,12 @@ static struct attribute *hugepage_attr[] = {
 #ifdef CONFIG_HUGETEXT
 	&hugetext_enabled_attr.attr,
 	&hugetext_pad_threshold_attr.attr,
+#endif
+#ifdef CONFIG_MEMCG
+	&reclaim_attr.attr,
+	&reclaim_proactive_attr.attr,
+	&reclaim_proactive_sleep_ms_attr.attr,
+	&reclaim_proactive_scan_attr.attr,
 #endif
 	NULL,
 };
@@ -521,6 +673,12 @@ static int __init hugepage_init(void)
 	err = start_stop_khugepaged();
 	if (err)
 		goto err_khugepaged;
+
+	INIT_DELAYED_WORK(&thp_reclaim_proactive_dwork,
+			  thp_reclaim_proactive_func);
+	if (thp_reclaim_proactive)
+		schedule_delayed_work(&thp_reclaim_proactive_dwork,
+			msecs_to_jiffies(thp_reclaim_proactive_sleep_ms));
 
 	return 0;
 err_khugepaged:
@@ -637,6 +795,9 @@ void prep_transhuge_page(struct page *page)
 	 */
 
 	INIT_LIST_HEAD(page_deferred_list(page));
+#ifdef CONFIG_MEMCG
+	INIT_LIST_HEAD(hugepage_reclaim_list(page));
+#endif
 	set_compound_page_dtor(page, TRANSHUGE_PAGE_DTOR);
 }
 
@@ -2578,7 +2739,7 @@ static void __split_huge_page_tail(struct page *head, int tail,
 			 (1L << PG_dirty)));
 
 	/* ->mapping in first tail page is compound_mapcount */
-	VM_BUG_ON_PAGE(tail > 2 && page_tail->mapping != TAIL_MAPPING,
+	VM_BUG_ON_PAGE(tail > 3 && page_tail->mapping != TAIL_MAPPING,
 			page_tail);
 	page_tail->mapping = head->mapping;
 	page_tail->index = head->index + tail;
@@ -2833,6 +2994,10 @@ int split_huge_page_to_list(struct page *page, struct list_head *list)
 	VM_BUG_ON_PAGE(!PageLocked(head), head);
 	VM_BUG_ON_PAGE(!PageCompound(head), head);
 
+#ifdef CONFIG_MEMCG
+	tr_del_hugepage(page);
+#endif
+
 	if (PageWriteback(head))
 		return -EBUSY;
 
@@ -2994,6 +3159,7 @@ void deferred_split_huge_page(struct page *page)
 		if (memcg)
 			memcg_set_shrinker_bit(memcg, page_to_nid(page),
 					       deferred_split_shrinker.id);
+		tr_del_hugepage(page);
 #endif
 	}
 	spin_unlock_irqrestore(&ds_queue->split_queue_lock, flags);
@@ -3188,5 +3354,405 @@ void remove_migration_pmd(struct page_vma_mapped_walk *pvmw, struct page *new)
 	if ((vma->vm_flags & VM_LOCKED) && !PageDoubleMap(new))
 		mlock_vma_page(new);
 	update_mmu_cache_pmd(vma, address, pvmw->pmd);
+}
+#endif
+
+#ifdef CONFIG_MEMCG
+static inline bool tr_zero_page(struct page *page)
+{
+	void *addr = kmap(page);
+	bool ret;
+
+	ret = !memchr_inv(addr, 0, PAGE_SIZE) ? true : false;
+	kunmap(page);
+
+	return ret;
+}
+
+/*
+ * We'll split the huge page iff it contains at least 1/32 zeros,
+ * estimate it by checking some discrete long values.
+ */
+static bool tr_hugepage_estimate_zero(struct page *page, int threshold)
+{
+	unsigned int i, maybe_zero_pages = 0, offset = 0;
+	void *addr;
+
+#define ESTIMATE_SIZE 64U
+	for (i = 0; i < HPAGE_PMD_NR; i++, page++, offset++) {
+		addr = kmap(page);
+		if (unlikely((offset + 1) * sizeof(long) > PAGE_SIZE))
+			offset = 0;
+		if (!memchr_inv((long *)addr + offset, 0, ESTIMATE_SIZE)) {
+			if (++maybe_zero_pages >= threshold) {
+				kunmap(page);
+				return true;
+			}
+		}
+		kunmap(page);
+	}
+
+	return false;
+}
+
+static bool tr_replace_zero_pte(struct page *page, struct vm_area_struct *vma,
+			     unsigned long addr, void *zero_page)
+{
+	struct page_vma_mapped_walk pvmw = {
+		.page = page,
+		.vma = vma,
+		.address = addr,
+		.flags = PVMW_SYNC | PVMW_MIGRATION,
+	};
+	pte_t pte;
+
+	VM_BUG_ON_PAGE(PageTail(page), page);
+
+	while (page_vma_mapped_walk(&pvmw)) {
+		pte = pte_mkspecial(
+			pfn_pte(page_to_pfn((struct page *)zero_page),
+			vma->vm_page_prot));
+
+		/*
+		 * We're replacing an anonymous page with a zero page, which is
+		 * not anonymous. We need to do proper accounting otherwise we
+		 * when tearing down the mm.
+		 */
+		dec_mm_counter(vma->vm_mm, MM_ANONPAGES);
+		set_pte_at(vma->vm_mm, pvmw.address, pvmw.pte, pte);
+
+		/* No need to invalidate - it was non-present before.*/
+		update_mmu_cache(vma, pvmw.address, pvmw.pte);
+	}
+
+	return true;
+}
+
+static void tr_replace_zero_ptes_locked(struct page *page)
+{
+	struct page *zero_page = ZERO_PAGE(0);
+	struct rmap_walk_control rwc = {
+		.rmap_one = tr_replace_zero_pte,
+		.arg = zero_page,
+	};
+
+	rmap_walk_locked(page, &rwc);
+}
+
+static bool tr_replace_zero_page(struct page *page)
+{
+	struct anon_vma *anon_vma = NULL;
+	bool unmap_success;
+	bool ret = true;
+
+	anon_vma = page_get_anon_vma(page);
+	if (!anon_vma)
+		return false;
+
+	anon_vma_lock_write(anon_vma);
+	unmap_success = try_to_unmap(page, TTU_RMAP_LOCKED | TTU_MIGRATION |
+				     TTU_SYNC);
+
+	if (!unmap_success || !tr_zero_page(page)) {
+		/* remap the non-zero page */
+		remove_migration_ptes(page, page, true);
+		ret = false;
+	} else
+		tr_replace_zero_ptes_locked(page);
+
+	anon_vma_unlock_write(anon_vma);
+	put_anon_vma(anon_vma);
+
+	return ret;
+}
+
+/*
+ * tr_reclaim_zero_subpages - reclaim the zero subpages and putback the non-zero
+ * subpages.
+ *
+ * The non-zero subpages are putback to the keep_list, and will be putback to
+ * the lru list.
+ *
+ * Return the number of reclaimed zero subpages.
+ */
+static unsigned long tr_reclaim_zero_subpages(struct list_head *list,
+					   struct list_head *keep_list)
+{
+	LIST_HEAD(zero_list);
+	struct page *page;
+	unsigned long reclaimed = 0;
+
+	while (!list_empty(list)) {
+		page = lru_to_page(list);
+		list_del_init(&page->lru);
+		if (tr_zero_page(page)) {
+			if (!trylock_page(page))
+				goto keep;
+
+			if (!tr_replace_zero_page(page)) {
+				unlock_page(page);
+				goto keep;
+			}
+
+			ClearPageActive(page);
+			unlock_page(page);
+			if (put_page_testzero(page)) {
+				list_add(&page->lru, &zero_list);
+				reclaimed++;
+			}
+
+			/* someone may hold the zero page, we just skip it. */
+
+			continue;
+		}
+keep:
+		list_add(&page->lru, keep_list);
+	}
+
+	mem_cgroup_uncharge_list(&zero_list);
+	free_unref_page_list(&zero_list);
+
+	return reclaimed;
+}
+
+/* Filter unsupported page flags. */
+#define THP_RECLAIM_FLAG_CHECK			\
+	((1UL << PG_error) |			\
+	 (1UL << PG_owner_priv_1) |		\
+	 (1UL << PG_arch_1) |			\
+	 (1UL << PG_reserved) |			\
+	 (1UL << PG_private) |			\
+	 (1UL << PG_private_2) |		\
+	 (1UL << PG_writeback) |		\
+	 (1UL << PG_swapcache) |		\
+	 (1UL << PG_mappedtodisk) |		\
+	 (1UL << PG_reclaim) |			\
+	 (1UL << PG_unevictable) |		\
+	 __PG_MLOCKED | __PG_UNCACHED | __PG_HWPOISON)
+
+#define hugepage_can_reclaim(page) \
+	(PageAnon(page) && !PageKsm(page) && \
+		!(page->flags & THP_RECLAIM_FLAG_CHECK))
+
+#define hr_list_to_page(head) \
+	(list_entry((head)->prev, struct page, hugepage_reclaim_list) - 3)
+
+static inline struct mem_cgroup *hr_queue_to_memcg(struct hugepage_reclaim *hq)
+{
+	return container_of(hq, struct mem_cgroup_per_node,
+			    hugepage_reclaim_queue)->memcg;
+}
+
+/*
+ * tr_get_hugepage - get one huge page from huge page reclaim queue
+ *
+ * Return -EINVAL if the queue is empty; otherwise, return 0.
+ * If the queue is not empty, it will check whether the tail page of the
+ * queue can be reclaimed or not. If the page can be reclaimed, it will
+ * be stored in reclaim_page; otherwise, just delete the page from the
+ * queue.
+ */
+int tr_get_hugepage(struct hugepage_reclaim *hr_queue, struct page **reclaim,
+		    int threshold, unsigned long time)
+{
+	struct page *page;
+	unsigned long flags;
+	int ret = 0;
+
+	if (!spin_trylock_irqsave(&hr_queue->reclaim_queue_lock, flags))
+		return ret;
+
+	if (list_empty(&hr_queue->reclaim_queue)) {
+		ret = -EINVAL;
+		goto unlock;
+	}
+
+	page = hr_list_to_page(&hr_queue->reclaim_queue);
+
+	if (time && tr_hugepage_time(page) > time) {
+		ret = -EINVAL;
+		goto unlock;
+	}
+
+	list_del_init(hugepage_reclaim_list(page));
+	hr_queue->queue_length--;
+
+	if (!hugepage_can_reclaim(page) || !get_page_unless_zero(page))
+		goto unlock;
+
+	if (!trylock_page(page)) {
+		put_page(page);
+		goto unlock;
+	}
+
+	spin_unlock_irqrestore(&hr_queue->reclaim_queue_lock, flags);
+
+	if (hugepage_can_reclaim(page) &&
+	    tr_hugepage_estimate_zero(page, threshold) &&
+	    !isolate_lru_page(page)) {
+		__mod_node_page_state(page_pgdat(page), NR_ISOLATED_ANON,
+				      HPAGE_PMD_NR);
+		/* dec the reference added in isolate_lru_page */
+		page_ref_dec(page);
+		*reclaim = page;
+	} else {
+		unlock_page(page);
+		put_page(page);
+	}
+
+	return ret;
+unlock:
+	spin_unlock_irqrestore(&hr_queue->reclaim_queue_lock, flags);
+	return ret;
+}
+
+unsigned long tr_reclaim_hugepage(struct hugepage_reclaim *hr_queue,
+				  struct lruvec *lruvec, struct page *page)
+{
+	struct pglist_data *pgdat = page_pgdat(page);
+	struct mem_cgroup *memcg = hr_queue_to_memcg(hr_queue);
+	unsigned long reclaimed;
+	unsigned long flags;
+	LIST_HEAD(split_list);
+	LIST_HEAD(keep_list);
+	int nid = pgdat->node_id;
+
+	/*
+	 * Split the huge page and reclaim the zero subpages.
+	 * And putback the non-zero subpages to the lru list.
+	 */
+	if (split_huge_page_to_list(page, &split_list)) {
+		unlock_page(page);
+		putback_lru_page(page);
+		mod_node_page_state(pgdat, NR_ISOLATED_ANON, -HPAGE_PMD_NR);
+		atomic_long_inc(&hr_queue->split_failed);
+		do {
+			hr_queue = &memcg->nodeinfo[nid]->hugepage_reclaim_queue;
+			atomic_long_inc(&hr_queue->total_split_failed);
+		} while (!mem_cgroup_is_root(memcg) &&
+			 (memcg = parent_mem_cgroup(memcg)));
+
+		return 0;
+	}
+
+	unlock_page(page);
+	list_add_tail(&page->lru, &split_list);
+	reclaimed = tr_reclaim_zero_subpages(&split_list, &keep_list);
+	atomic_long_inc(&hr_queue->split_hugepage);
+	atomic_long_add(reclaimed, &hr_queue->reclaim_subpage);
+	do {
+		hr_queue = &memcg->nodeinfo[nid]->hugepage_reclaim_queue;
+		atomic_long_inc(&hr_queue->total_split_hugepage);
+		atomic_long_add(reclaimed, &hr_queue->total_reclaim_subpage);
+	} while (!mem_cgroup_is_root(memcg) &&
+		 (memcg = parent_mem_cgroup(memcg)));
+
+	spin_lock_irqsave(&lruvec->lru_lock, flags);
+	move_pages_to_lru(lruvec, &keep_list);
+	spin_unlock_irqrestore(&lruvec->lru_lock, flags);
+	mod_node_page_state(pgdat, NR_ISOLATED_ANON, -HPAGE_PMD_NR);
+
+	mem_cgroup_uncharge_list(&keep_list);
+	free_unref_page_list(&keep_list);
+
+	return reclaimed;
+}
+
+/*
+ * Trigger the memcg reclaim.
+ * The huge page allocated before @time will be handled.
+ * @scan is the limit numbers of huge page can be handled.
+ * If @scan is 0, it means there is no limit.
+ */
+void __tr_reclaim_memcg(struct mem_cgroup *memcg, unsigned long time,
+			unsigned int scan, bool proactive)
+{
+	struct lruvec *lruvec;
+	struct hugepage_reclaim *hr_queue;
+	int threshold, nid;
+	int nr_to_scan = scan;
+
+	if (tr_get_reclaim_mode(memcg) != THP_RECLAIM_ZSR)
+		return;
+
+	threshold = READ_ONCE(memcg->tr_ctrl.threshold);
+	for_each_online_node(nid) {
+		lruvec = mem_cgroup_lruvec(memcg, NODE_DATA(nid));
+		hr_queue = &memcg->nodeinfo[nid]->hugepage_reclaim_queue;
+		for ( ; ; ) {
+			struct page *page = NULL;
+
+			cond_resched();
+
+			if (proactive &&
+			    (!READ_ONCE(thp_reclaim_proactive) ||
+			     !READ_ONCE(memcg->tr_ctrl.proactive)))
+				break;
+
+			if (scan && nr_to_scan == 0)
+				break;
+
+			if (tr_get_hugepage(hr_queue, &page, threshold, time))
+				break;
+
+			if (!page)
+				continue;
+
+			if (scan)
+				nr_to_scan--;
+
+			tr_reclaim_hugepage(hr_queue, lruvec, page);
+		}
+	}
+}
+
+static int __init setup_thp_reclaim(char *str)
+{
+	int ret = -1;
+
+	if (!str)
+		goto out;
+
+	if (!strcmp(str, "reclaim"))
+		global_thp_reclaim = THP_RECLAIM_ZSR;
+	else if (!strcmp(str, "swap"))
+		global_thp_reclaim = THP_RECLAIM_SWAP;
+	else if (!strcmp(str, "disable"))
+		global_thp_reclaim = THP_RECLAIM_DISABLE;
+	else if (!strcmp(str, "memcg"))
+		global_thp_reclaim = THP_RECLAIM_MEMCG;
+	else
+		goto out;
+	ret = 0;
+out:
+	if (ret)
+		pr_warn("tr= cannot parse, ignored\n");
+	return !ret;
+}
+__setup("tr=", setup_thp_reclaim);
+
+static void thp_reclaim_proactive_func(struct work_struct *work)
+{
+	struct mem_cgroup *memcg;
+	unsigned long time;
+	unsigned int scan;
+
+	if (READ_ONCE(global_thp_reclaim) == THP_RECLAIM_DISABLE)
+		goto resched;
+
+	scan = READ_ONCE(thp_reclaim_proactive_scan);
+	time = jiffies - msecs_to_jiffies(thp_reclaim_proactive_sleep_ms);
+	memcg = mem_cgroup_iter(NULL, NULL, NULL);
+	do {
+		if (READ_ONCE(memcg->tr_ctrl.proactive))
+			__tr_reclaim_memcg(memcg, time, scan, true);
+
+		if (!READ_ONCE(thp_reclaim_proactive))
+			break;
+	} while ((memcg = mem_cgroup_iter(NULL, memcg, NULL)));
+
+resched:
+	schedule_delayed_work(&thp_reclaim_proactive_dwork,
+		msecs_to_jiffies(thp_reclaim_proactive_sleep_ms));
 }
 #endif
