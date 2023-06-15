@@ -225,6 +225,21 @@ static __always_inline void smc_inet_sock_init_accompany_socket(struct sock *sk)
 #define SMC_REQSK_SMC	0x01
 #define SMC_REQSK_TCP	0x02
 
+static inline bool smc_inet_sock_is_under_presure(const struct sock *sk)
+{
+	return READ_ONCE(smc_sk(sk)->under_presure);
+}
+
+static inline void smc_inet_sock_under_presure(struct sock *sk)
+{
+	WRITE_ONCE(smc_sk(sk)->under_presure, 1);
+}
+
+static inline void smc_inet_sock_leave_presure(struct sock *sk)
+{
+	WRITE_ONCE(smc_sk(sk)->under_presure, 0);
+}
+
 /* This function initializes the inet related structures.
  * If initialization is successful, it returns 0;
  * otherwise, it returns a non-zero value.

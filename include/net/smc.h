@@ -309,6 +309,7 @@ struct smc_sock {				/* smc sock container */
 	spinlock_t		accept_q_lock;	/* protects accept_q */
 	bool			limit_smc_hs;	/* put constraint on handshake */
 	bool			use_fallback;	/* fallback to tcp */
+	bool			under_presure;	/* under presure */
 	int			fallback_rsn;	/* reason for fallback */
 	u32			peer_diagnosis; /* decline reason from peer */
 	atomic_t                queued_smc_hs;  /* queued smc handshakes */
