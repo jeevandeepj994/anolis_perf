@@ -2695,7 +2695,12 @@ static int io_do_iopoll(struct io_ring_ctx *ctx, unsigned int *nr_events,
 		if (!list_empty(&done))
 			break;
 
-		ret = kiocb->ki_filp->f_op->iopoll(kiocb, spin);
+		if (req->opcode == IORING_OP_URING_CMD) {
+			struct io_uring_cmd *ioucmd = &req->uring_cmd;
+
+			ret = req->file->f_op->uring_cmd_iopoll(ioucmd);
+		} else
+			ret = kiocb->ki_filp->f_op->iopoll(kiocb, spin);
 		if (ret < 0)
 			break;
 
@@ -4017,7 +4022,12 @@ void io_uring_cmd_done(struct io_uring_cmd *ioucmd, ssize_t ret, ssize_t res2)
 		req_set_fail_links(req);
 	if (req->ctx->flags & IORING_SETUP_CQE32)
 		io_req_set_cqe32_extra(req, res2, 0);
-	io_req_complete(req, ret);
+	if (req->ctx->flags & IORING_SETUP_IOPOLL) {
+		/* order with io_poll_complete() checking ->result */
+		smp_wmb();
+		WRITE_ONCE(req->iopoll_completed, 1);
+	} else
+		io_req_complete(req, ret);
 }
 EXPORT_SYMBOL_GPL(io_uring_cmd_done);
 
@@ -4050,11 +4060,20 @@ static int io_uring_cmd(struct io_kiocb *req, unsigned int issue_flags)
 	struct file *file = req->file;
 	int ret;
 
-	if (!req->file->f_op->uring_cmd)
+	if ((!req->file->f_op->uring_cmd) ||
+		(ctx->flags & IORING_SETUP_IOPOLL &&
+		!req->file->f_op->uring_cmd_iopoll))
 		return -EOPNOTSUPP;
 
 	if (ctx->flags & IORING_SETUP_SQE128)
 		issue_flags |= IO_URING_F_SQE128;
+	if (ctx->flags & IORING_SETUP_CQE32)
+		issue_flags |= IO_URING_F_CQE32;
+	if (ctx->flags & IORING_SETUP_IOPOLL) {
+		issue_flags |= IO_URING_F_IOPOLL;
+		req->iopoll_completed = 0;
+		WRITE_ONCE(ioucmd->cookie, NULL);
+	}
 
 	if (req->async_data)
 		ioucmd->cmd = req->async_data;

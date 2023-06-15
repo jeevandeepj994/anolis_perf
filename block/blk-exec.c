@@ -30,6 +30,16 @@ static void blk_end_sync_rq(struct request *rq, blk_status_t error)
 	complete(waiting);
 }
 
+bool blk_rq_is_poll(struct request *rq)
+{
+	if (!rq->mq_hctx)
+		return false;
+	if (rq->mq_hctx->type != HCTX_TYPE_POLL)
+		return false;
+	return true;
+}
+EXPORT_SYMBOL_GPL(blk_rq_is_poll);
+
 /**
  * blk_execute_rq_nowait - insert a request into queue for execution
  * @q:		queue to insert the request in
