@@ -380,9 +380,13 @@ static int smc_nl_fill_lgr_link(struct smc_link_group *lgr,
 				struct netlink_callback *cb)
 {
 	char smc_ibname[IB_DEVICE_NAME_MAX];
+	struct smc_link_stats *lnk_stats;
+	struct smc_link_ib_stats *stats;
 	u8 smc_gid_target[41];
 	struct nlattr *attrs;
 	u32 link_uid = 0;
+	int cpu, i, size;
+	u64 *src, *sum;
 	void *nlh;
 
 	nlh = genlmsg_put(skb, NETLINK_CB(cb->skb).portid, cb->nlh->nlmsg_seq,
@@ -423,10 +427,43 @@ static int smc_nl_fill_lgr_link(struct smc_link_group *lgr,
 	smc_gid_be16_convert(smc_gid_target, link->peer_gid);
 	if (nla_put_string(skb, SMC_NLA_LINK_PEER_GID, smc_gid_target))
 		goto errattr;
+	lnk_stats = &lgr->lnk_stats[link->link_idx];
+	stats = kzalloc(sizeof(*stats), GFP_KERNEL);
+	if (!stats)
+		goto errattr;
+	size = sizeof(*stats) / sizeof(u64);
+	for_each_possible_cpu(cpu) {
+		src = (u64 *)per_cpu_ptr(lnk_stats->ib_stats, cpu);
+		sum = (u64 *)stats;
+		for (i = 0; i < size; i++)
+			*(sum++) += *(src++);
+	}
+	if (nla_put_u32(skb, SMC_NLA_LINK_QPN, lnk_stats->qpn))
+		goto errstats;
+	if (nla_put_u32(skb, SMC_NLA_LINK_PEER_QPN, lnk_stats->peer_qpn))
+		goto errstats;
+	if (nla_put_u64_64bit(skb, SMC_NLA_LINK_SWR_CNT,
+			      stats->s_wr_cnt, SMC_NLA_LINK_UNSPEC))
+		goto errstats;
+	if (nla_put_u64_64bit(skb, SMC_NLA_LINK_SWC_CNT,
+			      stats->s_wc_cnt, SMC_NLA_LINK_UNSPEC))
+		goto errstats;
+	if (nla_put_u64_64bit(skb, SMC_NLA_LINK_RWR_CNT,
+			      stats->r_wr_cnt, SMC_NLA_LINK_UNSPEC))
+		goto errstats;
+	if (nla_put_u64_64bit(skb, SMC_NLA_LINK_RWC_CNT,
+			      stats->r_wc_cnt, SMC_NLA_LINK_UNSPEC))
+		goto errstats;
+	if (nla_put_u64_64bit(skb, SMC_NLA_LINK_WWC_CNT,
+			      stats->rw_wc_cnt, SMC_NLA_LINK_UNSPEC))
+		goto errstats;
 
 	nla_nest_end(skb, attrs);
 	genlmsg_end(skb, nlh);
+	kfree(stats);
 	return 0;
+errstats:
+	kfree(stats);
 errattr:
 	nla_nest_cancel(skb, attrs);
 errout:
@@ -455,7 +492,7 @@ static int smc_nl_handle_lgr(struct smc_link_group *lgr,
 	if (!list_links)
 		goto out;
 	for (i = 0; i < SMC_LINKS_PER_LGR_MAX; i++) {
-		if (!smc_link_usable(&lgr->lnk[i]))
+		if (lgr->lnk[i].state == SMC_LNK_UNUSED)
 			continue;
 		if (smc_nl_fill_lgr_link(lgr, &lgr->lnk[i], skb, cb))
 			goto errout;
@@ -480,7 +517,7 @@ static void smc_nl_fill_lgr_list(struct smc_lgr_list *smc_lgr,
 	int num = 0;
 
 	spin_lock_bh(&smc_lgr->lock);
-	list_for_each_entry(lgr, &smc_lgr->list, list) {
+	list_for_each_entry(lgr, &smc_lgr->list, stats_list) {
 		if (num < snum)
 			goto next;
 		if (smc_nl_handle_lgr(lgr, skb, cb, list_links))
@@ -610,7 +647,7 @@ int smcr_nl_get_lgr(struct sk_buff *skb, struct netlink_callback *cb)
 {
 	bool list_links = false;
 
-	smc_nl_fill_lgr_list(&smc_lgr_list, skb, cb, list_links);
+	smc_nl_fill_lgr_list(&smc_lgr_stats_list, skb, cb, list_links);
 	return skb->len;
 }
 
@@ -618,7 +655,7 @@ int smcr_nl_get_link(struct sk_buff *skb, struct netlink_callback *cb)
 {
 	bool list_links = true;
 
-	smc_nl_fill_lgr_list(&smc_lgr_list, skb, cb, list_links);
+	smc_nl_fill_lgr_list(&smc_lgr_stats_list, skb, cb, list_links);
 	return skb->len;
 }
 
@@ -732,6 +769,50 @@ static void smcr_copy_dev_info_to_link(struct smc_link *link)
 	snprintf(link->ibname, sizeof(link->ibname), "%s",
 		 smcibdev->ibdev->name);
 	link->ndev_ifidx = smcibdev->ndev_ifidx[link->ibport - 1];
+}
+
+int smcr_iw_net_reserve_ports(struct net *net)
+{
+	int ports_base = rsvd_ports_base;
+	struct sockaddr_in laddr;
+	int rc = 0, i, j;
+
+	for (i = 0; i < SMC_IWARP_RSVD_PORTS_NUM; i++) {
+		rc = __sock_create(net, AF_INET, SOCK_STREAM, IPPROTO_TCP,
+				   &net->smc.rsvd_sock[i], 1);
+		if (rc < 0)
+			goto release;
+		memset(&laddr, 0, sizeof(laddr));
+		laddr.sin_port = htons(ports_base + i);
+		/* keep the rsvd ports */
+		rc = kernel_bind(net->smc.rsvd_sock[i], (struct sockaddr *)&laddr,
+				 sizeof(struct sockaddr_in));
+		if (rc) {
+			sock_release(net->smc.rsvd_sock[i]);
+			net->smc.rsvd_sock[i] = NULL;
+			goto release;
+		}
+	}
+	pr_info_ratelimited("smc: netns %pK reserved ports for eRDMA OOB\n", net);
+	return 0;
+
+release:
+	for (j = 0; j < i; j++) {
+		sock_release(net->smc.rsvd_sock[j]);
+		net->smc.rsvd_sock[j] = NULL;
+	}
+	return rc;
+}
+
+void smcr_iw_net_release_ports(struct net *net)
+{
+	int i;
+
+	for (i = 0; i < SMC_IWARP_RSVD_PORTS_NUM; i++) {
+		sock_release(net->smc.rsvd_sock[i]);
+		net->smc.rsvd_sock[i] = NULL;
+	}
+	pr_info_ratelimited("smc: netns %pK released ports used by eRDMA OOB\n", net);
 }
 
 static void smcr_link_iw_extension(struct iw_ext_conn_param *iw_param, struct sock *clcsk)
@@ -914,9 +995,13 @@ static int smc_lgr_create(struct smc_sock *smc, struct smc_init_info *ini)
 		}
 		memcpy(lgr->pnet_id, ibdev->pnetid[ibport - 1],
 		       SMC_MAX_PNETID_LEN);
-		rc = smc_wr_alloc_lgr_mem(lgr);
+
+		rc = smc_lgr_link_stats_init(lgr);
 		if (rc)
 			goto free_wq;
+		rc = smc_wr_alloc_lgr_mem(lgr);
+		if (rc)
+			goto free_stats;
 		smc_llc_lgr_init(lgr, smc);
 
 		link_idx = SMC_SINGLE_LINK;
@@ -926,7 +1011,7 @@ static int smc_lgr_create(struct smc_sock *smc, struct smc_init_info *ini)
 		rc = smcr_link_init(lgr, lnk, link_idx, ini);
 		if (rc) {
 			smc_wr_free_lgr_mem(lgr);
-			goto free_wq;
+			goto free_stats;
 		}
 		lgr->net = smc_ib_net(lnk->smcibdev);
 		lgr_list = &smc_lgr_list.list;
@@ -940,6 +1025,9 @@ static int smc_lgr_create(struct smc_sock *smc, struct smc_init_info *ini)
 	spin_unlock_bh(lgr_lock);
 	return 0;
 
+free_stats:
+	if (!ini->is_smcd)
+		smc_lgr_link_stats_free(lgr);
 free_wq:
 	destroy_workqueue(lgr->tx_wq);
 free_lgr:
@@ -1140,8 +1228,9 @@ static void smcr_buf_unuse(struct smc_buf_desc *buf_desc, bool is_rmb,
 
 		smc_buf_free(lgr, is_rmb, buf_desc);
 	} else {
-		/* memzero_explicit provides potential memory barrier semantics */
-		memzero_explicit(buf_desc->cpu_addr, buf_desc->len);
+		if (is_rmb)
+			/* memzero_explicit provides potential memory barrier semantics */
+			memzero_explicit(buf_desc->cpu_addr, buf_desc->len);
 		WRITE_ONCE(buf_desc->used, 0);
 	}
 }
@@ -1153,7 +1242,6 @@ static void smc_buf_unuse(struct smc_connection *conn,
 		if (!lgr->is_smcd && conn->sndbuf_desc->is_vm) {
 			smcr_buf_unuse(conn->sndbuf_desc, false, lgr);
 		} else {
-			memzero_explicit(conn->sndbuf_desc->cpu_addr, conn->sndbuf_desc->len);
 			WRITE_ONCE(conn->sndbuf_desc->used, 0);
 		}
 	}
@@ -1268,10 +1356,14 @@ static void __smcr_link_clear(struct smc_link *lnk)
 	struct smc_link_group *lgr = lnk->lgr;
 	struct smc_ib_device *smcibdev;
 
+	smcr_buf_unmap_lgr(lnk);
+	smc_ib_destroy_queue_pair(lnk);
+	smc_ib_dealloc_protection_domain(lnk);
 	smc_wr_free_link_mem(lnk);
 	smc_ibdev_cnt_dec(lnk);
 	put_device(&lnk->smcibdev->ibdev->dev);
 	smcibdev = lnk->smcibdev;
+	smcr_link_stats_clear(lnk);
 	memset(lnk, 0, sizeof(struct smc_link));
 	lnk->state = SMC_LNK_UNUSED;
 	if (!atomic_dec_return(&smcibdev->lnk_cnt))
@@ -1288,12 +1380,9 @@ void smcr_link_clear(struct smc_link *lnk, bool log)
 	lnk->clearing = 1;
 	lnk->peer_qpn = 0;
 	smc_llc_link_clear(lnk, log);
-	smcr_buf_unmap_lgr(lnk);
 	smcr_rtoken_clear_link(lnk);
 	smc_ib_modify_qp_error(lnk);
 	smc_wr_free_link(lnk);
-	smc_ib_destroy_queue_pair(lnk);
-	smc_ib_dealloc_protection_domain(lnk);
 	smcr_link_put(lnk); /* theoretically last link_put */
 }
 
@@ -1313,8 +1402,11 @@ static void smcr_buf_free(struct smc_link_group *lgr, bool is_rmb,
 {
 	int i;
 
-	for (i = 0; i < SMC_LINKS_PER_LGR_MAX; i++)
+	for (i = 0; i < SMC_LINKS_PER_LGR_MAX; i++) {
+		if (lgr->lnk[i].state == SMC_LNK_UNUSED)
+			continue;
 		smcr_buf_unmap_link(buf_desc, is_rmb, &lgr->lnk[i]);
+	}
 
 	if (!buf_desc->is_vm && buf_desc->pages)
 		__free_pages(buf_desc->pages, buf_desc->order);
@@ -1384,6 +1476,8 @@ static void __smc_lgr_free(struct smc_link_group *lgr)
 		if (!atomic_dec_return(&lgr_cnt))
 			wake_up(&lgrs_deleted);
 	}
+	if (!lgr->is_smcd)
+		smc_lgr_link_stats_free(lgr);
 	kfree(lgr);
 }
 

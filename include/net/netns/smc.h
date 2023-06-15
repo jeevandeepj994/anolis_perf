@@ -4,6 +4,8 @@
 #include <linux/mutex.h>
 #include <linux/percpu.h>
 
+#define SMC_IWARP_RSVD_PORTS_NUM	16 /* must be 16 */
+
 struct smc_stats_rsn;
 struct smc_stats;
 struct netns_smc {
@@ -12,8 +14,9 @@ struct netns_smc {
 	/* protect fback_rsn */
 	struct mutex			mutex_fback_rsn;
 	struct smc_stats_rsn		*fback_rsn;
-
-	bool				limit_smc_hs;	/* constraint on handshake */
+	int				limit_smc_hs;	/* constraint on handshake */
+	atomic_t			iwarp_cnt;
+	struct socket			*rsvd_sock[SMC_IWARP_RSVD_PORTS_NUM];
 #ifdef CONFIG_SYSCTL
 	struct ctl_table_header		*smc_hdr;
 #endif
@@ -22,5 +25,6 @@ struct netns_smc {
 	int				sysctl_smcr_testlink_time;
 	int				sysctl_wmem;
 	int				sysctl_rmem;
+	int				sysctl_tcp2smc;
 };
 #endif

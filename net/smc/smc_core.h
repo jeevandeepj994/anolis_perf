@@ -20,6 +20,7 @@
 
 #include "smc.h"
 #include "smc_ib.h"
+#include "smc_stats.h"
 
 #define SMC_RMBS_PER_LGR_MAX	255	/* max. # of RMBs per link group */
 
@@ -87,6 +88,7 @@ struct smc_link {
 	struct ib_pd		*roce_pd;	/* IB protection domain,
 						 * unique for every RoCE QP
 						 */
+	struct smc_ib_cq	*smcibcq;	/* cq for recv & send */
 	struct ib_qp		*roce_qp;	/* IB queue pair */
 	struct ib_qp_attr	qp_attr;	/* IB queue pair attributes */
 
@@ -117,7 +119,6 @@ struct smc_link {
 	struct ib_sge		*wr_rx_sges;	/* WR recv scatter meta data */
 	/* above three vectors have wr_rx_cnt elements and use the same index */
 	dma_addr_t		wr_rx_dma_addr;	/* DMA address of wr_rx_bufs */
-	dma_addr_t		wr_rx_v2_dma_addr; /* DMA address of v2 rx buf*/
 	u64			wr_rx_id;	/* seq # of last recv WR */
 	u32			wr_rx_cnt;	/* number of WR recv buffers */
 	unsigned long		wr_rx_tstamp;	/* jiffies when last buf rx */
@@ -251,6 +252,7 @@ struct smc_llc_flow {
 
 struct smc_link_group {
 	struct list_head	list;
+	struct list_head	stats_list;
 	struct rb_root		conns_all;	/* connection tree */
 	rwlock_t		conns_lock;	/* protects conns_all */
 	unsigned int		conns_num;	/* current # of connections */
@@ -282,8 +284,8 @@ struct smc_link_group {
 						/* client or server */
 			struct smc_link		lnk[SMC_LINKS_PER_LGR_MAX];
 						/* smc link */
-			struct smc_wr_v2_buf	*wr_rx_buf_v2;
-						/* WR v2 recv payload buffer */
+			struct smc_link_stats	lnk_stats[SMC_LINKS_PER_LGR_MAX];
+						/* smc link statistics */
 			struct smc_wr_v2_buf	*wr_tx_buf_v2;
 						/* WR v2 send payload buffer */
 			char			peer_systemid[SMC_SYSTEMID_LEN];
@@ -559,6 +561,8 @@ struct smc_link *smc_switch_conns(struct smc_link_group *lgr,
 				  struct smc_link *from_lnk, bool is_dev_err);
 void smcr_link_down_cond(struct smc_link *lnk);
 void smcr_link_down_cond_sched(struct smc_link *lnk);
+int smcr_iw_net_reserve_ports(struct net *net);
+void smcr_iw_net_release_ports(struct net *net);
 int smc_nl_get_sys_info(struct sk_buff *skb, struct netlink_callback *cb);
 int smcr_nl_get_lgr(struct sk_buff *skb, struct netlink_callback *cb);
 int smcr_nl_get_link(struct sk_buff *skb, struct netlink_callback *cb);
@@ -567,5 +571,20 @@ int smcd_nl_get_lgr(struct sk_buff *skb, struct netlink_callback *cb);
 static inline struct smc_link_group *smc_get_lgr(struct smc_link *link)
 {
 	return link->lgr;
+}
+
+static inline void smcr_link_stats_clear(struct smc_link *link)
+{
+	struct smc_link_group *lgr = link->lgr;
+	struct smc_link_stats *lnk_stats;
+	int cpu;
+
+	lnk_stats = &lgr->lnk_stats[link->link_idx];
+	lnk_stats->qpn = 0;
+	lnk_stats->peer_qpn = 0;
+	for_each_possible_cpu(cpu) {
+		memset((u64 *)per_cpu_ptr(lnk_stats->ib_stats, cpu), 0,
+		       sizeof(struct smc_link_ib_stats));
+	}
 }
 #endif

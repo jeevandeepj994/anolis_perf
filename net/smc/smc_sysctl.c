@@ -63,6 +63,22 @@ static struct ctl_table smc_table[] = {
 		.proc_handler	= proc_dointvec_minmax,
 		.extra1		= &min_rcvbuf,
 	},
+	{
+		.procname	= "tcp2smc",
+		.data		= &init_net.smc.sysctl_tcp2smc,
+		.maxlen		= sizeof(init_net.smc.sysctl_tcp2smc),
+		.mode		= 0644,
+		.proc_handler	= proc_dointvec,
+	},
+	{
+		.procname       = "limit_handshake",
+		.data           = &init_net.smc.limit_smc_hs,
+		.maxlen         = sizeof(init_net.smc.limit_smc_hs),
+		.mode           = 0644,
+		.proc_handler   = proc_dointvec_minmax,
+		.extra1         = SYSCTL_ZERO,
+		.extra2         = SYSCTL_ONE,
+	},
 	{  }
 };
 
@@ -89,8 +105,9 @@ int __net_init smc_sysctl_net_init(struct net *net)
 	net->smc.sysctl_autocorking_size = SMC_AUTOCORKING_DEFAULT_SIZE;
 	net->smc.sysctl_smcr_buf_type = SMCR_PHYS_CONT_BUFS;
 	net->smc.sysctl_smcr_testlink_time = SMC_LLC_TESTLINK_DEFAULT_TIME;
-	WRITE_ONCE(net->smc.sysctl_wmem, READ_ONCE(net->ipv4.sysctl_tcp_wmem[1]));
-	WRITE_ONCE(net->smc.sysctl_rmem, READ_ONCE(net->ipv4.sysctl_tcp_rmem[1]));
+	net->smc.sysctl_wmem = 262144; /* 256 KiB */
+	net->smc.sysctl_rmem = 262144; /* 256 KiB */
+	net->smc.sysctl_tcp2smc = 0;
 	return 0;
 
 err_reg:
