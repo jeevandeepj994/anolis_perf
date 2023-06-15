@@ -576,7 +576,10 @@ static struct smc_buf_desc *smc_llc_get_next_rmb(struct smc_link_group *lgr,
 {
 	struct smc_buf_desc *buf_next;
 
-	if (!buf_pos || list_is_last(&buf_pos->list, &lgr->rmbs[*buf_lst])) {
+	if (!buf_pos)
+		return _smc_llc_get_next_rmb(lgr, buf_lst);
+
+	if (list_is_last(&buf_pos->list, &lgr->rmbs[*buf_lst])) {
 		(*buf_lst)++;
 		return _smc_llc_get_next_rmb(lgr, buf_lst);
 	}
@@ -612,6 +615,8 @@ static int smc_llc_fill_ext_v2(struct smc_llc_msg_add_link_v2_ext *ext,
 		goto out;
 	buf_pos = smc_llc_get_first_rmb(lgr, &buf_lst);
 	for (i = 0; i < ext->num_rkeys; i++) {
+		while (buf_pos && !(buf_pos)->used)
+			buf_pos = smc_llc_get_next_rmb(lgr, &buf_lst, buf_pos);
 		if (!buf_pos)
 			break;
 		rmb = buf_pos;
@@ -621,8 +626,6 @@ static int smc_llc_fill_ext_v2(struct smc_llc_msg_add_link_v2_ext *ext,
 			cpu_to_be64((uintptr_t)rmb->cpu_addr) :
 			cpu_to_be64((u64)sg_dma_address(rmb->sgt[lnk_idx].sgl));
 		buf_pos = smc_llc_get_next_rmb(lgr, &buf_lst, buf_pos);
-		while (buf_pos && !(buf_pos)->used)
-			buf_pos = smc_llc_get_next_rmb(lgr, &buf_lst, buf_pos);
 	}
 	len += i * sizeof(ext->rt[0]);
 out:
@@ -846,6 +849,8 @@ static int smc_llc_add_link_cont(struct smc_link *link,
 	addc_llc->num_rkeys = *num_rkeys_todo;
 	n = *num_rkeys_todo;
 	for (i = 0; i < min_t(u8, n, SMC_LLC_RKEYS_PER_CONT_MSG); i++) {
+		while (*buf_pos && !(*buf_pos)->used)
+			*buf_pos = smc_llc_get_next_rmb(lgr, buf_lst, *buf_pos);
 		if (!*buf_pos) {
 			addc_llc->num_rkeys = addc_llc->num_rkeys -
 					      *num_rkeys_todo;
@@ -862,8 +867,6 @@ static int smc_llc_add_link_cont(struct smc_link *link,
 
 		(*num_rkeys_todo)--;
 		*buf_pos = smc_llc_get_next_rmb(lgr, buf_lst, *buf_pos);
-		while (*buf_pos && !(*buf_pos)->used)
-			*buf_pos = smc_llc_get_next_rmb(lgr, buf_lst, *buf_pos);
 	}
 	addc_llc->hd.common.llc_type = SMC_LLC_ADD_LINK_CONT;
 	addc_llc->hd.length = sizeof(struct smc_llc_msg_add_link_cont);
@@ -988,14 +991,13 @@ static int smc_llc_cli_conf_link(struct smc_link *link,
 }
 
 static void smc_llc_save_add_link_rkeys(struct smc_link *link,
-					struct smc_link *link_new,
-					void *llc_msg)
+					struct smc_link *link_new)
 {
 	struct smc_llc_msg_add_link_v2_ext *ext;
 	struct smc_link_group *lgr = link->lgr;
 	int max, i;
 
-	ext = (struct smc_llc_msg_add_link_v2_ext *)((u8 *)llc_msg +
+	ext = (struct smc_llc_msg_add_link_v2_ext *)((u8 *)lgr->wr_rx_buf_v2 +
 						     SMC_WR_TX_SIZE);
 	max = min_t(u8, ext->num_rkeys, SMC_LLC_RKEYS_PER_MSG_V2);
 	down_write(&lgr->rmbs_lock);
@@ -1011,11 +1013,7 @@ static void smc_llc_save_add_link_rkeys(struct smc_link *link,
 static void smc_llc_save_add_link_info(struct smc_link *link,
 				       struct smc_llc_msg_add_link *add_llc)
 {
-	struct smc_link_stats *lnk_stats =
-		&link->lgr->lnk_stats[link->link_idx];
-
 	link->peer_qpn = ntoh24(add_llc->sender_qp_num);
-	lnk_stats->peer_qpn = link->peer_qpn;
 	memcpy(link->peer_gid, add_llc->sender_gid, SMC_GID_SIZE);
 	memcpy(link->peer_mac, add_llc->sender_mac, ETH_ALEN);
 	link->peer_psn = ntoh24(add_llc->initial_psn);
@@ -1090,7 +1088,7 @@ int smc_llc_cli_add_link(struct smc_link *link, struct smc_llc_qentry *qentry)
 	if (rc)
 		goto out_clear_lnk;
 	if (lgr->smc_version == SMC_V2) {
-		smc_llc_save_add_link_rkeys(link, lnk_new, (void *)llc);
+		smc_llc_save_add_link_rkeys(link, lnk_new);
 	} else {
 		rc = smc_llc_cli_rkey_exchange(link, lnk_new);
 		if (rc) {
@@ -1483,7 +1481,7 @@ int smc_llc_srv_add_link(struct smc_link *link,
 	if (rc)
 		goto out_err;
 	if (lgr->smc_version == SMC_V2) {
-		smc_llc_save_add_link_rkeys(link, link_new, (void *)add_llc);
+		smc_llc_save_add_link_rkeys(link, link_new);
 	} else {
 		rc = smc_llc_srv_rkey_exchange(link, link_new);
 		if (rc)
@@ -1792,7 +1790,8 @@ static void smc_llc_rmt_delete_rkey(struct smc_link_group *lgr)
 	if (lgr->smc_version == SMC_V2) {
 		struct smc_llc_msg_delete_rkey_v2 *llcv2;
 
-		llcv2 = (struct smc_llc_msg_delete_rkey_v2 *)llc;
+		memcpy(lgr->wr_rx_buf_v2, llc, sizeof(*llc));
+		llcv2 = (struct smc_llc_msg_delete_rkey_v2 *)lgr->wr_rx_buf_v2;
 		llcv2->num_inval_rkeys = 0;
 
 		max = min_t(u8, llcv2->num_rkeys, SMC_LLC_RKEYS_PER_MSG_V2);

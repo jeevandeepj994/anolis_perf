@@ -113,8 +113,8 @@ static int smc_tx_wait(struct smc_sock *smc, int flags)
 			break; /* at least 1 byte of free & no urgent data */
 		set_bit(SOCK_NOSPACE, &sk->sk_socket->flags);
 		sk_wait_event(sk, &timeo,
-			      sk->sk_err ||
-			      (sk->sk_shutdown & SEND_SHUTDOWN) ||
+			      READ_ONCE(sk->sk_err) ||
+			      (READ_ONCE(sk->sk_shutdown) & SEND_SHUTDOWN) ||
 			      smc_cdc_rxed_any_close(conn) ||
 			      (atomic_read(&conn->sndbuf_space) &&
 			       !conn->urg_tx_pend),
@@ -347,12 +347,6 @@ static int smc_tx_rdma_write(struct smc_connection *conn, int peer_rmbe_offset,
 		/* offset within RMBE */
 		peer_rmbe_offset;
 	rdma_wr->rkey = lgr->rtokens[conn->rtoken_idx][link->link_idx].rkey;
-	/* rtoken might be deleted if peer freed connection */
-	if (!rdma_wr->rkey ||
-	    (rdma_wr->remote_addr == (conn->tx_off + peer_rmbe_offset))) {
-		pr_warn_ratelimited("smc: unexpected sends during connection termination flow\n");
-		return -EINVAL;
-	}
 	rc = ib_post_send(link->roce_qp, &rdma_wr->wr, NULL);
 	if (rc)
 		smcr_link_down_cond_sched(link);
