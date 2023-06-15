@@ -280,6 +280,53 @@ static struct proc_ops dim_file_ops = {
 .proc_release  = single_release,
 };
 
+static int proc_show_links(struct seq_file *seq, void *v)
+{
+	struct smc_link_group *lgr, *lg;
+	struct smc_link *lnk;
+	int i = 0, j = 0;
+
+	seq_printf(seq, LINK_HDR_FM, "grp", "type", "role", "mxlnk", "idx",
+		   "mxcon", "gconn", "conn", "state", "qpn_l", "qpn_r", "tx",
+		   "rx", "cr-e", "cr-l", "cr-r", "cr_h", "cr_l", "flags",
+		   "rwwi");
+
+	spin_lock_bh(&smc_lgr_list.lock);
+	list_for_each_entry_safe(lgr, lg, &smc_lgr_list.list, list) {
+		for (i = 0; i < SMC_LINKS_PER_LGR_MAX; i++) {
+			lnk = &lgr->lnk[i];
+			if (!smc_link_usable(lnk))
+				continue;
+			for (j = 0; j < SMC_LGR_ID_SIZE; j++)
+				seq_printf(seq, "%02X", lgr->id[j]);
+			seq_printf(seq, LINK_INFO_FM, lgr->is_smcd ? "D" : "R",
+				   lgr->role == SMC_CLNT ? "C" : "S", lgr->max_links,
+				   i, lgr->max_conns, lgr->conns_num,
+				   atomic_read(&lnk->conn_cnt), lnk->state,
+				   lnk->roce_qp ? lnk->roce_qp->qp_num : 0, lnk->peer_qpn,
+				   lnk->wr_tx_cnt, lnk->wr_rx_cnt, lnk->credits_enable,
+				   atomic_read(&lnk->local_rq_credits),
+				   atomic_read(&lnk->peer_rq_credits),
+				   lnk->local_cr_watermark_high,
+				   lnk->peer_cr_watermark_low, lnk->flags, lgr->use_rwwi);
+		}
+	}
+	spin_unlock_bh(&smc_lgr_list.lock);
+	return 0;
+}
+
+static int proc_open_links(struct inode *inode, struct file *file)
+{
+	single_open(file, proc_show_links, NULL);
+	return 0;
+}
+
+static struct proc_ops link_file_ops = {
+.proc_open     = proc_open_links,
+.proc_read     = seq_read,
+.proc_release  = single_release,
+};
+
 static int __net_init smc_proc_dir_init(struct net *net)
 {
 	struct proc_dir_entry *proc_net_smc;
@@ -297,11 +344,17 @@ static int __net_init smc_proc_dir_init(struct net *net)
 			goto err_entry;
 	}
 
-	if (!proc_create("dim", 0444, proc_net_smc, &dim_file_ops))
+	if (!proc_create("links", 0444, proc_net_smc, &link_file_ops))
 		goto err_entry;
+
+	if (!proc_create("dim", 0444, proc_net_smc, &dim_file_ops))
+		goto err_link;
 
 	net->proc_net_smc = proc_net_smc;
 	return 0;
+
+err_link:
+	remove_proc_entry("links", proc_net_smc);
 
 err_entry:
 	for (i -= 1; i >= 0; i--)
@@ -318,6 +371,7 @@ static void __net_exit smc_proc_dir_exit(struct net *net)
 	struct proc_dir_entry *proc_net_smc = net->proc_net_smc;
 
 	remove_proc_entry("dim", proc_net_smc);
+	remove_proc_entry("links", proc_net_smc);
 
 	for (i = 0; i < ARRAY_SIZE(smc_proc); i++)
 		remove_proc_entry(smc_proc[i].name, proc_net_smc);

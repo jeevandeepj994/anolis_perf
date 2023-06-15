@@ -198,12 +198,25 @@ out:
 
 static int smc_ib_fill_mac(struct smc_ib_device *smcibdev, u8 ibport)
 {
+	struct ib_device *ibdev = smcibdev->ibdev;
 	const struct ib_gid_attr *attr;
+	struct net_device *ndev;
 	int rc;
 
 	attr = rdma_get_gid_attr(smcibdev->ibdev, ibport, 0);
 	if (IS_ERR(attr))
 		return -ENODEV;
+
+	if (smc_ib_is_iwarp(ibdev, ibport)) {
+		if (!ibdev->ops.get_netdev)
+			return -ENODEV;
+		ndev = ibdev->ops.get_netdev(ibdev, ibport);
+		if (!ndev)
+			return -ENODEV;
+		ether_addr_copy(smcibdev->mac[ibport - 1], ndev->dev_addr);
+		dev_put(ndev);
+		return 0;
+	}
 
 	rc = rdma_read_gid_l2_fields(attr, NULL, smcibdev->mac[ibport - 1]);
 	rdma_put_gid_attr(attr);
@@ -269,13 +282,62 @@ static int smc_ib_determine_gid_rcu(const struct net_device *ndev,
 				    u8 gid[], u8 *sgid_index,
 				    struct smc_init_info_smcrv2 *smcrv2)
 {
-	if (!smcrv2) {
+	if (!smcrv2 && attr->gid_type == IB_GID_TYPE_ROCE) {
 		if (gid)
 			memcpy(gid, &attr->gid, SMC_GID_SIZE);
 		if (sgid_index)
 			*sgid_index = attr->index;
 		return 0;
 	}
+
+	/* Note: This is a tricky workaround for eRDMA iWARP.
+	 *
+	 * eRDAM iWARP has only one GID of type IB_GID_TYPE_IB which is
+	 * converted from the MAC address. But RoCEv2 device have GID of
+	 * type IB_GID_TYPE_ROCE_UDP_ENCAP which is converted from the
+	 * IPv4 or IPv6 address. The IPv4 GID is used by SMCRv2 protocol
+	 * to record IPv4 address of peer.
+	 *
+	 * So in order to make SMCRv2 works well with eRDMA iWARP, we
+	 * do not record the real MAC GID of eRDMA iWARP, but convert the
+	 * IPv4 address of the net_device corresponding to eRDMA iWARP
+	 * into an IPv4 GID and record it.
+	 *
+	 * A prerequisite for this is that eRDMA iWARP will only be selected
+	 * for the reason that its corresponding net_device is the net_device
+	 * of clcsock, which means that we are not allowed to bind an eRDMA
+	 * iWARP device with another ethernet device through pnet_id.
+	 */
+	if (smcrv2 && attr->gid_type == IB_GID_TYPE_IB) {
+		struct in_device *in_dev = __in_dev_get_rcu(ndev);
+		const struct in_ifaddr *ifa;
+		bool ip_match = false;
+
+		if (!in_dev || smcrv2->saddr == cpu_to_be32(INADDR_NONE))
+			goto out;
+		in_dev_for_each_ifa_rcu(ifa, in_dev) {
+			if (ifa->ifa_address != smcrv2->saddr)
+				continue;
+			ip_match = true;
+			break;
+		}
+		if (!ip_match)
+			goto out;
+		if (smcrv2->daddr && smc_ib_find_route(smcrv2->saddr,
+						       smcrv2->daddr,
+						       smcrv2->nexthop_mac,
+						       &smcrv2->uses_gateway))
+			goto out;
+
+		if (gid)
+			ipv6_addr_set_v4mapped(smcrv2->saddr, (struct in6_addr *)gid);
+		if (sgid_index)
+			*sgid_index = attr->index;
+
+		memcpy(smcrv2->eiwarp_gid, &attr->gid, SMC_GID_SIZE);
+		return 0;
+	}
+
 	if (smcrv2 && attr->gid_type == IB_GID_TYPE_ROCE_UDP_ENCAP &&
 	    smc_ib_gid_to_ipv4((u8 *)&attr->gid) != cpu_to_be32(INADDR_NONE)) {
 		struct in_device *in_dev = __in_dev_get_rcu(ndev);
@@ -313,29 +375,40 @@ int smc_ib_determine_gid(struct smc_ib_device *smcibdev, u8 ibport,
 			 unsigned short vlan_id, u8 gid[], u8 *sgid_index,
 			 struct smc_init_info_smcrv2 *smcrv2)
 {
+	struct ib_device *ibdev = smcibdev->ibdev;
 	const struct ib_gid_attr *attr;
 	const struct net_device *ndev;
+	bool iwarp_ndev = false;
 	int i;
 
+	iwarp_ndev = smc_ib_is_iwarp(ibdev, ibport) && ibdev->ops.get_netdev;
+
 	for (i = 0; i < smcibdev->pattr[ibport - 1].gid_tbl_len; i++) {
-		attr = rdma_get_gid_attr(smcibdev->ibdev, ibport, i);
+		attr = rdma_get_gid_attr(ibdev, ibport, i);
 		if (IS_ERR(attr))
 			continue;
 
 		rcu_read_lock();
-		ndev = rdma_read_gid_attr_ndev_rcu(attr);
-		if (smc_ib_is_iwarp(smcibdev->ibdev, ibport) ||
-		    (!IS_ERR(ndev) &&
+		if (iwarp_ndev)
+			ndev = ibdev->ops.get_netdev(ibdev, ibport);
+		else
+			ndev = rdma_read_gid_attr_ndev_rcu(attr);
+
+		if (ndev && !IS_ERR(ndev) &&
 		    ((!vlan_id && !is_vlan_dev(ndev)) ||
 		     (vlan_id && is_vlan_dev(ndev) &&
-		      vlan_dev_vlan_id(ndev) == vlan_id)))) {
+		      vlan_dev_vlan_id(ndev) == vlan_id))) {
 			if (!smc_ib_determine_gid_rcu(ndev, attr, gid,
 						      sgid_index, smcrv2)) {
+				if (iwarp_ndev)
+					dev_put((struct net_device *)ndev);
 				rcu_read_unlock();
 				rdma_put_gid_attr(attr);
 				return 0;
 			}
 		}
+		if (ndev && iwarp_ndev)
+			dev_put((struct net_device *)ndev);
 		rcu_read_unlock();
 		rdma_put_gid_attr(attr);
 	}
@@ -356,7 +429,9 @@ static bool smc_ib_check_link_gid(u8 gid[SMC_GID_SIZE], bool smcrv2,
 			continue;
 
 		rcu_read_lock();
-		if ((!smcrv2 && attr->gid_type == IB_GID_TYPE_ROCE) ||
+		if ((smcrv2 && attr->gid_type == IB_GID_TYPE_IB &&
+		     smc_ib_is_iwarp(smcibdev->ibdev, ibport)) ||
+		    (!smcrv2 && attr->gid_type == IB_GID_TYPE_ROCE) ||
 		    (smcrv2 && attr->gid_type == IB_GID_TYPE_ROCE_UDP_ENCAP &&
 		     !(ipv6_addr_type((const struct in6_addr *)&attr->gid)
 				     & IPV6_ADDR_LINKLOCAL)))
@@ -371,6 +446,7 @@ static bool smc_ib_check_link_gid(u8 gid[SMC_GID_SIZE], bool smcrv2,
 /* check all links if the gid is still defined on smcibdev */
 static void smc_ib_gid_check(struct smc_ib_device *smcibdev, u8 ibport)
 {
+	bool is_iwarp = smc_ib_is_iwarp(smcibdev->ibdev, ibport);
 	struct smc_link_group *lgr;
 	int i;
 
@@ -385,7 +461,9 @@ static void smc_ib_gid_check(struct smc_ib_device *smcibdev, u8 ibport)
 			if (lgr->lnk[i].state == SMC_LNK_UNUSED ||
 			    lgr->lnk[i].smcibdev != smcibdev)
 				continue;
-			if (!smc_ib_check_link_gid(lgr->lnk[i].gid,
+			if (!smc_ib_check_link_gid(is_iwarp ?
+						   lgr->lnk[i].eiwarp_gid :
+						   lgr->lnk[i].gid,
 						   lgr->smc_version == SMC_V2,
 						   smcibdev, ibport))
 				smcr_port_err(smcibdev, ibport);
@@ -707,9 +785,11 @@ static void smc_ib_qp_event_handler(struct ib_event *ibevent, void *priv)
 		port_idx = ibevent->element.qp->port - 1;
 		if (port_idx >= SMC_MAX_PORTS)
 			break;
-		set_bit(port_idx, &smcibdev->port_event_mask);
-		if (!test_and_set_bit(port_idx, smcibdev->ports_going_away))
-			schedule_work(&smcibdev->port_event_work);
+		if (!smc_ib_port_active(smcibdev, port_idx + 1)) {
+			set_bit(port_idx, &smcibdev->port_event_mask);
+			if (!test_and_set_bit(port_idx, smcibdev->ports_going_away))
+				schedule_work(&smcibdev->port_event_work);
+		}
 		break;
 	default:
 		break;
@@ -738,10 +818,16 @@ int smc_ib_create_queue_pair(struct smc_link *lnk)
 		.srq = NULL,
 		.cap = {
 				/* include unsolicited rdma_writes as well,
-				 * there are max. 2 RDMA_WRITE per 1 WR_SEND
+				 * there are max. 2 RDMA_WRITE per 1 WR_SEND.
+				 * RDMA_WRITE consumes send queue entities,
+				 * without recv queue entities.When using rwwi,
+				 * the max num of inflight llc msg is SMC_WR_BUF_CNT,
+				 * and the max num of inflight cdc msg is SMC_WR_BUF_CNT,
+				 * 1 cdc msg has max 2 RDMA_WRITE_WITH_IMM,
+				 * so SMC_WR_BUF_CNT * 3 is enough for sq depth.
 				 */
 			.max_send_wr = SMC_WR_BUF_CNT * 3,
-			.max_recv_wr = SMC_WR_BUF_CNT * 3,
+			.max_recv_wr = SMC_WR_BUF_CNT,
 			.max_send_sge = SMC_IB_MAX_SEND_SGE,
 			.max_recv_sge = 1,
 			.max_inline_data = 0,
@@ -1053,10 +1139,18 @@ void smc_ib_ndev_change(struct net_device *ndev, unsigned long event)
 
 bool smc_ib_is_iwarp(struct ib_device *ibdev, u8 ibport)
 {
-	struct ib_port_immutable immutable;
+	return rdma_protocol_iwarp(ibdev, ibport);
+}
 
-	ibdev->ops.get_port_immutable(ibdev, ibport, &immutable);
-	return immutable.core_cap_flags & RDMA_CORE_CAP_PROT_IWARP;
+void smc_ib_get_pending_device(struct smc_ib_device *smcibdev)
+{
+	refcount_inc(&smcibdev->lnk_pending_cnt);
+}
+
+void smc_ib_put_pending_device(struct smc_ib_device *smcibdev)
+{
+	if (refcount_dec_and_test(&smcibdev->lnk_pending_cnt))
+		wake_up(&smcibdev->lnks_pending);
 }
 
 /* Reserve socket ports of each net namespace which can be accessed
@@ -1153,7 +1247,9 @@ static int smc_ib_add_dev(struct ib_device *ibdev)
 	}
 	INIT_WORK(&smcibdev->port_event_work, smc_ib_port_event_work);
 	atomic_set(&smcibdev->lnk_cnt, 0);
+	refcount_set(&smcibdev->lnk_pending_cnt, 1);
 	init_waitqueue_head(&smcibdev->lnks_deleted);
+	init_waitqueue_head(&smcibdev->lnks_pending);
 	mutex_init(&smcibdev->mutex);
 	mutex_lock(&smc_ib_devices.mutex);
 	list_add_tail(&smcibdev->list, &smc_ib_devices.list);
@@ -1165,7 +1261,7 @@ static int smc_ib_add_dev(struct ib_device *ibdev)
 
 	/* trigger reading of the port attributes */
 	port_cnt = smcibdev->ibdev->phys_port_cnt;
-	pr_warn_ratelimited("smc: adding ib device %s with port count %d\n",
+	pr_info_ratelimited("smc: adding ib device %s with port count %d\n",
 			    smcibdev->ibdev->name, port_cnt);
 	for (i = 0;
 	     i < min_t(size_t, port_cnt, SMC_MAX_PORTS);
@@ -1176,7 +1272,7 @@ static int smc_ib_add_dev(struct ib_device *ibdev)
 					   smcibdev->pnetid[i]))
 			smc_pnetid_by_table_ib(smcibdev, i + 1);
 		smc_copy_netdev_ifindex(smcibdev, i);
-		pr_warn_ratelimited("smc:    ib device %s port %d has pnetid "
+		pr_info_ratelimited("smc:    ib device %s port %d has pnetid "
 				    "%.16s%s\n",
 				    smcibdev->ibdev->name, i + 1,
 				    smcibdev->pnetid[i],
@@ -1196,7 +1292,10 @@ static void smc_ib_remove_dev(struct ib_device *ibdev, void *client_data)
 	mutex_lock(&smc_ib_devices.mutex);
 	list_del_init(&smcibdev->list); /* remove from smc_ib_devices */
 	mutex_unlock(&smc_ib_devices.mutex);
-	pr_warn_ratelimited("smc: removing ib device %s\n",
+	smc_ib_put_pending_device(smcibdev);
+	wait_event(smcibdev->lnks_pending,	/* wait for no pending usage */
+		   !refcount_read(&smcibdev->lnk_pending_cnt));
+	pr_info_ratelimited("smc: removing ib device %s\n",
 			    smcibdev->ibdev->name);
 	smc_smcr_terminate_all(smcibdev);
 	smc_iw_release_ports(smcibdev);

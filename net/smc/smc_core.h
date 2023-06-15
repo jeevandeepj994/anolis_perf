@@ -23,7 +23,13 @@
 #include "smc_stats.h"
 
 #define SMC_RMBS_PER_LGR_MAX	255	/* max. # of RMBs per link group */
-
+#define SMC_CONN_PER_LGR_MAX	32	/* max. # of connections per link group.
+					 * Correspondingly, SMC_WR_BUF_CNT should not be less than
+					 * 2 * SMC_CONN_PER_LGR_MAX, since every connection at
+					 * least has two rq/sq credits in average, otherwise
+					 * may result in waiting for credits in sending process.
+					 */
+#define SMC_MAX_TOKEN_LOCAL		255
 struct smc_lgr_list {			/* list of link group definition */
 	struct list_head	list;
 	spinlock_t		lock;	/* protects list of link groups */
@@ -81,6 +87,8 @@ struct smc_rdma_wr {				/* work requests per message
 
 #define SMC_LGR_ID_SIZE		4
 
+#define SMC_LINKFLAG_ANNOUNCE_PENDING	0
+
 struct smc_link {
 	struct iw_ext_conn_param	iw_conn_param;
 	struct smc_ib_device	*smcibdev;	/* ib-device */
@@ -109,7 +117,11 @@ struct smc_link {
 	unsigned long		*wr_tx_mask;	/* bit mask of used indexes */
 	u32			wr_tx_cnt;	/* number of WR send buffers */
 	wait_queue_head_t	wr_tx_wait;	/* wait for free WR send buf */
-	atomic_t		wr_tx_refcnt;	/* tx refs to link */
+	struct {
+		struct percpu_ref	wr_tx_refs;
+	} ____cacheline_aligned_in_smp;
+	struct completion	tx_ref_comp;
+	atomic_t		tx_inflight_credit;
 
 	struct smc_wr_buf	*wr_rx_bufs;	/* WR recv payload buffers */
 	struct ib_recv_wr	*wr_rx_ibs;	/* WR recv meta data */
@@ -122,10 +134,24 @@ struct smc_link {
 
 	struct ib_reg_wr	wr_reg;		/* WR register memory region */
 	wait_queue_head_t	wr_reg_wait;	/* wait for wr_reg result */
-	atomic_t		wr_reg_refcnt;	/* reg refs to link */
+	struct {
+		struct percpu_ref	wr_reg_refs;
+	} ____cacheline_aligned_in_smp;
+	struct completion	reg_ref_comp;
 	enum smc_wr_reg_state	wr_reg_state;	/* state of wr_reg request */
 
+	atomic_t	peer_rq_credits;	/* credits for peer rq flowctrl */
+	atomic_t	local_rq_credits;	/* credits for local rq flowctrl */
+	u8		credits_enable;		/* credits enable flag, set when negotiation */
+	u8		local_cr_watermark_high;	/* local rq credits watermark */
+	u8		peer_cr_watermark_low;	/* peer rq credits watermark */
+	u8		credits_update_limit;	/* credits update limit for cdc msg */
+	struct work_struct	credits_announce_work;	/* work for credits announcement */
+	unsigned long	flags;	/* link flags, SMC_LINKFLAG_ANNOUNCE_PENDING .etc */
+
 	u8			gid[SMC_GID_SIZE];/* gid matching used vlan id*/
+	u8			eiwarp_gid[SMC_GID_SIZE];
+						/* gid of eRDMA iWARP device */
 	u8			sgid_index;	/* gid index for vlan id      */
 	u32			peer_qpn;	/* QP number of peer */
 	enum ib_mtu		path_mtu;	/* used mtu */
@@ -158,6 +184,8 @@ struct smc_link {
  */
 #define SMC_LINKS_PER_LGR_MAX	3
 #define SMC_SINGLE_LINK		0
+#define SMC_LINKS_PER_LGR_PREFER	1	/* prefer 1 link per lgr */
+#define SMC_LINKS_ADD_LNK_MAX	2
 
 /* tx/rx buffer list element for sndbufs list and rmbs list of a lgr */
 struct smc_buf_desc {
@@ -326,6 +354,13 @@ struct smc_link_group {
 			__be32			saddr;
 						/* net namespace */
 			struct net		*net;
+			u8			max_conns;
+						/* max conn can be assigned to lgr */
+			u8			max_links;
+						/* max links can be added in lgr */
+			u8			credits_en;
+						/* is credits enabled by vendor opts negotiation */
+			u8			use_rwwi; /* use RDMA WRITE with Imm or not */
 		};
 		struct { /* SMC-D */
 			u64			peer_gid;
@@ -357,6 +392,7 @@ struct smc_init_info_smcrv2 {
 	struct smc_ib_device	*ib_dev_v2;
 	u8			ib_port_v2;
 	u8			ib_gid_v2[SMC_GID_SIZE];
+	u8			eiwarp_gid[SMC_GID_SIZE];
 
 	/* Additional output fields when clc_sk and daddr is set as well */
 	u8			uses_gateway;
@@ -369,6 +405,12 @@ struct smc_init_info {
 	u8			is_smcd;
 	u8			smc_type_v1;
 	u8			smc_type_v2;
+	u8			release_ver;
+	u8			max_conns;
+	u8			max_links;
+	u8			vendor_opt_valid : 1;
+	u8			credits_en : 1;
+	u8			rwwi_en : 1;
 	u8			first_contact_peer;
 	u8			first_contact_local;
 	unsigned short		vlan_id;

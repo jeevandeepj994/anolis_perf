@@ -12,7 +12,13 @@
 #define _SMC_H
 
 #include <net/inet_connection_sock.h>
-#include <linux/bpf.h>
+#include <linux/device.h>
+#include <linux/spinlock.h>
+#include <linux/types.h>
+#include <linux/wait.h>
+#include "linux/ism.h"
+
+struct sock;
 
 #ifdef ATOMIC64_INIT
 #define KERNEL_HAS_ATOMIC64
@@ -51,20 +57,14 @@ struct smcd_dmb {
 
 #define ISM_ERROR	0xFFFF
 
-struct smcd_event {
-	u32 type;
-	u32 code;
-	u64 tok;
-	u64 time;
-	u64 info;
-};
-
 struct smcd_dev;
+struct ism_client;
 
 struct smcd_ops {
 	int (*query_remote_gid)(struct smcd_dev *dev, u64 rgid, u32 vid_valid,
 				u32 vid);
-	int (*register_dmb)(struct smcd_dev *dev, struct smcd_dmb *dmb);
+	int (*register_dmb)(struct smcd_dev *dev, struct smcd_dmb *dmb,
+			    struct ism_client *client);
 	int (*unregister_dmb)(struct smcd_dev *dev, struct smcd_dmb *dmb);
 	int (*add_vlan_id)(struct smcd_dev *dev, u64 vlan_id);
 	int (*del_vlan_id)(struct smcd_dev *dev, u64 vlan_id);
@@ -75,15 +75,16 @@ struct smcd_ops {
 	int (*move_data)(struct smcd_dev *dev, u64 dmb_tok, unsigned int idx,
 			 bool sf, unsigned int offset, void *data,
 			 unsigned int size);
+	int (*supports_v2)(void);
 	u8* (*get_system_eid)(void);
+	u64 (*get_local_gid)(struct smcd_dev *dev);
 	u16 (*get_chid)(struct smcd_dev *dev);
+	struct device* (*get_dev)(struct smcd_dev *dev);
 };
 
 struct smcd_dev {
 	const struct smcd_ops *ops;
-	struct device dev;
 	void *priv;
-	u64 local_gid;
 	struct list_head list;
 	spinlock_t lock;
 	struct smc_connection **conn;
@@ -97,14 +98,6 @@ struct smcd_dev {
 	wait_queue_head_t lgrs_deleted;
 	u8 going_away : 1;
 };
-
-struct smcd_dev *smcd_alloc_dev(struct device *parent, const char *name,
-				const struct smcd_ops *ops, int max_dmbs);
-int smcd_register_dev(struct smcd_dev *smcd);
-void smcd_unregister_dev(struct smcd_dev *smcd);
-void smcd_free_dev(struct smcd_dev *smcd);
-void smcd_handle_event(struct smcd_dev *dev, struct smcd_event *event);
-void smcd_handle_irq(struct smcd_dev *dev, unsigned int bit, u16 dmbemask);
 
 struct smc_wr_rx_hdr {	/* common prefix part of LLC and CDC to demultiplex */
 	union {
@@ -279,6 +272,9 @@ struct smc_connection {
 	u8			killed : 1;	/* abnormal termination */
 	u8			freed : 1;	/* normal termiation */
 	u8			out_of_sync : 1; /* out of sync with peer */
+	u8			unwrap_remaining : 1; /* have remaining data to
+						       * send when RMB unwrapped
+						       */
 };
 
 struct smc_sock {				/* smc sock container */
@@ -328,46 +324,7 @@ struct smc_sock {				/* smc sock container */
 	struct mutex            clcsock_release_lock;
 						/* protects clcsock of a listen
 						 * socket
-						 */
+						 * */
 };
-
-#define SMC_SOCK_CLOSED_TIMING (0)
-
-#ifdef CONFIG_BPF_SYSCALL
-
-/* BPF struct ops for smc protocol negotiator */
-struct smc_sock_negotiator_ops {
-	/* ret for negotiate */
-	int (*negotiate)(struct smc_sock *sk);
-
-	/* info gathering timing */
-	void (*collect_info)(struct sock *sk, int timing);
-};
-
-/* Query if current sock should go with SMC protocol
- * SK_PASS for yes, otherwise for no.
- */
-int smc_sock_should_select_smc(const struct smc_sock *smc);
-
-
-/* At some specific points in time,
- * let negotiator can perform info gathering
- * on target sock.
- */
-void smc_sock_perform_collecting_info(const struct sock *sk, int timing);
-
-#else
-
-static inline int smc_sock_should_select_smc(const struct smc_sock *smc)
-{
-	return SK_PASS;
-}
-
-static inline void smc_sock_perform_collecting_info(const struct sock *sk, int timing)
-{
-
-}
-
-#endif /* CONFIG_BPF_SYSCALL */
 
 #endif	/* _SMC_H */
