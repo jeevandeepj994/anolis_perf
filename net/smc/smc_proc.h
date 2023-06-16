@@ -16,6 +16,13 @@
 #define CONN_SK_FM	("  %c      %-8X  %pK   %pK   %2d    %-16lu   ")
 #define CONN_LGR_FM	("   %c          %-8s %d     %-4X  %-4X   %-8X %-8X\n")
 
+#define LINK_HDR_FM                                                            \
+	("%-9s%-6s%-6s%-7s%-5s%-7s%-7s%-6s%-7s%-7s%-7s%-4s%-4s%-6s%-6s%-6s%-6s%-6s%-7s%-6s\n")
+#define LINK_INFO_FM                                                           \
+	(" %-6s%-6s%-7d%-5d%-7d%-7d%-6d%-7d%-7d%-7d%-4d%-4d%-6u%-6d%-6d%-6u%-6u%-7lu%-6u\n")
+
+extern struct smc_lgr_list smc_lgr_list;
+
 struct smc_proc_private {
 	struct	seq_net_private p;
 	int num, bucket, offset;
