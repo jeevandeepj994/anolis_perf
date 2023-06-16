@@ -127,7 +127,7 @@ void __init housekeeping_init(void)
 	/* We need at least one CPU to handle housekeeping work */
 	WARN_ON_ONCE(cpumask_empty(housekeeping_mask));
 #ifdef CONFIG_CGROUP_SCHED
-	if (housekeeping_flags & HK_FLAG_DOMAIN) {
+	if (dyn_isolcpus_ready && (housekeeping_flags & HK_FLAG_DOMAIN)) {
 		cpumask_copy(dyn_allowed, housekeeping_mask);
 		cpumask_copy(dyn_possible, housekeeping_mask);
 	}
