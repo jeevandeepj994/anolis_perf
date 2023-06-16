@@ -1117,7 +1117,7 @@ static sector_t dax_iomap_sector(const struct iomap *iomap, loff_t pos)
 	return (iomap->addr + (pos & PAGE_MASK) - iomap->offset) >> 9;
 }
 
-static int dax_iomap_direct_access(const struct iomap *iomap, loff_t pos,
+int dax_iomap_direct_access(const struct iomap *iomap, loff_t pos,
 		size_t size, void **kaddr, pfn_t *pfnp)
 {
 	const sector_t sector = dax_iomap_sector(iomap, pos);
@@ -1156,6 +1156,7 @@ out:
 	dax_read_unlock(id);
 	return rc;
 }
+EXPORT_SYMBOL_GPL(dax_iomap_direct_access);
 
 /**
  * dax_iomap_copy_around - Prepare for an unaligned write to a shared/cow page
@@ -1728,6 +1729,8 @@ finish_iomap:
 
 		if (ret & VM_FAULT_ERROR)
 			copied = 0;
+		else if (ops->iomap_save_private)
+			ops->iomap_save_private(vma, &iomap);
 		/*
 		 * The fault is done by now and there's no way back (other
 		 * thread may be already happily using PTE we have installed).

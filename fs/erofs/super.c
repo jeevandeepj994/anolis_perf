@@ -6,6 +6,7 @@
  */
 #include <linux/module.h>
 #include <linux/buffer_head.h>
+#include <linux/namei.h>
 #include <linux/statfs.h>
 #include <linux/parser.h>
 #include <linux/seq_file.h>
@@ -156,6 +157,16 @@ static int erofs_init_device(struct erofs_buf *buf, struct super_block *sb,
 		if (IS_ERR(fscache))
 			return PTR_ERR(fscache);
 		dif->fscache = fscache;
+	} else if (sbi->blob_dir_path) {
+		struct file *f;
+
+		f = file_open_root(sbi->blob_dir.dentry, sbi->blob_dir.mnt,
+				   dif->path, O_RDONLY | O_LARGEFILE, 0);
+		if (IS_ERR(f)) {
+			erofs_err(sb, "failed to open blob id %s", dif->path);
+			return PTR_ERR(f);
+		}
+		dif->blobfile = f;
 	} else if (!sbi->devs->flatdev) {
 		bdev = blkdev_get_by_path(dif->path, FMODE_READ | FMODE_EXCL,
 					  sb->s_type);
@@ -327,6 +338,8 @@ enum {
 	Opt_device,
 	Opt_fsid,
 	Opt_domain_id,
+	Opt_bootstrap_path,
+	Opt_blob_dir_path,
 	Opt_opt_creds,
 	Opt_err
 };
@@ -339,14 +352,16 @@ static const struct constant_table erofs_param_cache_strategy[] = {
 };
 
 static const struct fs_parameter_spec erofs_fs_parameters[] = {
-	fsparam_flag_no("user_xattr",	Opt_user_xattr),
-	fsparam_flag_no("acl",		Opt_acl),
-	fsparam_enum("cache_strategy",	Opt_cache_strategy,
+	fsparam_flag_no("user_xattr",		Opt_user_xattr),
+	fsparam_flag_no("acl",			Opt_acl),
+	fsparam_enum("cache_strategy",		Opt_cache_strategy,
 		     erofs_param_cache_strategy),
-	fsparam_string("device",	Opt_device),
-	fsparam_string("fsid",		Opt_fsid),
-	fsparam_string("domain_id",	Opt_domain_id),
-	fsparam_string("opt_creds",	Opt_opt_creds),
+	fsparam_string("device",		Opt_device),
+	fsparam_string("fsid",			Opt_fsid),
+	fsparam_string("domain_id",		Opt_domain_id),
+	fsparam_string("bootstrap_path",	Opt_bootstrap_path),
+	fsparam_string("blob_dir_path",		Opt_blob_dir_path),
+	fsparam_string("opt_creds",		Opt_opt_creds),
 	{}
 };
 
@@ -430,6 +445,18 @@ static int erofs_fc_parse_param(struct fs_context *fc,
 		errorfc(fc, "domain_id option not supported");
 #endif
 		break;
+	case Opt_bootstrap_path:
+		kfree(ctx->bootstrap_path);
+		ctx->bootstrap_path = kstrdup(param->string, GFP_KERNEL);
+		if (!ctx->bootstrap_path)
+			return -ENOMEM;
+		break;
+	case Opt_blob_dir_path:
+		kfree(ctx->blob_dir_path);
+		ctx->blob_dir_path = kstrdup(param->string, GFP_KERNEL);
+		if (!ctx->blob_dir_path)
+			return -ENOMEM;
+		break;
 	case Opt_opt_creds:
 		if (!strcmp(param->string, "on")) {
 			set_opt(&ctx->opt, OPT_CREDS);
@@ -443,6 +470,17 @@ static int erofs_fc_parse_param(struct fs_context *fc,
 	default:
 		return -ENOPARAM;
 	}
+
+	if (ctx->blob_dir_path && !ctx->bootstrap_path) {
+		errorfc(fc, "bootstrap_path required in RAFS mode");
+		return -EINVAL;
+	}
+
+	if (ctx->bootstrap_path && ctx->fsid) {
+		errorfc(fc, "fscache/RAFS modes are mutually exclusive");
+		return -EINVAL;
+	}
+
 	return 0;
 }
 
@@ -551,6 +589,37 @@ static int erofs_fc_fill_pseudo_super(struct super_block *sb, struct fs_context 
 	return simple_fill_super(sb, EROFS_SUPER_MAGIC, &empty_descr);
 }
 
+static int rafs_v6_fill_super(struct super_block *sb)
+{
+	struct erofs_sb_info *sbi = EROFS_SB(sb);
+
+	if (sbi->bootstrap_path) {
+		struct file *f;
+
+		f = filp_open(sbi->bootstrap_path, O_RDONLY | O_LARGEFILE, 0);
+		if (IS_ERR(f))
+			return PTR_ERR(f);
+		if (!S_ISREG(f->f_inode->i_mode)) {
+			erofs_err(sb, "bootstrap_path %s shall be regular file",
+					sbi->bootstrap_path);
+			return -EINVAL;
+		}
+		sbi->bootstrap = f;
+	}
+	if (sbi->blob_dir_path) {
+		int ret = kern_path(sbi->blob_dir_path,
+				LOOKUP_FOLLOW | LOOKUP_DIRECTORY,
+				&sbi->blob_dir);
+
+		if (ret) {
+			kfree(sbi->blob_dir_path);
+			sbi->blob_dir_path = NULL;
+			return ret;
+		}
+	}
+	return 0;
+}
+
 static int erofs_fc_fill_super(struct super_block *sb, struct fs_context *fc)
 {
 	struct inode *inode;
@@ -575,6 +644,10 @@ static int erofs_fc_fill_super(struct super_block *sb, struct fs_context *fc)
 	ctx->fsid = NULL;
 	sbi->domain_id = ctx->domain_id;
 	ctx->domain_id = NULL;
+	sbi->bootstrap_path = ctx->bootstrap_path;
+	ctx->bootstrap_path = NULL;
+	sbi->blob_dir_path = ctx->blob_dir_path;
+	ctx->blob_dir_path = NULL;
 
 	sbi->blkszbits = PAGE_SHIFT;
 	if (erofs_is_fscache_mode(sb)) {
@@ -604,11 +677,18 @@ static int erofs_fc_fill_super(struct super_block *sb, struct fs_context *fc)
 			errorfc(fc, "unsupported blksize for fscache mode");
 			return -EINVAL;
 		}
-		if (!sb_set_blocksize(sb, 1 << sbi->blkszbits)) {
+		if (sb->s_bdev && !sb_set_blocksize(sb, 1 << sbi->blkszbits)) {
 			errorfc(fc, "failed to set erofs blksize");
 			return -EINVAL;
+		} else {
+			sb->s_blocksize =  1 << sbi->blkszbits;
+			sb->s_blocksize_bits = sbi->blkszbits;
 		}
 	}
+
+	err = rafs_v6_fill_super(sb);
+	if (err)
+		return err;
 
 	sb->s_time_gran = 1;
 	sb->s_xattr = erofs_xattr_handlers;
@@ -668,6 +748,9 @@ static int erofs_fc_get_tree(struct fs_context *fc)
 	if (IS_ENABLED(CONFIG_EROFS_FS_ONDEMAND) && ctx->fsid)
 		return get_tree_nodev(fc, erofs_fc_fill_super);
 
+	if (ctx->bootstrap_path && ctx->blob_dir_path)
+		return get_tree_nodev(fc, erofs_fc_fill_super);
+
 	return get_tree_bdev(fc, erofs_fc_fill_super);
 }
 
@@ -704,6 +787,8 @@ static int erofs_release_device_info(int id, void *ptr, void *data)
 
 	if (dif->bdev)
 		blkdev_put(dif->bdev, FMODE_READ | FMODE_EXCL);
+	if (dif->blobfile)
+		filp_close(dif->blobfile, NULL);
 	erofs_fscache_unregister_cookie(dif->fscache);
 	dif->fscache = NULL;
 	kfree(dif->path);
@@ -784,15 +869,21 @@ static void erofs_kill_sb(struct super_block *sb)
 		return;
 	}
 
-	if (erofs_is_fscache_mode(sb))
-		kill_anon_super(sb);
-	else
+	if (sb->s_bdev)
 		kill_block_super(sb);
+	else
+		kill_anon_super(sb);
 
 	sbi = EROFS_SB(sb);
 	if (!sbi)
 		return;
 	erofs_free_dev_context(sbi->devs);
+	if (sbi->bootstrap)
+		filp_close(sbi->bootstrap, NULL);
+	if (sbi->blob_dir_path)
+		path_put(&sbi->blob_dir);
+	kfree(sbi->bootstrap_path);
+	kfree(sbi->blob_dir_path);
 	erofs_fscache_unregister_fs(sb);
 	kfree(sbi->fsid);
 	kfree(sbi->domain_id);
@@ -889,7 +980,7 @@ static int erofs_statfs(struct dentry *dentry, struct kstatfs *buf)
 	struct erofs_sb_info *sbi = EROFS_SB(sb);
 	u64 id = 0;
 
-	if (!erofs_is_fscache_mode(sb))
+	if (sb->s_bdev)
 		id = huge_encode_dev(sb->s_bdev->bd_dev);
 
 	buf->f_type = sb->s_magic;

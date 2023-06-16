@@ -17,6 +17,7 @@
 #include <linux/magic.h>
 #include <linux/slab.h>
 #include <linux/vmalloc.h>
+#include <linux/iomap.h>
 #include "erofs_fs.h"
 
 /* redefine pr_fmt "erofs: " */
@@ -51,6 +52,7 @@ struct erofs_device_info {
 	char *path;
 	struct erofs_fscache *fscache;
 	struct block_device *bdev;
+	struct file *blobfile;
 
 	u32 blocks;
 	u32 mapped_blkaddr;
@@ -80,6 +82,8 @@ struct erofs_fs_context {
 	struct erofs_dev_context *devs;
 	char *fsid;
 	char *domain_id;
+	char *bootstrap_path;
+	char *blob_dir_path;
 };
 
 struct erofs_domain {
@@ -112,6 +116,10 @@ struct erofs_sb_info {
 	/* pseudo inode to manage cached pages */
 	struct inode *managed_cache;
 #endif	/* CONFIG_EROFS_FS_ZIP */
+	struct path blob_dir;
+	struct file *bootstrap;
+	char *bootstrap_path;
+	char *blob_dir_path;
 	struct erofs_dev_context *devs;
 	u64 total_blocks;
 	u32 primarydevice_blocks;
@@ -257,6 +265,8 @@ enum erofs_kmap_type {
 };
 
 struct erofs_buf {
+	struct iomap iomap;
+	struct address_space *mapping;
 	struct page *page;
 	void *base;
 	enum erofs_kmap_type kmap_type;
@@ -300,6 +310,7 @@ struct erofs_inode {
 
 	unsigned int xattr_shared_count;
 	unsigned int *xattr_shared_xattrs;
+	const struct vm_operations_struct *lower_vm_ops;
 
 	union {
 		erofs_blk_t raw_blkaddr;
@@ -424,6 +435,7 @@ static inline int z_erofs_map_blocks_iter(struct inode *inode,
 struct erofs_map_dev {
 	struct erofs_fscache *m_fscache;
 	struct block_device *m_bdev;
+	struct file *m_fp;
 
 	erofs_off_t m_pa;
 	unsigned int m_deviceid;

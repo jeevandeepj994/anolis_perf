@@ -9,6 +9,7 @@
 #include <linux/iomap.h>
 #include <linux/uio.h>
 #include <trace/events/erofs.h>
+#include <linux/sched/mm.h>
 
 void erofs_unmap_metabuf(struct erofs_buf *buf)
 {
@@ -22,19 +23,31 @@ void erofs_unmap_metabuf(struct erofs_buf *buf)
 
 void erofs_put_metabuf(struct erofs_buf *buf)
 {
+	pgoff_t index;
+
 	if (!buf->page)
 		return;
 	erofs_unmap_metabuf(buf);
+
+	index = buf->page->index;
 	put_page(buf->page);
 	buf->page = NULL;
+
+	if (buf->mapping) {
+		buf->mapping->a_ops->endpfn(buf->mapping, index,
+				&buf->iomap, 0);
+		buf->mapping = NULL;
+		memset(&buf->iomap, 0, sizeof(buf->iomap));
+	}
 }
 
 /*
  * Derive the block size from inode->i_blkbits to make compatible with
  * anonymous inode in fscache mode.
  */
-void *erofs_bread(struct erofs_buf *buf, struct inode *inode,
-		  erofs_blk_t blkaddr, enum erofs_kmap_type type)
+void *__erofs_bread(struct super_block *sb, struct erofs_buf *buf,
+		    struct inode *inode, erofs_blk_t blkaddr,
+		    enum erofs_kmap_type type)
 {
 	erofs_off_t offset = (erofs_off_t)blkaddr << inode->i_blkbits;
 	struct address_space *const mapping = inode->i_mapping;
@@ -43,8 +56,25 @@ void *erofs_bread(struct erofs_buf *buf, struct inode *inode,
 
 	if (!page || page->index != index) {
 		erofs_put_metabuf(buf);
-		page = read_cache_page_gfp(mapping, index,
+		if (EROFS_SB(sb)->bootstrap) {
+			unsigned int nofs_flag;
+
+			nofs_flag = memalloc_nofs_save();
+			if (IS_DAX(inode)) {
+				page = mapping->a_ops->startpfn(mapping, index,
+								&buf->iomap);
+				if (!IS_ERR(page))
+					buf->mapping = mapping;
+			} else {
+				page = read_cache_page(mapping, index,
+					       (filler_t *)mapping->a_ops->readpage,
+					       EROFS_SB(sb)->bootstrap);
+			}
+			memalloc_nofs_restore(nofs_flag);
+		} else {
+			page = read_cache_page_gfp(mapping, index,
 				   mapping_gfp_constraint(mapping, ~__GFP_FS));
+		}
 		if (IS_ERR(page))
 			return page;
 		/* should already be PageUptodate, no need to lock page */
@@ -65,9 +95,19 @@ void *erofs_bread(struct erofs_buf *buf, struct inode *inode,
 	return buf->base + (offset & ~PAGE_MASK);
 }
 
+void *erofs_bread(struct erofs_buf *buf, struct inode *inode,
+		  erofs_blk_t blkaddr, enum erofs_kmap_type type)
+{
+	return __erofs_bread(NULL, buf, inode, blkaddr, type);
+}
+
 void *erofs_read_metabuf(struct erofs_buf *buf, struct super_block *sb,
 			 erofs_blk_t blkaddr, enum erofs_kmap_type type)
 {
+	if (EROFS_SB(sb)->bootstrap)
+		return __erofs_bread(sb, buf, EROFS_SB(sb)->bootstrap->f_inode,
+				     blkaddr, type);
+
 	if (erofs_is_fscache_mode(sb))
 		return erofs_bread(buf, EROFS_SB(sb)->s_fscache->inode,
 				   blkaddr, type);
@@ -75,8 +115,7 @@ void *erofs_read_metabuf(struct erofs_buf *buf, struct super_block *sb,
 	return erofs_bread(buf, sb->s_bdev->bd_inode, blkaddr, type);
 }
 
-static int erofs_map_blocks_flatmode(struct inode *inode,
-				     struct erofs_map_blocks *map)
+int erofs_map_blocks_flatmode(struct inode *inode, struct erofs_map_blocks *map)
 {
 	erofs_blk_t nblocks, lastblk;
 	u64 offset = map->m_la;
@@ -199,6 +238,7 @@ int erofs_map_dev(struct super_block *sb, struct erofs_map_dev *map)
 	int id;
 
 	map->m_bdev = sb->s_bdev;
+	map->m_fp = EROFS_SB(sb)->bootstrap;
 	map->m_fscache = EROFS_SB(sb)->s_fscache;
 
 	if (map->m_deviceid) {
@@ -214,6 +254,7 @@ int erofs_map_dev(struct super_block *sb, struct erofs_map_dev *map)
 			return 0;
 		}
 		map->m_bdev = dif->bdev;
+		map->m_fp = dif->blobfile;
 		map->m_fscache = dif->fscache;
 		up_read(&devs->rwsem);
 	} else if (devs->extra_devices && !devs->flatdev) {
@@ -230,6 +271,7 @@ int erofs_map_dev(struct super_block *sb, struct erofs_map_dev *map)
 			    map->m_pa < startoff + length) {
 				map->m_pa -= startoff;
 				map->m_bdev = dif->bdev;
+				map->m_fp = dif->blobfile;
 				map->m_fscache = dif->fscache;
 				break;
 			}
