@@ -47,7 +47,8 @@ struct smc_cdc_msg {
 	union smc_cdc_cursor		cons;	/* piggy backed "ack" */
 	struct smc_cdc_producer_flags	prod_flags;
 	struct smc_cdc_conn_state_flags	conn_state_flags;
-	u8				reserved[18];
+	u8				credits;	/* credits synced by every cdc msg */
+	u8				reserved[17];
 };
 
 /* SMC-D cursor format */
@@ -301,5 +302,6 @@ int smcr_cdc_msg_send_validation(struct smc_connection *conn,
 				 struct smc_wr_buf *wr_buf);
 int smc_cdc_init(void) __init;
 void smcd_cdc_rx_init(struct smc_connection *conn);
-
+void smc_cdc_rx_handler_rwwi(struct ib_wc *wc);
+void smc_cdc_tx_handler_rwwi(struct ib_wc *wc);
 #endif /* SMC_CDC_H */

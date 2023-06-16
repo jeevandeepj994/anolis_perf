@@ -39,6 +39,9 @@ static const char SMC_EYECATCHER[4] = {'\xe2', '\xd4', '\xc3', '\xd9'};
 /* eye catcher "SMCD" EBCDIC for CLC messages */
 static const char SMCD_EYECATCHER[4] = {'\xe2', '\xd4', '\xc3', '\xc4'};
 
+/* ALIBABA OUI */
+static const u8 SMC_VENDOR_OUI_ALIBABA[3] = {0xFC, 0xA6, 0x4C};
+
 static u8 smc_hostname[SMC_MAX_HOSTNAME_LEN];
 
 struct smc_clc_eid_table {
@@ -391,9 +394,7 @@ smc_clc_msg_acc_conf_valid(struct smc_clc_msg_accept_confirm_v2 *clc_v2)
 			return false;
 	} else {
 		if (hdr->typev1 == SMC_TYPE_D &&
-		    ntohs(hdr->length) != SMCD_CLC_ACCEPT_CONFIRM_LEN_V2 &&
-		    (ntohs(hdr->length) != SMCD_CLC_ACCEPT_CONFIRM_LEN_V2 +
-				sizeof(struct smc_clc_first_contact_ext)))
+		    ntohs(hdr->length) < SMCD_CLC_ACCEPT_CONFIRM_LEN_V2)
 			return false;
 		if (hdr->typev1 == SMC_TYPE_R &&
 		    ntohs(hdr->length) < SMCR_CLC_ACCEPT_CONFIRM_LEN_V2)
@@ -420,13 +421,35 @@ smc_clc_msg_decl_valid(struct smc_clc_msg_decline *dclc)
 	return true;
 }
 
-static void smc_clc_fill_fce(struct smc_clc_first_contact_ext *fce, int *len)
+static int smc_clc_fill_fce(struct smc_clc_first_contact_ext_v2x *fce,
+			    struct smc_init_info *ini)
 {
+	int ret = sizeof(*fce);
+
 	memset(fce, 0, sizeof(*fce));
-	fce->os_type = SMC_CLC_OS_LINUX;
-	fce->release = SMC_RELEASE;
-	memcpy(fce->hostname, smc_hostname, sizeof(smc_hostname));
-	(*len) += sizeof(*fce);
+	fce->fce_v20.os_type = SMC_CLC_OS_LINUX;
+	fce->fce_v20.release = ini->release_ver;
+	memcpy(fce->fce_v20.hostname, smc_hostname, sizeof(smc_hostname));
+	if (ini->is_smcd && ini->release_ver < SMC_RELEASE_1) {
+		ret = sizeof(struct smc_clc_first_contact_ext);
+		goto out;
+	}
+
+	if (ini->release_ver >= SMC_RELEASE_1) {
+		if (!ini->is_smcd) {
+			fce->max_conns = ini->max_conns;
+			fce->max_links = ini->max_links;
+		}
+
+		if (ini->vendor_opt_valid) {
+			fce->vendor_exp_options.valid = 1;
+			fce->vendor_exp_options.credits_en = ini->credits_en;
+			fce->vendor_exp_options.rwwi_en = ini->rwwi_en;
+		}
+	}
+
+out:
+	return ret;
 }
 
 /* check if received message has a correct header length and contains valid
@@ -807,6 +830,24 @@ int smc_clc_send_decline(struct smc_sock *smc, u32 peer_diag_info, u8 version)
 	return len > 0 ? 0 : len;
 }
 
+inline struct smc_clc_vendor_opt_ali
+smc_clc_vendor_opts_ali_get_config(struct smc_sock *smc)
+{
+	/* smc_clc_vendor_opt_ali is defined in network bytes order,
+	 * but sysctl_vendor_exp_options is assinged in host bytes order.
+	 * So converted sysctl_vendor_exp_options to __be32, in case
+	 * sysctl_vendor_exp_options can be configured compatible either
+	 * on be host or le host.
+	 */
+	__be32 vendor_opts_val =
+		cpu_to_be32(sock_net(&smc->sk)->smc.sysctl_vendor_exp_options);
+
+	BUILD_BUG_ON_MSG(sizeof(struct smc_clc_vendor_opt_ali) > sizeof(unsigned int),
+			 "struct smc_clc_vendor_opt_ali size can not exceeds 4 bytes");
+
+	return *((struct smc_clc_vendor_opt_ali *)&vendor_opts_val);
+}
+
 /* send CLC PROPOSAL message across internal TCP socket */
 int smc_clc_send_proposal(struct smc_sock *smc, struct smc_init_info *ini)
 {
@@ -887,6 +928,8 @@ int smc_clc_send_proposal(struct smc_sock *smc, struct smc_init_info *ini)
 	} else {
 		struct smc_clc_eid_entry *ueident;
 		u16 v2_ext_offset;
+		struct smc_clc_vendor_opt_ali vendor_config =
+			smc_clc_vendor_opts_ali_get_config(smc);
 
 		v2_ext->hdr.flag.release = SMC_RELEASE;
 		v2_ext_offset = sizeof(*pclc_smcd) -
@@ -896,6 +939,16 @@ int smc_clc_send_proposal(struct smc_sock *smc, struct smc_init_info *ini)
 						pclc_prfx->ipv6_prefixes_cnt *
 						sizeof(ipv6_prfx[0]);
 		pclc_smcd->v2_ext_offset = htons(v2_ext_offset);
+
+		if (vendor_config.valid) {
+			memcpy(pclc_smcd->vendor_oui, SMC_VENDOR_OUI_ALIBABA,
+			       sizeof(SMC_VENDOR_OUI_ALIBABA));
+			pclc_smcd->vendor_exp_options.valid = 1;
+			if (vendor_config.credits_en)
+				pclc_smcd->vendor_exp_options.credits_en = 1;
+			if (vendor_config.rwwi_en)
+				pclc_smcd->vendor_exp_options.rwwi_en = 1;
+		}
 		plen += sizeof(*v2_ext);
 
 		read_lock(&smc_clc_eid_table.lock);
@@ -933,8 +986,11 @@ int smc_clc_send_proposal(struct smc_sock *smc, struct smc_init_info *ini)
 				sizeof(struct smc_clc_smcd_gid_chid);
 		}
 	}
-	if (smcr_indicated(ini->smc_type_v2))
+	if (smcr_indicated(ini->smc_type_v2)) {
 		memcpy(v2_ext->roce, ini->smcrv2.ib_gid_v2, SMC_GID_SIZE);
+		v2_ext->max_conns = SMC_CONN_PER_LGR_MAX;
+		v2_ext->max_links = SMC_LINKS_PER_LGR_PREFER;
+	}
 
 	pclc_base->hdr.length = htons(plen);
 	memcpy(trl->eyecatcher, SMC_EYECATCHER, sizeof(SMC_EYECATCHER));
@@ -993,12 +1049,12 @@ static int smc_clc_send_confirm_accept(struct smc_sock *smc,
 {
 	struct smc_connection *conn = &smc->conn;
 	struct smc_clc_msg_accept_confirm *clc;
-	struct smc_clc_first_contact_ext fce;
+	struct smc_clc_first_contact_ext_v2x fce;
 	struct smc_clc_fce_gid_ext gle;
 	struct smc_clc_msg_trail trl;
 	struct kvec vec[5];
 	struct msghdr msg;
-	int i, len;
+	int i, len, fce_len;
 
 	/* send SMC Confirm CLC msg */
 	clc = (struct smc_clc_msg_accept_confirm *)clc_v2;
@@ -1024,8 +1080,10 @@ static int smc_clc_send_confirm_accept(struct smc_sock *smc,
 			if (eid && eid[0])
 				memcpy(clc_v2->d1.eid, eid, SMC_MAX_EID_LEN);
 			len = SMCD_CLC_ACCEPT_CONFIRM_LEN_V2;
-			if (first_contact)
-				smc_clc_fill_fce(&fce, &len);
+			if (first_contact) {
+				fce_len = smc_clc_fill_fce(&fce, ini);
+				len += fce_len;
+			}
 			clc_v2->hdr.length = htons(len);
 		}
 		memcpy(trl.eyecatcher, SMCD_EYECATCHER,
@@ -1051,9 +1109,13 @@ static int smc_clc_send_confirm_accept(struct smc_sock *smc,
 		switch (clc->hdr.type) {
 		case SMC_CLC_ACCEPT:
 			clc->r0.qp_mtu = link->path_mtu;
+			if (first_contact && ini->vendor_opt_valid && ini->credits_en)
+				clc->r0.init_credits = (u8)link->wr_rx_cnt;
 			break;
 		case SMC_CLC_CONFIRM:
 			clc->r0.qp_mtu = min(link->path_mtu, link->peer_mtu);
+			if (first_contact && link->credits_enable)
+				clc->r0.init_credits = (u8)link->wr_rx_cnt;
 			break;
 		}
 		clc->r0.rmbe_size = conn->rmbe_size_short;
@@ -1069,15 +1131,14 @@ static int smc_clc_send_confirm_accept(struct smc_sock *smc,
 				memcpy(clc_v2->r1.eid, eid, SMC_MAX_EID_LEN);
 			len = SMCR_CLC_ACCEPT_CONFIRM_LEN_V2;
 			if (first_contact) {
-				smc_clc_fill_fce(&fce, &len);
-				fce.v2_direct = !link->lgr->uses_gateway;
-				memset(&gle, 0, sizeof(gle));
+				fce_len = smc_clc_fill_fce(&fce, ini);
+				len += fce_len;
+				fce.fce_v20.v2_direct = !link->lgr->uses_gateway;
 				if (ini && clc->hdr.type == SMC_CLC_CONFIRM) {
+					memset(&gle, 0, sizeof(gle));
 					gle.gid_cnt = ini->smcrv2.gidlist.len;
 					len += sizeof(gle);
 					len += gle.gid_cnt * sizeof(gle.gid[0]);
-				} else {
-					len += sizeof(gle.reserved);
 				}
 			}
 			clc_v2->hdr.length = htons(len);
@@ -1100,7 +1161,7 @@ static int smc_clc_send_confirm_accept(struct smc_sock *smc,
 				   sizeof(trl);
 	if (version > SMC_V1 && first_contact) {
 		vec[i].iov_base = &fce;
-		vec[i++].iov_len = sizeof(fce);
+		vec[i++].iov_len = fce_len;
 		if (!conn->lgr->is_smcd) {
 			if (clc->hdr.type == SMC_CLC_CONFIRM) {
 				vec[i].iov_base = &gle;
@@ -1108,9 +1169,6 @@ static int smc_clc_send_confirm_accept(struct smc_sock *smc,
 				vec[i].iov_base = &ini->smcrv2.gidlist.list;
 				vec[i++].iov_len = gle.gid_cnt *
 						   sizeof(gle.gid[0]);
-			} else {
-				vec[i].iov_base = &gle.reserved;
-				vec[i++].iov_len = sizeof(gle.reserved);
 			}
 		}
 	}
@@ -1147,7 +1205,7 @@ int smc_clc_send_confirm(struct smc_sock *smc, bool clnt_first_contact,
 
 /* send CLC ACCEPT message across internal TCP socket */
 int smc_clc_send_accept(struct smc_sock *new_smc, bool srv_first_contact,
-			u8 version, u8 *negotiated_eid)
+			u8 version, u8 *negotiated_eid, struct smc_init_info *ini)
 {
 	struct smc_clc_msg_accept_confirm_v2 aclc_v2;
 	int len;
@@ -1155,11 +1213,151 @@ int smc_clc_send_accept(struct smc_sock *new_smc, bool srv_first_contact,
 	memset(&aclc_v2, 0, sizeof(aclc_v2));
 	aclc_v2.hdr.type = SMC_CLC_ACCEPT;
 	len = smc_clc_send_confirm_accept(new_smc, &aclc_v2, srv_first_contact,
-					  version, negotiated_eid, NULL);
+					  version, negotiated_eid, ini);
 	if (len < ntohs(aclc_v2.hdr.length))
 		len = len >= 0 ? -EPROTO : -new_smc->clcsock->sk->sk_err;
 
 	return len > 0 ? 0 : len;
+}
+
+void smc_clc_vendor_opt_validate(struct smc_sock *smc,
+				 struct smc_clc_msg_proposal *pclc,
+				 struct smc_init_info *ini)
+{
+	struct smc_clc_msg_smcd *prop_smcd = smc_get_clc_msg_smcd(pclc);
+	struct smc_clc_vendor_opt_ali vendor_config =
+		smc_clc_vendor_opts_ali_get_config(smc);
+
+	if (!prop_smcd || !vendor_config.valid)
+		return;
+
+	if (memcmp(prop_smcd->vendor_oui, SMC_VENDOR_OUI_ALIBABA,
+		   sizeof(SMC_VENDOR_OUI_ALIBABA)))
+		return;
+
+	if (!prop_smcd->vendor_exp_options.valid)
+		return;
+
+	ini->vendor_opt_valid = 1;
+
+	if (vendor_config.credits_en)
+		ini->credits_en = prop_smcd->vendor_exp_options.credits_en;
+	else
+		ini->credits_en = 0;
+
+	if (vendor_config.rwwi_en)
+		ini->rwwi_en = prop_smcd->vendor_exp_options.rwwi_en;
+	else
+		ini->rwwi_en = 0;
+}
+
+int smc_clc_srv_v2x_features_validate(struct smc_sock *smc,
+				      struct smc_clc_msg_proposal *pclc,
+				      struct smc_init_info *ini)
+{
+	struct smc_clc_v2_extension *pclc_v2_ext;
+
+	/* default max conn is SMC_RMBS_PER_LGR_MAX(255),
+	 * which is the default value in smc v1 and v2.0.
+	 */
+	ini->max_conns = SMC_RMBS_PER_LGR_MAX;
+	ini->max_links = SMC_LINKS_ADD_LNK_MAX;
+	ini->vendor_opt_valid = 0;
+
+	if ((!(ini->smcd_version & SMC_V2) && !(ini->smcr_version & SMC_V2)) ||
+	    ini->release_ver < SMC_RELEASE_1)
+		return 0;
+
+	pclc_v2_ext = smc_get_clc_v2_ext(pclc);
+	if (!pclc_v2_ext)
+		return SMC_CLC_DECL_NOV2EXT;
+
+	if (ini->smcr_version & SMC_V2) {
+		ini->max_conns = min_t(u8, pclc_v2_ext->max_conns, SMC_CONN_PER_LGR_MAX);
+		if (!ini->max_conns)
+			return SMC_CLC_DECL_MAXCONNERR;
+
+		ini->max_links = min_t(u8, pclc_v2_ext->max_links, SMC_LINKS_PER_LGR_PREFER);
+		if (!ini->max_links)
+			return SMC_CLC_DECL_MAXLINKERR;
+	}
+
+	smc_clc_vendor_opt_validate(smc, pclc, ini);
+
+	return 0;
+}
+
+int smc_clc_cli_v2x_features_validate(struct smc_sock *smc,
+				      struct smc_clc_first_contact_ext *fce,
+				      struct smc_init_info *ini)
+{
+	struct smc_clc_first_contact_ext_v2x *fce_v2x =
+		(struct smc_clc_first_contact_ext_v2x *)fce;
+	struct smc_clc_vendor_opt_ali vendor_config =
+		smc_clc_vendor_opts_ali_get_config(smc);
+
+	if (ini->release_ver < SMC_RELEASE_1)
+		return 0;
+
+	if (!ini->is_smcd) {
+		if (fce_v2x->max_conns > SMC_CONN_PER_LGR_MAX)
+			return SMC_CLC_DECL_MAXCONNERR;
+		ini->max_conns = fce_v2x->max_conns;
+
+		if (fce_v2x->max_links > SMC_LINKS_ADD_LNK_MAX)
+			return SMC_CLC_DECL_MAXLINKERR;
+		ini->max_links = fce_v2x->max_links;
+	}
+
+	if ((!vendor_config.valid && fce_v2x->vendor_exp_options.valid) ||
+	    (!vendor_config.credits_en &&
+	     fce_v2x->vendor_exp_options.credits_en) ||
+	    (!vendor_config.rwwi_en && fce_v2x->vendor_exp_options.rwwi_en))
+		return SMC_CLC_DECL_VENDORERR;
+
+	if (fce_v2x->vendor_exp_options.valid) {
+		ini->vendor_opt_valid = 1;
+		ini->credits_en = fce_v2x->vendor_exp_options.credits_en;
+		ini->rwwi_en = fce_v2x->vendor_exp_options.rwwi_en;
+	}
+
+	return 0;
+}
+
+int smc_clc_v2x_features_confirm_check(struct smc_clc_msg_accept_confirm *cclc,
+				       struct smc_init_info *ini)
+{
+	struct smc_clc_msg_accept_confirm_v2 *clc_v2 =
+		(struct smc_clc_msg_accept_confirm_v2 *)cclc;
+	struct smc_clc_first_contact_ext *fce =
+		smc_get_clc_first_contact_ext(clc_v2, ini->is_smcd);
+	struct smc_clc_first_contact_ext_v2x *fce_v2x =
+		(struct smc_clc_first_contact_ext_v2x *)fce;
+
+	if (cclc->hdr.version == SMC_V1 ||
+	    !(cclc->hdr.typev2 & SMC_FIRST_CONTACT_MASK))
+		return 0;
+
+	if (ini->release_ver != fce->release)
+		return SMC_CLC_DECL_RELEASEERR;
+
+	if (fce->release < SMC_RELEASE_1)
+		return 0;
+
+	if (!ini->is_smcd) {
+		if (fce_v2x->max_conns != ini->max_conns)
+			return SMC_CLC_DECL_MAXCONNERR;
+		if (fce_v2x->max_links != ini->max_links)
+			return SMC_CLC_DECL_MAXLINKERR;
+	}
+
+	if (ini->vendor_opt_valid &&
+	    (!fce_v2x->vendor_exp_options.valid ||
+	     fce_v2x->vendor_exp_options.credits_en != ini->credits_en ||
+	     fce_v2x->vendor_exp_options.rwwi_en != ini->rwwi_en))
+		return SMC_CLC_DECL_VENDORERR;
+
+	return 0;
 }
 
 void smc_clc_get_hostname(u8 **host)
@@ -1169,6 +1367,8 @@ void smc_clc_get_hostname(u8 **host)
 
 void __init smc_clc_init(void)
 {
+	static const char def_ueid[] = "SMCV2-DEFAULT-UEID";
+	char ueid[SMC_MAX_EID_LEN + 1] = { 0 };
 	struct new_utsname *u;
 
 	memset(smc_hostname, _S, sizeof(smc_hostname)); /* ASCII blanks */
@@ -1180,6 +1380,10 @@ void __init smc_clc_init(void)
 	rwlock_init(&smc_clc_eid_table.lock);
 	smc_clc_eid_table.ueid_cnt = 0;
 	smc_clc_eid_table.seid_enabled = 1;
+
+	memset(ueid, ' ', SMC_MAX_EID_LEN); /* fill with space */
+	memcpy(ueid, def_ueid, strlen(def_ueid));
+	smc_clc_ueid_add(ueid);
 }
 
 void smc_clc_exit(void)
