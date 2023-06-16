@@ -16,6 +16,7 @@
 #include <linux/spinlock.h>
 #include <linux/types.h>
 #include <linux/wait.h>
+#include <net/tcp.h>
 #include "linux/ism.h"
 
 struct sock;
@@ -272,11 +273,24 @@ struct smc_connection {
 	u8			killed : 1;	/* abnormal termination */
 	u8			freed : 1;	/* normal termiation */
 	u8			out_of_sync : 1; /* out of sync with peer */
+	u8			unwrap_remaining : 1; /* have remaining data to
+						       * send when RMB unwrapped
+						       */
 };
 
 struct smc_sock {				/* smc sock container */
-	struct sock		sk;
-	struct socket		*clcsock;	/* internal tcp socket */
+	union {
+		struct tcp_sock	tpsk;
+		struct sock	sk;
+	};
+	struct socket	*clcsock;	/* internal tcp socket */
+	unsigned char	smc_state;	/* smc state used in smc via inet_sk */
+	unsigned int	isck_smc_negotiation;
+	struct socket	accompany_socket;
+	struct request_sock	*tail_0;
+	struct request_sock	*tail_1;
+	struct request_sock	*reqsk;
+	unsigned int	queued_cnt;
 	void			(*clcsk_state_change)(struct sock *sk);
 						/* original stat_change fct. */
 	void			(*clcsk_data_ready)(struct sock *sk);
@@ -285,6 +299,7 @@ struct smc_sock {				/* smc sock container */
 						/* original write_space fct. */
 	void			(*clcsk_error_report)(struct sock *sk);
 						/* original error_report fct. */
+	void			(*original_sk_destruct)(struct sock *sk);
 	struct smc_connection	conn;		/* smc connection */
 	struct smc_sock		*listen_smc;	/* listen parent */
 	struct work_struct	connect_work;	/* handle non-blocking connect*/
@@ -294,6 +309,7 @@ struct smc_sock {				/* smc sock container */
 	spinlock_t		accept_q_lock;	/* protects accept_q */
 	bool			limit_smc_hs;	/* put constraint on handshake */
 	bool			use_fallback;	/* fallback to tcp */
+	bool			under_presure;	/* under presure */
 	int			fallback_rsn;	/* reason for fallback */
 	u32			peer_diagnosis; /* decline reason from peer */
 	atomic_t                queued_smc_hs;  /* queued smc handshakes */
@@ -318,6 +334,7 @@ struct smc_sock {				/* smc sock container */
 						/* non-blocking connect in
 						 * flight
 						 */
+	u8			ordered : 1;
 	struct mutex            clcsock_release_lock;
 						/* protects clcsock of a listen
 						 * socket

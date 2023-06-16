@@ -168,6 +168,7 @@ static int smc_lgr_register_conn(struct smc_connection *conn, bool first)
 {
 	struct smc_sock *smc = container_of(conn, struct smc_sock, conn);
 	static atomic_t nexttoken = ATOMIC_INIT(0);
+	int i;
 	int rc;
 
 	if (!conn->lgr->is_smcd) {
@@ -181,10 +182,26 @@ static int smc_lgr_register_conn(struct smc_connection *conn, bool first)
 	 * in this link group
 	 */
 	sock_hold(&smc->sk); /* sock_put in smc_lgr_unregister_conn() */
-	while (!conn->alert_token_local) {
-		conn->alert_token_local = atomic_inc_return(&nexttoken);
-		if (smc_lgr_find_conn(conn->alert_token_local, conn->lgr))
-			conn->alert_token_local = 0;
+	if (conn->lgr->use_rwwi) {
+		for (i = 1; i <= SMC_MAX_TOKEN_LOCAL; i++) {
+			if (!smc_lgr_find_conn(i, conn->lgr)) {
+				conn->alert_token_local = i;
+				break;
+			}
+		}
+		if (!conn->alert_token_local) {
+			atomic_dec(&conn->lnk->conn_cnt);
+			conn->lnk = NULL;
+			conn->lgr = NULL;
+			sock_put(&smc->sk);
+			return SMC_CLC_DECL_INTERR;
+		}
+	} else {
+		while (!conn->alert_token_local) {
+			conn->alert_token_local = atomic_inc_return(&nexttoken);
+			if (smc_lgr_find_conn(conn->alert_token_local, conn->lgr))
+				conn->alert_token_local = 0;
+		}
 	}
 	smc_lgr_add_alert_token(conn);
 	conn->lgr->conns_num++;
@@ -453,6 +470,9 @@ static int smc_nl_fill_lgr_link(struct smc_link_group *lgr,
 		goto errstats;
 	if (nla_put_u64_64bit(skb, SMC_NLA_LINK_RWC_CNT,
 			      stats->r_wc_cnt, SMC_NLA_LINK_UNSPEC))
+		goto errstats;
+	if (nla_put_u64_64bit(skb, SMC_NLA_LINK_WWR_CNT,
+			      stats->rw_wr_cnt, SMC_NLA_LINK_UNSPEC))
 		goto errstats;
 	if (nla_put_u64_64bit(skb, SMC_NLA_LINK_WWC_CNT,
 			      stats->rw_wc_cnt, SMC_NLA_LINK_UNSPEC))
@@ -825,6 +845,21 @@ static void smcr_link_iw_extension(struct iw_ext_conn_param *iw_param, struct so
 	} else {
 		iw_param->sk_addr.saddr_v6 = clcsk->sk_v6_rcv_saddr;
 		iw_param->sk_addr.daddr_v6 = clcsk->sk_v6_daddr;
+
+		/* Workaround for IPv6
+		 */
+		if (ipv6_addr_v4mapped(&iw_param->sk_addr.saddr_v6) &&
+		    ipv6_addr_v4mapped(&iw_param->sk_addr.daddr_v6)) {
+			__be32 saddr_v4, daddr_v4;
+
+			saddr_v4 = iw_param->sk_addr.saddr_v6.s6_addr32[3];
+			daddr_v4 = iw_param->sk_addr.daddr_v6.s6_addr32[3];
+			memset(&iw_param->sk_addr.saddr_v6, 0, sizeof(struct in6_addr));
+			memset(&iw_param->sk_addr.daddr_v6, 0, sizeof(struct in6_addr));
+			iw_param->sk_addr.family = PF_INET;
+			iw_param->sk_addr.saddr_v4 = saddr_v4;
+			iw_param->sk_addr.daddr_v4 = daddr_v4;
+		}
 #endif
 	}
 
@@ -874,6 +909,10 @@ int smcr_link_init(struct smc_link_group *lgr, struct smc_link *lnk,
 						  &ini->smcrv2 : NULL);
 	if (rc)
 		goto out;
+
+	if (smc_ib_is_iwarp(lnk->smcibdev->ibdev, lnk->ibport))
+		memcpy(lnk->eiwarp_gid, ini->smcrv2.eiwarp_gid, SMC_GID_SIZE);
+
 	rc = smc_llc_link_init(lnk);
 	if (rc)
 		goto out;
@@ -989,9 +1028,19 @@ static int smc_lgr_create(struct smc_sock *smc, struct smc_init_info *ini)
 			lgr->uses_gateway = ini->smcrv2.uses_gateway;
 			memcpy(lgr->nexthop_mac, ini->smcrv2.nexthop_mac,
 			       ETH_ALEN);
+			lgr->max_conns = ini->max_conns;
+			lgr->max_links = ini->max_links;
+			lgr->credits_en = ini->vendor_opt_valid && ini->credits_en;
+			/* use_rwwi is limited for single link lgr */
+			lgr->use_rwwi = ini->vendor_opt_valid && ini->rwwi_en &&
+					lgr->max_links <= 1;
 		} else {
 			ibdev = ini->ib_dev;
 			ibport = ini->ib_port;
+			lgr->max_conns = SMC_RMBS_PER_LGR_MAX;
+			lgr->max_links = SMC_LINKS_ADD_LNK_MAX;
+			lgr->credits_en = 0;
+			lgr->use_rwwi = 0;
 		}
 		memcpy(lgr->pnet_id, ibdev->pnetid[ibport - 1],
 		       SMC_MAX_PNETID_LEN);
@@ -1095,8 +1144,8 @@ static int smc_switch_cursor(struct smc_sock *smc, struct smc_cdc_tx_pend *pend,
 	/* recalculate, value is used by tx_rdma_writes() */
 	atomic_set(&smc->conn.peer_rmbe_space, smc_write_space(conn));
 
-	if (smc->sk.sk_state != SMC_INIT &&
-	    smc->sk.sk_state != SMC_CLOSED) {
+	if (smc_sk_state(&smc->sk) != SMC_INIT &&
+	    smc_sk_state(&smc->sk) != SMC_CLOSED) {
 		rc = smcr_cdc_msg_send_validation(conn, pend, wr_buf);
 		if (!rc) {
 			queue_delayed_work(conn->lgr->tx_wq, &conn->tx_work, 0);
@@ -1157,17 +1206,17 @@ again:
 			continue;
 		smc = container_of(conn, struct smc_sock, conn);
 		/* conn->lnk not yet set in SMC_INIT state */
-		if (smc->sk.sk_state == SMC_INIT)
+		if (smc_sk_state(&smc->sk) == SMC_INIT)
 			continue;
-		if (smc->sk.sk_state == SMC_CLOSED ||
-		    smc->sk.sk_state == SMC_PEERCLOSEWAIT1 ||
-		    smc->sk.sk_state == SMC_PEERCLOSEWAIT2 ||
-		    smc->sk.sk_state == SMC_APPFINCLOSEWAIT ||
-		    smc->sk.sk_state == SMC_APPCLOSEWAIT1 ||
-		    smc->sk.sk_state == SMC_APPCLOSEWAIT2 ||
-		    smc->sk.sk_state == SMC_PEERFINCLOSEWAIT ||
-		    smc->sk.sk_state == SMC_PEERABORTWAIT ||
-		    smc->sk.sk_state == SMC_PROCESSABORT) {
+		if (smc_sk_state(&smc->sk) == SMC_CLOSED ||
+		    smc_sk_state(&smc->sk) == SMC_PEERCLOSEWAIT1 ||
+		    smc_sk_state(&smc->sk) == SMC_PEERCLOSEWAIT2 ||
+		    smc_sk_state(&smc->sk) == SMC_APPFINCLOSEWAIT ||
+		    smc_sk_state(&smc->sk) == SMC_APPCLOSEWAIT1 ||
+		    smc_sk_state(&smc->sk) == SMC_APPCLOSEWAIT2 ||
+		    smc_sk_state(&smc->sk) == SMC_PEERFINCLOSEWAIT ||
+		    smc_sk_state(&smc->sk) == SMC_PEERABORTWAIT ||
+		    smc_sk_state(&smc->sk) == SMC_PROCESSABORT) {
 			spin_lock_bh(&conn->send_lock);
 			smc_switch_link_and_count(conn, to_lnk);
 			spin_unlock_bh(&conn->send_lock);
@@ -1732,7 +1781,7 @@ void smcr_lgr_set_type(struct smc_link_group *lgr, enum smc_lgr_type new_type)
 		lgr_type = "ASYMMETRIC_LOCAL";
 		break;
 	}
-	pr_warn_ratelimited("smc: SMC-R lg %*phN state changed: "
+	pr_info_ratelimited("smc: SMC-R lg %*phN state changed: "
 			    "%s, pnetid %.16s\n", SMC_LGR_ID_SIZE, &lgr->id,
 			    lgr_type, lgr->pnet_id);
 }
@@ -1763,6 +1812,7 @@ void smcr_port_add(struct smc_ib_device *smcibdev, u8 ibport)
 {
 	struct smc_link_group *lgr, *n;
 
+	spin_lock_bh(&smc_lgr_list.lock);
 	list_for_each_entry_safe(lgr, n, &smc_lgr_list.list, list) {
 		struct smc_link *link;
 
@@ -1773,11 +1823,15 @@ void smcr_port_add(struct smc_ib_device *smcibdev, u8 ibport)
 		    !rdma_dev_access_netns(smcibdev->ibdev, lgr->net))
 			continue;
 
+		if (lgr->type == SMC_LGR_SINGLE && lgr->max_links <= 1)
+			continue;
+
 		/* trigger local add link processing */
 		link = smc_llc_usable_link(lgr);
 		if (link)
 			smc_llc_add_link_local(link);
 	}
+	spin_unlock_bh(&smc_lgr_list.lock);
 }
 
 /* link is down - switch connections to alternate link,
@@ -1997,7 +2051,7 @@ int smc_conn_create(struct smc_sock *smc, struct smc_init_info *ini)
 		    (ini->smcd_version == SMC_V2 ||
 		     lgr->vlan_id == ini->vlan_id) &&
 		    (role == SMC_CLNT || ini->is_smcd ||
-		    (lgr->conns_num < SMC_RMBS_PER_LGR_MAX &&
+		    (lgr->conns_num < lgr->max_conns &&
 		      !bitmap_full(lgr->rtokens_used_mask, SMC_RMBS_PER_LGR_MAX)))) {
 			/* link group found */
 			ini->first_contact_local = 0;
