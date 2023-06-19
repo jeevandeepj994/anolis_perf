@@ -22,10 +22,10 @@ struct netns_smc {
 #endif
 	unsigned int			sysctl_autocorking_size;
 	unsigned int			sysctl_smcr_buf_type;
+	unsigned int			sysctl_vendor_exp_options;
 	int				sysctl_smcr_testlink_time;
 	int				sysctl_wmem;
 	int				sysctl_rmem;
 	int				sysctl_tcp2smc;
-	int				sysctl_allow_different_subnet;
 };
 #endif

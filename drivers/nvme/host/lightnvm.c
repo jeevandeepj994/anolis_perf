@@ -653,9 +653,10 @@ static struct request *nvme_nvm_alloc_request(struct request_queue *q,
 
 	nvme_nvm_rqtocmd(rqd, ns, cmd);
 
-	rq = nvme_alloc_request(q, (struct nvme_command *)cmd, 0);
+	rq = blk_mq_alloc_request(q, nvme_req_op((struct nvme_command *)cmd), 0);
 	if (IS_ERR(rq))
 		return rq;
+	nvme_init_request(rq, (struct nvme_command *)cmd);
 
 	rq->cmd_flags &= ~REQ_FAILFAST_DRIVER;
 
@@ -767,11 +768,12 @@ static int nvme_nvm_submit_user_cmd(struct request_queue *q,
 	DECLARE_COMPLETION_ONSTACK(wait);
 	int ret = 0;
 
-	rq = nvme_alloc_request(q, (struct nvme_command *)vcmd, 0);
+	rq = blk_mq_alloc_request(q, nvme_req_op((struct nvme_command *)vcmd), 0);
 	if (IS_ERR(rq)) {
 		ret = -ENOMEM;
 		goto err_cmd;
 	}
+	nvme_init_request(rq, (struct nvme_command *)vcmd);
 
 	if (timeout)
 		rq->timeout = timeout;
@@ -931,15 +933,15 @@ static int nvme_nvm_user_vcmd(struct nvme_ns *ns, int admin,
 	return ret;
 }
 
-int nvme_nvm_ioctl(struct nvme_ns *ns, unsigned int cmd, unsigned long arg)
+int nvme_nvm_ioctl(struct nvme_ns *ns, unsigned int cmd, void __user *argp)
 {
 	switch (cmd) {
 	case NVME_NVM_IOCTL_ADMIN_VIO:
-		return nvme_nvm_user_vcmd(ns, 1, (void __user *)arg);
+		return nvme_nvm_user_vcmd(ns, 1, argp);
 	case NVME_NVM_IOCTL_IO_VIO:
-		return nvme_nvm_user_vcmd(ns, 0, (void __user *)arg);
+		return nvme_nvm_user_vcmd(ns, 0, argp);
 	case NVME_NVM_IOCTL_SUBMIT_VIO:
-		return nvme_nvm_submit_vio(ns, (void __user *)arg);
+		return nvme_nvm_submit_vio(ns, argp);
 	default:
 		return -ENOTTY;
 	}

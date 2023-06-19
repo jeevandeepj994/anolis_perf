@@ -1260,6 +1260,12 @@ static int free_tail_pages_check(struct page *head_page, struct page *page)
 		 * deferred_list.next -- ignore value.
 		 */
 		break;
+	case 3:
+		/*
+		 * the third tail page: ->mapping is
+		 * hugepage_reclaim_list.next -- ignore value.
+		 */
+		break;
 	default:
 		if (page->mapping != TAIL_MAPPING) {
 			bad_page(page, "corrupted mapping in tail page");
@@ -1447,6 +1453,15 @@ static bool bulkfree_pcp_prepare(struct page *page)
 }
 #endif /* CONFIG_DEBUG_VM */
 
+static inline void prefetch_buddy(struct page *page, unsigned int order)
+{
+	unsigned long pfn = page_to_pfn(page);
+	unsigned long buddy_pfn = __find_buddy_pfn(pfn, order);
+	struct page *buddy = page + (buddy_pfn - pfn);
+
+	prefetch(buddy);
+}
+
 /*
  * Frees a number of pages from the PCP lists
  * Assumes all pages on list are in same zone, and of same order.
@@ -1465,25 +1480,16 @@ static void free_pcppages_bulk(struct zone *zone, int count,
 	int min_pindex = 0;
 	int max_pindex = NR_PCP_LISTS - 1;
 	unsigned int order;
+	int prefetch_nr = 0;
 	bool isolated_pageblocks;
-	struct page *page;
+	struct page *page, *tmp;
+	LIST_HEAD(head);
 
 	/*
 	 * Ensure proper count is passed which otherwise would stuck in the
 	 * below while (list_empty(list)) loop.
 	 */
 	count = min(pcp->count, count);
-
-	/* Ensure requested pindex is drained first. */
-	pindex = pindex - 1;
-
-	/*
-	 * local_lock_irq held so equivalent to spin_lock_irqsave for
-	 * both PREEMPT_RT and non-PREEMPT_RT configurations.
-	 */
-	spin_lock(&zone->lock);
-	isolated_pageblocks = has_isolate_pageblock(zone);
-
 	while (count > 0) {
 		struct list_head *list;
 		int nr_pages;
@@ -1506,11 +1512,7 @@ static void free_pcppages_bulk(struct zone *zone, int count,
 		nr_pages = 1 << order;
 		BUILD_BUG_ON(MAX_ORDER >= (1<<NR_PCP_ORDER_WIDTH));
 		do {
-			int mt;
-
 			page = list_last_entry(list, struct page, lru);
-			mt = get_pcppage_migratetype(page);
-
 			/* must delete to avoid corrupting pcp list */
 			list_del(&page->lru);
 			count -= nr_pages;
@@ -1526,17 +1528,49 @@ static void free_pcppages_bulk(struct zone *zone, int count,
 			if (bulkfree_pcp_prepare(page))
 				continue;
 
-			/* MIGRATE_ISOLATE page should not go to pcplists */
-			VM_BUG_ON_PAGE(is_migrate_isolate(mt), page);
-			/* Pageblock could have been isolated meanwhile */
-			if (unlikely(isolated_pageblocks))
-				mt = get_pageblock_migratetype(page);
+			/* Encode order with the migratetype */
+			page->index <<= NR_PCP_ORDER_WIDTH;
+			page->index |= order;
 
-			__free_one_page(page, page_to_pfn(page), zone, order, mt, FPI_NONE);
-			trace_mm_page_pcpu_drain(page, order, mt);
+			list_add_tail(&page->lru, &head);
+
+			/*
+			 * We are going to put the page back to the global
+			 * pool, prefetch its buddy to speed up later access
+			 * under zone->lock. It is believed the overhead of
+			 * an additional test and calculating buddy_pfn here
+			 * can be offset by reduced memory latency later. To
+			 * avoid excessive prefetching due to large count, only
+			 * prefetch buddy for the first pcp->batch nr of pages.
+			 */
+			if (prefetch_nr++ < pcp->batch)
+				prefetch_buddy(page, order);
 		} while (count > 0 && !list_empty(list));
 	}
 
+	spin_lock(&zone->lock);
+	isolated_pageblocks = has_isolate_pageblock(zone);
+
+	/*
+	 * Use safe version since after __free_one_page(),
+	 * page->lru.next will not point to original list.
+	 */
+	list_for_each_entry_safe(page, tmp, &head, lru) {
+		int mt = get_pcppage_migratetype(page);
+
+		/* mt has been encoded with the order (see above) */
+		order = mt & NR_PCP_ORDER_MASK;
+		mt >>= NR_PCP_ORDER_WIDTH;
+
+		/* MIGRATE_ISOLATE page should not go to pcplists */
+		VM_BUG_ON_PAGE(is_migrate_isolate(mt), page);
+		/* Pageblock could have been isolated meanwhile */
+		if (unlikely(isolated_pageblocks))
+			mt = get_pageblock_migratetype(page);
+
+		__free_one_page(page, page_to_pfn(page), zone, order, mt, FPI_NONE);
+		trace_mm_page_pcpu_drain(page, order, mt);
+	}
 	spin_unlock(&zone->lock);
 }
 

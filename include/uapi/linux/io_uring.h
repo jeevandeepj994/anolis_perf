@@ -101,6 +101,7 @@ enum {
 #define IORING_SETUP_ATTACH_WQ	(1U << 5)	/* attach to existing wq */
 #define IORING_SETUP_R_DISABLED	(1U << 6)	/* start with ring disabled */
 #define IORING_SETUP_SQE128		(1U << 10) /* SQEs are 128 byte */
+#define IORING_SETUP_CQE32		(1U << 11) /* CQEs are 32 byte */
 #define IORING_SETUP_IDLE_US	(1U << 30)	/* unit of thread_idle is macrosecond */
 #define IORING_SETUP_SQPOLL_PERCPU	(1U << 31)	/* use percpu SQ poll thread */
 
@@ -139,6 +140,18 @@ enum {
 	IORING_OP_PROVIDE_BUFFERS,
 	IORING_OP_REMOVE_BUFFERS,
 	IORING_OP_TEE,
+	IORING_OP_SHUTDOWN,
+	IORING_OP_RENAMEAT,
+	IORING_OP_UNLINKAT,
+	IORING_OP_MKDIRAT,
+	IORING_OP_SYMLINKAT,
+	IORING_OP_LINKAT,
+	IORING_OP_MSG_RING,
+	IORING_OP_FSETXATTR,
+	IORING_OP_SETXATTR,
+	IORING_OP_FGETXATTR,
+	IORING_OP_GETXATTR,
+	IORING_OP_SOCKET,
 	IORING_OP_URING_CMD,
 
 	/* this goes last, obviously */
@@ -168,6 +181,12 @@ struct io_uring_cqe {
 	__u64	user_data;	/* sqe->data submission passed back */
 	__s32	res;		/* result code for this event */
 	__u32	flags;
+
+	/*
+	 * If the ring is initialized with IORING_SETUP_CQE32, then this field
+	 * contains 16-bytes of padding, doubling the size of the CQE.
+	 */
+	__u64 big_cqe[];
 };
 
 /*

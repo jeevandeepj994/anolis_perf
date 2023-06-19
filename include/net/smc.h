@@ -12,7 +12,14 @@
 #define _SMC_H
 
 #include <net/inet_connection_sock.h>
-#include <linux/bpf.h>
+#include <linux/device.h>
+#include <linux/spinlock.h>
+#include <linux/types.h>
+#include <linux/wait.h>
+#include <net/tcp.h>
+#include "linux/ism.h"
+
+struct sock;
 
 #ifdef ATOMIC64_INIT
 #define KERNEL_HAS_ATOMIC64
@@ -51,20 +58,14 @@ struct smcd_dmb {
 
 #define ISM_ERROR	0xFFFF
 
-struct smcd_event {
-	u32 type;
-	u32 code;
-	u64 tok;
-	u64 time;
-	u64 info;
-};
-
 struct smcd_dev;
+struct ism_client;
 
 struct smcd_ops {
 	int (*query_remote_gid)(struct smcd_dev *dev, u64 rgid, u32 vid_valid,
 				u32 vid);
-	int (*register_dmb)(struct smcd_dev *dev, struct smcd_dmb *dmb);
+	int (*register_dmb)(struct smcd_dev *dev, struct smcd_dmb *dmb,
+			    struct ism_client *client);
 	int (*unregister_dmb)(struct smcd_dev *dev, struct smcd_dmb *dmb);
 	int (*add_vlan_id)(struct smcd_dev *dev, u64 vlan_id);
 	int (*del_vlan_id)(struct smcd_dev *dev, u64 vlan_id);
@@ -75,15 +76,16 @@ struct smcd_ops {
 	int (*move_data)(struct smcd_dev *dev, u64 dmb_tok, unsigned int idx,
 			 bool sf, unsigned int offset, void *data,
 			 unsigned int size);
+	int (*supports_v2)(void);
 	u8* (*get_system_eid)(void);
+	u64 (*get_local_gid)(struct smcd_dev *dev);
 	u16 (*get_chid)(struct smcd_dev *dev);
+	struct device* (*get_dev)(struct smcd_dev *dev);
 };
 
 struct smcd_dev {
 	const struct smcd_ops *ops;
-	struct device dev;
 	void *priv;
-	u64 local_gid;
 	struct list_head list;
 	spinlock_t lock;
 	struct smc_connection **conn;
@@ -97,14 +99,6 @@ struct smcd_dev {
 	wait_queue_head_t lgrs_deleted;
 	u8 going_away : 1;
 };
-
-struct smcd_dev *smcd_alloc_dev(struct device *parent, const char *name,
-				const struct smcd_ops *ops, int max_dmbs);
-int smcd_register_dev(struct smcd_dev *smcd);
-void smcd_unregister_dev(struct smcd_dev *smcd);
-void smcd_free_dev(struct smcd_dev *smcd);
-void smcd_handle_event(struct smcd_dev *dev, struct smcd_event *event);
-void smcd_handle_irq(struct smcd_dev *dev, unsigned int bit, u16 dmbemask);
 
 struct smc_wr_rx_hdr {	/* common prefix part of LLC and CDC to demultiplex */
 	union {
@@ -279,11 +273,24 @@ struct smc_connection {
 	u8			killed : 1;	/* abnormal termination */
 	u8			freed : 1;	/* normal termiation */
 	u8			out_of_sync : 1; /* out of sync with peer */
+	u8			unwrap_remaining : 1; /* have remaining data to
+						       * send when RMB unwrapped
+						       */
 };
 
 struct smc_sock {				/* smc sock container */
-	struct sock		sk;
-	struct socket		*clcsock;	/* internal tcp socket */
+	union {
+		struct tcp_sock	tpsk;
+		struct sock	sk;
+	};
+	struct socket	*clcsock;	/* internal tcp socket */
+	unsigned char	smc_state;	/* smc state used in smc via inet_sk */
+	unsigned int	isck_smc_negotiation;
+	struct socket	accompany_socket;
+	struct request_sock	*tail_0;
+	struct request_sock	*tail_1;
+	struct request_sock	*reqsk;
+	unsigned int	queued_cnt;
 	void			(*clcsk_state_change)(struct sock *sk);
 						/* original stat_change fct. */
 	void			(*clcsk_data_ready)(struct sock *sk);
@@ -292,6 +299,7 @@ struct smc_sock {				/* smc sock container */
 						/* original write_space fct. */
 	void			(*clcsk_error_report)(struct sock *sk);
 						/* original error_report fct. */
+	void			(*original_sk_destruct)(struct sock *sk);
 	struct smc_connection	conn;		/* smc connection */
 	struct smc_sock		*listen_smc;	/* listen parent */
 	struct work_struct	connect_work;	/* handle non-blocking connect*/
@@ -301,11 +309,14 @@ struct smc_sock {				/* smc sock container */
 	spinlock_t		accept_q_lock;	/* protects accept_q */
 	bool			limit_smc_hs;	/* put constraint on handshake */
 	bool			use_fallback;	/* fallback to tcp */
+	bool			under_presure;	/* under presure */
 	int			fallback_rsn;	/* reason for fallback */
 	u32			peer_diagnosis; /* decline reason from peer */
 	atomic_t                queued_smc_hs;  /* queued smc handshakes */
 	struct inet_connection_sock_af_ops		af_ops;
 	const struct inet_connection_sock_af_ops	*ori_af_ops;
+	/* protocol negotiator ops */
+	const struct smc_sock_negotiator_ops *negotiator_ops;
 						/* original af ops */
 	int			sockopt_defer_accept;
 						/* sockopt TCP_DEFER_ACCEPT
@@ -325,49 +336,54 @@ struct smc_sock {				/* smc sock container */
 						/* non-blocking connect in
 						 * flight
 						 */
+	u8			ordered : 1;
 	struct mutex            clcsock_release_lock;
 						/* protects clcsock of a listen
 						 * socket
 						 */
 };
 
-#define SMC_SOCK_CLOSED_TIMING (0)
-
-#ifdef CONFIG_BPF_SYSCALL
+#define SMC_NEGOTIATOR_NAME_MAX	(16)
+#define SMC_SOCK_CLOSED_TIMING	(0)
 
 /* BPF struct ops for smc protocol negotiator */
 struct smc_sock_negotiator_ops {
-	/* ret for negotiate */
-	int (*negotiate)(struct smc_sock *sk);
+
+	struct list_head	list;
+
+	/* ops name */
+	char		name[16];
+	/* key for name */
+	u32			key;
+
+	/* init with sk */
+	void (*init)(struct sock *sk);
+
+	/* release with sk */
+	void (*release)(struct sock *sk);
+
+	/* advice for negotiate */
+	int (*negotiate)(struct sock *sk);
 
 	/* info gathering timing */
 	void (*collect_info)(struct sock *sk, int timing);
+
+	/* module owner */
+	struct module *owner;
 };
 
-/* Query if current sock should go with SMC protocol
- * SK_PASS for yes, otherwise for no.
- */
-int smc_sock_should_select_smc(const struct smc_sock *smc);
+int smc_sock_register_negotiator_ops(struct smc_sock_negotiator_ops *ops);
+int smc_sock_update_negotiator_ops(struct smc_sock_negotiator_ops *ops,
+					  struct smc_sock_negotiator_ops *old_ops);
+void smc_sock_unregister_negotiator_ops(struct smc_sock_negotiator_ops *ops);
+int smc_sock_assign_negotiator_ops(struct smc_sock *smc, const char *name);
 
-
-/* At some specific points in time,
- * let negotiator can perform info gathering
- * on target sock.
- */
-void smc_sock_perform_collecting_info(const struct sock *sk, int timing);
-
+#ifdef CONFIG_BPF_SYSCALL
+void smc_sock_cleanup_negotiator_ops(struct smc_sock *smc, int in_release);
+void smc_sock_clone_negotiator_ops(struct sock *parent, struct sock *child);
 #else
-
-static inline int smc_sock_should_select_smc(const struct smc_sock *smc)
-{
-	return SK_PASS;
-}
-
-static inline void smc_sock_perform_collecting_info(const struct sock *sk, int timing)
-{
-
-}
-
-#endif /* CONFIG_BPF_SYSCALL */
+static inline void smc_sock_cleanup_negotiator_ops(struct smc_sock *smc, int in_release) {}
+static inline void smc_sock_clone_negotiator_ops(struct sock *parent, struct sock *child) {}
+#endif
 
 #endif	/* _SMC_H */

@@ -7,29 +7,22 @@
 #ifndef __ERDMA_H__
 #define __ERDMA_H__
 
+#include "kcompat.h"
 #include <linux/bitfield.h>
 #include <linux/netdevice.h>
 #include <linux/pci.h>
 #include <linux/xarray.h>
 #include <rdma/ib_verbs.h>
 
-#include "erdma_debug.h"
 #include "erdma_hw.h"
 #include "erdma_ioctl.h"
 #include "erdma_stats.h"
 
-#ifndef RDMA_DRIVER_ERDMA
-#define RDMA_DRIVER_ERDMA 19
-#endif
-
-#define ERDMA_MAJOR_VER 0
-#define ERDMA_MEDIUM_VER 2
-#define ERDMA_MINOR_VER 35
 
 #define DRV_MODULE_NAME "erdma"
 #define ERDMA_NODE_DESC "Elastic RDMA(iWARP) stack"
 
-typedef u8 port_t;
+extern bool compat_mode;
 
 struct erdma_stats {
 	atomic64_t value[ERDMA_STATS_MAX];
@@ -143,11 +136,14 @@ struct erdma_devattr {
 	u32 fw_version;
 
 	unsigned char peer_addr[ETH_ALEN];
+	unsigned long cap_flags;
 
 	int numa_node;
 	enum erdma_cc_alg cc;
-	u8 flags;
+	u8 retrans_num;
+	u8 rsvd;
 	u32 grp_num;
+	u32 max_ceqs;
 	int irq_num;
 
 	bool disable_dwqe;
@@ -250,6 +246,8 @@ struct erdma_dev {
 
 	struct dma_pool *db_pool;
 	struct dma_pool *resp_pool;
+
+	struct dentry *dbg_root;
 };
 
 static inline void *get_queue_entry(void *qbuf, u32 idx, u32 depth, u32 shift)
@@ -314,5 +312,17 @@ void erdma_ceq_completion_handler(struct erdma_eq_cb *ceq_cb);
 
 void erdma_chrdev_destroy(void);
 int erdma_chrdev_init(void);
+
+int erdma_query_resource(struct erdma_dev *dev, u32 mod, u32 op, u32 index,
+			 void *out, u32 len);
+int erdma_query_ext_attr(struct erdma_dev *dev, void *out);
+int erdma_set_dack_count(struct erdma_dev *dev, u32 value);
+
+void erdma_debugfs_register(void);
+void erdma_debugfs_unregister(void);
+
+int erdma_debugfs_files_create(struct erdma_dev *dev);
+void erdma_debugfs_files_destroy(struct erdma_dev *dev);
+extern struct dentry *erdma_debugfs_root;
 
 #endif

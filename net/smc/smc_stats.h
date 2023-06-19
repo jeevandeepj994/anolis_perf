@@ -88,6 +88,54 @@ struct smc_stats {
 	u64			srv_hshake_err_cnt;
 };
 
+struct smc_link_ib_stats {
+	u64	s_wr_cnt;  /* send request cnt*/
+	u64	s_wc_cnt;  /* send tx complete cnt */
+	u64	r_wr_cnt;  /* recv wr cnt */
+	u64	r_wc_cnt;  /* recv complete cnt */
+	u64	rw_wr_cnt; /* rdma write(with imm) request cnt */
+	u64	rw_wc_cnt; /* rdma write(with imm) tx complete cnt */
+};
+
+struct smc_link_stats {
+	struct smc_link_ib_stats __percpu	*ib_stats;
+	u32					qpn;
+	u32					peer_qpn;
+};
+
+#define SMC_LINK_STAT_IB(_lnk_stats, op, elem) \
+	this_cpu_inc((_lnk_stats)->ib_stats->op ## _ ## elem ## _cnt)
+
+#define SMC_LINK_STAT_WC(lnk_stats, opcode, is_rx) \
+do { \
+	typeof(lnk_stats) _lnk_stats = lnk_stats; \
+	typeof(opcode) op = opcode; \
+	if (is_rx) { \
+		SMC_LINK_STAT_IB(_lnk_stats, r, wc); \
+	} else { \
+		if (op == IB_WC_SEND || op == IB_WC_REG_MR) \
+			SMC_LINK_STAT_IB(_lnk_stats, s, wc); \
+		if (op == IB_WC_RDMA_WRITE) \
+			SMC_LINK_STAT_IB(_lnk_stats, rw, wc); \
+	} \
+} \
+while (0)
+
+#define SMC_LINK_STAT_WR(lnk_stats, opcode, is_rx) \
+do { \
+	typeof(lnk_stats) _lnk_stats = lnk_stats; \
+	typeof(opcode) op = opcode; \
+	if (is_rx) { \
+		SMC_LINK_STAT_IB(_lnk_stats, r, wr); \
+	} else { \
+		if (op == IB_WR_SEND || op == IB_WR_REG_MR) \
+			SMC_LINK_STAT_IB(_lnk_stats, s, wr); \
+		else if (op == IB_WR_RDMA_WRITE_WITH_IMM) \
+			SMC_LINK_STAT_IB(_lnk_stats, rw, wr); \
+	} \
+} \
+while (0)
+
 #define SMC_STAT_PAYLOAD_SUB(_smc_stats, _tech, key, _len, _rc) \
 do { \
 	typeof(_smc_stats) stats = (_smc_stats); \
@@ -244,8 +292,9 @@ while (0)
 #define SMC_STAT_SERV_SUCC_INC(net, _ini) \
 do { \
 	typeof(_ini) i = (_ini); \
-	bool is_v2 = (i->smcd_version & SMC_V2); \
 	bool is_smcd = (i->is_smcd); \
+	u8 version = is_smcd ? i->smcd_version : i->smcr_version; \
+	bool is_v2 = (version & SMC_V2); \
 	typeof(net->smc.smc_stats) smc_stats = (net)->smc.smc_stats; \
 	if (is_v2 && is_smcd) \
 		this_cpu_inc(smc_stats->smc[SMC_TYPE_D].srv_v2_succ_cnt); \
@@ -260,6 +309,8 @@ while (0)
 
 int smc_nl_get_stats(struct sk_buff *skb, struct netlink_callback *cb);
 int smc_nl_get_fback_stats(struct sk_buff *skb, struct netlink_callback *cb);
+int smc_lgr_link_stats_init(struct smc_link_group *lgr);
+void smc_lgr_link_stats_free(struct smc_link_group *lgr);
 int smc_stats_init(struct net *net);
 void smc_stats_exit(struct net *net);
 

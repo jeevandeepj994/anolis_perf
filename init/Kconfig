@@ -2474,7 +2474,7 @@ config CK_KABI_RESERVE
 config CK_KABI_SIZE_ALIGN_CHECKS
 	bool "Enables more stringent kabi checks in the macros"
 	default y
-	depends on KABI_RESERVE
+	depends on CK_KABI_RESERVE
 	help
 	  This option enables more stringent kabi checks. Those must be disabled
 	  in case of a debug-build because they allow to change struct sizes.

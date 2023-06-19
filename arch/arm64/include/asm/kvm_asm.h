@@ -136,6 +136,13 @@ extern void *__vhe_undefined_symbol;
  * - Don't let the nVHE hypervisor have access to this, as it will
  *   pick the *wrong* symbol (yes, it runs at EL2...).
  */
+#if defined(CONFIG_KVM_ARM_HOST_VHE_ONLY)
+#define CHOOSE_HYP_SYM(sym) CHOOSE_VHE_SYM(sym)
+#define this_cpu_ptr_hyp_sym(sym) this_cpu_ptr(&sym)
+#define per_cpu_ptr_hyp_sym(sym, cpu) per_cpu_ptr(&sym, cpu)
+#define CHOOSE_VHE_SYM(sym) sym
+#define CHOOSE_NVHE_SYM(sym)    kvm_nvhe_sym(sym)
+#else
 #define CHOOSE_HYP_SYM(sym)		(is_kernel_in_hyp_mode()	\
 					   ? CHOOSE_VHE_SYM(sym)	\
 					   : CHOOSE_NVHE_SYM(sym))
@@ -150,6 +157,7 @@ extern void *__vhe_undefined_symbol;
 
 #define CHOOSE_VHE_SYM(sym)	sym
 #define CHOOSE_NVHE_SYM(sym)	kvm_nvhe_sym(sym)
+#endif
 
 #endif
 

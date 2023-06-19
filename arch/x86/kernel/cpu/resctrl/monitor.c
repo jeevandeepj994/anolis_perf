@@ -200,7 +200,7 @@ static void __rmid_read(void *_arg)
 
 	do {
 		arg->err = ___rmid_read(arg);
-	} while (arg->err && arg->err != -EINTR);
+	} while (arg->err && arg->err == -EINTR);
 }
 
 int resctrl_arch_rmid_read(struct rdt_resource *r, struct rdt_domain *d,

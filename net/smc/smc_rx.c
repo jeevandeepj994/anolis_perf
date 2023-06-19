@@ -13,6 +13,7 @@
 #include <linux/net.h>
 #include <linux/rcupdate.h>
 #include <linux/sched/signal.h>
+#include <linux/splice.h>
 
 #include <net/sock.h>
 
@@ -40,7 +41,7 @@ static void smc_rx_wake_up(struct sock *sk)
 						EPOLLRDNORM | EPOLLRDBAND);
 	sk_wake_async(sk, SOCK_WAKE_WAITD, POLL_IN);
 	if ((sk->sk_shutdown == SHUTDOWN_MASK) ||
-	    (sk->sk_state == SMC_CLOSED))
+	    (smc_sk_state(sk) == SMC_CLOSED))
 		sk_wake_async(sk, SOCK_WAKE_WAITD, POLL_HUP);
 	rcu_read_unlock();
 }
@@ -115,9 +116,9 @@ static void smc_rx_pipe_buf_release(struct pipe_inode_info *pipe,
 	struct smc_connection *conn;
 	struct sock *sk = &smc->sk;
 
-	if (sk->sk_state == SMC_CLOSED ||
-	    sk->sk_state == SMC_PEERFINCLOSEWAIT ||
-	    sk->sk_state == SMC_APPFINCLOSEWAIT)
+	if (smc_sk_state(sk) == SMC_CLOSED ||
+	    smc_sk_state(sk) == SMC_PEERFINCLOSEWAIT ||
+	    smc_sk_state(sk) == SMC_APPFINCLOSEWAIT)
 		goto out;
 	conn = &smc->conn;
 	lock_sock(sk);
@@ -263,9 +264,9 @@ int smc_rx_wait(struct smc_sock *smc, long *timeo,
 	sk_set_bit(SOCKWQ_ASYNC_WAITDATA, sk);
 	add_wait_queue(sk_sleep(sk), &wait);
 	rc = sk_wait_event(sk, timeo,
-			   sk->sk_err ||
+			   READ_ONCE(sk->sk_err) ||
 			   cflags->peer_conn_abort ||
-			   sk->sk_shutdown & RCV_SHUTDOWN ||
+			   READ_ONCE(sk->sk_shutdown) & RCV_SHUTDOWN ||
 			   conn->killed ||
 			   fcrit(conn),
 			   &wait);
@@ -312,7 +313,7 @@ static int smc_rx_recv_urg(struct smc_sock *smc, struct msghdr *msg, int len,
 		return rc ? -EFAULT : len;
 	}
 
-	if (sk->sk_state == SMC_CLOSED || sk->sk_shutdown & RCV_SHUTDOWN)
+	if (smc_sk_state(sk) == SMC_CLOSED || sk->sk_shutdown & RCV_SHUTDOWN)
 		return 0;
 
 	return -EAGAIN;
@@ -357,7 +358,7 @@ int smc_rx_recvmsg(struct smc_sock *smc, struct msghdr *msg,
 		return -EINVAL; /* future work for sk.sk_family == AF_SMC */
 
 	sk = &smc->sk;
-	if (sk->sk_state == SMC_LISTEN)
+	if (smc_sk_state(sk) == SMC_LISTEN)
 		return -ENOTCONN;
 	if (flags & MSG_OOB)
 		return smc_rx_recv_urg(smc, msg, len, flags);
@@ -394,7 +395,7 @@ int smc_rx_recvmsg(struct smc_sock *smc, struct msghdr *msg,
 
 		if (read_done) {
 			if (sk->sk_err ||
-			    sk->sk_state == SMC_CLOSED ||
+			    smc_sk_state(sk) == SMC_CLOSED ||
 			    !timeo ||
 			    signal_pending(current))
 				break;
@@ -403,7 +404,7 @@ int smc_rx_recvmsg(struct smc_sock *smc, struct msghdr *msg,
 				read_done = sock_error(sk);
 				break;
 			}
-			if (sk->sk_state == SMC_CLOSED) {
+			if (smc_sk_state(sk) == SMC_CLOSED) {
 				if (!sock_flag(sk, SOCK_DONE)) {
 					/* This occurs when user tries to read
 					 * from never connected socket.

@@ -2285,12 +2285,23 @@ static void tx_work_handler(struct work_struct *work)
 	mutex_unlock(&tls_ctx->tx_lock);
 }
 
+static bool tls_is_tx_ready(struct tls_sw_context_tx *ctx)
+{
+	struct tls_rec *rec;
+
+	rec = list_first_entry_or_null(&ctx->tx_list, struct tls_rec, list);
+	if (!rec)
+		return false;
+
+	return READ_ONCE(rec->tx_ready);
+}
+
 void tls_sw_write_space(struct sock *sk, struct tls_context *ctx)
 {
 	struct tls_sw_context_tx *tx_ctx = tls_sw_ctx_tx(ctx);
 
 	/* Schedule the transmission if tx list is ready */
-	if (is_tx_ready(tx_ctx) &&
+	if (tls_is_tx_ready(tx_ctx) &&
 	    !test_and_set_bit(BIT_TX_SCHEDULED, &tx_ctx->tx_bitmask))
 		schedule_delayed_work(&tx_ctx->tx_work.work, 0);
 }

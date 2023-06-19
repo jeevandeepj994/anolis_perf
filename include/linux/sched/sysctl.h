@@ -85,7 +85,7 @@ extern int sched_group_identity_enable_handler(struct ctl_table *table, int writ
 		loff_t *ppos);
 #ifdef CONFIG_SCHED_SMT
 extern int sysctl_sched_expel_idle_balance_delay;
-extern unsigned long sysctl_sched_expel_update_interval;
+extern unsigned int sysctl_sched_expel_update_interval;
 #endif
 #endif
 

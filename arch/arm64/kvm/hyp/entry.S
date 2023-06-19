@@ -4,6 +4,9 @@
  * Author: Marc Zyngier <marc.zyngier@arm.com>
  */
 
+#if defined(CONFIG_KVM_ARM_HOST_VHE_ONLY)
+#define __KVM_VHE_HYPERVISOR__
+#endif
 #include <linux/linkage.h>
 
 #include <asm/alternative.h>

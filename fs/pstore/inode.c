@@ -510,12 +510,12 @@ static int pstore_fill_super(struct super_block *sb, void *data, int silent)
 	pstore_sb = sb;
 	mutex_unlock(&pstore_sb_lock);
 
-	rcu_read_lock();
-	list_for_each_entry_rcu(entry, &psback->list_entry, list) {
+	mutex_lock(&psback_lock);
+	list_for_each_entry(entry, &psback->list_entry, list) {
 		pstore_mksubdir(entry->psi);
 		pstore_get_records(entry->psi, entry->index, 0);
 	}
-	rcu_read_unlock();
+	mutex_unlock(&psback_lock);
 
 	psback->fs_ready = true;
 

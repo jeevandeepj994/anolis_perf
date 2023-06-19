@@ -4,6 +4,9 @@
  * Author: Marc Zyngier <marc.zyngier@arm.com>
  */
 
+#if defined(CONFIG_KVM_ARM_HOST_VHE_ONLY)
+#define __KVM_VHE_HYPERVISOR__
+#endif
 #include <linux/arm-smccc.h>
 #include <linux/linkage.h>
 
@@ -191,6 +194,7 @@ SYM_CODE_START(__kvm_hyp_vector)
 	valid_vect	el1_error		// Error 32-bit EL1
 SYM_CODE_END(__kvm_hyp_vector)
 
+#if !defined(CONFIG_KVM_ARM_HOST_VHE_ONLY)
 .macro hyp_ventry
 	.align 7
 1:	esb
@@ -240,3 +244,4 @@ SYM_CODE_START(__bp_harden_hyp_vecs)
 1:	.org __bp_harden_hyp_vecs + __BP_HARDEN_HYP_VECS_SZ
 	.org 1b
 SYM_CODE_END(__bp_harden_hyp_vecs)
+#endif

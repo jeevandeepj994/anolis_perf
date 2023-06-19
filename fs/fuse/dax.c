@@ -12,6 +12,7 @@
 #include <linux/pfn_t.h>
 #include <linux/iomap.h>
 #include <linux/interval_tree.h>
+#include <linux/magic.h>
 
 /*
  * Default memory range size.  A power of 2 so it agrees with common FUSE_INIT
@@ -652,9 +653,52 @@ static int fuse_iomap_end(struct inode *inode, loff_t pos, loff_t length,
 	return 0;
 }
 
+struct virtiofs_dmap_bitmap {
+	unsigned int magic;	/* 0x01020304 */
+	struct fuse_conn *fc;
+	refcount_t count;
+	unsigned long bitmap[];
+};
+
+static const struct vm_operations_struct fuse_dax_vm_ops;
+
+static void fuse_iomap_save_private(struct vm_area_struct *vma,
+				    struct iomap *iomap)
+{
+	struct fuse_dax_mapping *dmap = iomap->private;
+	unsigned int nr = dmap->window_offset / FUSE_DAX_SZ;
+	struct virtiofs_dmap_bitmap *db = vma->vm_private_data;
+
+	/* check if the vma belongs erofs */
+	if (vma->vm_ops == &fuse_dax_vm_ops)
+		return;
+
+	if (!dmap)
+		return;
+
+	if (!db || db->magic != 0x01020304) {
+		WARN_ON(1);
+		return;
+	}
+
+	WARN_ON_ONCE(dmap->window_offset % FUSE_DAX_SZ);
+	WARN_ON_ONCE(nr >= db->fc->dax->nr_ranges);
+
+	/* (used by erofs) atomic set bitmap in vma->vm_private_data */
+	if (!test_and_set_bit(nr, db->bitmap)) {
+		pr_debug("erofs pinned memory range window_offset=0x%llx length=0x%llx\n",
+			 dmap->window_offset, dmap->length);
+
+		/* increase refcnt so that erofs's vma mapping won't be reclaimed. */
+		WARN_ON_ONCE(refcount_read(&dmap->refcnt) < 2);
+		refcount_inc(&dmap->refcnt);
+	}
+}
+
 static const struct iomap_ops fuse_iomap_ops = {
 	.iomap_begin = fuse_iomap_begin,
 	.iomap_end = fuse_iomap_end,
+	.iomap_save_private = fuse_iomap_save_private,
 };
 
 static void fuse_wait_dax_page(struct inode *inode)
@@ -778,6 +822,47 @@ out:
 	return ret;
 }
 
+static void fuse_dax_endpfn(struct address_space *mapping,
+		pgoff_t index, struct iomap *iomap, int err)
+{
+	loff_t pos = (loff_t)index << PAGE_SHIFT;
+
+	fuse_iomap_ops.iomap_end(mapping->host, pos, PAGE_SIZE,
+			err ? 0 : PAGE_SIZE, 0, iomap);
+}
+
+static struct page *fuse_dax_startpfn(struct address_space *mapping,
+		pgoff_t index, struct iomap *iomap)
+
+{
+	struct inode *inode = mapping->host;
+	struct iomap srcmap = { .type = IOMAP_HOLE };
+	loff_t pos = (loff_t)index << PAGE_SHIFT;
+	pfn_t pfn;
+	struct page *page;
+	int ret;
+
+	iomap->type = IOMAP_HOLE;
+	ret = fuse_iomap_ops.iomap_begin(inode, pos, PAGE_SIZE, 0,
+					 iomap, &srcmap);
+	if (ret)
+		return ERR_PTR(ret);
+
+	if (WARN_ON_ONCE(iomap->type != IOMAP_MAPPED))
+		return ERR_PTR(-EIO);
+
+	ret = dax_iomap_direct_access(iomap, pos, PAGE_SIZE, NULL, &pfn);
+	if (ret < 0) {
+		fuse_dax_endpfn(mapping, index, iomap, 0);
+		return ERR_PTR(ret);
+	}
+
+	page = pfn_t_to_page(pfn);
+	WARN_ON(page_ref_count(page) < 1);
+	get_page(page);
+	return page;
+}
+
 static int fuse_dax_writepages(struct address_space *mapping,
 			       struct writeback_control *wbc)
 {
@@ -853,15 +938,88 @@ static vm_fault_t fuse_dax_pfn_mkwrite(struct vm_fault *vmf)
 	return __fuse_dax_fault(vmf, PE_SIZE_PTE, true);
 }
 
+static void fuse_dax_vma_close(struct vm_area_struct *vma)
+{
+	struct fuse_dax_mapping *dmap;
+	struct virtiofs_dmap_bitmap *db = vma->vm_private_data;
+	struct fuse_conn_dax *fcd;
+
+	/* check if the vma belongs erofs */
+	if (vma->vm_ops == &fuse_dax_vm_ops)
+		return;
+	if (!vma->vm_file || !db || db->magic != 0x01020304) {
+		WARN_ON(1);
+		return;
+	}
+
+	vma->vm_private_data = NULL;
+	if (!refcount_dec_and_test(&db->count))
+		return;
+	fcd = db->fc->dax;
+	spin_lock(&fcd->lock);
+	list_for_each_entry(dmap, &fcd->busy_ranges, busy_list) {
+		unsigned int nr = dmap->window_offset / FUSE_DAX_SZ;
+
+		WARN_ON_ONCE(dmap->window_offset % FUSE_DAX_SZ);
+		if (!test_bit(nr, db->bitmap))
+			continue;
+
+		if (refcount_dec_and_test(&dmap->refcnt)) {
+			/*
+			 * refcount should not hit 0. This object only goes
+			 * away when fuse connection goes away
+			 */
+			WARN_ON_ONCE(1);
+		}
+	}
+	spin_unlock(&fcd->lock);
+	kfree(db);
+}
+
+static void fuse_dax_vma_open(struct vm_area_struct *vma)
+{
+	struct virtiofs_dmap_bitmap *db = vma->vm_private_data;
+
+	/* check if the vma belongs erofs */
+	if (vma->vm_ops == &fuse_dax_vm_ops)
+		return;
+	if (!vma->vm_file || !db || db->magic != 0x01020304) {
+		WARN_ON(1);
+		return;
+	}
+	refcount_inc(&db->count);
+
+}
+
 static const struct vm_operations_struct fuse_dax_vm_ops = {
 	.fault		= fuse_dax_fault,
 	.huge_fault	= fuse_dax_huge_fault,
 	.page_mkwrite	= fuse_dax_page_mkwrite,
 	.pfn_mkwrite	= fuse_dax_pfn_mkwrite,
+	.open		= fuse_dax_vma_open,
+	.close		= fuse_dax_vma_close,
 };
 
 int fuse_dax_mmap(struct file *file, struct vm_area_struct *vma)
 {
+	if (vma->vm_ops != &fuse_dax_vm_ops &&
+	    file != vma->vm_file &&
+	    file_inode(vma->vm_file)->i_sb->s_magic == EROFS_SUPER_MAGIC_V1) {
+		struct fuse_conn *fc = get_fuse_conn(file_inode(file));
+		unsigned int size = DIV_ROUND_UP(fc->dax->nr_ranges,
+						 sizeof(unsigned long));
+		struct virtiofs_dmap_bitmap *db =
+			kzalloc(struct_size(db, bitmap, size), GFP_NOFS);
+
+		WARN_ON(vma->vm_private_data);
+		if (!db)
+			return -ENOMEM;
+		db->magic = 0x01020304;
+		db->fc = fc;
+		refcount_set(&db->count, 1);
+		vma->vm_private_data = db;
+	}
+
 	file_accessed(file);
 	vma->vm_ops = &fuse_dax_vm_ops;
 	vma->vm_flags |= VM_MIXEDMAP | VM_HUGEPAGE;
@@ -1330,6 +1488,8 @@ bool fuse_dax_inode_alloc(struct super_block *sb, struct fuse_inode *fi)
 }
 
 static const struct address_space_operations fuse_dax_file_aops  = {
+	.startpfn	= fuse_dax_startpfn,
+	.endpfn		= fuse_dax_endpfn,
 	.writepages	= fuse_dax_writepages,
 	.direct_IO	= noop_direct_IO,
 	.set_page_dirty	= noop_set_page_dirty,

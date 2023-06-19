@@ -14,6 +14,7 @@
 #include <linux/export.h>
 #include <linux/slab.h>
 #include <linux/errno.h>
+#include <linux/cc_platform.h>
 #include <linux/iommu.h>
 #include <linux/idr.h>
 #include <linux/notifier.h>
@@ -158,7 +159,7 @@ static int __init iommu_subsys_init(void)
 		else
 			iommu_set_default_translated(false);
 
-		if (iommu_default_passthrough() && mem_encrypt_active()) {
+		if (iommu_default_passthrough() && cc_platform_has(CC_ATTR_MEM_ENCRYPT)) {
 			pr_info("Memory encryption detected - Disabling default IOMMU Passthrough\n");
 			iommu_set_default_translated(false);
 		}

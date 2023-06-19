@@ -50,6 +50,7 @@ void __init arm64_numa_distance_init(void);
 
 static inline void numa_store_cpu_info(unsigned int cpu) { }
 static inline void numa_add_cpu(unsigned int cpu) { }
+static inline void numa_clear_node(unsigned int cpu) { }
 static inline void numa_remove_cpu(unsigned int cpu) { }
 static inline void arm64_numa_init(void) { }
 static inline void early_map_cpu_to_node(unsigned int cpu, int nid) { }

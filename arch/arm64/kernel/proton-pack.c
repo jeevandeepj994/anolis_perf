@@ -217,6 +217,7 @@ enum mitigation_state arm64_get_spectre_v2_state(void)
 {
 	return spectre_v2_state;
 }
+EXPORT_SYMBOL(arm64_get_spectre_v2_state);
 
 #ifdef CONFIG_KVM
 #include <asm/cacheflush.h>
@@ -478,6 +479,7 @@ enum mitigation_state arm64_get_spectre_v4_state(void)
 {
 	return spectre_v4_state;
 }
+EXPORT_SYMBOL(arm64_get_spectre_v4_state);
 
 static enum mitigation_state spectre_v4_get_cpu_hw_mitigation_state(void)
 {
@@ -848,6 +850,7 @@ enum mitigation_state arm64_get_spectre_bhb_state(void)
 {
 	return spectre_bhb_state;
 }
+EXPORT_SYMBOL(arm64_get_spectre_bhb_state);
 
 /*
  * This must be called with SCOPE_LOCAL_CPU for each type of CPU, before any

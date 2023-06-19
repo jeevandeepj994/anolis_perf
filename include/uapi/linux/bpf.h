@@ -78,7 +78,7 @@ struct bpf_lpm_trie_key {
 
 struct bpf_cgroup_storage_key {
 	__u64	cgroup_inode_id;	/* cgroup inode id */
-	__u32	attach_type;		/* program attach type */
+	__u32	attach_type;		/* program attach type (enum bpf_attach_type) */
 };
 
 union bpf_iter_link_info {
@@ -158,6 +158,7 @@ enum bpf_map_type {
 	BPF_MAP_TYPE_RINGBUF,
 	BPF_MAP_TYPE_INODE_STORAGE,
 	BPF_MAP_TYPE_TASK_STORAGE,
+	BPF_MAP_TYPE_BLOOM_FILTER,
 };
 
 /* Note that tracing related programs such as
@@ -503,6 +504,13 @@ union bpf_attr {
 						   * struct stored as the
 						   * map value
 						   */
+		/* Any per-map-type extra fields
+		 *
+		 * BPF_MAP_TYPE_BLOOM_FILTER - the lowest 4 bits indicate the
+		 * number of hash functions (if 0, the bloom filter will default
+		 * to using 5 hash functions).
+		 */
+		__u64	map_extra;
 	};
 
 	struct { /* anonymous struct used by BPF_MAP_*_ELEM commands */
@@ -4499,6 +4507,7 @@ struct bpf_map_info {
 	__u32 btf_id;
 	__u32 btf_key_type_id;
 	__u32 btf_value_type_id;
+	__u64 map_extra;
 } __attribute__((aligned(8)));
 
 struct bpf_btf_info {

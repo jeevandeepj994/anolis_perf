@@ -3149,6 +3149,7 @@ int drop_caches_sysctl_handler(struct ctl_table *, int, void *, size_t *,
 
 void drop_slab(void);
 void drop_slab_node(int nid);
+unsigned int move_pages_to_lru(struct lruvec *lruvec, struct list_head *list);
 
 #ifndef CONFIG_MMU
 #define randomize_va_space 0
@@ -3163,6 +3164,13 @@ void print_vma_addr(char *prefix, unsigned long rip);
 static inline void print_vma_addr(char *prefix, unsigned long rip)
 {
 }
+#endif
+
+#ifdef CONFIG_HUGETLB_PAGE_OPTIMIZE_VMEMMAP
+int vmemmap_remap_free(unsigned long start, unsigned long end,
+		       unsigned long reuse);
+int vmemmap_remap_alloc(unsigned long start, unsigned long end,
+			unsigned long reuse, gfp_t gfp_mask);
 #endif
 
 void *sparse_buffer_alloc(unsigned long size);

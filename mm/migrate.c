@@ -652,7 +652,10 @@ void migrate_page_states(struct page *newpage, struct page *page)
 	if (PageSwapCache(page))
 		ClearPageSwapCache(page);
 	ClearPagePrivate(page);
-	set_page_private(page, 0);
+
+	/* page->private contains hugetlb specific flags */
+	if (!PageHuge(page))
+		set_page_private(page, 0);
 
 	/*
 	 * If any waiters have accumulated on the new page then
@@ -1340,7 +1343,7 @@ static int unmap_and_move_huge_page(new_page_t get_new_page,
 	 * page_mapping() set, hugetlbfs specific move page routine will not
 	 * be called and we could leak usage counts for subpools.
 	 */
-	if (page_private(hpage) && !page_mapping(hpage)) {
+	if (hugetlb_page_subpool(hpage) && !page_mapping(hpage)) {
 		rc = -EBUSY;
 		goto out_unlock;
 	}

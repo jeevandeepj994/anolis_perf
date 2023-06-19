@@ -12,10 +12,12 @@
 #include <asm/insn.h>
 #include <asm/kvm_mmu.h>
 
+#if !defined(CONFIG_KVM_ARM_HOST_VHE_ONLY)
 /*
  * The LSB of the HYP VA tag
  */
 static u8 tag_lsb;
+
 /*
  * The HYP VA tag value with the region bit
  */
@@ -97,7 +99,7 @@ static u32 compute_instruction(int n, u32 rd, u32 rn)
 	return insn;
 }
 
-void __init kvm_update_va_mask(struct alt_instr *alt,
+void kvm_update_va_mask(struct alt_instr *alt,
 			       __le32 *origptr, __le32 *updptr, int nr_inst)
 {
 	int i;
@@ -130,10 +132,12 @@ void __init kvm_update_va_mask(struct alt_instr *alt,
 		updptr[i] = cpu_to_le32(insn);
 	}
 }
+#endif
 
 void *__kvm_bp_vect_base;
 int __kvm_harden_el2_vector_slot;
 
+#if !defined(CONFIG_KVM_ARM_HOST_VHE_ONLY)
 void kvm_patch_vector_branch(struct alt_instr *alt,
 			     __le32 *origptr, __le32 *updptr, int nr_inst)
 {
@@ -201,3 +205,4 @@ void kvm_patch_vector_branch(struct alt_instr *alt,
 					   AARCH64_INSN_BRANCH_NOLINK);
 	*updptr++ = cpu_to_le32(insn);
 }
+#endif

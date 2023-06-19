@@ -7,9 +7,8 @@
 #ifndef __ERDMA_STATS_H__
 #define __ERDMA_STATS_H__
 
+#include "kcompat.h"
 #include <rdma/ib_verbs.h>
-
-typedef u8 port_t;
 
 #define ERDMA_INC_CNT(dev, name) \
 	atomic64_inc(&dev->stats.value[ERDMA_STATS_##name])

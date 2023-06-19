@@ -795,8 +795,8 @@ int inet_getname(struct socket *sock, struct sockaddr *uaddr,
 	}
 	if (cgroup_bpf_enabled)
 		BPF_CGROUP_RUN_SA_PROG_LOCK(sk, (struct sockaddr *)sin,
-					    peer ? BPF_CGROUP_INET4_GETPEERNAME :
-						   BPF_CGROUP_INET4_GETSOCKNAME,
+					    peer ? CGROUP_INET4_GETPEERNAME :
+						   CGROUP_INET4_GETSOCKNAME,
 					    NULL);
 	memset(sin->sin_zero, 0, sizeof(sin->sin_zero));
 	return sizeof(*sin);
@@ -1010,7 +1010,7 @@ static int inet_compat_routing_ioctl(struct sock *sk, unsigned int cmd,
 	return ip_rt_ioctl(sock_net(sk), cmd, &rt);
 }
 
-static int inet_compat_ioctl(struct socket *sock, unsigned int cmd, unsigned long arg)
+int inet_compat_ioctl(struct socket *sock, unsigned int cmd, unsigned long arg)
 {
 	void __user *argp = compat_ptr(arg);
 	struct sock *sk = sock->sk;
@@ -1025,6 +1025,7 @@ static int inet_compat_ioctl(struct socket *sock, unsigned int cmd, unsigned lon
 		return sk->sk_prot->compat_ioctl(sk, cmd, arg);
 	}
 }
+EXPORT_SYMBOL_GPL(inet_compat_ioctl);
 #endif /* CONFIG_COMPAT */
 
 const struct proto_ops inet_stream_ops = {

@@ -80,6 +80,7 @@ int pmd_huge(pmd_t pmd)
 {
 	return pmd_val(pmd) && !(pmd_val(pmd) & PMD_TABLE_BIT);
 }
+EXPORT_SYMBOL(pmd_huge);
 
 int pud_huge(pud_t pud)
 {
@@ -89,6 +90,7 @@ int pud_huge(pud_t pud)
 	return 0;
 #endif
 }
+EXPORT_SYMBOL(pud_huge);
 
 /*
  * Select all bits except the pfn

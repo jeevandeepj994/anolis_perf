@@ -54,6 +54,13 @@
 static int num_standard_resources;
 static struct resource *standard_resources;
 
+/* Export below symbols for KVM usage. */
+EXPORT_SYMBOL(__boot_cpu_mode);
+extern char vectors[];
+EXPORT_SYMBOL(vectors);
+EXPORT_SYMBOL(__flush_dcache_area);
+EXPORT_SYMBOL(invalidate_icache_range);
+
 phys_addr_t __fdt_pointer __initdata;
 
 /*
@@ -389,7 +396,7 @@ static int __init topology_init(void)
 	for_each_online_node(i)
 		register_one_node(i);
 
-	for_each_possible_cpu(i) {
+	for_each_present_cpu(i) {
 		struct cpu *cpu = &per_cpu(cpu_data.cpu, i);
 		cpu->hotpluggable = cpu_can_disable(i);
 		register_cpu(cpu, i);
@@ -432,3 +439,24 @@ static int __init register_arm64_panic_block(void)
 	return 0;
 }
 device_initcall(register_arm64_panic_block);
+
+#ifdef CONFIG_HOTPLUG_CPU
+
+int arch_register_cpu(int num)
+{
+	struct cpu *cpu = &per_cpu(cpu_data.cpu, num);
+
+	cpu->hotpluggable = 1;
+	return register_cpu(cpu, num);
+}
+EXPORT_SYMBOL(arch_register_cpu);
+
+void arch_unregister_cpu(int num)
+{
+	struct cpu *cpu = &per_cpu(cpu_data.cpu, num);
+
+	unregister_cpu(cpu);
+}
+EXPORT_SYMBOL(arch_unregister_cpu);
+
+#endif

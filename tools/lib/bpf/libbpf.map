@@ -337,3 +337,20 @@ LIBBPF_0.2.0 {
 		perf_buffer__consume_buffer;
 		xsk_socket__create_shared;
 } LIBBPF_0.1.0;
+
+LIBBPF_0.3.0 {
+} LIBBPF_0.2.0;
+
+LIBBPF_0.4.0 {
+} LIBBPF_0.3.0;
+
+LIBBPF_0.5.0 {
+	global:
+		bpf_map_lookup_and_delete_elem_flags;
+} LIBBPF_0.4.0;
+
+LIBBPF_0.6.0 {
+	global:
+		bpf_map__map_extra;
+		bpf_map__set_map_extra;
+} LIBBPF_0.5.0;

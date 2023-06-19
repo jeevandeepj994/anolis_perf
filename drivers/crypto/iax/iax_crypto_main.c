@@ -106,17 +106,12 @@ static int iax_all_wqs_get(void)
 	int n_wqs = 0;
 	int ret;
 
-	spin_lock(&iax_devices_lock);
 	list_for_each_entry(iax_device, &iax_devices, list) {
 		ret = iax_wqs_get(iax_device);
-		if (ret < 0) {
-			spin_unlock(&iax_devices_lock);
+		if (ret < 0)
 			return ret;
-		}
 		n_wqs += ret;
 	}
-	spin_unlock(&iax_devices_lock);
-
 	return n_wqs;
 }
 
@@ -124,37 +119,42 @@ static void iax_all_wqs_put(void)
 {
 	struct iax_device *iax_device;
 
-	spin_lock(&iax_devices_lock);
 	list_for_each_entry(iax_device, &iax_devices, list)
 		iax_wqs_put(iax_device);
-	spin_unlock(&iax_devices_lock);
 }
 
 static bool iax_crypto_enabled = false;
 static int iax_crypto_enable(const char *val, const struct kernel_param *kp)
 {
 	int ret = 0;
+	bool flag;
 
-	if (val[0] == '0') {
+	spin_lock(&iax_devices_lock);
+	/* accept 'Yy1Nn0', or [oO][NnFf] for "on" and "off". */
+	ret = kstrtobool(val, &flag);
+	if (ret)
+		return ret;
+	if (!flag) {
+		if (!iax_crypto_enabled)
+			goto skipping;
 		iax_crypto_enabled = false;
 		iax_all_wqs_put();
-	} else if (val[0] == '1') {
-		ret = iax_all_wqs_get();
-		if (ret == 0) {
-			pr_info("%s: no wqs available, not enabling iax_crypto\n", __func__);
-			return ret;
-		} else if (ret < 0) {
-			pr_err("%s: iax_crypto enable failed: ret=%d\n", __func__, ret);
-			return ret;
-		} else
-			iax_crypto_enabled = true;
 	} else {
-		pr_err("%s: iax_crypto failed, bad enable val: ret=%d\n", __func__, -EINVAL);
-		return -EINVAL;
+		if (iax_crypto_enabled)
+			goto skipping;
+		ret = iax_all_wqs_get();
+		if (ret < 0)
+			pr_err("%s: iax_crypto enable failed: ret=%d\n", __func__, ret);
+		else if (ret == 0)
+			pr_info("%s: no wqs available, not enabling iax_crypto\n", __func__);
+		else
+			iax_crypto_enabled = true;
 	}
 
+skipping:
 	pr_info("%s: iax_crypto now %s\n", __func__,
 		iax_crypto_enabled ? "ENABLED" : "DISABLED");
+	spin_unlock(&iax_devices_lock);
 
 	return ret;
 }
@@ -732,20 +732,20 @@ static int iax_compress(struct crypto_tfm *tfm,
 	desc->decompr_flags = IAX_DECOMP_FLAGS | IAX_DECOMP_SUPPRESS_OUTPUT;
 	desc->priv = 1;
 
-	src_addr = dma_map_single(dev, (void *)src, slen, DMA_TO_DEVICE);
+	src_addr = dma_map_single(dev, (void *)src, slen, DMA_FROM_DEVICE);
 	pr_debug("%s: dma_map_single, src_addr %llx, dev %p, src %p, slen %d\n", __func__, src_addr, dev, src, slen);
 	if (unlikely(dma_mapping_error(dev, src_addr))) {
 		pr_debug("%s: dma_map_single err, exiting\n", __func__);
 		ret = -ENOMEM;
-		goto err_map_src;
+		goto verify_err_map_src;
 	}
 
-	dst_addr = dma_map_single(dev, (void *)dst, *dlen, DMA_FROM_DEVICE);
+	dst_addr = dma_map_single(dev, (void *)dst, *dlen, DMA_TO_DEVICE);
 	pr_debug("%s: dma_map_single, dst_addr %llx, dev %p, dst %p, *dlen %d\n", __func__, dst_addr, dev, dst, *dlen);
 	if (unlikely(dma_mapping_error(dev, dst_addr))) {
 		pr_debug("%s: dma_map_single err, exiting\n", __func__);
 		ret = -ENOMEM;
-		goto err_map_dst;
+		goto verify_err_map_dst;
 	}
 
 	desc->src1_addr = (u64)dst_addr;
@@ -757,13 +757,13 @@ static int iax_compress(struct crypto_tfm *tfm,
 	ret = idxd_submit_desc(wq, idxd_desc);
 	if (ret) {
 		pr_warn("%s: submit_desc (verify) failed ret=%d\n", __func__, ret);
-		goto err;
+		goto verify_err;
 	}
 
 	ret = check_completion(idxd_desc->iax_completion, true);
 	if (ret) {
 		pr_warn("%s: check_completion (verify) failed ret=%d\n", __func__, ret);
-		goto err;
+		goto verify_err;
 	}
 
 	if (compression_crc != idxd_desc->iax_completion->crc) {
@@ -771,12 +771,14 @@ static int iax_compress(struct crypto_tfm *tfm,
 		pr_err("%s: iax comp/decomp crc mismatch: comp=0x%x, decomp=0x%x\n", __func__,
 		       compression_crc, idxd_desc->iax_completion->crc);
 		print_hex_dump(KERN_INFO, "cmp-rec: ", DUMP_PREFIX_OFFSET, 8, 1, idxd_desc->iax_completion, 64, 0);
-		goto err;
+		goto verify_err;
 	}
 
-	dma_unmap_single(dev, src_addr, slen, DMA_TO_DEVICE);
-	dma_unmap_single(dev, dst_addr, *dlen, DMA_FROM_DEVICE);
-
+verify_err:
+	dma_unmap_single(dev, dst_addr, *dlen, DMA_TO_DEVICE);
+verify_err_map_dst:
+	dma_unmap_single(dev, src_addr, slen, DMA_FROM_DEVICE);
+verify_err_map_src:
 	idxd_free_desc(wq, idxd_desc);
 out:
 	return ret;

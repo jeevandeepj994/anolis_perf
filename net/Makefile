@@ -55,7 +55,7 @@ obj-$(CONFIG_IUCV)		+= iucv/
 obj-$(CONFIG_SMC)		+= smc/
 ifneq ($(CONFIG_SMC),)
 ifeq ($(CONFIG_BPF_SYSCALL),y)
-obj-y				+= smc/bpf_smc_struct_ops.o
+obj-y				+= smc/bpf_smc.o
 endif
 endif
 obj-$(CONFIG_RFKILL)		+= rfkill/
@@ -94,3 +94,4 @@ obj-$(CONFIG_NET_NCSI)		+= ncsi/
 obj-$(CONFIG_XDP_SOCKETS)	+= xdp/
 obj-$(CONFIG_HOOKERS)		+= hookers/
 obj-$(CONFIG_MPTCP)		+= mptcp/
+obj-$(CONFIG_VTOA)		+= vtoa/

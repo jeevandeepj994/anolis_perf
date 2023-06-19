@@ -156,6 +156,27 @@ int bpf_object__section_size(const struct bpf_object *obj, const char *name,
 int bpf_object__variable_offset(const struct bpf_object *obj, const char *name,
 				__u32 *off);
 
+struct bpf_create_map_params {
+	const char *name;
+	enum bpf_map_type map_type;
+	__u32 map_flags;
+	__u32 key_size;
+	__u32 value_size;
+	__u32 max_entries;
+	__u32 numa_node;
+	__u32 btf_fd;
+	__u32 btf_key_type_id;
+	__u32 btf_value_type_id;
+	__u32 map_ifindex;
+	union {
+		__u32 inner_map_fd;
+		__u32 btf_vmlinux_value_type_id;
+	};
+	__u64 map_extra;
+};
+
+int libbpf__bpf_create_map_xattr(const struct bpf_create_map_params *create_attr);
+
 struct btf_ext_info {
 	/*
 	 * info points to the individual info section (e.g. func_info and

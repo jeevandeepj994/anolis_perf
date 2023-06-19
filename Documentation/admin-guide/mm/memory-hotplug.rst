@@ -565,6 +565,19 @@ block might fail:
   worth the risk of possibly not being able to offline memory in certain
   situations.
 
+  Memory offlining can fail when dissolving a free huge page on ZONE_MOVABLE
+  and the feature of freeing unused vmemmap pages associated with each hugetlb
+  page is enabled.
+
+  This can happen when we have plenty of ZONE_MOVABLE memory, but not enough
+  kernel memory to allocate vmemmmap pages.  We may even be able to migrate
+  huge page contents, but will not be able to dissolve the source huge page.
+  This will prevent an offline operation and is unfortunate as memory offlining
+  is expected to succeed on movable zones.  Users that depend on memory hotplug
+  to succeed for movable zones should carefully consider whether the memory
+  savings gained from this feature are worth the risk of possibly not being
+  able to offline memory in certain situations.
+
 Further, when running into out of memory situations while migrating pages, or
 when still encountering permanently unmovable pages within ZONE_MOVABLE
 (-> BUG), memory offlining will keep retrying until it eventually succeeds.

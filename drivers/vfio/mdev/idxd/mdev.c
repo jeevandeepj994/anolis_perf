@@ -618,6 +618,7 @@ static int vidxd_dest_complete_migration(struct vdcm_idxd *vidxd)
 	int rc = 0;
 	unsigned int offset;
 	bool int_handle_revoked = false;
+	struct vfio_pci_device *vfio_pdev = &vidxd->vfio_pdev;
 
 	offset = vidxd_dest_load_state(vidxd);
 
@@ -628,11 +629,21 @@ static int vidxd_dest_complete_migration(struct vdcm_idxd *vidxd)
 		return rc;
 	}
 
-	rc = vidxd_resume_ims_state(vidxd, &offset, &int_handle_revoked);
+	if (vfio_pdev->num_ctx > 1) {
+		rc = vidxd_resume_ims_state(vidxd, &offset, &int_handle_revoked);
 
-	if (rc) {
-		pr_info("vidxd int handle revocation handling failed %d\n", rc);
-		return rc;
+		if (rc) {
+			pr_info("vidxd int handle revocation handling failed %d\n", rc);
+			return rc;
+		}
+	} else {
+		pr_debug("No IMS vector info, skip ims state resume, just set offset!\n");
+		/*
+		 * Need to set correct offset in migration data pages.
+		 * 'offset' adds size of old handle which is u32 type.
+		 */
+		offset += sizeof(u32);
+
 	}
 
 	rc = vidxd_resubmit_pending_descs(vidxd, &offset);

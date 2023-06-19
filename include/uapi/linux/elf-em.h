@@ -51,6 +51,7 @@
 #define EM_RISCV	243	/* RISC-V */
 #define EM_BPF		247	/* Linux BPF - in-kernel virtual machine */
 #define EM_CSKY		252	/* C-SKY */
+#define EM_LOONGARCH	258	/* LoongArch */
 #define EM_FRV		0x5441	/* Fujitsu FR-V */
 
 /*
@@ -58,6 +59,7 @@
  * up with a final number.
  */
 #define EM_ALPHA	0x9026
+#define EM_SW64		0x9916
 
 /* Bogus old m32r magic number, used by old tools. */
 #define EM_CYGNUS_M32R	0x9041

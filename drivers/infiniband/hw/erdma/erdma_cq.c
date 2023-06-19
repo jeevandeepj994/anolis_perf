@@ -11,7 +11,7 @@ static void *get_next_valid_cqe(struct erdma_cq *cq)
 	__be32 *cqe = get_queue_entry(cq->kern_cq.qbuf, cq->kern_cq.ci,
 				      cq->depth, CQE_SHIFT);
 	u32 owner = FIELD_GET(ERDMA_CQE_HDR_OWNER_MASK,
-			      __be32_to_cpu(READ_ONCE(*cqe)));
+			      be32_to_cpu(READ_ONCE(*cqe)));
 
 	return owner ^ !!(cq->kern_cq.ci & cq->depth) ? cqe : NULL;
 }
@@ -36,6 +36,7 @@ int erdma_req_notify_cq(struct ib_cq *ibcq, enum ib_cq_notify_flags flags)
 	u16 dim_timeout = cq->dim.timeout;
 	unsigned long irq_flags;
 	int ret = 0;
+
 
 	spin_lock_irqsave(&cq->kern_cq.lock, irq_flags);
 
@@ -189,6 +190,7 @@ int erdma_poll_cq(struct ib_cq *ibcq, int num_entries, struct ib_wc *wc)
 	struct erdma_cq *cq = to_ecq(ibcq);
 	unsigned long flags;
 	int npolled, ret;
+
 
 	spin_lock_irqsave(&cq->kern_cq.lock, flags);
 

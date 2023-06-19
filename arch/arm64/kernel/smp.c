@@ -437,8 +437,11 @@ static void __init hyp_mode_check(void)
 			   "CPU: CPUs started in inconsistent modes");
 	else
 		pr_info("CPU: All CPU(s) started at EL1\n");
+
+#if !defined(CONFIG_KVM_ARM_HOST_VHE_ONLY)
 	if (IS_ENABLED(CONFIG_KVM))
 		kvm_compute_layout();
+#endif
 }
 
 void __init smp_cpus_done(unsigned int max_cpus)
@@ -577,15 +580,13 @@ acpi_map_gic_cpu_interface(struct acpi_madt_generic_interrupt *processor)
 {
 	u64 hwid = processor->arm_mpidr;
 
-	if (!(processor->flags & ACPI_MADT_ENABLED)) {
-		pr_debug("skipping disabled CPU entry with 0x%llx MPIDR\n", hwid);
-		return;
-	}
-
 	if (hwid & ~MPIDR_HWID_BITMASK || hwid == INVALID_HWID) {
 		pr_err("skipping CPU entry with invalid MPIDR 0x%llx\n", hwid);
 		return;
 	}
+
+	if (!(processor->flags & ACPI_MADT_ENABLED))
+		pr_debug("disabled CPU entry with 0x%llx MPIDR\n", hwid);
 
 	if (is_mpidr_duplicate(cpu_count, hwid)) {
 		pr_err("duplicate CPU MPIDR 0x%llx in MADT\n", hwid);
@@ -814,7 +815,17 @@ void __init smp_prepare_cpus(unsigned int max_cpus)
 		if (err)
 			continue;
 
+#ifdef CONFIG_ACPI
+		if (!acpi_disabled) {
+			if ((cpu_madt_gicc[cpu].flags & ACPI_MADT_ENABLED))
+				set_cpu_present(cpu, true);
+		} else {
+			set_cpu_present(cpu, true);
+		}
+#else
 		set_cpu_present(cpu, true);
+#endif
+
 		numa_store_cpu_info(cpu);
 	}
 #ifdef CONFIG_NUMA_AWARE_SPINLOCKS
@@ -1068,6 +1079,7 @@ void smp_send_reschedule(int cpu)
 {
 	smp_cross_call(cpumask_of(cpu), IPI_RESCHEDULE);
 }
+EXPORT_SYMBOL(smp_send_reschedule);
 
 #ifdef CONFIG_GENERIC_CLOCKEVENTS_BROADCAST
 void tick_broadcast(const struct cpumask *mask)
