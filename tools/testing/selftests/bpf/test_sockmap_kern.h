@@ -182,7 +182,7 @@ SEC("sk_msg1")
 int bpf_prog4(struct sk_msg_md *msg)
 {
 	int *bytes, zero = 0, one = 1, two = 2, three = 3;
-	int *start, *end, *start_push, *end_push;
+	int *start, *end, *start_push, *end_push, err = 0;
 
 	bytes = bpf_map_lookup_elem(&sock_apply_bytes, &zero);
 	if (bytes)
@@ -196,8 +196,11 @@ int bpf_prog4(struct sk_msg_md *msg)
 		bpf_msg_pull_data(msg, *start, *end, 0);
 	start_push = bpf_map_lookup_elem(&sock_bytes, &two);
 	end_push = bpf_map_lookup_elem(&sock_bytes, &three);
-	if (start_push && end_push)
-		bpf_msg_push_data(msg, *start_push, *end_push, 0);
+	if (start_push && end_push) {
+		err = bpf_msg_push_data(msg, *start_push, *end_push, 0);
+		if (err)
+			return SK_DROP;
+	}
 	return SK_PASS;
 }
 
@@ -258,6 +261,7 @@ int bpf_prog6(struct sk_msg_md *msg)
 {
 	int *bytes, *start, *end, *start_push, *end_push, *f;
 	int zero = 0, one = 1, two = 2, three = 3, key = 0;
+	int err = 0;
 	__u64 flags = 0;
 
 	bytes = bpf_map_lookup_elem(&sock_apply_bytes, &zero);
@@ -274,9 +278,11 @@ int bpf_prog6(struct sk_msg_md *msg)
 
 	start_push = bpf_map_lookup_elem(&sock_bytes, &two);
 	end_push = bpf_map_lookup_elem(&sock_bytes, &three);
-	if (start_push && end_push)
-		bpf_msg_push_data(msg, *start_push, *end_push, 0);
-
+	if (start_push && end_push) {
+		err = bpf_msg_push_data(msg, *start_push, *end_push, 0);
+		if (err)
+			return SK_DROP;
+	}
 	f = bpf_map_lookup_elem(&sock_redir_flags, &zero);
 	if (f && *f) {
 		key = 2;
@@ -390,7 +396,7 @@ SEC("sk_msg7")
 int bpf_prog10(struct sk_msg_md *msg)
 {
 	int *bytes, *start, *end, *start_push, *end_push;
-	int zero = 0, one = 1, two = 2, three = 3;
+	int zero = 0, one = 1, two = 2, three = 3, err = 0;
 
 	bytes = bpf_map_lookup_elem(&sock_apply_bytes, &zero);
 	if (bytes)
@@ -404,9 +410,11 @@ int bpf_prog10(struct sk_msg_md *msg)
 		bpf_msg_pull_data(msg, *start, *end, 0);
 	start_push = bpf_map_lookup_elem(&sock_bytes, &two);
 	end_push = bpf_map_lookup_elem(&sock_bytes, &three);
-	if (start_push && end_push)
-		bpf_msg_push_data(msg, *start_push, *end_push, 0);
-
+	if (start_push && end_push) {
+		err = bpf_msg_push_data(msg, *start_push, *end_push, 0);
+		if (err)
+			return SK_PASS;
+	}
 	return SK_DROP;
 }
 
