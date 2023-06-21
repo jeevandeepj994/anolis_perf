@@ -335,7 +335,7 @@ _bpftool()
                             ;;
                     esac
                     ;;
-                load)
+                load|loadall)
                     local obj
 
                     if [[ ${#words[@]} -lt 6 ]]; then
