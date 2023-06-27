@@ -3380,10 +3380,14 @@ static bool tr_hugepage_estimate_zero(struct page *page, int threshold)
 
 #define ESTIMATE_SIZE 64U
 	for (i = 0; i < HPAGE_PMD_NR; i++, page++, offset++) {
+		if (HPAGE_PMD_NR - i + maybe_zero_pages < threshold)
+			return false;
+
 		addr = kmap(page);
-		if (unlikely((offset + 1) * sizeof(long) > PAGE_SIZE))
+		if (unlikely((offset + 1) * ESTIMATE_SIZE > PAGE_SIZE))
 			offset = 0;
-		if (!memchr_inv((long *)addr + offset, 0, ESTIMATE_SIZE)) {
+		if (!memchr_inv((char *)addr + offset * ESTIMATE_SIZE, 0,
+				ESTIMATE_SIZE)) {
 			if (++maybe_zero_pages >= threshold) {
 				kunmap(page);
 				return true;
