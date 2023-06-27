@@ -274,17 +274,20 @@ static void flush_bg_queue(struct fuse_conn *fc)
 	}
 }
 
-static void fuse_update_stats(struct fuse_conn *fc, int opcode, uint64_t send_time)
+static void fuse_update_stats(struct fuse_conn *fc, struct fuse_req *req)
 {
+	unsigned int opcode = req->in.h.opcode;
 	uint64_t delta_time;
 
-	delta_time = get_time_now_us() - send_time;
+	if (opcode < FUSE_OP_MAX) {
+		delta_time = get_time_now_us() - req->send_time;
 
-	atomic64_add(delta_time, &fc->stats.req_time[FUSE_SUMMARY]);
-	atomic64_add(delta_time, &fc->stats.req_time[opcode]);
+		atomic64_add(delta_time, &fc->stats.req_time[FUSE_SUMMARY]);
+		atomic64_add(delta_time, &fc->stats.req_time[opcode]);
 
-	atomic64_inc(&fc->stats.req_cnts[FUSE_SUMMARY]);
-	atomic64_inc(&fc->stats.req_cnts[opcode]);
+		atomic64_inc(&fc->stats.req_cnts[FUSE_SUMMARY]);
+		atomic64_inc(&fc->stats.req_cnts[opcode]);
+	}
 }
 
 /*
@@ -317,7 +320,7 @@ void fuse_request_end(struct fuse_req *req)
 	WARN_ON(test_bit(FR_PENDING, &req->flags));
 	WARN_ON(test_bit(FR_SENT, &req->flags));
 	if (test_bit(FR_BACKGROUND, &req->flags)) {
-		fuse_update_stats(fc, req->in.h.opcode, req->send_time);
+		fuse_update_stats(fc, req);
 
 		spin_lock(&fc->bg_lock);
 		clear_bit(FR_BACKGROUND, &req->flags);
@@ -453,7 +456,7 @@ static void __fuse_request_send(struct fuse_req *req)
 		/* Pairs with smp_wmb() in fuse_request_end() */
 		smp_rmb();
 
-		fuse_update_stats(fc, req->in.h.opcode, req->send_time);
+		fuse_update_stats(fc, req);
 	}
 }
 
