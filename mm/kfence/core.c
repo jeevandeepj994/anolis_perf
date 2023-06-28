@@ -57,6 +57,7 @@ unsigned long kfence_num_objects __read_mostly = CONFIG_KFENCE_NUM_OBJECTS;
 EXPORT_SYMBOL(kfence_num_objects);
 static unsigned long kfence_num_objects_snap __read_mostly; /* Used to record upstream ver. */
 static int *kfence_node_map; /* Map real node to "virtual kfence node". */
+bool kfence_panic_on_fault;
 struct kfence_alloc_node_cond {
 	long need;
 	long allocated;
@@ -212,6 +213,34 @@ static const struct kernel_param_ops order0_page_param_ops = {
 	.get = param_get_order0_page,
 };
 module_param_cb(order0_page, &order0_page_param_ops, NULL, 0600);
+
+static int param_set_fault(const char *val, const struct kernel_param *kp)
+{
+	bool mode;
+	char *s = strstrip((char *)val);
+
+	if (!strcmp(s, "report"))
+		mode = false;
+	else if (!strcmp(s, "panic"))
+		mode = true;
+	else
+		return -EINVAL;
+
+	*((bool *)kp->arg) = mode;
+
+	return 0;
+}
+
+static int param_get_fault(char *buffer, const struct kernel_param *kp)
+{
+	return sprintf(buffer, "%s\n", *(bool *)kp->arg ? "panic" : "report");
+}
+
+static const struct kernel_param_ops fault_param_ops = {
+	.set = param_set_fault,
+	.get = param_get_fault,
+};
+module_param_cb(fault, &fault_param_ops, &kfence_panic_on_fault, 0600);
 
 /*
  * The pool of pages used for guard pages and objects.

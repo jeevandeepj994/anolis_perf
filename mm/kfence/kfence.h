@@ -99,6 +99,7 @@ struct kfence_metadata {
 };
 
 extern unsigned long kfence_num_objects;
+extern bool kfence_panic_on_fault;
 DECLARE_STATIC_KEY_FALSE(kfence_short_canary);
 
 /* KFENCE error types for report generation. */
