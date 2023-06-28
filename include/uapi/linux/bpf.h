@@ -2486,6 +2486,7 @@ struct __sk_buff {
 
 	__u32 data_meta;
 	__bpf_md_ptr(struct bpf_flow_keys *, flow_keys);
+	__u64 tstamp;
 };
 
 struct bpf_tunnel_key {
