@@ -1437,10 +1437,6 @@ extern int send_sigurg(struct fown_struct *fown);
 
 #define SB_I_SKIP_SYNC	0x00000100	/* Skip superblock at global sync */
 
-/* hint from lowerfs for overlayfs optimizations (e.g. for container scenarios) */
-#define SB_I_OVL_OPT_CREDS	0x40000000 /* bypass [override|revert]_creds */
-#define SB_I_OVL_OPT_ACL_RCU	0x80000000 /* enable RCU'd ACL */
-
 /* Possible states of 'frozen' field */
 enum {
 	SB_UNFROZEN = 0,		/* FS is unfrozen */
