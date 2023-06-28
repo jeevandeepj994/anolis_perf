@@ -378,7 +378,7 @@ xfs_trans_free_extent(
 			xefi->xefi_blockcount);
 
 	error = __xfs_free_extent(tp, xefi->xefi_startblock,
-			xefi->xefi_blockcount, &oinfo, XFS_AG_RESV_NONE,
+			xefi->xefi_blockcount, &oinfo, xefi->xefi_agresv,
 			xefi->xefi_flags & XFS_EFI_SKIP_DISCARD);
 	/*
 	 * Mark the transaction dirty, even on error. This ensures the
@@ -626,6 +626,7 @@ xfs_efi_item_recover(
 	for (i = 0; i < efip->efi_format.efi_nextents; i++) {
 		struct xfs_extent_free_item	fake = {
 			.xefi_owner		= XFS_RMAP_OWN_UNKNOWN,
+			.xefi_agresv		= XFS_AG_RESV_NONE,
 		};
 
 		extp = &efip->efi_format.efi_extents[i];
