@@ -48,6 +48,8 @@ void my_usr1(int sig, siginfo_t *si, void *u)
 
 #if __s390x__
 	register unsigned long sp asm("%15");
+#elif __sw_64__
+	register unsigned long sp asm("$30");
 #else
 	register unsigned long sp asm("sp");
 #endif
