@@ -85,7 +85,7 @@ Note: On architectures that support huge pages, KFENCE will ensure that the
 pool is using pages of size ``PAGE_SIZE``. This will result in additional page
 tables being allocated.
 
-TLB revocer issue
+TLB recover issue
 ~~~~~~~~~~~~~~~~~
 
 For some arch like x86, kernel virtual address directly mapping to physical
@@ -161,6 +161,13 @@ or writing to ``/sys/module/kfence/parameters/order0_page``.
 
 Error reports
 ~~~~~~~~~~~~~
+
+By default, KFENCE will only report faults in dmesg. If users want to panic
+the kernel, set ``kfence.fault=panic`` in boot command line, or write "panic"
+to ``/sys/module/kfence/parameters/fault``.
+
+The default value is "report". Users can switch between "report" and "panic"
+at any time.
 
 A typical out-of-bounds access looks like this::
 
