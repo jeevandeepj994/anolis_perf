@@ -1356,8 +1356,10 @@ static void __init cpu_set_bug_bits(struct cpuinfo_x86 *c)
 			setup_force_cpu_bug(X86_BUG_RETBLEED);
 	}
 
-	if (cpu_matches(cpu_vuln_blacklist, SRSO))
-		setup_force_cpu_bug(X86_BUG_SRSO);
+	if (!cpu_has(c, X86_FEATURE_SRSO_NO)) {
+		if (cpu_matches(cpu_vuln_blacklist, SRSO))
+			setup_force_cpu_bug(X86_BUG_SRSO);
+	}
 
 	if (cpu_matches(cpu_vuln_whitelist, NO_MELTDOWN))
 		return;
