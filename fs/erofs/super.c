@@ -373,8 +373,6 @@ enum {
 	Opt_fsid,
 	Opt_bootstrap_path,
 	Opt_blob_dir_path,
-	Opt_opt_creds_on,
-	Opt_opt_creds_off,
 	Opt_err
 };
 
@@ -388,8 +386,6 @@ static match_table_t erofs_tokens = {
 	{Opt_fsid, "fsid=%s"},
 	{Opt_bootstrap_path, "bootstrap_path=%s"},
 	{Opt_blob_dir_path, "blob_dir_path=%s"},
-	{Opt_opt_creds_on, "opt_creds=on"},
-	{Opt_opt_creds_off, "opt_creds=off"},
 	{Opt_err, NULL}
 };
 
@@ -492,12 +488,6 @@ static int erofs_parse_options(struct super_block *sb, char *options)
 			if (!sbi->bootstrap_path)
 				return -ENOMEM;
 			erofs_dbg("RAFS bootstrap_path %s", sbi->bootstrap_path);
-			break;
-		case Opt_opt_creds_on:
-			set_opt(EROFS_SB(sb), OPT_CREDS);
-			break;
-		case Opt_opt_creds_off:
-			clear_opt(EROFS_SB(sb), OPT_CREDS);
 			break;
 		default:
 			erofs_err(sb, "Unrecognized mount option \"%s\" or missing value", p);
@@ -677,11 +667,6 @@ static int erofs_fill_super(struct super_block *sb, void *data, int silent)
 		sb->s_flags |= SB_POSIXACL;
 	else
 		sb->s_flags &= ~SB_POSIXACL;
-
-	if (test_opt(sbi, OPT_CREDS))
-		sb->s_iflags |= SB_I_OVL_OPT_CREDS;
-	else
-		sb->s_iflags &= ~SB_I_OVL_OPT_CREDS;
 
 #ifdef CONFIG_EROFS_FS_ZIP
 	INIT_RADIX_TREE(&sbi->workstn_tree, GFP_ATOMIC);
@@ -949,11 +934,6 @@ static int erofs_show_options(struct seq_file *seq, struct dentry *root)
 	if (sbi->fsid)
 		seq_printf(seq, ",fsid=%s", sbi->fsid);
 #endif
-	if (test_opt(sbi, OPT_CREDS))
-		seq_puts(seq, ",opt_creds=on");
-	else
-		seq_puts(seq, ",opt_creds=off");
-
 	return 0;
 }
 
@@ -972,11 +952,6 @@ static int erofs_remount(struct super_block *sb, int *flags, char *data)
 		sb->s_flags |= SB_POSIXACL;
 	else
 		sb->s_flags &= ~SB_POSIXACL;
-
-	if (test_opt(sbi, OPT_CREDS))
-		sb->s_iflags |= SB_I_OVL_OPT_CREDS;
-	else
-		sb->s_iflags &= ~SB_I_OVL_OPT_CREDS;
 
 	*flags |= SB_RDONLY;
 	return 0;
