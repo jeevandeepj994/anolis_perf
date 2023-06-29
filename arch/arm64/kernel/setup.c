@@ -54,6 +54,8 @@
 static int num_standard_resources;
 static struct resource *standard_resources;
 
+EXPORT_SYMBOL(__boot_cpu_mode);
+
 phys_addr_t __fdt_pointer __initdata;
 
 /*
