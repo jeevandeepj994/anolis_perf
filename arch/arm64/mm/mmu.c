@@ -505,7 +505,7 @@ early_param("crashkernel", enable_crash_mem_map);
 
 static unsigned long __ro_after_init kfence_pool_size = ((CONFIG_KFENCE_NUM_OBJECTS + 1) * 2 * PAGE_SIZE);
 
-bool __ro_after_init kfence_early_init = !!CONFIG_KFENCE_SAMPLE_INTERVAL;
+bool __ro_after_init kfence_early_init = IS_ENABLED(CONFIG_KFENCE);
 
 static int __init parse_kfence_early_init_num_objects(char *arg)
 {
