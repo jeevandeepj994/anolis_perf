@@ -1692,10 +1692,10 @@ CONFIG_NET_SCH_PLUG=m
 CONFIG_NET_SCH_DEFAULT=y
 # CONFIG_DEFAULT_FQ is not set
 # CONFIG_DEFAULT_CODEL is not set
-# CONFIG_DEFAULT_FQ_CODEL is not set
+CONFIG_DEFAULT_FQ_CODEL=y
 # CONFIG_DEFAULT_SFQ is not set
-CONFIG_DEFAULT_PFIFO_FAST=y
-CONFIG_DEFAULT_NET_SCH="pfifo_fast"
+# CONFIG_DEFAULT_PFIFO_FAST is not set
+CONFIG_DEFAULT_NET_SCH="fq_codel"
 
 #
 # Classification
@@ -5530,6 +5530,11 @@ CONFIG_HYPERV_IOMMU=y
 #
 # CONFIG_XILINX_VCU is not set
 # end of Xilinx SoC drivers
+
+#
+# prefetch tuning drivers
+#
+# end of prefetch tuning drivers
 # end of SOC (System On Chip) specific Drivers
 
 # CONFIG_PM_DEVFREQ is not set
