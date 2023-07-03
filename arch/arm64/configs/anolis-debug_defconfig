@@ -815,7 +815,6 @@ CONFIG_ARCH_USE_MEMREMAP_PROT=y
 CONFIG_LOCK_EVENT_COUNTS=y
 CONFIG_ARCH_HAS_RELR=y
 CONFIG_ARCH_WANT_LD_ORPHAN_WARN=y
-CONFIG_ARM64_PREFETCH_TUNING=m
 
 #
 # GCOV-based kernel profiling
@@ -5217,6 +5216,12 @@ CONFIG_QCOM_KRYO_L2_ACCESSORS=y
 #
 # CONFIG_XILINX_VCU is not set
 # end of Xilinx SoC drivers
+
+#
+# prefetch tuning drivers
+#
+CONFIG_ARM64_PREFETCH_TUNING=m
+# end of prefetch tuning drivers
 # end of SOC (System On Chip) specific Drivers
 
 # CONFIG_PM_DEVFREQ is not set
