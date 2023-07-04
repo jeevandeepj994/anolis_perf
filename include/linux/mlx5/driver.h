@@ -48,6 +48,7 @@
 #include <linux/idr.h>
 #include <linux/notifier.h>
 #include <linux/refcount.h>
+#include <linux/auxiliary_bus.h>
 
 #include <linux/mlx5/device.h>
 #include <linux/mlx5/doorbell.h>
@@ -55,6 +56,8 @@
 #include <linux/timecounter.h>
 #include <linux/ptp_clock_kernel.h>
 #include <net/devlink.h>
+
+#define MLX5_ADEV_NAME "mlx5_core"
 
 enum {
 	MLX5_BOARD_ID_LEN = 64,
@@ -190,7 +193,8 @@ enum port_state_policy {
 
 enum mlx5_coredev_type {
 	MLX5_COREDEV_PF,
-	MLX5_COREDEV_VF
+	MLX5_COREDEV_VF,
+	MLX5_COREDEV_SF,
 };
 
 struct mlx5_field_desc {
@@ -504,6 +508,10 @@ struct mlx5_devcom;
 struct mlx5_fw_reset;
 struct mlx5_eq_table;
 struct mlx5_irq_table;
+struct mlx5_vhca_state_notifier;
+struct mlx5_sf_dev_table;
+struct mlx5_sf_hw_table;
+struct mlx5_sf_table;
 
 struct mlx5_rate_limit {
 	u32			rate;
@@ -532,6 +540,17 @@ struct mlx5_core_roce {
 	struct mlx5_flow_table *ft;
 	struct mlx5_flow_group *fg;
 	struct mlx5_flow_handle *allow_rule;
+};
+
+enum {
+	MLX5_PRIV_FLAGS_DISABLE_IB_ADEV = 1 << 0,
+	MLX5_PRIV_FLAGS_DISABLE_ALL_ADEV = 1 << 1,
+};
+
+struct mlx5_adev {
+	struct auxiliary_device adev;
+	struct mlx5_core_dev *mdev;
+	int idx;
 };
 
 struct mlx5_priv {
@@ -571,6 +590,8 @@ struct mlx5_priv {
 	struct list_head        dev_list;
 	struct list_head        ctx_list;
 	spinlock_t              ctx_lock;
+	struct mlx5_adev       **adev;
+	int			adev_idx;
 	struct mlx5_events      *events;
 
 	struct mlx5_flow_steering *steering;
@@ -578,6 +599,7 @@ struct mlx5_priv {
 	struct mlx5_eswitch     *eswitch;
 	struct mlx5_core_sriov	sriov;
 	struct mlx5_lag		*lag;
+	u32			flags;
 	struct mlx5_devcom	*devcom;
 	struct mlx5_fw_reset	*fw_reset;
 	struct mlx5_core_roce	roce;
@@ -586,6 +608,15 @@ struct mlx5_priv {
 
 	struct mlx5_bfreg_data		bfregs;
 	struct mlx5_uars_page	       *uar;
+#ifdef CONFIG_MLX5_SF
+	struct mlx5_vhca_state_notifier *vhca_state_notifier;
+	struct mlx5_sf_dev_table *sf_dev_table;
+	struct mlx5_core_dev *parent_mdev;
+#endif
+#ifdef CONFIG_MLX5_SF_MANAGER
+	struct mlx5_sf_hw_table *sf_hw_table;
+	struct mlx5_sf_table *sf_table;
+#endif
 };
 
 enum mlx5_device_state {
@@ -694,6 +725,7 @@ struct mlx5_core_dev {
 	enum mlx5_device_state	state;
 	/* sync interface state */
 	struct mutex		intf_state_mutex;
+	struct lock_class_key	lock_key;
 	unsigned long		intf_state;
 	struct mlx5_priv	priv;
 	struct mlx5_profile	*profile;
@@ -1059,9 +1091,14 @@ enum {
 };
 
 enum {
-	MLX5_INTERFACE_PROTOCOL_IB  = 0,
-	MLX5_INTERFACE_PROTOCOL_ETH = 1,
-	MLX5_INTERFACE_PROTOCOL_VDPA = 2,
+	MLX5_INTERFACE_PROTOCOL_ETH_REP,
+	MLX5_INTERFACE_PROTOCOL_ETH,
+
+	MLX5_INTERFACE_PROTOCOL_IB_REP,
+	MLX5_INTERFACE_PROTOCOL_MPIB,
+	MLX5_INTERFACE_PROTOCOL_IB,
+
+	MLX5_INTERFACE_PROTOCOL_VDPA,
 };
 
 struct mlx5_interface {

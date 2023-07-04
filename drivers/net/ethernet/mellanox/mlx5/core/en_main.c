@@ -5673,11 +5673,15 @@ static struct mlx5_interface mlx5e_interface = {
 	.protocol  = MLX5_INTERFACE_PROTOCOL_ETH,
 };
 
-void mlx5e_init(void)
+int mlx5e_init(void)
 {
+	int err;
+
 	mlx5e_ipsec_build_inverse_table();
 	mlx5e_build_ptys2ethtool_map();
-	mlx5_register_interface(&mlx5e_interface);
+	err = mlx5_register_interface(&mlx5e_interface);
+
+	return err;
 }
 
 void mlx5e_cleanup(void)

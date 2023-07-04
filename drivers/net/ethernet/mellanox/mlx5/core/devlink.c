@@ -7,6 +7,8 @@
 #include "fw_reset.h"
 #include "fs_core.h"
 #include "eswitch.h"
+#include "sf/dev/dev.h"
+#include "sf/sf.h"
 
 static int mlx5_devlink_flash_update(struct devlink *devlink,
 				     struct devlink_flash_update_params *params,
@@ -52,7 +54,7 @@ mlx5_devlink_info_get(struct devlink *devlink, struct devlink_info_req *req,
 	u32 running_fw, stored_fw;
 	int err;
 
-	err = devlink_info_driver_name_put(req, DRIVER_NAME);
+	err = devlink_info_driver_name_put(req, KBUILD_MODNAME);
 	if (err)
 		return err;
 
@@ -136,6 +138,17 @@ static int mlx5_devlink_reload_down(struct devlink *devlink, bool netns_change,
 				    struct netlink_ext_ack *extack)
 {
 	struct mlx5_core_dev *dev = devlink_priv(devlink);
+	bool sf_dev_allocated;
+
+	sf_dev_allocated = mlx5_sf_dev_allocated(dev);
+	if (sf_dev_allocated) {
+		/* Reload results in deleting SF device which further results in
+		 * unregistering devlink instance while holding devlink_mutext.
+		 * Hence, do not support reload.
+		 */
+		NL_SET_ERR_MSG_MOD(extack, "reload is unsupported when SFs are allocated\n");
+		return -EOPNOTSUPP;
+	}
 
 	if (mlx5_lag_is_active(dev)) {
 		NL_SET_ERR_MSG_MOD(extack, "reload is unsupported in Lag mode\n");
@@ -192,6 +205,12 @@ static const struct devlink_ops mlx5_devlink_ops = {
 	.eswitch_encap_mode_get = mlx5_devlink_eswitch_encap_mode_get,
 	.port_function_hw_addr_get = mlx5_devlink_port_function_hw_addr_get,
 	.port_function_hw_addr_set = mlx5_devlink_port_function_hw_addr_set,
+#endif
+#ifdef CONFIG_MLX5_SF_MANAGER
+	.port_new = mlx5_devlink_sf_port_new,
+	.port_del = mlx5_devlink_sf_port_del,
+	.port_fn_state_get = mlx5_devlink_sf_port_fn_state_get,
+	.port_fn_state_set = mlx5_devlink_sf_port_fn_state_set,
 #endif
 	.flash_update = mlx5_devlink_flash_update,
 	.info_get = mlx5_devlink_info_get,
