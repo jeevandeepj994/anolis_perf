@@ -1,7 +1,7 @@
-/* 
- * Cryptographic API.
+// SPDX-License-Identifier: GPL-2.0-only
+/*
  *
- * Support for VIA PadLock hardware crypto engine.
+ * Support for ACE hardware crypto engine.
  *
  * Copyright (c) 2004  Michal Ludvig <michal@logix.cz>
  *
@@ -486,22 +486,22 @@ static struct crypto_alg cbc_aes_alg = {
 	}
 };
 
-static const struct x86_cpu_id padlock_cpu_id[] = {
-	{ X86_VENDOR_CENTAUR, 6, X86_MODEL_ANY, X86_FEATURE_XCRYPT },
+static const struct x86_cpu_id zhaoxin_cpu_id[] = {
+	{ X86_VENDOR_CENTAUR, 7, X86_MODEL_ANY, X86_STEPPING_ANY, X86_FEATURE_XCRYPT },
+	{ X86_VENDOR_ZHAOXIN, 7, X86_MODEL_ANY, X86_STEPPING_ANY, X86_FEATURE_XCRYPT },
 	{}
 };
-MODULE_DEVICE_TABLE(x86cpu, padlock_cpu_id);
+MODULE_DEVICE_TABLE(x86cpu, zhaoxin_cpu_id);
 
 static int __init padlock_init(void)
 {
 	int ret;
-	struct cpuinfo_x86 *c = &cpu_data(0);
 
-	if (!x86_match_cpu(padlock_cpu_id))
+	if (!x86_match_cpu(zhaoxin_cpu_id))
 		return -ENODEV;
 
 	if (!boot_cpu_has(X86_FEATURE_XCRYPT_EN)) {
-		printk(KERN_NOTICE PFX "VIA PadLock detected, but not enabled. Hmm, strange...\n");
+		printk(KERN_NOTICE "ACE detected, but not enabled. Hmm, strange...\n");
 		return -ENODEV;
 	}
 
@@ -514,13 +514,7 @@ static int __init padlock_init(void)
 	if ((ret = crypto_register_alg(&cbc_aes_alg)))
 		goto cbc_aes_err;
 
-	printk(KERN_NOTICE PFX "Using VIA PadLock ACE for AES algorithm.\n");
-
-	if (c->x86 == 6 && c->x86_model == 15 && c->x86_stepping == 2) {
-		ecb_fetch_blocks = MAX_ECB_FETCH_BLOCKS;
-		cbc_fetch_blocks = MAX_CBC_FETCH_BLOCKS;
-		printk(KERN_NOTICE PFX "VIA Nano stepping 2 detected: enabling workaround.\n");
-	}
+	printk(KERN_NOTICE "Using ACE for AES algorithm.\n");
 
 out:
 	return ret;
@@ -530,7 +524,7 @@ cbc_aes_err:
 ecb_aes_err:
 	crypto_unregister_alg(&aes_alg);
 aes_err:
-	printk(KERN_ERR PFX "VIA PadLock AES initialization failed.\n");
+	printk(KERN_ERR "ACE AES initialization failed.\n");
 	goto out;
 }
 
@@ -544,7 +538,7 @@ static void __exit padlock_fini(void)
 module_init(padlock_init);
 module_exit(padlock_fini);
 
-MODULE_DESCRIPTION("VIA PadLock AES algorithm support");
+MODULE_DESCRIPTION("ACE AES algorithm support");
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Michal Ludvig");
 
