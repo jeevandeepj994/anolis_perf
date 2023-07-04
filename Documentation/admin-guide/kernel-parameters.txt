@@ -728,6 +728,14 @@
 			policy to use. This governor must be registered in the
 			kernel before the cpufreq driver probes.
 
+	cpufreq_snapshot_ms=N
+			[ARM64] When getting the cpufreq via /proc/cpuinfo,
+			to avoid performance problems caused by frequent
+			sampling, a snapshot is used. This parameter can
+			adjust the snapshot expiration period in
+			milliseconds.
+			Default: LLONG_MAX
+
 	cpu_init_udelay=N
 			[X86] Delay for N microsec between assert and de-assert
 			of APIC INIT to start processors.  This delay occurs

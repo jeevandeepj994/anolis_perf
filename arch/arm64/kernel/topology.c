@@ -158,18 +158,35 @@ struct arch_cpufreq_sample {
 
 static DEFINE_PER_CPU(struct arch_cpufreq_sample, samples);
 
-#define ARCH_CPUFREQ_CACHE_THRESHOLD_MS	100
+static s64 arch_cpufreq_snapshot_ms = LLONG_MAX;
+
+static int __init parse_cpufreq_snapshot_ms(char *str)
+{
+	int ret;
+	s64 threshold_ms;
+
+	if (!str)
+		return -EINVAL;
+
+	ret = kstrtos64(str, 10, &threshold_ms);
+	if (ret)
+		return ret;
+	arch_cpufreq_snapshot_ms = threshold_ms;
+
+	return 0;
+}
+early_param("cpufreq_snapshot_ms", parse_cpufreq_snapshot_ms);
 
 static void arch_cpufreq_snapshot_cpu(int cpu, ktime_t now)
 {
 	s64 time_delta = ktime_ms_delta(now, per_cpu(samples.time, cpu));
 	struct arch_cpufreq_sample *s;
 
-	/* Don't bother re-computing within the cache threshold time. */
-	if (time_delta < ARCH_CPUFREQ_CACHE_THRESHOLD_MS)
-		return;
-
 	s = per_cpu_ptr(&samples, cpu);
+
+	/* Don't bother re-computing within the cache threshold time. */
+	if (s->khz && time_delta < arch_cpufreq_snapshot_ms)
+		return;
 
 	s->khz = cpufreq_get(cpu);
 	if (s->khz)
