@@ -36,7 +36,7 @@ enum {
 
 struct smc_stats_fback {
 	int	fback_code;
-	u16	count;
+	u64	count;
 };
 
 struct smc_stats_rsn {
