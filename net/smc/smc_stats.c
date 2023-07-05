@@ -407,8 +407,8 @@ static int smc_nl_get_fback_details(struct sk_buff *skb,
 	if (nla_put_u32(skb, SMC_NLA_FBACK_STATS_RSN_CODE,
 			trgt_arr[pos].fback_code))
 		goto errattr;
-	if (nla_put_u16(skb, SMC_NLA_FBACK_STATS_RSN_CNT,
-			trgt_arr[pos].count))
+	if (nla_put_u64_64bit(skb, SMC_NLA_FBACK_STATS_RSN_CNT,
+			      trgt_arr[pos].count, SMC_NLA_FBACK_STATS_PAD))
 		goto errattr;
 
 	cb_ctx->pos[2] = cnt_reported;
