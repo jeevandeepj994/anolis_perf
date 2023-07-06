@@ -15,6 +15,8 @@
 
 #include "smc.h"
 
+#define S390_ISM_IDENT_MASK 0x00FFFF
+
 struct smcd_dev_list {	/* List of SMCD devices */
 	struct list_head list;
 	struct mutex mutex;	/* Protects list of devices */

@@ -302,6 +302,7 @@ int smcr_cdc_msg_send_validation(struct smc_connection *conn,
 				 struct smc_wr_buf *wr_buf);
 int smc_cdc_init(void) __init;
 void smcd_cdc_rx_init(struct smc_connection *conn);
+void smcd_cdc_rx_handler(struct smc_connection *conn);
 void smc_cdc_rx_handler_rwwi(struct ib_wc *wc);
 void smc_cdc_tx_handler_rwwi(struct ib_wc *wc);
 #endif /* SMC_CDC_H */
