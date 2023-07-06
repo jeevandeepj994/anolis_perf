@@ -817,6 +817,8 @@ int smcr_iw_net_reserve_ports(struct net *net)
 	return 0;
 
 release:
+	pr_warn_ratelimited("warning: smc: netns %pK reserved ports %d FAIL for eRDMA OOB\n",
+			    net, SMC_IWARP_RSVD_PORTS_BASE + i);
 	for (j = 0; j < i; j++) {
 		sock_release(net->smc.rsvd_sock[j]);
 		net->smc.rsvd_sock[j] = NULL;
