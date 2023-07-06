@@ -58,6 +58,7 @@
 #include "smc_sysctl.h"
 #include "smc_proc.h"
 #include "smc_inet.h"
+#include "smc_loopback.h"
 
 static DEFINE_MUTEX(smc_server_lgr_pending);	/* serialize link group
 						 * creation on server
@@ -4772,10 +4773,16 @@ static int __init smc_init(void)
 		goto out_sock;
 	}
 
+	rc = smc_loopback_init();
+	if (rc) {
+		pr_err("%s: smc_loopback_init fails with %d\n", __func__, rc);
+		goto out_ib;
+	}
+
 	rc = smc_proc_init();
 	if (rc) {
 		pr_err("%s: smc_proc_init fails with %d\n", __func__, rc);
-		goto out_ib;
+		goto out_lo;
 	}
 
 	/* init smc inet sock related proto and proto_ops */
@@ -4808,6 +4815,8 @@ out_proto_register:
 	proto_unregister(&smc_inet_prot);
 out_proc:
 	smc_proc_exit();
+out_lo:
+	smc_loopback_exit();
 out_ib:
 	smc_ib_unregister_client();
 out_sock:
@@ -4849,6 +4858,7 @@ static void __exit smc_exit(void)
 	smc_proc_exit();
 	sock_unregister(PF_SMC);
 	smc_core_exit();
+	smc_loopback_exit();
 	smc_ib_unregister_client();
 	smc_ism_exit();
 	destroy_workqueue(smc_close_wq);
