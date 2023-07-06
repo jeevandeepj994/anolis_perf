@@ -23,7 +23,7 @@
 #define SMC_GID_SIZE			sizeof(union ib_gid)
 
 #define SMC_IB_MAX_SEND_SGE		2
-#define SMC_IWARP_RSVD_PORTS_BASE	33800
+#define SMC_IWARP_RSVD_PORTS_BASE	65500
 
 struct smc_ib_devices {			/* list of smc ib devices definition */
 	struct list_head	list;
