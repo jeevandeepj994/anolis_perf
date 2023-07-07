@@ -349,7 +349,7 @@ static int smc_tx_rdma_write(struct smc_connection *conn, int peer_rmbe_offset,
 		peer_rmbe_offset;
 	rdma_wr->rkey = lgr->rtokens[conn->rtoken_idx][link->link_idx].rkey;
 	/* rtoken might be deleted if peer freed connection */
-	if (!rdma_wr->rkey ||
+	if (!test_bit(conn->rtoken_idx, lgr->rtokens_used_mask) ||
 	    (rdma_wr->remote_addr == (conn->tx_off + peer_rmbe_offset))) {
 		pr_warn_ratelimited("smc: unexpected sends during connection termination flow\n");
 		return -EINVAL;
