@@ -50,7 +50,12 @@ enum smc_link_state {			/* possible states of a link */
 
 #define SMC_WR_BUF_SIZE		48	/* size of work request buffer */
 #define SMC_WR_BUF_V2_SIZE	8192	/* size of v2 work request buffer */
-
+#define SMC_WR_BUF_CNT		64	/* # of ctrl buffers per link, SMC_WR_BUF_CNT
+					 * should not be less than 2 * SMC_RMBS_PER_LGR_MAX,
+					 * since every connection at least has two rq/sq
+					 * credits in average, otherwise may result in
+					 * waiting for credits in sending process.
+					 */
 struct smc_wr_buf {
 	u8	raw[SMC_WR_BUF_SIZE];
 };
@@ -123,11 +128,13 @@ struct smc_link {
 	struct completion	tx_ref_comp;
 	atomic_t		tx_inflight_credit;
 
-	struct smc_wr_buf	*wr_rx_bufs;	/* WR recv payload buffers */
+	struct smc_wr_buf	*wr_rx_bufs[SMC_WR_BUF_CNT];
+						/* WR recv payload buffers */
 	struct ib_recv_wr	*wr_rx_ibs;	/* WR recv meta data */
 	struct ib_sge		*wr_rx_sges;	/* WR recv scatter meta data */
 	/* above three vectors have wr_rx_cnt elements and use the same index */
-	dma_addr_t		wr_rx_dma_addr;	/* DMA address of wr_rx_bufs */
+	dma_addr_t		wr_rx_dma_addr[SMC_WR_BUF_CNT];
+						/* DMA address of wr_rx_bufs */
 	u64			wr_rx_id;	/* seq # of last recv WR */
 	u32			wr_rx_cnt;	/* number of WR recv buffers */
 	unsigned long		wr_rx_tstamp;	/* jiffies when last buf rx */
