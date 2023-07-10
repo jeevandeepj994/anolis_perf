@@ -10219,9 +10219,7 @@ static int io_uring_create(unsigned entries, struct io_uring_params *p,
 		sqd = *per_cpu_ptr(percpu_sqd, cpu);
 		io_sq_thread_park(sqd);
 		sqd->thread->flags &= ~PF_NO_SETAFFINITY;
-#ifdef CONFIG_CGROUP_CPUACCT
 		ret = io_sq_attach_cpu_cgroup(sqd->thread);
-#endif
 		sqd->thread->flags |= PF_NO_SETAFFINITY;
 		io_sq_thread_unpark(sqd);
 		mutex_unlock(&percpu_sqd_lock);
