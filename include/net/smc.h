@@ -376,14 +376,18 @@ int smc_sock_register_negotiator_ops(struct smc_sock_negotiator_ops *ops);
 int smc_sock_update_negotiator_ops(struct smc_sock_negotiator_ops *ops,
 					  struct smc_sock_negotiator_ops *old_ops);
 void smc_sock_unregister_negotiator_ops(struct smc_sock_negotiator_ops *ops);
-int smc_sock_assign_negotiator_ops(struct smc_sock *smc, const char *name);
 
 #ifdef CONFIG_BPF_SYSCALL
 void smc_sock_cleanup_negotiator_ops(struct smc_sock *smc, int in_release);
 void smc_sock_clone_negotiator_ops(struct sock *parent, struct sock *child);
+int smc_sock_assign_negotiator_ops(struct smc_sock *smc, const char *name);
 #else
 static inline void smc_sock_cleanup_negotiator_ops(struct smc_sock *smc, int in_release) {}
 static inline void smc_sock_clone_negotiator_ops(struct sock *parent, struct sock *child) {}
+static inline int smc_sock_assign_negotiator_ops(struct smc_sock *smc, const char *name)
+{
+	return -EOPNOTSUPP;
+}
 #endif
 
 #endif	/* _SMC_H */
