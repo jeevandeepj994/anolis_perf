@@ -5,3 +5,4 @@ idr-test
 main
 multiorder
 radix-tree.c
+xarray
