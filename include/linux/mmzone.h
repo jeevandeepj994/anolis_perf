@@ -293,8 +293,6 @@ enum lruvec_flags {
 
 struct lruvec {
 	struct list_head		lists[NR_LRU_LISTS];
-	/* per lruvec lru_lock for memcg */
-	spinlock_t			lru_lock;
 	/*
 	 * These track the cost of reclaiming one LRU - file or anon -
 	 * over the other. As the observed cost of reclaiming one LRU
@@ -311,6 +309,9 @@ struct lruvec {
 #ifdef CONFIG_MEMCG
 	struct pglist_data *pgdat;
 #endif
+	ZONE_PADDING(_pad1_)
+	/* per lruvec lru_lock for memcg */
+	spinlock_t			lru_lock;
 
 	CK_KABI_RESERVE(1)
 };
