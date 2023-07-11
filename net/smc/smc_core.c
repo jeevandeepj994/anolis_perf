@@ -2054,7 +2054,7 @@ int smc_conn_create(struct smc_sock *smc, struct smc_init_info *ini)
 		    (ini->smcd_version == SMC_V2 ||
 		     lgr->vlan_id == ini->vlan_id) &&
 		    (role == SMC_CLNT || ini->is_smcd ||
-		    (lgr->conns_num < lgr->max_conns &&
+		    (lgr->conns_num < lgr->max_conns && !lgr->terminating &&
 		      !bitmap_full(lgr->rtokens_used_mask, SMC_RMBS_PER_LGR_MAX)))) {
 			/* link group found */
 			ini->first_contact_local = 0;
@@ -2692,6 +2692,7 @@ int smc_rtoken_delete(struct smc_link *lnk, __be32 nw_rkey)
 {
 	struct smc_link_group *lgr = smc_get_lgr(lnk);
 	struct smc_sock *smc = NULL;
+	struct smc_connection *conn;
 	u32 rkey = ntohl(nw_rkey);
 	int i, j;
 
@@ -2711,6 +2712,14 @@ int smc_rtoken_delete(struct smc_link *lnk, __be32 nw_rkey)
 			clear_bit(i, lgr->rtokens_used_mask);
 
 			if (smc) {
+				conn = &smc->conn;
+				if (!smc_cdc_rxed_any_close(&smc->conn)) {
+					/* make peer_conn_abort */
+					conn->local_rx_ctrl.conn_state_flags.peer_conn_abort = 1;
+					sock_hold(&smc->sk); /* sock_put in close_work */
+					if (!queue_work(smc_close_wq, &smc->conn.close_work))
+						sock_put(&smc->sk);
+				}
 				spin_unlock_bh(&smc->conn.send_lock);
 				/* sock_hold in smc_lgr_get_sock_by_rtoken */
 				sock_put(&smc->sk);
