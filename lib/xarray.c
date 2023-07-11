@@ -490,12 +490,9 @@ static int xas_expand(struct xa_state *xas, void *head)
 }
 
 /*
- * xas_create() - Create a slot to store an entry in.
- * @xas: XArray operation state.
- *
- * Most users will not need to call this function directly, as it is called
- * by xas_store().  It is useful for doing conditional store operations
- * (see the xa_cmpxchg() implementation for an example).
+ * xa_load() - Load an entry from an XArray.
+ * @xa: XArray.
+ * @index: index into array.
  *
  * Context: Any context.  Takes and releases the RCU lock.
  * Return: The entry at @index in @xa.
