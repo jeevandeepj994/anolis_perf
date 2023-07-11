@@ -355,7 +355,7 @@ static void smc_cdc_handle_urg_data_arrival(struct smc_sock *smc,
 	/* new data included urgent business */
 	smc_curs_copy(&conn->urg_curs, &conn->local_rx_ctrl.prod, conn);
 	conn->urg_state = SMC_URG_VALID;
-	if (!sock_flag(&smc->sk, SOCK_URGINLINE))
+	if (!smc_sock_flag(&smc->sk, SOCK_URGINLINE))
 		/* we'll skip the urgent byte, so don't account for it */
 		(*diff_prod)--;
 	base = (char *)conn->rmb_desc->cpu_addr + conn->rx_off;
@@ -444,7 +444,7 @@ static void __smc_cdc_msg_recv_action(struct smc_sock *smc,
 		smc->sk.sk_shutdown |= RCV_SHUTDOWN;
 		if (smc->clcsock && smc->clcsock->sk)
 			smc->clcsock->sk->sk_shutdown |= RCV_SHUTDOWN;
-		sock_set_flag(&smc->sk, SOCK_DONE);
+		smc_sock_set_flag(&smc->sk, SOCK_DONE);
 		sock_hold(&smc->sk); /* sock_put in close_work */
 		if (!queue_work(smc_close_wq, &conn->close_work))
 			sock_put(&smc->sk);

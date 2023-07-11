@@ -361,7 +361,7 @@ static int __smc_release(struct smc_sock *smc)
 
 	if (!smc->use_fallback) {
 		rc = smc_close_active(smc);
-		sock_set_flag(sk, SOCK_DEAD);
+		smc_sock_set_flag(sk, SOCK_DEAD);
 		sk->sk_shutdown |= SHUTDOWN_MASK;
 	} else {
 		if (smc_sk_state(sk) != SMC_CLOSED) {
@@ -452,7 +452,7 @@ static void smc_destruct(struct sock *sk)
 
 	if (smc_sk_state(sk) != SMC_CLOSED)
 		return;
-	if (!sock_flag(sk, SOCK_DEAD))
+	if (!smc_sock_flag(sk, SOCK_DEAD))
 		return;
 
 	sk_refcnt_debug_dec(sk);
@@ -1798,7 +1798,7 @@ static void smc_connect_work(struct work_struct *work)
 		smc->sk.sk_err = -rc;
 
 out:
-	if (!sock_flag(&smc->sk, SOCK_DEAD)) {
+	if (!smc_sock_flag(&smc->sk, SOCK_DEAD)) {
 		if (smc->sk.sk_err) {
 			smc->sk.sk_state_change(&smc->sk);
 		} else { /* allow polling before and after fallback decision */
@@ -1976,7 +1976,7 @@ static int smc_clcsock_accept(struct smc_sock *lsmc, struct smc_sock **new_smc)
 		if (new_clcsock)
 			sock_release(new_clcsock);
 		smc_sk_set_state(new_sk, SMC_CLOSED);
-		sock_set_flag(new_sk, SOCK_DEAD);
+		smc_sock_set_flag(new_sk, SOCK_DEAD);
 		mutex_unlock(&lsmc->clcsock_release_lock);
 		sock_put(new_sk); /* final */
 		*new_smc = NULL;
@@ -2087,7 +2087,7 @@ void smc_close_non_accepted(struct sock *sk)
 	if (smc_sock_is_inet_sock(sk)) {
 		if (!smc_inet_sock_check_fallback(sk) && smc_sk_state(sk) != SMC_CLOSED) {
 			smc_close_active(smc);
-			sock_set_flag(sk, SOCK_DEAD);
+			smc_sock_set_flag(sk, SOCK_DEAD);
 			if (smc_sk_state(sk) == SMC_CLOSED)
 				smc_conn_free(&smc->conn);
 		}
@@ -3834,7 +3834,7 @@ static int __smc_inet_connect_work_locked(struct smc_sock *smc)
 	/* make smc_negotiation can be seen */
 	smp_wmb();
 
-	if (!sock_flag(&smc->sk, SOCK_DEAD)) {
+	if (!smc_sock_flag(&smc->sk, SOCK_DEAD)) {
 		if (smc->sk.sk_err)
 			smc->sk.sk_state_change(&smc->sk);
 		else
@@ -4279,7 +4279,7 @@ int smc_inet_release(struct socket *sock)
 
 	/* ret of smc_close_active do not need return to userspace */
 	smc_close_active(smc);
-	sock_set_flag(sk, SOCK_DEAD);
+	smc_sock_set_flag(sk, SOCK_DEAD);
 
 	if (smc_sk_state(sk) == SMC_CLOSED)
 		smc_conn_free(&smc->conn);
