@@ -31,6 +31,8 @@ extern struct inet_protosw smc_inet6_protosw;
 
 extern const struct proto_ops smc_inet_clcsock_ops;
 
+void smc_inet_sock_state_change(struct sock *sk);
+
 enum smc_inet_sock_negotiation_state {
 	/* When creating an AF_SMC sock, the state field will be initialized to 0 by default,
 	 * which is only for logical compatibility with that situation
@@ -64,17 +66,19 @@ enum smc_inet_sock_negotiation_state {
 
 	/* flags */
 	SMC_NEGOTIATION_LISTEN_FLAG = 0x01,
+	SMC_NEGOTIATION_ABORT_FLAG = 0x02,
 };
 
 static __always_inline void isck_smc_negotiation_store(struct smc_sock *smc,
 						       enum smc_inet_sock_negotiation_state state)
 {
-	smc->isck_smc_negotiation = (state | (smc->isck_smc_negotiation & 0x0f));
+	WRITE_ONCE(smc->isck_smc_negotiation,
+		   state | (READ_ONCE(smc->isck_smc_negotiation) & 0x0f));
 }
 
 static __always_inline int isck_smc_negotiation_load(struct smc_sock *smc)
 {
-	return smc->isck_smc_negotiation & 0xf0;
+	return READ_ONCE(smc->isck_smc_negotiation) & 0xf0;
 }
 
 static __always_inline void isck_smc_negotiation_set_flags(struct smc_sock *smc, int flags)
@@ -87,7 +91,7 @@ static __always_inline int isck_smc_negotiation_get_flags(struct smc_sock *smc)
 	return smc->isck_smc_negotiation & 0x0f;
 }
 
-static inline int smc_inet_sock_set_syn_smc(struct sock *sk)
+static inline int smc_inet_sock_set_syn_smc(struct sock *sk, int flags)
 {
 	int rc = 0;
 
@@ -102,11 +106,29 @@ static inline int smc_inet_sock_set_syn_smc(struct sock *sk)
 	 */
 	if (isck_smc_negotiation_load(smc_sk(sk)) == SMC_NEGOTIATION_TBD) {
 		tcp_sk(sk)->syn_smc = 1;
+		if (flags & O_NONBLOCK)
+			smc_clcsock_replace_cb(&sk->sk_state_change,
+					       smc_inet_sock_state_change,
+					       &smc_sk(sk)->clcsk_state_change);
 		rc = 1;
 	}
 	read_unlock_bh(&sk->sk_callback_lock);
 	return rc;
 }
+
+static inline void smc_inet_sock_abort(struct sock *sk)
+{
+	write_lock_bh(&sk->sk_callback_lock);
+	if (isck_smc_negotiation_get_flags(smc_sk(sk)) & SMC_NEGOTIATION_ABORT_FLAG) {
+		write_unlock_bh(&sk->sk_callback_lock);
+		return;
+	}
+	isck_smc_negotiation_set_flags(smc_sk(sk), SMC_NEGOTIATION_ABORT_FLAG);
+	write_unlock_bh(&sk->sk_callback_lock);
+	sk->sk_error_report(sk);
+}
+
+int smc_inet_sock_move_state_locked(struct sock *sk, int except, int target);
 
 static inline int smc_inet_sock_try_fallback_fast(struct sock *sk, int abort)
 {
@@ -116,20 +138,21 @@ static inline int smc_inet_sock_try_fallback_fast(struct sock *sk, int abort)
 	write_lock_bh(&sk->sk_callback_lock);
 	switch (isck_smc_negotiation_load(smc)) {
 	case SMC_NEGOTIATION_TBD:
-		if (!abort && tcp_sk(sk)->syn_smc)
-			break;
 		/* fallback is meanless for listen socks */
 		if (unlikely(inet_sk_state_load(sk) == TCP_LISTEN))
+			break;
+		if (abort)
+			isck_smc_negotiation_set_flags(smc_sk(sk), SMC_NEGOTIATION_ABORT_FLAG);
+		else if (tcp_sk(sk)->syn_smc)
 			break;
 		/* In the implementation of INET sock, syn_smc will only be determined after
 		 * smc_inet_connect or smc_inet_listen, which means that if there is
 		 * no syn_smc set, we can easily fallback.
 		 */
-		isck_smc_negotiation_store(smc, SMC_NEGOTIATION_NO_SMC);
+		smc_inet_sock_move_state_locked(sk, SMC_NEGOTIATION_TBD, SMC_NEGOTIATION_NO_SMC);
+		smc_sk_set_state(sk, SMC_ACTIVE);
 		fallthrough;
 	case SMC_NEGOTIATION_NO_SMC:
-		if (smc->clcsk_state_change)
-			sk->sk_state_change = smc->clcsk_state_change;
 		syn_smc = 0;
 	default:
 		break;
@@ -188,15 +211,13 @@ static __always_inline struct proto *smc_inet_get_tcp_prot(int family)
 	return NULL;
 }
 
-int smc_inet_sock_switch_negotiation_state_locked(struct sock *sk, int except, int target);
-
-static __always_inline int smc_inet_sock_switch_negotiation_state(struct sock *sk,
-								  int except, int target)
+static __always_inline int smc_inet_sock_move_state(struct sock *sk,
+						    int except, int target)
 {
 	int rc;
 
 	write_lock_bh(&sk->sk_callback_lock);
-	rc = smc_inet_sock_switch_negotiation_state_locked(sk, except, target);
+	rc = smc_inet_sock_move_state_locked(sk, except, target);
 	write_unlock_bh(&sk->sk_callback_lock);
 	return rc;
 }

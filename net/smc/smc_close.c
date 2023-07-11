@@ -27,11 +27,12 @@ void smc_clcsock_release(struct smc_sock *smc)
 {
 	struct socket *tcp;
 
+	if (smc->listen_smc && current_work() != &smc->smc_listen_work)
+		cancel_work_sync(&smc->smc_listen_work);
+
 	if (smc_sock_is_inet_sock(&smc->sk))
 		return;
 
-	if (smc->listen_smc && current_work() != &smc->smc_listen_work)
-		cancel_work_sync(&smc->smc_listen_work);
 	mutex_lock(&smc->clcsock_release_lock);
 	if (smc->clcsock) {
 		tcp = smc->clcsock;
@@ -147,10 +148,7 @@ void smc_close_active_abort(struct smc_sock *smc)
 	if (smc_sk_state(sk) != SMC_INIT) {
 		/* sock locked */
 		if (smc_sock_is_inet_sock(sk)) {
-			sk->sk_err = ECONNABORTED;
-			/* This barrier is coupled with smp_rmb() in tcp_poll() */
-			smp_wmb();
-			sk->sk_error_report(sk);
+			smc_inet_sock_abort(sk);
 		} else if (smc->clcsock && smc->clcsock->sk) {
 			sk->sk_err = ECONNABORTED;
 			tcp_abort(smc->clcsock->sk, ECONNABORTED);
@@ -198,6 +196,7 @@ void smc_close_active_abort(struct smc_sock *smc)
 	}
 
 	smc_sock_set_flag(sk, SOCK_DEAD);
+
 	sk->sk_state_change(sk);
 
 	if (release_clcsock) {

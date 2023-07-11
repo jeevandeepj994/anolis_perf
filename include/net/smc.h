@@ -280,11 +280,13 @@ struct smc_connection {
 
 struct smc_sock {				/* smc sock container */
 	union {
+		struct tcp6_sock	tp6sk;
 		struct tcp_sock	tpsk;
 		struct sock	sk;
 	};
 	struct socket	*clcsock;	/* internal tcp socket */
 	unsigned char	smc_state;	/* smc state used in smc via inet_sk */
+	unsigned long	smc_sk_flags;
 	unsigned int	isck_smc_negotiation;
 	struct socket	accompany_socket;
 	struct request_sock	*tail_0;
@@ -341,6 +343,8 @@ struct smc_sock {				/* smc sock container */
 						/* protects clcsock of a listen
 						 * socket
 						 */
+	/* ipv6_pinfo has to be the last member of tcp6_sock, see inet6_sk_generic */
+	struct ipv6_pinfo inet6;
 };
 
 #define SMC_NEGOTIATOR_NAME_MAX	(16)
