@@ -2190,8 +2190,10 @@ static void smc_listen_out_connected(struct smc_sock *new_smc)
 {
 	struct sock *newsmcsk = &new_smc->sk;
 
+	lock_sock(newsmcsk);
 	if (smc_sk_state(newsmcsk) == SMC_INIT)
 		smc_sk_set_state(newsmcsk, SMC_ACTIVE);
+	release_sock(newsmcsk);
 
 	smc_listen_out(new_smc);
 }
@@ -2203,9 +2205,13 @@ static void smc_listen_out_err(struct smc_sock *new_smc)
 	struct net *net = sock_net(newsmcsk);
 
 	this_cpu_inc(net->smc.smc_stats->srv_hshake_err_cnt);
-	if (smc_sk_state(newsmcsk) == SMC_INIT)
+
+	lock_sock(newsmcsk);
+	if (smc_sk_state(newsmcsk) == SMC_INIT) {
 		sock_put(&new_smc->sk); /* passive closing */
-	smc_sk_set_state(newsmcsk, SMC_CLOSED);
+		smc_sk_set_state(newsmcsk, SMC_CLOSED);
+	}
+	release_sock(newsmcsk);
 
 	smc_listen_out(new_smc);
 }
