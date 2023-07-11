@@ -200,6 +200,7 @@ config INTEL_IOMMU_SVM
 	depends on INTEL_IOMMU && X86
 	select PCI_PASID
 	select MMU_NOTIFIER
+	select IOASID
 	help
 	  Shared Virtual Memory (SVM) provides a facility for devices
 	  to access DMA resources through process address space by
