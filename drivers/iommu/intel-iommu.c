@@ -305,8 +305,6 @@ static int hw_pass_through = 1;
  */
 #define DOMAIN_FLAG_VIRTUAL_MACHINE	(1 << 0)
 
-/* si_domain contains mulitple devices */
-#define DOMAIN_FLAG_STATIC_IDENTITY	(1 << 1)
 
 #define for_each_domain_iommu(idx, domain)			\
 	for (idx = 0; idx < g_num_of_iommus; idx++)		\
