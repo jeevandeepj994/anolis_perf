@@ -175,4 +175,7 @@ int smc_nl_dump_hs_limitation(struct sk_buff *skb, struct netlink_callback *cb);
 int smc_nl_enable_hs_limitation(struct sk_buff *skb, struct genl_info *info);
 int smc_nl_disable_hs_limitation(struct sk_buff *skb, struct genl_info *info);
 
+#define smc_sock_flag(sk, flag)			sock_flag(sk, flag)
+#define smc_sock_set_flag(sk, flag)		sock_set_flag(sk, flag)
+
 #endif	/* __SMC_H */
