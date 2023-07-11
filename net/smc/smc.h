@@ -35,7 +35,7 @@ extern struct proto smc_proto6;
 extern bool reserve_mode;
 extern u16 rsvd_ports_base;
 
-static __always_inline bool smc_sock_is_inet_sock(struct sock *sk)
+static __always_inline bool smc_sock_is_inet_sock(const struct sock *sk)
 {
 	return inet_sk(sk)->is_icsk;
 }
@@ -175,7 +175,33 @@ int smc_nl_dump_hs_limitation(struct sk_buff *skb, struct netlink_callback *cb);
 int smc_nl_enable_hs_limitation(struct sk_buff *skb, struct genl_info *info);
 int smc_nl_disable_hs_limitation(struct sk_buff *skb, struct genl_info *info);
 
-#define smc_sock_flag(sk, flag)			sock_flag(sk, flag)
-#define smc_sock_set_flag(sk, flag)		sock_set_flag(sk, flag)
+static inline bool smc_sock_flag(const struct sock *sk, enum sock_flags flag)
+{
+	if (smc_sock_is_inet_sock(sk)) {
+		switch (flag) {
+		case SOCK_DEAD:
+		case SOCK_DONE:
+			return test_bit(flag, &smc_sk(sk)->smc_sk_flags);
+		default:
+			break;
+		}
+	}
+	return sock_flag(sk, flag);
+}
+
+static inline void smc_sock_set_flag(struct sock *sk, enum sock_flags flag)
+{
+	if (smc_sock_is_inet_sock(sk)) {
+		switch (flag) {
+		case SOCK_DEAD:
+		case SOCK_DONE:
+			__set_bit(flag, &smc_sk(sk)->smc_sk_flags);
+			return;
+		default:
+			break;
+		}
+	}
+	sock_set_flag(sk, flag);
+}
 
 #endif	/* __SMC_H */
