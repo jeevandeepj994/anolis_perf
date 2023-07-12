@@ -68,6 +68,7 @@
 #include <net/ip.h>
 #include "slab.h"
 #include <linux/proc_fs.h>
+#include <linux/pre_oom.h>
 
 #include <linux/uaccess.h>
 #ifdef CONFIG_TEXT_UNEVICTABLE
@@ -2751,11 +2752,13 @@ static void reclaim_wmark(struct mem_cgroup *memcg)
 	 * simply record the whole duration of reclaim_wmark work for the
 	 * overhead-accuracy trade-off.
 	 */
+	pre_oom_enter();
 	start = ktime_get_ns();
 	psi_memstall_enter(&pflags);
 	try_to_free_mem_cgroup_pages(memcg, nr_pages, GFP_KERNEL, true);
 	psi_memstall_leave(&pflags);
 	duration = ktime_get_ns() - start;
+	pre_oom_leave();
 
 	if (!css_tryget_online(&memcg->css))
 		return;
@@ -2791,10 +2794,12 @@ static unsigned long reclaim_high(struct mem_cgroup *memcg,
 
 		memcg_memory_event(memcg, MEMCG_HIGH);
 
+		pre_oom_enter();
 		psi_memstall_enter(&pflags);
 		nr_reclaimed += try_to_free_mem_cgroup_pages(memcg, nr_pages,
 							     gfp_mask, true);
 		psi_memstall_leave(&pflags);
+		pre_oom_leave();
 	} while ((memcg = parent_mem_cgroup(memcg)) &&
 		 !mem_cgroup_is_root(memcg));
 
@@ -3121,12 +3126,14 @@ retry:
 
 	memcg_memory_event(mem_over_limit, MEMCG_MAX);
 
+	pre_oom_enter();
 	memcg_lat_stat_start(&start);
 	psi_memstall_enter(&pflags);
 	nr_reclaimed = try_to_free_mem_cgroup_pages(mem_over_limit, nr_pages,
 						    gfp_mask, may_swap);
 	psi_memstall_leave(&pflags);
 	memcg_lat_stat_end(MEM_LAT_MEMCG_DIRECT_RECLAIM, start);
+	pre_oom_leave();
 
 	if (mem_cgroup_margin(mem_over_limit) >= nr_pages)
 		goto retry;
@@ -6724,6 +6731,29 @@ static int memcg_pgtable_misplaced_write(struct cgroup_subsys_state *css,
 }
 #endif /* CONFIG_PGTABLE_BIND */
 
+#ifdef CONFIG_PRE_OOM
+static u64 memcg_oom_offline_read(struct cgroup_subsys_state *css,
+				   struct cftype *cft)
+{
+	struct mem_cgroup *memcg = mem_cgroup_from_css(css);
+
+	return READ_ONCE(memcg->oom_offline);
+}
+
+static int memcg_oom_offline_write(struct cgroup_subsys_state *css,
+				    struct cftype *cft, u64 val)
+{
+	struct mem_cgroup *memcg = mem_cgroup_from_css(css);
+
+	if (val)
+		memcg->oom_offline = true;
+	else
+		memcg->oom_offline = false;
+
+	return 0;
+}
+#endif /* CONFIG_PRE_OOM */
+
 #ifdef CONFIG_LRU_GEN
 static bool mglru_size_valid_check(struct mem_cgroup *memcg)
 {
@@ -7398,6 +7428,13 @@ static struct cftype mem_cgroup_legacy_files[] = {
 		.name = "pgtable_misplaced",
 		.write_u64 = memcg_pgtable_misplaced_write,
 		.read_u64 = memcg_pgtable_misplaced_read,
+	},
+#endif
+#ifdef CONFIG_PRE_OOM
+	{
+		.name = "oom_offline",
+		.write_u64 = memcg_oom_offline_write,
+		.read_u64 = memcg_oom_offline_read,
 	},
 #endif
 	{ },	/* terminate */

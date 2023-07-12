@@ -76,6 +76,7 @@
 #include <linux/buffer_head.h>
 #include <linux/vmalloc.h>
 #include <linux/prezero.h>
+#include <linux/pre_oom.h>
 
 #include <asm/sections.h>
 #include <asm/tlbflush.h>
@@ -4741,6 +4742,7 @@ __perform_reclaim(gfp_t gfp_mask, unsigned int order,
 	cond_resched();
 
 	/* We now go into synchronous reclaim */
+	pre_oom_enter();
 	cpuset_memory_pressure_bump();
 	memcg_lat_stat_start(&start);
 	psi_memstall_enter(&pflags);
@@ -4754,6 +4756,7 @@ __perform_reclaim(gfp_t gfp_mask, unsigned int order,
 	fs_reclaim_release(gfp_mask);
 	psi_memstall_leave(&pflags);
 	memcg_lat_stat_end(MEM_LAT_GLOBAL_DIRECT_RECLAIM, start);
+	pre_oom_leave();
 
 	cond_resched();
 
@@ -5029,7 +5032,6 @@ static inline struct page *
 __alloc_pages_slowpath(gfp_t gfp_mask, unsigned int order,
 						struct alloc_context *ac)
 {
-	bool can_direct_reclaim = gfp_mask & __GFP_DIRECT_RECLAIM;
 	const bool costly_order = order > PAGE_ALLOC_COSTLY_ORDER;
 	struct page *page = NULL;
 	unsigned int alloc_flags;
@@ -5041,6 +5043,7 @@ __alloc_pages_slowpath(gfp_t gfp_mask, unsigned int order,
 	unsigned int cpuset_mems_cookie;
 	unsigned int zonelist_iter_cookie;
 	int reserve_flags;
+	bool can_direct_reclaim;
 
 	/*
 	 * We also sanity check to catch abuse of atomic reserves being used by
@@ -5050,6 +5053,24 @@ __alloc_pages_slowpath(gfp_t gfp_mask, unsigned int order,
 				(__GFP_ATOMIC|__GFP_DIRECT_RECLAIM)))
 		gfp_mask &= ~__GFP_ATOMIC;
 
+#ifdef CONFIG_PRE_OOM
+	/*
+	 * If Pre-OOM is enabled, the cgroup of QoS sensitive should avoid
+	 * direct reclaim and trigger OOM as soon as possible. Thus gfp_mask
+	 * should be reset here.
+	 */
+	if (pre_oom_enabled()) {
+		struct mem_cgroup *memcg;
+
+		memcg = get_mem_cgroup_from_mm(current->mm);
+		if (memcg && !memcg->oom_offline) {
+			gfp_mask &= ~__GFP_DIRECT_RECLAIM;
+			css_put(&memcg->css);
+		}
+	}
+#endif
+
+	can_direct_reclaim = gfp_mask & __GFP_DIRECT_RECLAIM;
 restart:
 	compaction_retries = 0;
 	no_progress_loops = 0;
@@ -5168,7 +5189,7 @@ retry:
 
 	/* Caller is not willing to reclaim, we can't balance anything */
 	if (!can_direct_reclaim)
-		goto nopage;
+		goto oom;
 
 	/* Avoid recursion of direct reclaim */
 	if (current->flags & PF_MEMALLOC)
@@ -5222,6 +5243,7 @@ retry:
 	    check_retry_zonelist(zonelist_iter_cookie))
 		goto restart;
 
+oom:
 	/* Reclaim has failed us, start killing things */
 	page = __alloc_pages_may_oom(gfp_mask, order, ac, &did_some_progress);
 	if (page)
