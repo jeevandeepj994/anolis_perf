@@ -925,7 +925,33 @@ keep:
 #ifdef CONFIG_ARCH_WANT_BATCHED_UNMAP_TLB_FLUSH
 	my_try_to_unmap_flush();
 #endif
-	my_free_unref_page_list(&free_pages);
+
+	if (filter->batch) {
+		/* Free pages in batch */
+		LIST_HEAD(batch_free_pages);
+
+		batch = 0;
+
+		while (!list_empty(&free_pages)) {
+			page = lru_to_page(&free_pages);
+			list_move(&page->lru, &batch_free_pages);
+
+			if (++batch >= filter->batch) {
+				my_free_unref_page_list(&batch_free_pages);
+
+				cond_resched();
+				batch = 0;
+				INIT_LIST_HEAD(&batch_free_pages);
+			}
+		}
+
+		/* Don't forget the remaining pages */
+		if (!list_empty(&batch_free_pages))
+			my_free_unref_page_list(&batch_free_pages);
+	} else {
+		/* Free pages in one shot */
+		my_free_unref_page_list(&free_pages);
+	}
 
 	/* Put all pages back to the list */
 	list_splice(&keep_pages, list);
