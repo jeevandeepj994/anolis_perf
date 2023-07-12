@@ -194,8 +194,12 @@ static int smc_nl_fill_stats_bufsize_data(struct sk_buff *skb,
 			      stats_pload->buf[SMC_BUF_1024K],
 			      SMC_NLA_STATS_PLOAD_PAD))
 		goto errattr;
-	if (nla_put_u64_64bit(skb, SMC_NLA_STATS_PLOAD_G_1024K,
-			      stats_pload->buf[SMC_BUF_G_1024K],
+	if (nla_put_u64_64bit(skb, SMC_NLA_STATS_PLOAD_2048K,
+			      stats_pload->buf[SMC_BUF_2048K],
+			      SMC_NLA_STATS_PLOAD_PAD))
+		goto errattr;
+	if (nla_put_u64_64bit(skb, SMC_NLA_STATS_PLOAD_G_2048K,
+			      stats_pload->buf[SMC_BUF_G_2048K],
 			      SMC_NLA_STATS_PLOAD_PAD))
 		goto errattr;
 
