@@ -86,7 +86,6 @@
 #include <trace/events/io_uring.h>
 
 #include <uapi/linux/io_uring.h>
-#include <uapi/linux/sched/types.h>
 
 #include "internal.h"
 #include "io-wq.h"
@@ -7940,7 +7939,6 @@ static int io_sq_offload_start(struct io_ring_ctx *ctx,
 			goto err;
 		}
 		wake_up_process(ctx->sqo_thread);
-		set_user_nice(ctx->sqo_thread, MIN_NICE);
 	} else if (p->flags & (IORING_SETUP_SQ_AFF | IORING_SETUP_IDLE_US |
 			       IORING_SETUP_SQPOLL_PERCPU)) {
 		/* Can't have SQ_AFF or IDLE_US or SQPOLL_PERCPU without SQPOLL */
