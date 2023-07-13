@@ -25,6 +25,7 @@
 
 struct smc_diag_dump_ctx {
 	int pos[2];
+	int inet_pos[2];
 };
 
 static struct smc_diag_dump_ctx *smc_dump_context(struct netlink_callback *cb)
@@ -213,10 +214,17 @@ static int smc_diag_dump_inet_proto(struct inet_hashinfo *hashinfo, struct sk_bu
 {
 	struct smc_diag_dump_ctx *cb_ctx = smc_dump_context(cb);
 	struct net *net = sock_net(skb->sk);
-	int snum = cb_ctx->pos[p_type];
+	int snum = cb_ctx->inet_pos[p_type];
 	struct nlattr *bc = NULL;
 	int rc = 0, num = 0, i;
+	struct proto *target_proto;
 	struct sock *sk;
+
+#if IS_ENABLED(CONFIG_IPV6)
+	target_proto = (p_type == SMCPROTO_SMC6) ? &smc_inet6_prot : &smc_inet_prot;
+#else
+	target_proto = &smc_inet_prot;
+#endif
 
 	for (i = 0; i < INET_LHTABLE_SIZE; i++) {
 		struct inet_listen_hashbucket *ilb;
@@ -227,7 +235,7 @@ static int smc_diag_dump_inet_proto(struct inet_hashinfo *hashinfo, struct sk_bu
 		sk_nulls_for_each(sk, node, &ilb->nulls_head) {
 			if (!net_eq(sock_net(sk), net))
 				continue;
-			if (sk->sk_prot != &smc_inet_prot)
+			if (sk->sk_prot != target_proto)
 				continue;
 			if (num < snum)
 				goto next_ls;
@@ -258,7 +266,7 @@ next_ls:
 				continue;
 			if (sk->sk_state == TCP_NEW_SYN_RECV)
 				continue;
-			if (sk->sk_prot != &smc_inet_prot)
+			if (sk->sk_prot != target_proto)
 				continue;
 			if (num < snum)
 				goto next;
@@ -273,7 +281,7 @@ next:
 		spin_unlock_bh(lock);
 	}
 out:
-	cb_ctx->pos[p_type] += num;
+	cb_ctx->inet_pos[p_type] = num;
 	return rc;
 }
 
@@ -308,7 +316,7 @@ next:
 
 out:
 	read_unlock(&prot->h.smc_hash->lock);
-	cb_ctx->pos[p_type] += num;
+	cb_ctx->pos[p_type] = num;
 	return rc;
 }
 
@@ -317,13 +325,20 @@ static int smc_diag_dump(struct sk_buff *skb, struct netlink_callback *cb)
 	int rc = 0;
 
 	rc = smc_diag_dump_proto(&smc_proto, skb, cb, SMCPROTO_SMC);
-	if (!rc)
-		rc = smc_diag_dump_proto(&smc_proto6, skb, cb, SMCPROTO_SMC6);
-	if (!rc)
-		rc = smc_diag_dump_inet_proto(smc_inet_prot.h.hashinfo, skb, cb, SMCPROTO_SMC);
+	if (rc)
+		return rc;
 #if IS_ENABLED(CONFIG_IPV6)
-	if (!rc)
-		rc = smc_diag_dump_inet_proto(smc_inet6_prot.h.hashinfo, skb, cb, SMCPROTO_SMC6);
+	rc = smc_diag_dump_proto(&smc_proto6, skb, cb, SMCPROTO_SMC6);
+	if (rc)
+		return rc;
+#endif
+	rc = smc_diag_dump_inet_proto(smc_inet_prot.h.hashinfo, skb, cb, SMCPROTO_SMC);
+	if (rc)
+		return rc;
+#if IS_ENABLED(CONFIG_IPV6)
+	rc = smc_diag_dump_inet_proto(smc_inet6_prot.h.hashinfo, skb, cb, SMCPROTO_SMC6);
+	if (rc)
+		return rc;
 #endif
 	return skb->len;
 }
