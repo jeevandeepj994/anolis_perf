@@ -448,8 +448,14 @@ static void smc_destruct(struct sock *sk)
 	if (smc_sk(sk)->original_sk_destruct)
 		smc_sk(sk)->original_sk_destruct(sk);
 
+	/* for inet sock, sk here MUST be non accepted */
+	if (smc_sock_is_inet_sock(sk) && !smc_inet_sock_is_active_open(sk) &&
+	    (isck_smc_negotiation_load(smc_sk(sk)) == SMC_NEGOTIATION_TBD))
+		goto out;
+
 	smc_sock_cleanup_negotiator_ops(smc_sk(sk), /* in release */ 1);
 
+out:
 	if (smc_sk_state(sk) != SMC_CLOSED)
 		return;
 	if (!smc_sock_flag(sk, SOCK_DEAD))
