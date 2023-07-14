@@ -40,6 +40,8 @@
 #define SMC_LGR_FREE_DELAY_SERV		(600 * HZ)
 #define SMC_LGR_FREE_DELAY_CLNT		(SMC_LGR_FREE_DELAY_SERV + 10 * HZ)
 
+#define SMC_RTOKEN_UNINITIALIZED	-1
+
 struct smc_lgr_list smc_lgr_list = {	/* established link groups */
 	.lock = __SPIN_LOCK_UNLOCKED(smc_lgr_list.lock),
 	.list = LIST_HEAD_INIT(smc_lgr_list.list),
@@ -2034,7 +2036,7 @@ int smc_conn_create(struct smc_sock *smc, struct smc_init_info *ini)
 				  &smc_lgr_list.lock;
 	ini->first_contact_local = 1;
 	role = smc->listen_smc ? SMC_SERV : SMC_CLNT;
-	conn->rtoken_idx = -1; /* -1 means rtoken not handled */
+	conn->rtoken_idx = SMC_RTOKEN_UNINITIALIZED;
 	if (role == SMC_CLNT && ini->first_contact_peer)
 		/* create new link group as well */
 		goto create;
@@ -2712,6 +2714,7 @@ int smc_rtoken_delete(struct smc_link *lnk, __be32 nw_rkey)
 			clear_bit(i, lgr->rtokens_used_mask);
 
 			if (smc) {
+				smc->conn.rtoken_idx = SMC_RTOKEN_UNINITIALIZED;
 				conn = &smc->conn;
 				if (!smc_cdc_rxed_any_close(&smc->conn)) {
 					/* make peer_conn_abort */
