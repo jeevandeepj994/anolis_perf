@@ -1608,6 +1608,60 @@ unsigned long do_mmap(struct file *file, unsigned long addr,
 	    ((vm_flags & VM_LOCKED) ||
 	     (flags & (MAP_POPULATE | MAP_NONBLOCK)) == MAP_POPULATE))
 		*populate = len;
+
+#if VM_SHARED_PT
+	/*
+	 * Check if this mapping is a candidate for page table sharing
+	 * at PMD level. It is if following conditions hold:
+	 *	- It is not anonymous mapping
+	 *	- It is not hugetlbfs mapping (for now)
+	 *	- flags conatins MAP_SHARED or MAP_SHARED_VALIDATE and
+	 *	  MAP_SHARED_PT
+	 *	- Start address is aligned to PMD size
+	 *	- Mapping size is a multiple of PMD size
+	 */
+	if (ptshare && file && !is_file_hugepages(file)) {
+		struct vm_area_struct *vma;
+
+		vma = find_vma(mm, addr);
+		if (!((vma->vm_start | vma->vm_end) & (PMD_SIZE - 1))) {
+			struct ptshare_data *info = file->f_mapping->ptshare_data;
+			/*
+			 * If this mapping has not been set up for page table
+			 * sharing yet, do so by creating a new mm to hold the
+			 * shared page tables for this mapping
+			 */
+			if (info == NULL) {
+				int ret;
+
+				ret = ptshare_new_mm(file, vma);
+				if (ret < 0)
+					return ret;
+
+				info = file->f_mapping->ptshare_data;
+				ret = ptshare_insert_vma(info->mm, vma);
+				if (ret < 0)
+					addr = ret;
+				else
+					vma->vm_flags |= VM_SHARED_PT;
+			} else {
+				/*
+				 * Page tables will be shared only if the
+				 * file is mapped in with the same permissions
+				 * across all mappers with same starting
+				 * address and size
+				 */
+				if (((prot & info->mode) == info->mode) &&
+					(addr == info->start) &&
+					(len == info->size)) {
+					vma->vm_flags |= VM_SHARED_PT;
+					refcount_inc(&info->refcnt);
+				}
+			}
+		}
+	}
+#endif
+
 	return addr;
 }
 
@@ -1862,6 +1916,8 @@ unsigned long mmap_region(struct file *file, unsigned long addr,
 			}
 		}
 
+		if (vm_flags & VM_SHARED_PT)
+			vma->vm_flags |= VM_SHARED_PT;
 		vm_flags = vma->vm_flags;
 	} else if (vm_flags & VM_SHARED) {
 		error = shmem_zero_setup(vma);
@@ -2873,6 +2929,21 @@ int __do_munmap(struct mm_struct *mm, unsigned long start, size_t len,
 	end = start + len;
 	if (len == 0)
 		return -EINVAL;
+
+	/*
+	 * Check if this vma uses shared page tables
+	 */
+	vma = find_vma_intersection(mm, start, end);
+	if (vma && unlikely(vma_is_shared(vma))) {
+		struct ptshare_data *info = NULL;
+
+		if (vma->vm_file && vma->vm_file->f_mapping)
+			info = vma->vm_file->f_mapping->ptshare_data;
+		/* Don't allow partial munmaps */
+		if (info && ((start != info->start) || (len != info->size)))
+			return -EINVAL;
+		ptshare_del_mm(vma);
+	}
 
 	/*
 	 * arch_unmap() might do unmaps itself.  It must be called
