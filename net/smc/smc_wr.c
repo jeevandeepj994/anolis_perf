@@ -419,8 +419,6 @@ out_unlock:
 static inline void smc_wr_rx_demultiplex(struct ib_wc *wc)
 {
 	struct smc_link *link = (struct smc_link *)wc->qp->qp_context;
-	int rx_buf_size = (link->lgr->smc_version == SMC_V2) ?
-			  SMC_WR_BUF_V2_SIZE : SMC_WR_BUF_SIZE;
 	struct smc_wr_rx_handler *handler;
 	struct smc_wr_rx_hdr *wr_rx;
 	u64 temp_wr_id;
@@ -430,7 +428,7 @@ static inline void smc_wr_rx_demultiplex(struct ib_wc *wc)
 		return; /* short message */
 	temp_wr_id = wc->wr_id / 2;
 	index = do_div(temp_wr_id, link->wr_rx_cnt);
-	wr_rx = (struct smc_wr_rx_hdr *)((u8 *)link->wr_rx_bufs + index * rx_buf_size);
+	wr_rx = (struct smc_wr_rx_hdr *)(link->wr_rx_bufs[index]);
 	hash_for_each_possible(smc_wr_rx_hash, handler, list, wr_rx->type) {
 		if (handler->type == wr_rx->type)
 			handler->handler(wc, wr_rx);
@@ -633,11 +631,8 @@ static void smc_wr_init_sge(struct smc_link *lnk)
 	for (i = 0; i < lnk->wr_rx_cnt; i++) {
 		int rx_msg_size = (lnk->lgr->smc_version == SMC_V2) ?
 				  SMC_WR_BUF_V2_SIZE : SMC_WR_TX_SIZE;
-		int rx_buf_size = (lnk->lgr->smc_version == SMC_V2) ?
-				  SMC_WR_BUF_V2_SIZE : SMC_WR_BUF_SIZE;
 
-		lnk->wr_rx_sges[i].addr =
-			lnk->wr_rx_dma_addr + i * rx_buf_size;
+		lnk->wr_rx_sges[i].addr = lnk->wr_rx_dma_addr[i];
 		lnk->wr_rx_sges[i].length = rx_msg_size;
 		lnk->wr_rx_sges[i].lkey = lnk->roce_pd->local_dma_lkey;
 		lnk->wr_rx_ibs[i].next = NULL;
@@ -656,6 +651,7 @@ void smc_wr_free_link(struct smc_link *lnk)
 	int rx_buf_size = (lnk->lgr->smc_version == SMC_V2) ?
 			  SMC_WR_BUF_V2_SIZE : SMC_WR_BUF_SIZE;
 	struct ib_device *ibdev;
+	int i;
 
 	if (!lnk->smcibdev)
 		return;
@@ -670,11 +666,12 @@ void smc_wr_free_link(struct smc_link *lnk)
 	percpu_ref_kill(&lnk->wr_tx_refs);
 	wait_for_completion(&lnk->tx_ref_comp);
 
-	if (lnk->wr_rx_dma_addr) {
-		ib_dma_unmap_single(ibdev, lnk->wr_rx_dma_addr,
-				    rx_buf_size * lnk->wr_rx_cnt,
-				    DMA_FROM_DEVICE);
-		lnk->wr_rx_dma_addr = 0;
+	for (i = 0; i < lnk->wr_rx_cnt; i++) {
+		if (lnk->wr_rx_dma_addr[i]) {
+			ib_dma_unmap_single(ibdev, lnk->wr_rx_dma_addr[i],
+					    rx_buf_size, DMA_FROM_DEVICE);
+			lnk->wr_rx_dma_addr[i] = 0;
+		}
 	}
 	if (lnk->wr_tx_dma_addr) {
 		ib_dma_unmap_single(ibdev, lnk->wr_tx_dma_addr,
@@ -701,6 +698,8 @@ void smc_wr_free_lgr_mem(struct smc_link_group *lgr)
 
 void smc_wr_free_link_mem(struct smc_link *lnk)
 {
+	int i;
+
 	kfree(lnk->wr_tx_v2_ib);
 	lnk->wr_tx_v2_ib = NULL;
 	kfree(lnk->wr_tx_v2_sge);
@@ -727,8 +726,10 @@ void smc_wr_free_link_mem(struct smc_link *lnk)
 	lnk->wr_tx_ibs = NULL;
 	kfree(lnk->wr_tx_bufs);
 	lnk->wr_tx_bufs = NULL;
-	kfree(lnk->wr_rx_bufs);
-	lnk->wr_rx_bufs = NULL;
+	for (i = 0 ; i < SMC_WR_BUF_CNT; i++) {
+		kfree(lnk->wr_rx_bufs[i]);
+		lnk->wr_rx_bufs[i] = NULL;
+	}
 }
 
 int smc_wr_alloc_lgr_mem(struct smc_link_group *lgr)
@@ -746,15 +747,23 @@ int smc_wr_alloc_link_mem(struct smc_link *link)
 {
 	int rx_buf_size = (link->lgr->smc_version == SMC_V2) ?
 			  SMC_WR_BUF_V2_SIZE : SMC_WR_BUF_SIZE;
+	int i, j;
 
 	/* allocate link related memory */
 	link->wr_tx_bufs = kcalloc(SMC_WR_BUF_CNT, SMC_WR_BUF_SIZE, GFP_KERNEL);
 	if (!link->wr_tx_bufs)
 		goto no_mem;
-	link->wr_rx_bufs = kcalloc(SMC_WR_BUF_CNT, rx_buf_size,
-				   GFP_KERNEL);
-	if (!link->wr_rx_bufs)
-		goto no_mem_wr_tx_bufs;
+
+	for (i = 0; i < SMC_WR_BUF_CNT; i++) {
+		link->wr_rx_bufs[i] = kzalloc(rx_buf_size, GFP_KERNEL);
+		if (!link->wr_rx_bufs[i]) {
+			for (j = i - 1; j >= 0; j--) {
+				kfree(link->wr_rx_bufs[j]);
+				link->wr_rx_bufs[j] = NULL;
+			}
+			goto no_mem_wr_tx_bufs;
+		}
+	}
 	link->wr_tx_ibs = kcalloc(SMC_WR_BUF_CNT, sizeof(link->wr_tx_ibs[0]),
 				  GFP_KERNEL);
 	if (!link->wr_tx_ibs)
@@ -835,7 +844,8 @@ no_mem_wr_rx_ibs:
 no_mem_wr_tx_ibs:
 	kfree(link->wr_tx_ibs);
 no_mem_wr_rx_bufs:
-	kfree(link->wr_rx_bufs);
+	for (i = 0; i < SMC_WR_BUF_CNT; i++)
+		kfree(link->wr_rx_bufs[i]);
 no_mem_wr_tx_bufs:
 	kfree(link->wr_tx_bufs);
 no_mem:
@@ -879,17 +889,25 @@ int smc_wr_create_link(struct smc_link *lnk)
 	int rx_buf_size = (lnk->lgr->smc_version == SMC_V2) ?
 			  SMC_WR_BUF_V2_SIZE : SMC_WR_BUF_SIZE;
 	struct ib_device *ibdev = lnk->smcibdev->ibdev;
-	int rc = 0;
+	int i, j, rc = 0;
 
 	smc_wr_tx_set_wr_id(&lnk->wr_tx_id, 0);
 	lnk->wr_rx_id = 1;
-	lnk->wr_rx_dma_addr = ib_dma_map_single(
-		ibdev, lnk->wr_rx_bufs,	rx_buf_size * lnk->wr_rx_cnt,
-		DMA_FROM_DEVICE);
-	if (ib_dma_mapping_error(ibdev, lnk->wr_rx_dma_addr)) {
-		lnk->wr_rx_dma_addr = 0;
-		rc = -EIO;
-		goto out;
+
+	for (i = 0; i < lnk->wr_rx_cnt; i++) {
+		lnk->wr_rx_dma_addr[i] =
+			ib_dma_map_single(ibdev, lnk->wr_rx_bufs[i],
+					  rx_buf_size, DMA_FROM_DEVICE);
+		if (ib_dma_mapping_error(ibdev, lnk->wr_rx_dma_addr[i])) {
+			lnk->wr_rx_dma_addr[i] = 0;
+			for (j = i - 1; j >= 0; j--) {
+				ib_dma_unmap_single(ibdev, lnk->wr_rx_dma_addr[j],
+						    rx_buf_size, DMA_FROM_DEVICE);
+				lnk->wr_rx_dma_addr[j] = 0;
+			}
+			rc = -EIO;
+			goto out;
+		}
 	}
 	if (lnk->lgr->smc_version == SMC_V2) {
 		lnk->wr_tx_v2_dma_addr = ib_dma_map_single(ibdev,
@@ -940,10 +958,11 @@ dma_unmap:
 				    DMA_TO_DEVICE);
 		lnk->wr_tx_v2_dma_addr = 0;
 	}
-	ib_dma_unmap_single(ibdev, lnk->wr_rx_dma_addr,
-			    rx_buf_size * lnk->wr_rx_cnt,
-			    DMA_FROM_DEVICE);
-	lnk->wr_rx_dma_addr = 0;
+	for (i = 0; i < lnk->wr_rx_cnt; i++) {
+		ib_dma_unmap_single(ibdev, lnk->wr_rx_dma_addr[i],
+				    rx_buf_size, DMA_FROM_DEVICE);
+		lnk->wr_rx_dma_addr[i] = 0;
+	}
 out:
 	return rc;
 }

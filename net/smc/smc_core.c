@@ -40,6 +40,8 @@
 #define SMC_LGR_FREE_DELAY_SERV		(600 * HZ)
 #define SMC_LGR_FREE_DELAY_CLNT		(SMC_LGR_FREE_DELAY_SERV + 10 * HZ)
 
+#define SMC_RTOKEN_UNINITIALIZED	-1
+
 struct smc_lgr_list smc_lgr_list = {	/* established link groups */
 	.lock = __SPIN_LOCK_UNLOCKED(smc_lgr_list.lock),
 	.list = LIST_HEAD_INIT(smc_lgr_list.list),
@@ -817,6 +819,8 @@ int smcr_iw_net_reserve_ports(struct net *net)
 	return 0;
 
 release:
+	pr_warn_ratelimited("warning: smc: netns %pK reserved ports %d FAIL for eRDMA OOB\n",
+			    net, SMC_IWARP_RSVD_PORTS_BASE + i);
 	for (j = 0; j < i; j++) {
 		sock_release(net->smc.rsvd_sock[j]);
 		net->smc.rsvd_sock[j] = NULL;
@@ -2032,6 +2036,7 @@ int smc_conn_create(struct smc_sock *smc, struct smc_init_info *ini)
 				  &smc_lgr_list.lock;
 	ini->first_contact_local = 1;
 	role = smc->listen_smc ? SMC_SERV : SMC_CLNT;
+	conn->rtoken_idx = SMC_RTOKEN_UNINITIALIZED;
 	if (role == SMC_CLNT && ini->first_contact_peer)
 		/* create new link group as well */
 		goto create;
@@ -2051,7 +2056,7 @@ int smc_conn_create(struct smc_sock *smc, struct smc_init_info *ini)
 		    (ini->smcd_version == SMC_V2 ||
 		     lgr->vlan_id == ini->vlan_id) &&
 		    (role == SMC_CLNT || ini->is_smcd ||
-		    (lgr->conns_num < lgr->max_conns &&
+		    (lgr->conns_num < lgr->max_conns && !lgr->terminating &&
 		      !bitmap_full(lgr->rtokens_used_mask, SMC_RMBS_PER_LGR_MAX)))) {
 			/* link group found */
 			ini->first_contact_local = 0;
@@ -2114,8 +2119,8 @@ out:
 	return rc;
 }
 
-#define SMCD_DMBE_SIZES		6 /* 0 -> 16KB, 1 -> 32KB, .. 6 -> 1MB */
-#define SMCR_RMBE_SIZES		5 /* 0 -> 16KB, 1 -> 32KB, .. 5 -> 512KB */
+#define SMCD_DMBE_SIZES		7 /* 0 -> 16KB, 1 -> 32KB, .. 7 -> 2MB */
+#define SMCR_RMBE_SIZES		7 /* 0 -> 16KB, 1 -> 32KB, .. 7 -> 2MB */
 
 /* convert the RMB size into the compressed notation (minimum 16K, see
  * SMCD/R_DMBE_SIZES.
@@ -2124,7 +2129,6 @@ out:
  */
 static u8 smc_compress_bufsize(int size, bool is_smcd, bool is_rmb)
 {
-	const unsigned int max_scat = SG_MAX_SINGLE_ALLOC * PAGE_SIZE;
 	u8 compressed;
 
 	if (size <= SMC_BUF_MIN_SIZE)
@@ -2133,10 +2137,6 @@ static u8 smc_compress_bufsize(int size, bool is_smcd, bool is_rmb)
 	size = (size - 1) >> 14;  /* convert to 16K multiple */
 	compressed = min_t(u8, ilog2(size) + 1,
 			   is_smcd ? SMCD_DMBE_SIZES : SMCR_RMBE_SIZES);
-
-	if (!is_smcd && is_rmb)
-		/* RMBs are backed by & limited to max size of scatterlists */
-		compressed = min_t(u8, compressed, ilog2(max_scat >> 14));
 
 	return compressed;
 }
@@ -2693,17 +2693,40 @@ int smc_rtoken_add(struct smc_link *lnk, __be64 nw_vaddr, __be32 nw_rkey)
 int smc_rtoken_delete(struct smc_link *lnk, __be32 nw_rkey)
 {
 	struct smc_link_group *lgr = smc_get_lgr(lnk);
+	struct smc_sock *smc = NULL;
+	struct smc_connection *conn;
 	u32 rkey = ntohl(nw_rkey);
 	int i, j;
 
 	for (i = 0; i < SMC_RMBS_PER_LGR_MAX; i++) {
 		if (lgr->rtokens[i][lnk->link_idx].rkey == rkey &&
 		    test_bit(i, lgr->rtokens_used_mask)) {
+			read_lock_bh(&lgr->conns_lock);
+			smc = smc_lgr_get_sock_by_rtoken(i, lgr);
+			read_unlock_bh(&lgr->conns_lock);
+			if (smc)
+				spin_lock_bh(&smc->conn.send_lock);
+
 			for (j = 0; j < SMC_LINKS_PER_LGR_MAX; j++) {
 				lgr->rtokens[i][j].rkey = 0;
 				lgr->rtokens[i][j].dma_addr = 0;
 			}
 			clear_bit(i, lgr->rtokens_used_mask);
+
+			if (smc) {
+				smc->conn.rtoken_idx = SMC_RTOKEN_UNINITIALIZED;
+				conn = &smc->conn;
+				if (!smc_cdc_rxed_any_close(&smc->conn)) {
+					/* make peer_conn_abort */
+					conn->local_rx_ctrl.conn_state_flags.peer_conn_abort = 1;
+					sock_hold(&smc->sk); /* sock_put in close_work */
+					if (!queue_work(smc_close_wq, &smc->conn.close_work))
+						sock_put(&smc->sk);
+				}
+				spin_unlock_bh(&smc->conn.send_lock);
+				/* sock_hold in smc_lgr_get_sock_by_rtoken */
+				sock_put(&smc->sk);
+			}
 			return 0;
 		}
 	}

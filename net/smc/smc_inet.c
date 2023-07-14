@@ -25,11 +25,17 @@ static struct timewait_sock_ops smc_timewait_sock_ops = {
 	.twsk_destructor	= tcp_twsk_destructor,
 };
 
+static struct timewait_sock_ops smc6_timewait_sock_ops = {
+	.twsk_obj_size		= sizeof(struct tcp6_timewait_sock),
+	.twsk_unique		= tcp_twsk_unique,
+	.twsk_destructor	= tcp_twsk_destructor,
+};
+
 struct proto smc_inet_prot = {
 	.name			= "SMC",
 	.owner			= THIS_MODULE,
 	.close			= tcp_close,
-	.pre_connect	= NULL,
+	.pre_connect		= NULL,
 	.connect		= tcp_v4_connect,
 	.disconnect		= tcp_disconnect,
 	.accept			= smc_inet_csk_accept,
@@ -43,7 +49,7 @@ struct proto smc_inet_prot = {
 	.recvmsg		= tcp_recvmsg,
 	.sendmsg		= tcp_sendmsg,
 	.sendpage		= tcp_sendpage,
-	.backlog_rcv	= tcp_v4_do_rcv,
+	.backlog_rcv		= tcp_v4_do_rcv,
 	.release_cb		= smc_inet_sock_proto_release_cb,
 	.hash			= inet_hash,
 	.unhash			= inet_unhash,
@@ -62,7 +68,6 @@ struct proto smc_inet_prot = {
 	.obj_size		= sizeof(struct smc_sock),
 	.slab_flags		= SLAB_TYPESAFE_BY_RCU,
 	.twsk_prot		= &smc_timewait_sock_ops,
-	/* tcp_conn_request will use tcp_request_sock_ops */
 	.rsk_prot		= NULL,
 	.h.hashinfo		= &tcp_hashinfo,
 	.no_autobind		= true,
@@ -117,7 +122,7 @@ struct proto smc_inet6_prot = {
 	.name			= "SMCv6",
 	.owner			= THIS_MODULE,
 	.close			= tcp_close,
-	.pre_connect	= NULL,
+	.pre_connect		= NULL,
 	.connect		= NULL,
 	.disconnect		= tcp_disconnect,
 	.accept			= smc_inet_csk_accept,
@@ -149,8 +154,7 @@ struct proto smc_inet6_prot = {
 	.max_header		= MAX_TCP_HEADER,
 	.obj_size		= sizeof(struct smc_sock),
 	.slab_flags		= SLAB_TYPESAFE_BY_RCU,
-	.twsk_prot		= &smc_timewait_sock_ops,
-	/* tcp_conn_request will use tcp_request_sock_ops */
+	.twsk_prot		= &smc6_timewait_sock_ops,
 	.rsk_prot		= NULL,
 	.h.hashinfo		= &tcp_hashinfo,
 	.no_autobind		= true,
@@ -201,7 +205,7 @@ struct inet_protosw smc_inet6_protosw = {
 };
 #endif
 
-int smc_inet_sock_switch_negotiation_state_locked(struct sock *sk, int except, int target)
+int smc_inet_sock_move_state_locked(struct sock *sk, int except, int target)
 {
 	struct smc_sock *smc = smc_sk(sk);
 	int cur;
@@ -214,11 +218,9 @@ int smc_inet_sock_switch_negotiation_state_locked(struct sock *sk, int except, i
 	case SMC_NEGOTIATION_TBD:
 		switch (target) {
 		case SMC_NEGOTIATION_PREPARE_SMC:
-			/* same as passive closing */
-			sock_hold(sk);
-			fallthrough;
 		case SMC_NEGOTIATION_NO_SMC:
 			isck_smc_negotiation_store(smc, target);
+			sock_hold(sk);	/* sock hold for passive closing */
 			return target;
 		default:
 			break;
@@ -227,8 +229,6 @@ int smc_inet_sock_switch_negotiation_state_locked(struct sock *sk, int except, i
 	case SMC_NEGOTIATION_PREPARE_SMC:
 		switch (target) {
 		case SMC_NEGOTIATION_NO_SMC:
-			sock_put(sk);	/* sock hold in SMC_NEGOTIATION_PREPARE_SMC */
-			fallthrough;
 		case SMC_NEGOTIATION_SMC:
 			isck_smc_negotiation_store(smc, target);
 			return target;
@@ -276,7 +276,6 @@ int smc_inet_sock_init(void)
 #if IS_ENABLED(CONFIG_IPV6)
 	smc_inet6_prot.pre_connect = tcp_v6prot->pre_connect;
 	smc_inet6_prot.connect = tcp_v6prot->connect;
-	smc_inet6_prot.init = tcp_v6prot->init;
 	smc_inet6_prot.destroy = tcp_v6prot->destroy;
 	smc_inet6_prot.backlog_rcv = tcp_v6prot->backlog_rcv;
 	smc_inet6_prot.hash = tcp_v6prot->hash;
@@ -308,6 +307,23 @@ static int smc_inet_clcsock_sendmsg(struct socket *sock, struct msghdr *msg, siz
 	return tcp_sendmsg_locked(sk, msg, len);
 }
 
+int smc_sk_wait_tcp_data(struct sock *sk, long *timeo, const struct sk_buff *skb)
+{
+	DEFINE_WAIT_FUNC(wait, woken_wake_function);
+	int rc;
+
+	lock_sock(sk);
+	add_wait_queue(sk_sleep(sk), &wait);
+	sk_set_bit(SOCKWQ_ASYNC_WAITDATA, sk);
+	rc = sk_wait_event(sk, timeo, skb_peek_tail(&sk->sk_receive_queue) != skb ||
+			   isck_smc_negotiation_get_flags(smc_sk(sk)) & SMC_NEGOTIATION_ABORT_FLAG,
+			   &wait);
+	sk_clear_bit(SOCKWQ_ASYNC_WAITDATA, sk);
+	remove_wait_queue(sk_sleep(sk), &wait);
+	release_sock(sk);
+	return rc;
+}
+
 static int smc_inet_clcsock_recvmsg(struct socket *sock, struct msghdr *msg, size_t len,
 				    int flags)
 {
@@ -329,23 +345,32 @@ static int smc_inet_clcsock_recvmsg(struct socket *sock, struct msghdr *msg, siz
 
 	timeo = sock_rcvtimeo(sk, flags & MSG_DONTWAIT);
 
-	if (current_work() == &smc->smc_listen_work) {
-		err = tcp_recvmsg(sk, msg, len, flags & MSG_DONTWAIT,
-				  flags & ~MSG_DONTWAIT, &addr_len);
-	} else {
-		/* Locked, see more details in smc_inet_clcsock_sendmsg() */
+	/* Locked, see more details in smc_inet_clcsock_sendmsg() */
+	if (current_work() != &smc->smc_listen_work)
 		release_sock(sock->sk);
-		err = tcp_recvmsg(sk, msg, len, flags & MSG_DONTWAIT,
-				  flags & ~MSG_DONTWAIT, &addr_len);
+again:
+	/* recv nonblock */
+	err = tcp_recvmsg(sk, msg, len, /* non block */1, flags & ~MSG_DONTWAIT, &addr_len);
+	if (err != -EAGAIN || !timeo)
+		goto out;
+
+	smc_sk_wait_tcp_data(sk, &timeo, NULL);
+	if (isck_smc_negotiation_get_flags(smc_sk(sk)) & SMC_NEGOTIATION_ABORT_FLAG) {
+		/* TODO: THIS SHOULD NOT report as handshake error */
+		pr_warn_once("smc: THIS SHOULD NOT report as handshake erro.");
+		err = -ECONNABORTED;
+		goto out;
+	}
+	goto again;
+out:
+	if (current_work() != &smc->smc_listen_work) {
 		lock_sock(sock->sk);
 		/* since we release sock before, there might be state changed */
-		if (smc_sk_state(&smc->sk) != SMC_INIT)
+		if (err >= 0 && smc_sk_state(&smc->sk) != SMC_INIT)
 			err = -EPIPE;
 	}
-
 	if (err >= 0)
 		msg->msg_namelen = addr_len;
-
 	return err;
 }
 

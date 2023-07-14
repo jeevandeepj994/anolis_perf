@@ -30,13 +30,14 @@ enum {
 	SMC_BUF_256K,
 	SMC_BUF_512K,
 	SMC_BUF_1024K,
-	SMC_BUF_G_1024K,
+	SMC_BUF_2048K,
+	SMC_BUF_G_2048K,
 	SMC_BUF_MAX,
 };
 
 struct smc_stats_fback {
 	int	fback_code;
-	u16	count;
+	u64	count;
 };
 
 struct smc_stats_rsn {

@@ -341,6 +341,11 @@ static int smc_tx_rdma_write(struct smc_connection *conn, int peer_rmbe_offset,
 	if (!lgr->use_rwwi)
 		rdma_wr->wr.wr_id = smc_wr_tx_get_next_wr_id(link);
 	rdma_wr->wr.num_sge = num_sges;
+	/* rtoken might be deleted if peer freed connection */
+	if (conn->rtoken_idx < 0) {
+		pr_warn_ratelimited("smc: unexpected sends during connection termination flow(rtoken idx invalid)\n");
+		return -EINVAL;
+	}
 	rdma_wr->remote_addr =
 		lgr->rtokens[conn->rtoken_idx][link->link_idx].dma_addr +
 		/* RMBE within RMB */
@@ -349,9 +354,8 @@ static int smc_tx_rdma_write(struct smc_connection *conn, int peer_rmbe_offset,
 		peer_rmbe_offset;
 	rdma_wr->rkey = lgr->rtokens[conn->rtoken_idx][link->link_idx].rkey;
 	/* rtoken might be deleted if peer freed connection */
-	if (!rdma_wr->rkey ||
-	    (rdma_wr->remote_addr == (conn->tx_off + peer_rmbe_offset))) {
-		pr_warn_ratelimited("smc: unexpected sends during connection termination flow\n");
+	if (rdma_wr->remote_addr == (conn->tx_off + peer_rmbe_offset)) {
+		pr_warn_ratelimited("smc: unexpected sends during connection termination flow(addr invalid)\n");
 		return -EINVAL;
 	}
 	rc = ib_post_send(link->roce_qp, &rdma_wr->wr, NULL);
@@ -376,7 +380,8 @@ static int __smcr_tx_rdma_writes_rwwi(struct smc_connection *conn, int dst_off,
 	u8 saved_credits = 0;
 	bool cr_flag = false;
 	u8 conn_state_flags;
-	int diff_cons, rc;
+	int diff_cons = 0;
+	int rc;
 
 	BUILD_BUG_ON_MSG(sizeof(union smc_wr_imm_msg) > sizeof(__be32),
 			 "sizeof(union smc_wr_imm_msg) can not exceed the size of imm_data(__be32)");
@@ -409,10 +414,11 @@ static int __smcr_tx_rdma_writes_rwwi(struct smc_connection *conn, int dst_off,
 	if (conn_state_flags || prod_flags != urg_flags)
 		imm_msg.hdr.opcode = SMC_WR_OP_CTRL;
 
-	smc_curs_copy(&cfed, &conn->local_tx_ctrl.cons, conn);
-	smc_curs_copy(&cons_old, &conn->rx_curs_confirmed, conn);
-	diff_cons = smc_curs_diff(conn->rmb_desc->len, &cons_old,
-				  &conn->local_tx_ctrl.cons);
+	if (conn->rmb_desc) {
+		smc_curs_copy(&cfed, &conn->local_tx_ctrl.cons, conn);
+		smc_curs_copy(&cons_old, &conn->rx_curs_confirmed, conn);
+		diff_cons = smc_curs_diff(conn->rmb_desc->len, &cons_old, &cfed);
+	}
 	switch (imm_msg.hdr.opcode) {
 	case SMC_WR_OP_DATA:
 		if (diff_cons > SMC_DATA_MAX_DIFF_CONS)
@@ -462,7 +468,7 @@ static int __smcr_tx_rdma_writes_rwwi(struct smc_connection *conn, int dst_off,
 		/* do not update rx_curs_confirmed if all flags equal to 0,
 		 * since diff_cons will not be carried by imm_data in this case.
 		 */
-		if (update_rx_curs_confirmed)
+		if (update_rx_curs_confirmed && conn->rmb_desc)
 			smc_curs_add(conn->rmb_desc->len, &conn->rx_curs_confirmed, diff_cons);
 	} else {
 		smc_wr_rx_put_credits(link, saved_credits);

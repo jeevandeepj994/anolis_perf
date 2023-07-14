@@ -50,7 +50,12 @@ enum smc_link_state {			/* possible states of a link */
 
 #define SMC_WR_BUF_SIZE		48	/* size of work request buffer */
 #define SMC_WR_BUF_V2_SIZE	8192	/* size of v2 work request buffer */
-
+#define SMC_WR_BUF_CNT		64	/* # of ctrl buffers per link, SMC_WR_BUF_CNT
+					 * should not be less than 2 * SMC_RMBS_PER_LGR_MAX,
+					 * since every connection at least has two rq/sq
+					 * credits in average, otherwise may result in
+					 * waiting for credits in sending process.
+					 */
 struct smc_wr_buf {
 	u8	raw[SMC_WR_BUF_SIZE];
 };
@@ -123,11 +128,13 @@ struct smc_link {
 	struct completion	tx_ref_comp;
 	atomic_t		tx_inflight_credit;
 
-	struct smc_wr_buf	*wr_rx_bufs;	/* WR recv payload buffers */
+	struct smc_wr_buf	*wr_rx_bufs[SMC_WR_BUF_CNT];
+						/* WR recv payload buffers */
 	struct ib_recv_wr	*wr_rx_ibs;	/* WR recv meta data */
 	struct ib_sge		*wr_rx_sges;	/* WR recv scatter meta data */
 	/* above three vectors have wr_rx_cnt elements and use the same index */
-	dma_addr_t		wr_rx_dma_addr;	/* DMA address of wr_rx_bufs */
+	dma_addr_t		wr_rx_dma_addr[SMC_WR_BUF_CNT];
+						/* DMA address of wr_rx_bufs */
 	u64			wr_rx_id;	/* seq # of last recv WR */
 	u32			wr_rx_cnt;	/* number of WR recv buffers */
 	unsigned long		wr_rx_tstamp;	/* jiffies when last buf rx */
@@ -463,6 +470,52 @@ static inline struct smc_connection *smc_lgr_find_conn(
 				res = cur;
 				break;
 			}
+		}
+	}
+
+	return res;
+}
+
+/* Find the smc sock associated with the given alert token in the link group.
+ * Requires @conns_lock
+ * @token	alert token to search for
+ * @lgr		link group to search in
+ * Returns smc_sock associated with token if found, NULL otherwise.
+ * sock_put(&smc->sk) must be called after using the smc_sock.
+ */
+static inline struct smc_sock *
+smc_lgr_get_sock(u32 token, struct smc_link_group *lgr)
+{
+	struct smc_connection *conn = NULL;
+	struct smc_sock *smc = NULL;
+
+	conn = smc_lgr_find_conn(token, lgr);
+	if (!conn)
+		return NULL;
+
+	smc = container_of(conn, struct smc_sock, conn);
+	sock_hold(&smc->sk);
+	return smc;
+}
+
+/* Find the smc sock associated with the given rtoken_idx in the link group.
+ * Requires @conns_lock
+ * @rtoken_idx	rtoken index to search for
+ * @lgr			link group to search in
+ * Returns smc_sock associated with rtoken_idx if found, NULL otherwise.
+ * sock_put(&smc->sk) must be called after using the smc_sock.
+ */
+static inline struct smc_sock *
+smc_lgr_get_sock_by_rtoken(int rtoken_idx, struct smc_link_group *lgr)
+{
+	struct smc_connection *cur, *tmp;
+	struct smc_sock *res = NULL;
+
+	rbtree_postorder_for_each_entry_safe(cur, tmp, &lgr->conns_all, alert_node) {
+		if (cur->rtoken_idx == rtoken_idx) {
+			res = container_of(cur, struct smc_sock, conn);
+			sock_hold(&res->sk);
+			break;
 		}
 	}
 

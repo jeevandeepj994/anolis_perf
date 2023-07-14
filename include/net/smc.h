@@ -280,11 +280,13 @@ struct smc_connection {
 
 struct smc_sock {				/* smc sock container */
 	union {
+		struct tcp6_sock	tp6sk;
 		struct tcp_sock	tpsk;
 		struct sock	sk;
 	};
 	struct socket	*clcsock;	/* internal tcp socket */
 	unsigned char	smc_state;	/* smc state used in smc via inet_sk */
+	unsigned long	smc_sk_flags;
 	unsigned int	isck_smc_negotiation;
 	struct socket	accompany_socket;
 	struct request_sock	*tail_0;
@@ -341,6 +343,8 @@ struct smc_sock {				/* smc sock container */
 						/* protects clcsock of a listen
 						 * socket
 						 */
+	/* ipv6_pinfo has to be the last member of tcp6_sock, see inet6_sk_generic */
+	struct ipv6_pinfo inet6;
 };
 
 #define SMC_NEGOTIATOR_NAME_MAX	(16)
@@ -376,14 +380,18 @@ int smc_sock_register_negotiator_ops(struct smc_sock_negotiator_ops *ops);
 int smc_sock_update_negotiator_ops(struct smc_sock_negotiator_ops *ops,
 					  struct smc_sock_negotiator_ops *old_ops);
 void smc_sock_unregister_negotiator_ops(struct smc_sock_negotiator_ops *ops);
-int smc_sock_assign_negotiator_ops(struct smc_sock *smc, const char *name);
 
 #ifdef CONFIG_BPF_SYSCALL
 void smc_sock_cleanup_negotiator_ops(struct smc_sock *smc, int in_release);
 void smc_sock_clone_negotiator_ops(struct sock *parent, struct sock *child);
+int smc_sock_assign_negotiator_ops(struct smc_sock *smc, const char *name);
 #else
 static inline void smc_sock_cleanup_negotiator_ops(struct smc_sock *smc, int in_release) {}
 static inline void smc_sock_clone_negotiator_ops(struct sock *parent, struct sock *child) {}
+static inline int smc_sock_assign_negotiator_ops(struct smc_sock *smc, const char *name)
+{
+	return -EOPNOTSUPP;
+}
 #endif
 
 #endif	/* _SMC_H */

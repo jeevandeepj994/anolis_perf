@@ -77,7 +77,6 @@ int smc_sock_register_negotiator_ops(struct smc_sock_negotiator_ops *ops)
 	spin_unlock(&smc_sock_negotiator_list_lock);
 	return ret;
 }
-EXPORT_SYMBOL_GPL(smc_sock_register_negotiator_ops);
 
 /* unregister ops */
 void smc_sock_unregister_negotiator_ops(struct smc_sock_negotiator_ops *ops)
@@ -91,7 +90,6 @@ void smc_sock_unregister_negotiator_ops(struct smc_sock_negotiator_ops *ops)
 	 */
 	synchronize_rcu();
 }
-EXPORT_SYMBOL_GPL(smc_sock_unregister_negotiator_ops);
 
 int smc_sock_update_negotiator_ops(struct smc_sock_negotiator_ops *ops,
 				   struct smc_sock_negotiator_ops *old_ops)
@@ -126,7 +124,6 @@ int smc_sock_update_negotiator_ops(struct smc_sock_negotiator_ops *ops,
 	synchronize_rcu();
 	return 0;
 }
-EXPORT_SYMBOL_GPL(smc_sock_update_negotiator_ops);
 
 /* assign ops to sock */
 int smc_sock_assign_negotiator_ops(struct smc_sock *smc, const char *name)

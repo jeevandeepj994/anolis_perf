@@ -12,7 +12,7 @@ struct netns_smc {
 	/* per cpu counters for SMC */
 	struct smc_stats __percpu	*smc_stats;
 	/* protect fback_rsn */
-	struct mutex			mutex_fback_rsn;
+	spinlock_t			mutex_fback_rsn;
 	struct smc_stats_rsn		*fback_rsn;
 	int				limit_smc_hs;	/* constraint on handshake */
 	atomic_t			iwarp_cnt;
