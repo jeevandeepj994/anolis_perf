@@ -791,6 +791,12 @@ int smc_clc_send_decline(struct smc_sock *smc, u32 peer_diag_info, u8 version)
 	int len, send_len;
 	struct kvec vec;
 
+	if (smc->sent_confirm_accept) {
+		pr_warn_once("smc: decline [%d] dropped dues to confirm_accept sent.",
+			     peer_diag_info);
+		return -EPROTO;
+	}
+
 	dclc_v1 = (struct smc_clc_msg_decline *)&dclc;
 	memset(&dclc, 0, sizeof(dclc));
 	memcpy(dclc.hdr.eyecatcher, SMC_EYECATCHER, sizeof(SMC_EYECATCHER));
@@ -1174,6 +1180,7 @@ static int smc_clc_send_confirm_accept(struct smc_sock *smc,
 	}
 	vec[i].iov_base = &trl;
 	vec[i++].iov_len = sizeof(trl);
+	smc->sent_confirm_accept = true;
 	return kernel_sendmsg(smc->clcsock, &msg, vec, 1,
 			      ntohs(clc->hdr.length));
 }
