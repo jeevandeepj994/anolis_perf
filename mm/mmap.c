@@ -1416,6 +1416,7 @@ unsigned long do_mmap(struct file *file, unsigned long addr,
 	struct mm_struct *mm = current->mm;
 	vm_flags_t vm_flags;
 	int pkey = 0;
+	int ptshare = 0;
 
 	*populate = 0;
 
@@ -1451,6 +1452,21 @@ unsigned long do_mmap(struct file *file, unsigned long addr,
 	/* Too many mappings? */
 	if (mm->map_count > sysctl_max_map_count)
 		return -ENOMEM;
+
+	/*
+	 * If MAP_SHARED_PT is set, MAP_SHARED or MAP_SHARED_VALIDATE must
+	 * be set as well
+	 */
+	if (flags & MAP_SHARED_PT) {
+#if VM_SHARED_PT
+		if (flags & (MAP_SHARED | MAP_SHARED_VALIDATE))
+			ptshare = 1;
+		else
+			return -EINVAL;
+#else
+		return -EINVAL;
+#endif
+	}
 
 	/* Obtain the address to map to. we verify (or select) it and ensure
 	 * that it represents a valid section of the address space.
