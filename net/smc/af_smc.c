@@ -4294,6 +4294,9 @@ int smc_inet_release(struct socket *sock)
 	else
 		lock_sock(sk);
 
+	if (smc->conn.killed && !smc->use_fallback)
+		smc_close_active_abort(smc);
+
 	if (!smc->use_fallback) {
 		/* ret of smc_close_active do not need return to userspace */
 		smc_close_active(smc);
