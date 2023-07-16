@@ -80,8 +80,6 @@ static int smc_inet_sock_sort_csk_queue(struct sock *parent);
 
 /* default use reserve_mode */
 bool reserve_mode = true;
-module_param(reserve_mode, bool, 0444);
-MODULE_PARM_DESC(reserve_mode, "reserve mode support and keep-first-contact disable");
 
 /* rsvd_ports_base must less than (u16 MAX - 8) */
 u16 rsvd_ports_base = SMC_IWARP_RSVD_PORTS_BASE;
