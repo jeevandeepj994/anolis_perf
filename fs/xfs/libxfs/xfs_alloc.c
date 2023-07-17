@@ -2468,6 +2468,7 @@ xfs_defer_agfl_block(
 	new->xefi_blockcount = 1;
 	new->xefi_oinfo = *oinfo;
 	new->xefi_skip_discard = false;
+	new->xefi_agresv = XFS_AG_RESV_AGFL;
 
 	trace_xfs_agfl_free_defer(mp, agno, 0, agbno, 1);
 
@@ -2484,6 +2485,7 @@ __xfs_free_extent_later(
 	xfs_fsblock_t			bno,
 	xfs_filblks_t			len,
 	const struct xfs_owner_info	*oinfo,
+	enum xfs_ag_resv_type		type,
 	bool				skip_discard)
 {
 	struct xfs_extent_free_item	*new;		/* new element */
@@ -2504,11 +2506,13 @@ __xfs_free_extent_later(
 	ASSERT(agbno + len <= mp->m_sb.sb_agblocks);
 #endif
 	ASSERT(xfs_extfree_item_cache != NULL);
+	ASSERT(type != XFS_AG_RESV_AGFL);
 
 	new = kmem_cache_alloc(xfs_extfree_item_cache,
 			       GFP_KERNEL | __GFP_NOFAIL);
 	new->xefi_startblock = bno;
 	new->xefi_blockcount = (xfs_extlen_t)len;
+	new->xefi_agresv = type;
 	if (oinfo)
 		new->xefi_oinfo = *oinfo;
 	else

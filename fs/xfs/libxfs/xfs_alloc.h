@@ -247,7 +247,7 @@ xfs_buf_to_agfl_bno(
 
 void __xfs_free_extent_later(struct xfs_trans *tp, xfs_fsblock_t bno,
 		xfs_filblks_t len, const struct xfs_owner_info *oinfo,
-		bool skip_discard);
+		enum xfs_ag_resv_type type, bool skip_discard);
 
 /*
  * List of extents to be free "later".
@@ -259,6 +259,7 @@ struct xfs_extent_free_item {
 	xfs_extlen_t		xefi_blockcount;/* number of blocks in extent */
 	bool			xefi_skip_discard;
 	struct xfs_owner_info	xefi_oinfo;	/* extent owner */
+	enum xfs_ag_resv_type	xefi_agresv;
 };
 
 static inline void
@@ -266,9 +267,10 @@ xfs_free_extent_later(
 	struct xfs_trans		*tp,
 	xfs_fsblock_t			bno,
 	xfs_filblks_t			len,
-	const struct xfs_owner_info	*oinfo)
+	const struct xfs_owner_info	*oinfo,
+	enum xfs_ag_resv_type		type)
 {
-	__xfs_free_extent_later(tp, bno, len, oinfo, false);
+	__xfs_free_extent_later(tp, bno, len, oinfo, type, false);
 }
 
 

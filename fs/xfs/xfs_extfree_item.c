@@ -359,6 +359,7 @@ xfs_trans_free_extent(
 	xfs_fsblock_t			start_block,
 	xfs_extlen_t			ext_len,
 	const struct xfs_owner_info	*oinfo,
+	enum xfs_ag_resv_type		xefi_agresv,
 	bool				skip_discard)
 {
 	struct xfs_mount		*mp = tp->t_mountp;
@@ -372,7 +373,7 @@ xfs_trans_free_extent(
 	trace_xfs_bmap_free_deferred(tp->t_mountp, agno, 0, agbno, ext_len);
 
 	error = __xfs_free_extent(tp, start_block, ext_len,
-				  oinfo, XFS_AG_RESV_NONE, skip_discard);
+				  oinfo, xefi_agresv, skip_discard);
 	/*
 	 * Mark the transaction dirty, even on error. This ensures the
 	 * transaction is aborted, which:
@@ -481,7 +482,8 @@ xfs_extent_free_finish_item(
 	error = xfs_trans_free_extent(tp, EFD_ITEM(done),
 			free->xefi_startblock,
 			free->xefi_blockcount,
-			&free->xefi_oinfo, free->xefi_skip_discard);
+			&free->xefi_oinfo,
+			free->xefi_agresv, free->xefi_skip_discard);
 	kmem_cache_free(xfs_extfree_item_cache, free);
 	return error;
 }
@@ -621,7 +623,8 @@ xfs_efi_item_recover(
 		extp = &efip->efi_format.efi_extents[i];
 		error = xfs_trans_free_extent(tp, efdp, extp->ext_start,
 					      extp->ext_len,
-					      &XFS_RMAP_OINFO_ANY_OWNER, false);
+					      &XFS_RMAP_OINFO_ANY_OWNER,
+						  XFS_AG_RESV_NONE, false);
 		if (error)
 			goto abort_error;
 
