@@ -2456,9 +2456,12 @@ void __init sev_hardware_setup(void)
 	if (boot_cpu_data.x86_vendor == X86_VENDOR_HYGON) {
 		if (alloc_trans_mempool())
 			goto out;
+		pr_info("CSV supported: %u ASIDs\n",
+			max_sev_asid - min_sev_asid + 1);
+	} else {
+		pr_info("SEV supported: %u ASIDs\n",
+			max_sev_asid - min_sev_asid + 1);
 	}
-
-	pr_info("SEV supported: %u ASIDs\n", max_sev_asid - min_sev_asid + 1);
 	sev_supported = true;
 
 	/* SEV-ES support requested? */
@@ -2473,7 +2476,10 @@ void __init sev_hardware_setup(void)
 	if (min_sev_asid == 1)
 		goto out;
 
-	pr_info("SEV-ES supported: %u ASIDs\n", min_sev_asid - 1);
+	if (boot_cpu_data.x86_vendor == X86_VENDOR_HYGON)
+		pr_info("CSV2 supported: %u ASIDs\n", min_sev_asid - 1);
+	else
+		pr_info("SEV-ES supported: %u ASIDs\n", min_sev_asid - 1);
 	sev_es_supported = true;
 
 out:
