@@ -1424,6 +1424,49 @@ s32 txgbe_enable_sec_rx_path(struct txgbe_hw *hw)
 }
 
 /**
+ *  txgbe_disable_sec_tx_path - Stops the transmit data path
+ *  @hw: pointer to hardware structure
+ *
+ *  Stops the transmit data path and waits for the HW to internally empty
+ *  the tx security block
+ **/
+s32 txgbe_disable_sec_tx_path(struct txgbe_hw *hw)
+{
+#define TXGBE_MAX_SECTX_POLL 40
+
+	int i;
+	int secrxreg;
+
+	wr32m(hw, TXGBE_TSC_CTL, TXGBE_TSC_CTL_TX_DIS, TXGBE_TSC_CTL_TX_DIS);
+	for (i = 0; i < TXGBE_MAX_SECTX_POLL; i++) {
+		secrxreg = rd32(hw, TXGBE_TSC_ST);
+		if (!(secrxreg & TXGBE_TSC_ST_SECTX_RDY))
+			usec_delay(1000);
+		else
+			break;
+	}
+
+	/* For informational purposes only */
+	if (i >= TXGBE_MAX_SECTX_POLL)
+		ERROR_REPORT2(hw, TXGBE_ERROR_INVALID_STATE, "disable tx sec failed.\n");
+
+	return 0;
+}
+
+/**
+ * txgbe_enable_sec_Tx_path - Enables the transmit data path
+ * @hw: pointer to hardware structure
+ *
+ * Enables the transmit data path.
+ **/
+s32 txgbe_enable_sec_tx_path(struct txgbe_hw *hw)
+{
+	wr32m(hw, TXGBE_TSC_CTL, TXGBE_TSC_CTL_TX_DIS, 0);
+	TXGBE_WRITE_FLUSH(hw);
+	return 0;
+}
+
+/**
  *  txgbe_get_san_mac_addr_offset - Get SAN MAC address offset from the EEPROM
  *  @hw: pointer to hardware structure
  *  @san_mac_offset: SAN MAC address offset
@@ -3156,6 +3199,8 @@ s32 txgbe_init_ops(struct txgbe_hw *hw)
 	mac->ops.start_hw = txgbe_start_hw;
 	mac->ops.get_san_mac_addr = txgbe_get_san_mac_addr;
 	mac->ops.get_wwn_prefix = txgbe_get_wwn_prefix;
+	mac->ops.disable_sec_tx_path = txgbe_disable_sec_tx_path;
+	mac->ops.enable_sec_tx_path = txgbe_enable_sec_tx_path;
 
 	/* LEDs */
 	mac->ops.led_on = txgbe_led_on;
@@ -3605,6 +3650,9 @@ s32 txgbe_set_link_to_kx4(struct txgbe_hw *hw, bool autoneg)
 	}
 
 	wr32m(hw, TXGBE_MAC_TX_CFG, TXGBE_MAC_TX_CFG_TE, ~TXGBE_MAC_TX_CFG_TE);
+	wr32m(hw, TXGBE_MAC_RX_CFG, TXGBE_MAC_RX_CFG_RE, ~TXGBE_MAC_RX_CFG_RE);
+
+	TCALL(hw, mac.ops.disable_sec_tx_path);
 
 	/* 2. Disable xpcs AN-73 */
 	if (!autoneg)
@@ -3766,6 +3814,9 @@ s32 txgbe_set_link_to_kx4(struct txgbe_hw *hw, bool autoneg)
 	}
 
 out:
+	TCALL(hw, mac.ops.enable_sec_tx_path);
+	wr32m(hw, TXGBE_MAC_RX_CFG, TXGBE_MAC_RX_CFG_RE, TXGBE_MAC_RX_CFG_RE);
+
 	return status;
 }
 
@@ -3797,6 +3848,8 @@ s32 txgbe_set_link_to_kx(struct txgbe_hw *hw, u32 speed, bool autoneg)
 	}
 
 	wr32m(hw, TXGBE_MAC_TX_CFG, TXGBE_MAC_TX_CFG_TE, ~TXGBE_MAC_TX_CFG_TE);
+	wr32m(hw, TXGBE_MAC_RX_CFG, TXGBE_MAC_RX_CFG_RE, ~TXGBE_MAC_RX_CFG_RE);
+	TCALL(hw, mac.ops.disable_sec_tx_path);
 
 	/* 2. Disable xpcs AN-73 */
 	if (!autoneg)
@@ -3979,6 +4032,9 @@ s32 txgbe_set_link_to_kx(struct txgbe_hw *hw, u32 speed, bool autoneg)
 	txgbe_wr32_epcs(hw, TXGBE_PHY_TX_EQ_CTL1, value);
 
 out:
+	TCALL(hw, mac.ops.enable_sec_tx_path);
+	wr32m(hw, TXGBE_MAC_RX_CFG, TXGBE_MAC_RX_CFG_RE, TXGBE_MAC_RX_CFG_RE);
+
 	return status;
 }
 
@@ -4005,6 +4061,8 @@ static s32 txgbe_set_link_to_sfi(struct txgbe_hw *hw, u32 speed)
 	}
 
 	wr32m(hw, TXGBE_MAC_TX_CFG, TXGBE_MAC_TX_CFG_TE, ~TXGBE_MAC_TX_CFG_TE);
+	wr32m(hw, TXGBE_MAC_RX_CFG, TXGBE_MAC_RX_CFG_RE, ~TXGBE_MAC_RX_CFG_RE);
+	TCALL(hw, mac.ops.disable_sec_tx_path);
 
 	/* 2. Disable xpcs AN-73 */
 	txgbe_wr32_epcs(hw, TXGBE_SR_AN_MMD_CTL, 0x0);
@@ -4254,6 +4312,9 @@ static s32 txgbe_set_link_to_sfi(struct txgbe_hw *hw, u32 speed)
 	}
 
 out:
+	TCALL(hw, mac.ops.enable_sec_tx_path);
+	wr32m(hw, TXGBE_MAC_RX_CFG, TXGBE_MAC_RX_CFG_RE, TXGBE_MAC_RX_CFG_RE);
+
 	return status;
 }
 
