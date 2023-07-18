@@ -458,6 +458,8 @@ struct txgbe_mac_addr {
 #define TXGBE_FLAG2_ECC_ERR_RESET               BIT(29)
 #define TXGBE_FLAG2_PCIE_NEED_RECOVER           BIT(31)
 
+#define TXGBE_ETH_PRIV_FLAG_LLDP                BIT(0)
+
 /* preset defaults */
 #define TXGBE_FLAGS_SP_INIT (TXGBE_FLAG_MSI_CAPABLE \
 			   | TXGBE_FLAG_MSIX_CAPABLE \
@@ -657,6 +659,7 @@ struct txgbe_adapter {
 	unsigned int num_vmdqs; /* does not include pools assigned to VFs */
 	unsigned int queues_per_pool;
 	u8 default_up;
+	u64 eth_priv_flags;
 };
 
 /* must account for pools assigned to VFs. */

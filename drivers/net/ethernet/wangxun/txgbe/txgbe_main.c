@@ -25,7 +25,7 @@
 #include "txgbe_sriov.h"
 
 char txgbe_driver_name[] = "txgbe";
-#define DRV_VERSION "1.3.2-k"
+#define DRV_VERSION "1.3.4-k"
 const char txgbe_driver_version[] = DRV_VERSION;
 
 static const char txgbe_overheat_msg[] =
@@ -3351,10 +3351,41 @@ static void txgbe_setup_gpie(struct txgbe_adapter *adapter)
 	wr32(hw, TXGBE_PX_GPIE, gpie);
 }
 
+static void reinit_gpio_int(struct txgbe_adapter *adapter)
+{
+	struct txgbe_hw *hw = &adapter->hw;
+	u32 reg;
+
+	wr32(hw, TXGBE_GPIO_INTMASK, 0xFF);
+	reg = rd32(hw, TXGBE_GPIO_INTSTATUS);
+	if (reg & TXGBE_GPIO_INTSTATUS_2) {
+		adapter->flags2 |= TXGBE_FLAG2_SFP_NEEDS_RESET;
+		wr32(hw, TXGBE_GPIO_EOI, TXGBE_GPIO_EOI_2);
+		adapter->sfp_poll_time = 0;
+		txgbe_service_event_schedule(adapter);
+	}
+	if (reg & TXGBE_GPIO_INTSTATUS_3) {
+		adapter->flags |= TXGBE_FLAG_NEED_LINK_CONFIG;
+		wr32(hw, TXGBE_GPIO_EOI, TXGBE_GPIO_EOI_3);
+		txgbe_service_event_schedule(adapter);
+	}
+
+	if (reg & TXGBE_GPIO_INTSTATUS_6) {
+		wr32(hw, TXGBE_GPIO_EOI, TXGBE_GPIO_EOI_6);
+		adapter->flags |=
+				TXGBE_FLAG_NEED_LINK_CONFIG;
+		txgbe_service_event_schedule(adapter);
+	}
+	wr32(hw, TXGBE_GPIO_INTMASK, 0x0);
+}
+
 static void txgbe_up_complete(struct txgbe_adapter *adapter)
 {
 	struct txgbe_hw *hw = &adapter->hw;
 	u32 links_reg;
+
+	/* workaround gpio int lost in lldp-on condition */
+	reinit_gpio_int(adapter);
 
 	txgbe_get_hw_control(adapter);
 	txgbe_setup_gpie(adapter);
@@ -3494,6 +3525,8 @@ void txgbe_reset(struct txgbe_adapter *adapter)
 
 	/* update SAN MAC vmdq pool selection */
 	TCALL(hw, mac.ops.set_vmdq_san_mac, VMDQ_P(0));
+	if (txgbe_is_lldp(hw))
+		e_dev_err("Can not get lldp flags from flash\n");
 
 	if (test_bit(__TXGBE_PTP_RUNNING, &adapter->state))
 		txgbe_ptp_reset(adapter);
@@ -3699,7 +3732,8 @@ void txgbe_disable_device(struct txgbe_adapter *adapter)
 	}
 
 	if (!(((hw->subsystem_device_id & TXGBE_NCSI_MASK) == TXGBE_NCSI_SUP) ||
-	      ((hw->subsystem_device_id & TXGBE_WOL_MASK) == TXGBE_WOL_SUP))) {
+	      ((hw->subsystem_device_id & TXGBE_WOL_MASK) == TXGBE_WOL_SUP) ||
+		  adapter->eth_priv_flags & TXGBE_ETH_PRIV_FLAG_LLDP)) {
 		/* disable mac transmiter */
 		wr32m(hw, TXGBE_MAC_TX_CFG, TXGBE_MAC_TX_CFG_TE, 0);
 	}
@@ -3712,6 +3746,9 @@ void txgbe_disable_device(struct txgbe_adapter *adapter)
 
 	/* Disable the Tx DMA engine */
 	wr32m(hw, TXGBE_TDM_CTL, TXGBE_TDM_CTL_TE, 0);
+
+	/* workaround gpio int lost in lldp-on condition */
+	reinit_gpio_int(adapter);
 }
 
 void txgbe_down(struct txgbe_adapter *adapter)
@@ -3721,7 +3758,8 @@ void txgbe_down(struct txgbe_adapter *adapter)
 	txgbe_disable_device(adapter);
 	txgbe_reset(adapter);
 
-	if (!(((hw->subsystem_device_id & TXGBE_NCSI_MASK) == TXGBE_NCSI_SUP)))
+	if (!(((hw->subsystem_device_id & TXGBE_NCSI_MASK) == TXGBE_NCSI_SUP) ||
+	      adapter->eth_priv_flags & TXGBE_ETH_PRIV_FLAG_LLDP))
 		/* power down the optics for SFP+ fiber */
 		TCALL(&adapter->hw, mac.ops.disable_tx_laser);
 
@@ -3766,7 +3804,7 @@ static int txgbe_sw_init(struct txgbe_adapter *adapter)
 		hw->subsystem_vendor_id = pdev->subsystem_vendor;
 		hw->subsystem_device_id = pdev->subsystem_device;
 	} else {
-		ssid = txgbe_flash_read_dword(hw, 0xfffdc);
+		txgbe_flash_read_dword(hw, 0xfffdc, &ssid);
 		if (ssid == 0x1) {
 			netif_err(adapter, probe, adapter->netdev,
 				  "read of internal subsystem device id failed\n");
@@ -3843,6 +3881,9 @@ static int txgbe_sw_init(struct txgbe_adapter *adapter)
 	adapter->rx_work_limit = TXGBE_DEFAULT_RX_WORK;
 
 	adapter->num_vmdqs = 1;
+
+	if (txgbe_is_lldp(hw))
+		e_dev_err("Can not get lldp flags from flash\n");
 
 	set_bit(0, &adapter->fwd_bitmask);
 	set_bit(__TXGBE_DOWN, &adapter->state);
@@ -4246,7 +4287,8 @@ static void txgbe_close_suspend(struct txgbe_adapter *adapter)
 	txgbe_ptp_suspend(adapter);
 
 	txgbe_disable_device(adapter);
-	if (!((hw->subsystem_device_id & TXGBE_NCSI_MASK) == TXGBE_NCSI_SUP))
+	if (!((hw->subsystem_device_id & TXGBE_NCSI_MASK) == TXGBE_NCSI_SUP ||
+	      adapter->eth_priv_flags & TXGBE_ETH_PRIV_FLAG_LLDP))
 		TCALL(hw, mac.ops.disable_tx_laser);
 	txgbe_clean_all_tx_rings(adapter);
 	txgbe_clean_all_rx_rings(adapter);
@@ -4348,6 +4390,7 @@ static int txgbe_dev_shutdown(struct pci_dev *pdev, bool *enable_wake)
 #endif
 
 	netif_device_detach(netdev);
+	txgbe_mac_set_default_filter(adapter, hw->mac.perm_addr);
 
 	rtnl_lock();
 	if (netif_running(netdev))
@@ -6489,6 +6532,8 @@ static int txgbe_probe(struct pci_dev *pdev,
 		dev_err(&pdev->dev, "HW Init failed: %d\n", err);
 		goto err_free_mac_table;
 	}
+	/* Store the permanent mac address */
+	TCALL(hw, mac.ops.get_mac_addr, hw->mac.perm_addr);
 
 #ifdef CONFIG_PCI_IOV
 	if (adapter->num_vfs > 0) {
@@ -6658,7 +6703,8 @@ static int txgbe_probe(struct pci_dev *pdev,
 	pci_set_drvdata(pdev, adapter);
 	adapter->netdev_registered = true;
 
-	if (!((hw->subsystem_device_id & TXGBE_NCSI_MASK) == TXGBE_NCSI_SUP))
+	if (!((hw->subsystem_device_id & TXGBE_NCSI_MASK) == TXGBE_NCSI_SUP ||
+	      adapter->eth_priv_flags & TXGBE_ETH_PRIV_FLAG_LLDP))
 		/* power down the optics for SFP+ fiber */
 		TCALL(hw, mac.ops.disable_tx_laser);
 
@@ -6786,9 +6832,10 @@ static void txgbe_remove(struct pci_dev *pdev)
 	struct txgbe_adapter *adapter = pci_get_drvdata(pdev);
 	struct net_device *netdev;
 	bool disable_dev;
+	struct txgbe_hw *hw = &adapter->hw;
 
 	netdev = adapter->netdev;
-
+	txgbe_mac_set_default_filter(adapter, hw->mac.perm_addr);
 	txgbe_dbg_adapter_exit(adapter);
 
 	set_bit(__TXGBE_REMOVING, &adapter->state);
