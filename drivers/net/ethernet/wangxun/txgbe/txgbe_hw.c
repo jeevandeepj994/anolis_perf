@@ -986,21 +986,23 @@ s32 txgbe_fc_enable(struct txgbe_hw *hw)
 	u32 mflcn_reg, fccfg_reg;
 	u32 reg;
 	u32 fcrtl, fcrth;
+	int i;
 
 	/* Validate the water mark configuration */
 	if (!hw->fc.pause_time) {
 		ret_val = TXGBE_ERR_INVALID_LINK_SETTINGS;
 		goto out;
 	}
-
 	/* Low water mark of zero causes XOFF floods */
-	if ((hw->fc.current_mode & txgbe_fc_tx_pause) &&
-	    hw->fc.high_water) {
-		if (!hw->fc.low_water ||
-		    hw->fc.low_water >= hw->fc.high_water) {
-			txgbe_dbg(hw, "Invalid water mark configuration\n");
-			ret_val = TXGBE_ERR_INVALID_LINK_SETTINGS;
-			goto out;
+	for (i = 0; i < TXGBE_DCB_MAX_TRAFFIC_CLASS; i++) {
+		if ((hw->fc.current_mode & txgbe_fc_tx_pause) &&
+		    hw->fc.high_water[i]) {
+			if (!hw->fc.low_water[i] ||
+			    hw->fc.low_water[i] >= hw->fc.high_water[i]) {
+				txgbe_dbg(hw, "Invalid water mark configuration\n");
+				ret_val = TXGBE_ERR_INVALID_LINK_SETTINGS;
+				goto out;
+			}
 		}
 	}
 
@@ -1064,29 +1066,32 @@ s32 txgbe_fc_enable(struct txgbe_hw *hw)
 	wr32(hw, TXGBE_RDB_RFCC, fccfg_reg);
 
 	/* Set up and enable Rx high/low water mark thresholds, enable XON. */
-	if ((hw->fc.current_mode & txgbe_fc_tx_pause) &&
-	    hw->fc.high_water) {
-		fcrtl = (hw->fc.low_water << 10) |
-			TXGBE_RDB_RFCL_XONE;
-		wr32(hw, TXGBE_RDB_RFCL(0), fcrtl);
-		fcrth = (hw->fc.high_water << 10) |
-			TXGBE_RDB_RFCH_XOFFE;
-	} else {
-		wr32(hw, TXGBE_RDB_RFCL(0), 0);
-		/* In order to prevent Tx hangs when the internal Tx
-		 * switch is enabled we must set the high water mark
-		 * to the Rx packet buffer size - 24KB.  This allows
-		 * the Tx switch to function even under heavy Rx
-		 * workloads.
-		 */
-		fcrth = rd32(hw, TXGBE_RDB_PB_SZ(0)) - 24576;
-	}
+	for (i = 0; i < TXGBE_DCB_MAX_TRAFFIC_CLASS; i++) {
+		if ((hw->fc.current_mode & txgbe_fc_tx_pause) &&
+		    hw->fc.high_water[i]) {
+			fcrtl = (hw->fc.low_water[i] << 10) |
+				TXGBE_RDB_RFCL_XONE;
+			wr32(hw, TXGBE_RDB_RFCL(i), fcrtl);
+			fcrth = (hw->fc.high_water[i] << 10) |
+				TXGBE_RDB_RFCH_XOFFE;
+		} else {
+			wr32(hw, TXGBE_RDB_RFCL(i), 0);
+			/* In order to prevent Tx hangs when the internal Tx
+			 * switch is enabled we must set the high water mark
+			 * to the Rx packet buffer size - 24KB.  This allows
+			 * the Tx switch to function even under heavy Rx
+			 * workloads.
+			 */
+			fcrth = rd32(hw, TXGBE_RDB_PB_SZ(i)) - 24576;
+		}
 
-	wr32(hw, TXGBE_RDB_RFCH(0), fcrth);
+			wr32(hw, TXGBE_RDB_RFCH(i), fcrth);
+	}
 
 	/* Configure pause time */
 	reg = hw->fc.pause_time * 0x00010001;
-	wr32(hw, TXGBE_RDB_RFCV(0), reg);
+	for (i = 0; i < (TXGBE_DCB_MAX_TRAFFIC_CLASS / 2); i++)
+		wr32(hw, TXGBE_RDB_RFCV(i), reg);
 
 	/* Configure flow control refresh threshold value */
 	wr32(hw, TXGBE_RDB_RFCRT, hw->fc.pause_time / 2);
@@ -1267,6 +1272,9 @@ s32 txgbe_disable_pcie_master(struct txgbe_hw *hw)
 	struct txgbe_adapter *adapter = container_of(hw, struct txgbe_adapter, hw);
 	s32 status = 0;
 	u32 i;
+	unsigned int num_vfs = adapter->num_vfs;
+	u16 dev_ctl;
+	u32 vf_bme_clear = 0;
 
 	/* Always set this bit to ensure any future transactions are blocked */
 	pci_clear_master(adapter->pdev);
@@ -1276,6 +1284,18 @@ s32 txgbe_disable_pcie_master(struct txgbe_hw *hw)
 	    TXGBE_REMOVED(hw->hw_addr))
 		goto out;
 
+	/* BME disable handshake will not be finished if any VF BME is 0 */
+	for (i = 0; i < num_vfs; i++) {
+		struct pci_dev *vfdev = adapter->vfinfo[i].vfdev;
+
+		if (!vfdev)
+			continue;
+		pci_read_config_word(vfdev, 0x4, &dev_ctl);
+		if ((dev_ctl & 0x4) == 0) {
+			vf_bme_clear = 1;
+		break;
+		}
+	}
 	/* Poll for master request bit to clear */
 	for (i = 0; i < TXGBE_PCI_MASTER_DISABLE_TIMEOUT; i++) {
 		usec_delay(100);
@@ -1283,9 +1303,11 @@ s32 txgbe_disable_pcie_master(struct txgbe_hw *hw)
 			goto out;
 	}
 
-	ERROR_REPORT1(hw, TXGBE_ERROR_POLLING,
-		      "PCIe transaction pending bit did not clear.\n");
-	status = TXGBE_ERR_MASTER_REQUESTS_PENDING;
+	if (!vf_bme_clear) {
+		ERROR_REPORT1(hw, TXGBE_ERROR_POLLING,
+			      "PCIe transaction pending bit did not clear.\n");
+		status = TXGBE_ERR_MASTER_REQUESTS_PENDING;
+	}
 out:
 	return status;
 }
@@ -1555,6 +1577,161 @@ s32 txgbe_init_uta_tables(struct txgbe_hw *hw)
 }
 
 /**
+ *  txgbe_find_vlvf_slot - find the vlanid or the first empty slot
+ *  @hw: pointer to hardware structure
+ *  @vlan: VLAN id to write to VLAN filter
+ *
+ *  return the VLVF index where this VLAN id should be placed
+ *
+ **/
+s32 txgbe_find_vlvf_slot(struct txgbe_hw *hw, u32 vlan)
+{
+	u32 bits = 0;
+	u32 first_empty_slot = 0;
+	s32 regindex;
+
+	/* short cut the special case */
+	if (vlan == 0)
+		return 0;
+
+	/* Search for the vlan id in the VLVF entries. Save off the first empty
+	 * slot found along the way
+	 */
+	for (regindex = 1; regindex < TXGBE_PSR_VLAN_SWC_ENTRIES; regindex++) {
+		wr32(hw, TXGBE_PSR_VLAN_SWC_IDX, regindex);
+		bits = rd32(hw, TXGBE_PSR_VLAN_SWC);
+		if (!bits && !(first_empty_slot))
+			first_empty_slot = regindex;
+		else if ((bits & 0x0FFF) == vlan)
+			break;
+	}
+
+	/* If regindex is less than TXGBE_VLVF_ENTRIES, then we found the vlan
+	 * in the VLVF. Else use the first empty VLVF register for this
+	 * vlan id.
+	 */
+	if (regindex >= TXGBE_PSR_VLAN_SWC_ENTRIES) {
+		if (first_empty_slot) {
+			regindex = first_empty_slot;
+		} else {
+			ERROR_REPORT1(hw, TXGBE_ERROR_SOFTWARE,
+				      "No space in VLVF.\n");
+			regindex = TXGBE_ERR_NO_SPACE;
+		}
+	}
+
+	return regindex;
+}
+
+/**
+ *  txgbe_set_vlvf - Set VLAN Pool Filter
+ *  @hw: pointer to hardware structure
+ *  @vlan: VLAN id to write to VLAN filter
+ *  @vind: VMDq output index that maps queue to VLAN id in VFVFB
+ *  @vlan_on: boolean flag to turn on/off VLAN in VFVF
+ *  @vfta_changed: pointer to boolean flag which indicates whether VFTA
+ *                 should be changed
+ *
+ *  Turn on/off specified bit in VLVF table.
+ **/
+s32 txgbe_set_vlvf(struct txgbe_hw *hw, u32 vlan, u32 vind,
+		   bool vlan_on, bool *vfta_changed)
+{
+	u32 vt;
+
+	if (vlan > 4095)
+		return TXGBE_ERR_PARAM;
+
+	/* If VT Mode is set
+	 *   Either vlan_on
+	 *     make sure the vlan is in VLVF
+	 *     set the vind bit in the matching VLVFB
+	 *   Or !vlan_on
+	 *     clear the pool bit and possibly the vind
+	 */
+	vt = rd32(hw, TXGBE_CFG_PORT_CTL);
+	if (vt & TXGBE_CFG_PORT_CTL_NUM_VT_MASK) {
+		s32 vlvf_index;
+		u32 bits;
+
+		vlvf_index = txgbe_find_vlvf_slot(hw, vlan);
+		if (vlvf_index < 0)
+			return vlvf_index;
+
+		wr32(hw, TXGBE_PSR_VLAN_SWC_IDX, vlvf_index);
+		if (vlan_on) {
+			/* set the pool bit */
+			if (vind < 32) {
+				bits = rd32(hw,
+					    TXGBE_PSR_VLAN_SWC_VM_L);
+				bits |= (1 << vind);
+				wr32(hw,
+				     TXGBE_PSR_VLAN_SWC_VM_L,
+						bits);
+			} else {
+				bits = rd32(hw,
+					    TXGBE_PSR_VLAN_SWC_VM_H);
+				bits |= (1 << (vind - 32));
+				wr32(hw,
+				     TXGBE_PSR_VLAN_SWC_VM_H,
+					bits);
+			}
+		} else {
+			/* clear the pool bit */
+			if (vind < 32) {
+				bits = rd32(hw,
+					    TXGBE_PSR_VLAN_SWC_VM_L);
+				bits &= ~(1 << vind);
+				wr32(hw,
+				     TXGBE_PSR_VLAN_SWC_VM_L,
+						bits);
+				bits |= rd32(hw,
+					TXGBE_PSR_VLAN_SWC_VM_H);
+			} else {
+				bits = rd32(hw,
+					    TXGBE_PSR_VLAN_SWC_VM_H);
+				bits &= ~(1 << (vind - 32));
+				wr32(hw,
+				     TXGBE_PSR_VLAN_SWC_VM_H,
+					bits);
+				bits |= rd32(hw,
+						TXGBE_PSR_VLAN_SWC_VM_L);
+			}
+		}
+
+		/* If there are still bits set in the VLVFB registers
+		 * for the VLAN ID indicated we need to see if the
+		 * caller is requesting that we clear the VFTA entry bit.
+		 * If the caller has requested that we clear the VFTA
+		 * entry bit but there are still pools/VFs using this VLAN
+		 * ID entry then ignore the request.  We're not worried
+		 * about the case where we're turning the VFTA VLAN ID
+		 * entry bit on, only when requested to turn it off as
+		 * there may be multiple pools and/or VFs using the
+		 * VLAN ID entry.  In that case we cannot clear the
+		 * VFTA bit until all pools/VFs using that VLAN ID have also
+		 * been cleared.  This will be indicated by "bits" being
+		 * zero.
+		 */
+		if (bits) {
+			wr32(hw, TXGBE_PSR_VLAN_SWC,
+			     (TXGBE_PSR_VLAN_SWC_VIEN | vlan));
+			if (!vlan_on && !vfta_changed) {
+				/* someone wants to clear the vfta entry
+				 * but some pools/VFs are still using it.
+				 * Ignore it.
+				 */
+				*vfta_changed = false;
+			}
+		} else {
+			wr32(hw, TXGBE_PSR_VLAN_SWC, 0);
+		}
+	}
+
+	return 0;
+}
+
+/**
  *  txgbe_set_vfta - Set VLAN filter table
  *  @hw: pointer to hardware structure
  *  @vlan: VLAN id to write to VLAN filter
@@ -1571,14 +1748,15 @@ s32 txgbe_set_vfta(struct txgbe_hw *hw, u32 vlan, u32 vind,
 	u32 vfta;
 	u32 targetbit;
 	bool vfta_changed = false;
+	s32 ret_val = 0;
 
 	if (vlan > 4095)
 		return TXGBE_ERR_PARAM;
 
 	/* The VFTA is a bitstring made up of 128 32-bit registers
 	 * that enable the particular VLAN id, much like the MTA:
-	 *    bits[11-5]: which register
-	 *    bits[4-0]:  which bit in the register
+	 * bits[11-5]: which register
+	 * bits[4-0]:  which bit in the register
 	 */
 	regindex = (vlan >> 5) & 0x7F;
 	bitindex = vlan & 0x1F;
@@ -1597,8 +1775,17 @@ s32 txgbe_set_vfta(struct txgbe_hw *hw, u32 vlan, u32 vind,
 		}
 	}
 
+	/* Part 2
+	 * Call txgbe_set_vlvf to set VLVFB and VLVF
+	 */
+	ret_val = txgbe_set_vlvf(hw, vlan, vind, vlan_on,
+				 &vfta_changed);
+	if (ret_val != 0)
+		return ret_val;
+
 	if (vfta_changed)
 		wr32(hw, TXGBE_PSR_VLAN_TBL(regindex), vfta);
+
 	/* errata 5 */
 	hw->mac.vft_shadow[regindex] = vfta;
 	return 0;
@@ -1628,6 +1815,62 @@ s32 txgbe_clear_vfta(struct txgbe_hw *hw)
 	}
 
 	return 0;
+}
+
+/**
+ *  txgbe_set_vlan_anti_spoofing - Enable/Disable VLAN anti-spoofing
+ *  @hw: pointer to hardware structure
+ *  @enable: enable or disable switch for VLAN anti-spoofing
+ *  @vf: Virtual Function pool - VF Pool to set for VLAN anti-spoofing
+ *
+ **/
+void txgbe_set_vlan_anti_spoofing(struct txgbe_hw *hw, bool enable, int vf)
+{
+	u32 pfvfspoof;
+
+	if (vf < 32) {
+		pfvfspoof = rd32(hw, TXGBE_TDM_VLAN_AS_L);
+		if (enable)
+			pfvfspoof |= (1 << vf);
+		else
+			pfvfspoof &= ~(1 << vf);
+		wr32(hw, TXGBE_TDM_VLAN_AS_L, pfvfspoof);
+	} else {
+		pfvfspoof = rd32(hw, TXGBE_TDM_VLAN_AS_H);
+		if (enable)
+			pfvfspoof |= (1 << (vf - 32));
+		else
+			pfvfspoof &= ~(1 << (vf - 32));
+		wr32(hw, TXGBE_TDM_VLAN_AS_H, pfvfspoof);
+	}
+}
+
+/**
+ *  txgbe_set_ethertype_anti_spoofing - Enable/Disable Ethertype anti-spoofing
+ *  @hw: pointer to hardware structure
+ *  @enable: enable or disable switch for Ethertype anti-spoofing
+ *  @vf: Virtual Function pool - VF Pool to set for Ethertype anti-spoofing
+ *
+ **/
+void txgbe_set_ethertype_anti_spoofing(struct txgbe_hw *hw, bool enable, int vf)
+{
+	u32 pfvfspoof;
+
+	if (vf < 32) {
+		pfvfspoof = rd32(hw, TXGBE_TDM_ETYPE_AS_L);
+		if (enable)
+			pfvfspoof |= (1 << vf);
+		else
+			pfvfspoof &= ~(1 << vf);
+		wr32(hw, TXGBE_TDM_ETYPE_AS_L, pfvfspoof);
+	} else {
+		pfvfspoof = rd32(hw, TXGBE_TDM_ETYPE_AS_H);
+		if (enable)
+			pfvfspoof |= (1 << (vf - 32));
+		else
+			pfvfspoof &= ~(1 << (vf - 32));
+		wr32(hw, TXGBE_TDM_ETYPE_AS_H, pfvfspoof);
+	}
 }
 
 /**
@@ -2925,6 +3168,9 @@ s32 txgbe_init_ops(struct txgbe_hw *hw)
 	mac->ops.set_vfta = txgbe_set_vfta;
 	mac->ops.clear_vfta = txgbe_clear_vfta;
 	mac->ops.init_uta_tables = txgbe_init_uta_tables;
+	mac->ops.set_vlan_anti_spoofing = txgbe_set_vlan_anti_spoofing;
+	mac->ops.set_ethertype_anti_spoofing =
+				txgbe_set_ethertype_anti_spoofing;
 
 	/* Flow Control */
 	mac->ops.fc_enable = txgbe_fc_enable;
@@ -2959,6 +3205,8 @@ s32 txgbe_init_ops(struct txgbe_hw *hw)
 					 txgbe_get_thermal_sensor_data;
 	mac->ops.init_thermal_sensor_thresh =
 				      txgbe_init_thermal_sensor_thresh;
+
+	hw->mbx.ops.init_params = txgbe_init_mbx_params_pf;
 
 	return 0;
 }
@@ -4114,7 +4362,7 @@ int txgbe_reset_misc(struct txgbe_hw *hw)
 	wr32(hw, TXGBE_MAC_PKT_FLT, TXGBE_MAC_PKT_FLT_PR);
 
 	wr32m(hw, TXGBE_MIS_RST_ST,
-	      TXGBE_MIS_RST_ST_RST_INIT, 0x1E00);
+	      TXGBE_MIS_RST_ST_RST_INIT, 0xA00);
 
 	/* errata 4: initialize mng flex tbl and wakeup flex tbl*/
 	wr32(hw, TXGBE_PSR_MNG_FLEX_SEL, 0);
@@ -4456,15 +4704,20 @@ static void txgbe_fdir_enable(struct txgbe_hw *hw, u32 fdirctrl)
 s32 txgbe_init_fdir_signature(struct txgbe_hw *hw, u32 fdirctrl)
 {
 	u32 flex = 0;
+	struct txgbe_adapter *adapter = (struct txgbe_adapter *)hw->back;
+	int i = VMDQ_P(0) / 4;
+	int j = VMDQ_P(0) % 4;
 
-	flex = rd32m(hw, TXGBE_RDB_FDIR_FLEX_CFG(0),
-		     ~(TXGBE_RDB_FDIR_FLEX_CFG_BASE_MSK |
+	flex = rd32m(hw, TXGBE_RDB_FDIR_FLEX_CFG(i),
+		     ~((TXGBE_RDB_FDIR_FLEX_CFG_BASE_MSK |
 		       TXGBE_RDB_FDIR_FLEX_CFG_MSK |
-		       TXGBE_RDB_FDIR_FLEX_CFG_OFST));
+		       TXGBE_RDB_FDIR_FLEX_CFG_OFST) <<
+			   (TXGBE_RDB_FDIR_FLEX_CFG_VM_SHIFT * j)));
 
 	flex |= (TXGBE_RDB_FDIR_FLEX_CFG_BASE_MAC |
-		 0x6 << TXGBE_RDB_FDIR_FLEX_CFG_OFST_SHIFT);
-	wr32(hw, TXGBE_RDB_FDIR_FLEX_CFG(0), flex);
+		0x6 << TXGBE_RDB_FDIR_FLEX_CFG_OFST_SHIFT) <<
+		(TXGBE_RDB_FDIR_FLEX_CFG_VM_SHIFT * j);
+	wr32(hw, TXGBE_RDB_FDIR_FLEX_CFG(i), flex);
 
 	/* Continue setup of fdirctrl register bits:
 	 *  Move the flexible bytes to use the ethertype - shift 6 words
@@ -4478,11 +4731,6 @@ s32 txgbe_init_fdir_signature(struct txgbe_hw *hw, u32 fdirctrl)
 	/* write hashes and fdirctrl register, poll for completion */
 	txgbe_fdir_enable(hw, fdirctrl);
 
-	if (hw->revision_id == TXGBE_SP_MPW) {
-		/* errata 1: disable RSC of drop ring 0 */
-		wr32m(hw, TXGBE_PX_RR_CFG(0),
-		      TXGBE_PX_RR_CFG_RSC, ~TXGBE_PX_RR_CFG_RSC);
-	}
 	return 0;
 }
 
@@ -4499,12 +4747,12 @@ s32 txgbe_init_fdir_perfect(struct txgbe_hw *hw, u32 fdirctrl,
 	struct txgbe_adapter *adapter = container_of(hw, struct txgbe_adapter, hw);
 
 	/* Continue setup of fdirctrl register bits:
-	 *  Turn perfect match filtering on
-	 *  Report hash in RSS field of Rx wb descriptor
-	 *  Initialize the drop queue
-	 *  Move the flexible bytes to use the ethertype - shift 6 words
-	 *  Set the maximum length per hash bucket to 0xA filters
-	 *  Send interrupt when 64 (0x4 * 16) filters are left
+	 * Turn perfect match filtering on
+	 * Report hash in RSS field of Rx wb descriptor
+	 * Initialize the drop queue
+	 * Move the flexible bytes to use the ethertype - shift 6 words
+	 * Set the maximum length per hash bucket to 0xA filters
+	 * Send interrupt when 64 (0x4 * 16) filters are left
 	 */
 	fdirctrl |= TXGBE_RDB_FDIR_CTL_PERFECT_MATCH |
 		    (TXGBE_RDB_FDIR_DROP_QUEUE <<
@@ -4782,6 +5030,9 @@ s32 txgbe_fdir_set_input_mask(struct txgbe_hw *hw,
 	u32 fdirm = 0;
 	u32 fdirtcpm;
 	u32 flex = 0;
+	struct txgbe_adapter *adapter = (struct txgbe_adapter *)hw->back;
+	int i = VMDQ_P(0) / 4;
+	int j = VMDQ_P(0) % 4;
 
 	/* Program the relevant mask registers.  If src/dst_port or src/dst_addr
 	 * are zero, then assume a full mask for that field.  Also assume that
@@ -4825,24 +5076,27 @@ s32 txgbe_fdir_set_input_mask(struct txgbe_hw *hw,
 	/* Now mask VM pool and destination IPv6 - bits 5 and 2 */
 	wr32(hw, TXGBE_RDB_FDIR_OTHER_MSK, fdirm);
 
-	flex = rd32m(hw, TXGBE_RDB_FDIR_FLEX_CFG(0),
-		     ~(TXGBE_RDB_FDIR_FLEX_CFG_BASE_MSK |
+	flex = rd32m(hw, TXGBE_RDB_FDIR_FLEX_CFG(i),
+		     ~((TXGBE_RDB_FDIR_FLEX_CFG_BASE_MSK |
 		       TXGBE_RDB_FDIR_FLEX_CFG_MSK |
-		       TXGBE_RDB_FDIR_FLEX_CFG_OFST));
+		       TXGBE_RDB_FDIR_FLEX_CFG_OFST) <<
+		   (TXGBE_RDB_FDIR_FLEX_CFG_VM_SHIFT * j)));
 	flex |= (TXGBE_RDB_FDIR_FLEX_CFG_BASE_MAC |
-		 0x6 << TXGBE_RDB_FDIR_FLEX_CFG_OFST_SHIFT);
+		 0x6 << TXGBE_RDB_FDIR_FLEX_CFG_OFST_SHIFT) <<
+		(TXGBE_RDB_FDIR_FLEX_CFG_VM_SHIFT * j);
 
 	switch ((__force u16)input_mask->formatted.flex_bytes & 0xFFFF) {
 	case 0x0000:
-		/* Mask Flex Bytes */
-		flex |= TXGBE_RDB_FDIR_FLEX_CFG_MSK;
+		flex |= TXGBE_RDB_FDIR_FLEX_CFG_MSK <<
+			(TXGBE_RDB_FDIR_FLEX_CFG_VM_SHIFT * j);
+		/* fallthrough */
 	case 0xFFFF:
 		break;
 	default:
 		txgbe_dbg(hw, "Error on flexible byte mask\n");
 		return TXGBE_ERR_CONFIG;
 	}
-	wr32(hw, TXGBE_RDB_FDIR_FLEX_CFG(0), flex);
+	wr32(hw, TXGBE_RDB_FDIR_FLEX_CFG(i), flex);
 
 	/* store the TCP/UDP port masks, bit reversed from port layout */
 	fdirtcpm = txgbe_get_fdirtcpm(input_mask);
