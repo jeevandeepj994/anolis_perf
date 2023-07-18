@@ -133,6 +133,24 @@ static const char txgbe_gstrings_test[][ETH_GSTRING_LEN] = {
 #define txgbe_isbackplane(type)  \
 			((type == txgbe_media_type_backplane) ? true : false)
 
+struct txgbe_priv_flags {
+	char flag_string[ETH_GSTRING_LEN];
+	u64 flag;
+	bool read_only;
+};
+
+#define TXGBE_PRIV_FLAG(_name, _flag, _read_only) { \
+	.flag_string = _name, \
+	.flag = _flag, \
+	.read_only = _read_only, \
+}
+
+static const struct txgbe_priv_flags txgbe_gstrings_priv_flags[] = {
+	TXGBE_PRIV_FLAG("lldp", TXGBE_ETH_PRIV_FLAG_LLDP, 0),
+};
+
+#define TXGBE_PRIV_FLAGS_STR_LEN ARRAY_SIZE(txgbe_gstrings_priv_flags)
+
 static __u32 txgbe_backplane_type(struct txgbe_hw *hw)
 {
 	__u32 mode = 0x00;
@@ -1140,6 +1158,8 @@ static int txgbe_get_sset_count(struct net_device *netdev, int sset)
 		} else {
 			return TXGBE_STATS_LEN;
 		}
+	case ETH_SS_PRIV_FLAGS:
+		return TXGBE_PRIV_FLAGS_STR_LEN;
 	default:
 		return -EOPNOTSUPP;
 	}
@@ -1219,6 +1239,18 @@ static void txgbe_get_ethtool_stats(struct net_device *netdev,
 	}
 }
 
+static void txgbe_get_priv_flag_strings(struct net_device *netdev, u8 *data)
+{
+	char *p = (char *)data;
+	unsigned int i;
+
+	for (i = 0; i < TXGBE_PRIV_FLAGS_STR_LEN; i++) {
+		snprintf(p, ETH_GSTRING_LEN, "%s",
+			 txgbe_gstrings_priv_flags[i].flag_string);
+		p += ETH_GSTRING_LEN;
+	}
+}
+
 static void txgbe_get_strings(struct net_device *netdev, u32 stringset,
 			      u8 *data)
 {
@@ -1262,6 +1294,9 @@ static void txgbe_get_strings(struct net_device *netdev, u32 stringset,
 			sprintf(p, "rx_pb_%u_pxoff", i);
 			p += ETH_GSTRING_LEN;
 		}
+		break;
+	case ETH_SS_PRIV_FLAGS:
+		txgbe_get_priv_flag_strings(netdev, data);
 		break;
 	}
 }
@@ -3169,6 +3204,87 @@ static int txgbe_set_flash(struct net_device *netdev, struct ethtool_flash *ef)
 	return ret;
 }
 
+/**
+ * txgbe_get_priv_flags - report device private flags
+ * @dev: network interface device structure
+ *
+ * The get string set count and the string set should be matched for each
+ * flag returned.  Add new strings for each flag to the txgbe_gstrings_priv_flags
+ * array.
+ *
+ * Returns a u32 bitmap of flags.
+ **/
+static u32 txgbe_get_priv_flags(struct net_device *dev)
+{
+	struct txgbe_adapter *adapter = netdev_priv(dev);
+	struct txgbe_hw *hw = &adapter->hw;
+	u32 i;
+	u32 ret_flags = 0;
+
+	if (txgbe_is_lldp(hw))
+		e_err(drv, "Can not get lldp flags from flash\n");
+
+	for (i = 0; i < TXGBE_PRIV_FLAGS_STR_LEN; i++) {
+		const struct txgbe_priv_flags *priv_flags;
+
+		priv_flags = &txgbe_gstrings_priv_flags[i];
+
+		if (priv_flags->flag & adapter->eth_priv_flags)
+			ret_flags |= BIT(i);
+	}
+	return ret_flags;
+}
+
+/**
+ * txgbe_set_priv_flags - set private flags
+ * @dev: network interface device structure
+ * @flags: bit flags to be set
+ **/
+static int txgbe_set_priv_flags(struct net_device *dev, u32 flags)
+{
+	struct txgbe_adapter *adapter = netdev_priv(dev);
+	u32 orig_flags, new_flags, changed_flags;
+	bool reset_needed = 0;
+	u32 i;
+	s32 status = 0;
+
+	orig_flags = adapter->eth_priv_flags;
+	new_flags = orig_flags;
+
+	for (i = 0; i < TXGBE_PRIV_FLAGS_STR_LEN; i++) {
+		const struct txgbe_priv_flags *priv_flags;
+
+		priv_flags = &txgbe_gstrings_priv_flags[i];
+
+		if (flags & BIT(i))
+			new_flags |= priv_flags->flag;
+		else
+			new_flags &= ~(priv_flags->flag);
+
+		/* If this is a read-only flag, it can't be changed */
+		if (priv_flags->read_only &&
+		    ((orig_flags ^ new_flags) & ~BIT(i)))
+			return -EOPNOTSUPP;
+	}
+
+	changed_flags = orig_flags ^ new_flags;
+
+	if (!changed_flags)
+		return 0;
+
+	if (changed_flags & TXGBE_ETH_PRIV_FLAG_LLDP)
+		reset_needed = 1;
+
+	if (changed_flags & TXGBE_ETH_PRIV_FLAG_LLDP)
+		status = txgbe_hic_write_lldp(&adapter->hw,
+					      (u32)(new_flags & TXGBE_ETH_PRIV_FLAG_LLDP));
+
+	if (!status)
+		adapter->eth_priv_flags = new_flags;
+
+	return status;
+}
+
 static const struct ethtool_ops txgbe_ethtool_ops = {
 	.supported_coalesce_params = ETHTOOL_COALESCE_RX_USECS,
 	.get_link_ksettings     = txgbe_get_link_ksettings,
@@ -3193,6 +3309,8 @@ static const struct ethtool_ops txgbe_ethtool_ops = {
 	.get_strings            = txgbe_get_strings,
 	.set_phys_id            = txgbe_set_phys_id,
 	.get_sset_count         = txgbe_get_sset_count,
+	.get_priv_flags         = txgbe_get_priv_flags,
+	.set_priv_flags         = txgbe_set_priv_flags,
 	.get_ethtool_stats      = txgbe_get_ethtool_stats,
 	.get_coalesce           = txgbe_get_coalesce,
 	.set_coalesce           = txgbe_set_coalesce,
