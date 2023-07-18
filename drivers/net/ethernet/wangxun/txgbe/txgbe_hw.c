@@ -2330,14 +2330,18 @@ u8 fmgr_cmd_op(struct txgbe_hw *hw, u32 cmd, u32 cmd_addr)
 	return 0;
 }
 
-u32 txgbe_flash_read_dword(struct txgbe_hw *hw, u32 addr)
+int txgbe_flash_read_dword(struct txgbe_hw *hw, u32 addr, u32 *data)
 {
-	u8 status = fmgr_cmd_op(hw, SPI_CMD_READ_DWORD, addr);
+	int ret = 0;
 
-	if (status)
-		return (u32)status;
+	ret = fmgr_cmd_op(hw, SPI_CMD_READ_DWORD, addr);
+	if (ret < 0)
+		return ret;
 
-	return rd32(hw, SPI_H_DAT_REG_ADDR);
+	*data = rd32(hw, SPI_H_DAT_REG_ADDR);
+
+	return ret;
+
 }
 
 /**
@@ -4474,21 +4478,14 @@ s32 txgbe_reset_hw(struct txgbe_hw *hw)
 			pci_wake_from_d3(adapter->pdev, false);
 		}
 	} else {
-		if (txgbe_mng_present(hw)) {
-			if (!(((hw->subsystem_device_id & TXGBE_NCSI_MASK) == TXGBE_NCSI_SUP) ||
-			      ((hw->subsystem_device_id & TXGBE_WOL_MASK) == TXGBE_WOL_SUP))) {
-				txgbe_reset_hostif(hw);
-			}
-		} else {
-			if (hw->bus.lan_id == 0)
-				reset = TXGBE_MIS_RST_LAN0_RST;
-			else
-				reset = TXGBE_MIS_RST_LAN1_RST;
+		if (hw->bus.lan_id == 0)
+			reset = TXGBE_MIS_RST_LAN0_RST;
+		else
+			reset = TXGBE_MIS_RST_LAN1_RST;
 
-			wr32(hw, TXGBE_MIS_RST,
-			     reset | rd32(hw, TXGBE_MIS_RST));
-			TXGBE_WRITE_FLUSH(hw);
-		}
+		wr32(hw, TXGBE_MIS_RST, reset | rd32(hw, TXGBE_MIS_RST));
+		TXGBE_WRITE_FLUSH(hw);
+
 		usec_delay(10);
 
 		if (hw->bus.lan_id == 0)
@@ -4535,9 +4532,6 @@ s32 txgbe_reset_hw(struct txgbe_hw *hw)
 
 	/*make sure phy power is up*/
 	msleep(100);
-
-	/* Store the permanent mac address */
-	TCALL(hw, mac.ops.get_mac_addr, hw->mac.perm_addr);
 
 	/* Store MAC address from RAR0, clear receive address registers, and
 	 * clear the multicast table.  Also reset num_rar_entries to 128,
@@ -5862,4 +5856,43 @@ s32 txgbe_check_mac_link(struct txgbe_hw *hw, u32 *speed,
 	}
 
 	return 0;
+}
+
+int txgbe_is_lldp(struct txgbe_hw *hw)
+{
+	u32 tmp = 0, lldp_flash_data = 0, i = 0;
+	struct txgbe_adapter *adapter = hw->back;
+	s32 status = 0;
+
+	for (; i < 0x1000 / sizeof(u32); i++) {
+		status = txgbe_flash_read_dword(hw, TXGBE_LLDP_REG + i * 4, &tmp);
+		if (status)
+			return status;
+		if (tmp == U32_MAX)
+			break;
+		lldp_flash_data = tmp;
+	}
+	if (lldp_flash_data & BIT(hw->bus.lan_id))
+		adapter->eth_priv_flags |= TXGBE_ETH_PRIV_FLAG_LLDP;
+	else
+		adapter->eth_priv_flags &= ~TXGBE_ETH_PRIV_FLAG_LLDP;
+
+	return 0;
+}
+
+s32 txgbe_hic_write_lldp(struct txgbe_hw *hw, u32 open)
+{
+	int status;
+	struct txgbe_adapter *adapter = hw->back;
+	struct pci_dev *pdev = adapter->pdev;
+	struct txgbe_hic_write_lldp buffer;
+
+	buffer.hdr.cmd = 0xf1 - open;
+	buffer.hdr.buf_len = 0x1;
+	buffer.hdr.cmd_or_resp.cmd_resv = FW_CEM_CMD_RESERVED;
+	buffer.hdr.checksum = FW_DEFAULT_CHECKSUM;
+	buffer.func = PCI_FUNC(pdev->devfn);
+	status = txgbe_host_interface_command(hw, (u32 *)&buffer,
+					      sizeof(buffer), 5000, false);
+	return status;
 }

@@ -2678,6 +2678,13 @@ struct txgbe_hw {
 	u16 oem_svid;
 };
 
+struct txgbe_hic_write_lldp {
+	struct txgbe_hic_hdr hdr;
+	u8 func;
+	u8 pad2;
+	u16 pad3;
+};
+
 #define TCALL(hw, func, args...) (((hw)->func) \
 		? (hw)->func((hw), ##args) : TXGBE_NOT_IMPLEMENTED)
 
@@ -2742,6 +2749,9 @@ struct txgbe_hw {
 #define TXGBE_DEAD_READ_REG64       0xdeadbeefdeadbeefULL
 #define TXGBE_FAILED_READ_REG       0xffffffffU
 #define TXGBE_FAILED_READ_REG64     0xffffffffffffffffULL
+
+#define TXGBE_LLDP_REG              0xf1000
+#define TXGBE_LLDP_ON               0x0000000f
 
 static inline bool TXGBE_REMOVED(void __iomem *addr)
 {
