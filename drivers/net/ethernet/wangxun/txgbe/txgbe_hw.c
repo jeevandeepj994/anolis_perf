@@ -5369,12 +5369,12 @@ s32 txgbe_close_notify(struct txgbe_hw *hw)
 
 	status = txgbe_host_interface_command(hw, (u32 *)&buffer,
 					      sizeof(buffer),
-					      TXGBE_HI_COMMAND_TIMEOUT, false);
+					      TXGBE_HI_COMMAND_NOTIFY_TIMEOUT, false);
 	if (status)
 		return status;
 
 	if (txgbe_check_mng_access(hw)) {
-		tmp = (u32)rd32(hw, TXGBE_MNG_SW_SM);
+		tmp = (u32)rd32a(hw, TXGBE_MNG_MBOX, 1);
 		if (tmp == TXGBE_CHECKSUM_CAP_ST_PASS)
 			status = 0;
 		else
@@ -5404,16 +5404,17 @@ s32 txgbe_open_notify(struct txgbe_hw *hw)
 
 	status = txgbe_host_interface_command(hw, (u32 *)&buffer,
 					      sizeof(buffer),
-					      TXGBE_HI_COMMAND_TIMEOUT, false);
+					      TXGBE_HI_COMMAND_NOTIFY_TIMEOUT, false);
 	if (status)
 		return status;
 
 	if (txgbe_check_mng_access(hw)) {
-		tmp = (u32)rd32(hw, TXGBE_MNG_SW_SM);
+		tmp = (u32)rd32a(hw, TXGBE_MNG_MBOX, 1);
 		if (tmp == TXGBE_CHECKSUM_CAP_ST_PASS)
 			status = 0;
 		else
 			status = TXGBE_ERR_EEPROM_CHECKSUM;
+
 	} else {
 		status = TXGBE_ERR_MNG_ACCESS_FAILED;
 		return status;
