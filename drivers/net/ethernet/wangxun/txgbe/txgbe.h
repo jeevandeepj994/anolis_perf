@@ -24,6 +24,7 @@
 
 /* Ether Types */
 #define TXGBE_ETH_P_CNM                         0x22E7
+#define TXGBE_ETH_P_LLDP                        0x88CC
 
 /* TX/RX descriptor defines */
 #define TXGBE_DEFAULT_TXD               512
@@ -225,13 +226,22 @@ struct txgbe_ring {
 
 enum txgbe_ring_f_enum {
 	RING_F_NONE = 0,
+	RING_F_VMDQ,  /* SR-IOV uses the same ring feature */
 	RING_F_RSS,
 	RING_F_FDIR,
+#if IS_ENABLED(CONFIG_FCOE)
+	RING_F_FCOE,
+#endif /* CONFIG_FCOE */
 	RING_F_ARRAY_SIZE  /* must be last in enum set */
 };
 
 #define TXGBE_MAX_RSS_INDICES           63
 #define TXGBE_MAX_FDIR_INDICES          63
+#define TXGBE_MAX_VMDQ_INDICES          64
+
+#define TXGBE_VMDQ_8Q_MASK 0x78
+#define TXGBE_VMDQ_4Q_MASK 0x7C
+#define TXGBE_VMDQ_2Q_MASK 0x7E
 
 #define TXGBE_MAX_RX_QUEUES   (TXGBE_MAX_FDIR_INDICES + 1)
 #define TXGBE_MAX_TX_QUEUES   (TXGBE_MAX_FDIR_INDICES + 1)
@@ -351,6 +361,7 @@ static inline u16 txgbe_desc_unused(struct txgbe_ring *ring)
 	(&(((struct txgbe_tx_context_desc *)((R)->desc))[i]))
 
 #define TXGBE_MAX_JUMBO_FRAME_SIZE      9432 /* max payload 9414 */
+#define TXGBE_FCOE_JUMBO_FRAME_SIZE     3072
 
 #define TCP_TIMER_VECTOR        0
 #define OTHER_VECTOR    1
@@ -381,32 +392,78 @@ struct txgbe_mac_addr {
 /**
  * txgbe_adapter.flag
  **/
-#define TXGBE_FLAG_NEED_LINK_UPDATE             BIT(0)
-#define TXGBE_FLAG_NEED_LINK_CONFIG             BIT(1)
-#define TXGBE_FLAG_MSI_ENABLED                  BIT(2)
+#define TXGBE_FLAG_MSI_CAPABLE                  BIT(0)
+#define TXGBE_FLAG_MSI_ENABLED                  BIT(1)
+#define TXGBE_FLAG_MSIX_CAPABLE                 BIT(2)
 #define TXGBE_FLAG_MSIX_ENABLED                 BIT(3)
-#define TXGBE_FLAG_VXLAN_OFFLOAD_CAPABLE        BIT(4)
-#define TXGBE_FLAG_VXLAN_OFFLOAD_ENABLE         BIT(5)
-#define TXGBE_FLAG_FDIR_HASH_CAPABLE            BIT(6)
-#define TXGBE_FLAG_FDIR_PERFECT_CAPABLE         BIT(7)
-#define TXGBE_FLAG_RX_HWTSTAMP_ENABLED          BIT(8)
-#define TXGBE_FLAG_RX_HWTSTAMP_IN_REGISTER      BIT(9)
+#ifndef TXGBE_NO_LLI
+#define TXGBE_FLAG_LLI_PUSH                     BIT(4)
+#endif
+
+#define TXGBE_FLAG_TPH_ENABLED                  BIT(6)
+#define TXGBE_FLAG_TPH_CAPABLE                  BIT(7)
+#define TXGBE_FLAG_TPH_ENABLED_DATA             BIT(8)
+
+#define TXGBE_FLAG_MQ_CAPABLE                   BIT(9)
+#define TXGBE_FLAG_DCB_ENABLED                  BIT(10)
+#define TXGBE_FLAG_VMDQ_ENABLED                 BIT(11)
+#define TXGBE_FLAG_FAN_FAIL_CAPABLE             BIT(12)
+#define TXGBE_FLAG_NEED_LINK_UPDATE             BIT(13)
+#define TXGBE_FLAG_NEED_LINK_CONFIG             BIT(14)
+#define TXGBE_FLAG_FDIR_HASH_CAPABLE            BIT(15)
+#define TXGBE_FLAG_FDIR_PERFECT_CAPABLE         BIT(16)
+
+#define TXGBE_FLAG_SRIOV_CAPABLE                BIT(19)
+#define TXGBE_FLAG_SRIOV_ENABLED                BIT(20)
+#define TXGBE_FLAG_SRIOV_REPLICATION_ENABLE     BIT(21)
+#define TXGBE_FLAG_SRIOV_L2SWITCH_ENABLE        BIT(22)
+#define TXGBE_FLAG_SRIOV_VEPA_BRIDGE_MODE       BIT(23)
+#define TXGBE_FLAG_RX_HWTSTAMP_ENABLED          BIT(24)
+#define TXGBE_FLAG_VXLAN_OFFLOAD_CAPABLE        BIT(25)
+#define TXGBE_FLAG_VXLAN_OFFLOAD_ENABLE         BIT(26)
+#define TXGBE_FLAG_RX_HWTSTAMP_IN_REGISTER      BIT(27)
+#define TXGBE_FLAG_NEED_ETH_PHY_RESET           BIT(28)
+#define TXGBE_FLAG_RX_HS_ENABLED                BIT(30)
+#define TXGBE_FLAG_LINKSEC_ENABLED              BIT(31)
+#define TXGBE_FLAG_IPSEC_ENABLED                BIT(5)
 
 /**
  * txgbe_adapter.flag2
  **/
-#define TXGBE_FLAG2_MNG_REG_ACCESS_DISABLED     BIT(0)
-#define TXGBE_FLAG2_SFP_NEEDS_RESET             BIT(1)
-#define TXGBE_FLAG2_TEMP_SENSOR_EVENT           BIT(2)
-#define TXGBE_FLAG2_PF_RESET_REQUESTED          BIT(3)
-#define TXGBE_FLAG2_RESET_INTR_RECEIVED         BIT(4)
-#define TXGBE_FLAG2_GLOBAL_RESET_REQUESTED      BIT(5)
-#define TXGBE_FLAG2_RSC_CAPABLE                 BIT(6)
-#define TXGBE_FLAG2_RSC_ENABLED                 BIT(7)
-#define TXGBE_FLAG2_RSS_FIELD_IPV4_UDP          BIT(8)
-#define TXGBE_FLAG2_RSS_FIELD_IPV6_UDP          BIT(9)
-#define TXGBE_FLAG2_RSS_ENABLED                 BIT(10)
-#define TXGBE_FLAG2_FDIR_REQUIRES_REINIT        BIT(11)
+#define TXGBE_FLAG2_RSC_CAPABLE                 BIT(0)
+#define TXGBE_FLAG2_RSC_ENABLED                 BIT(1)
+#define TXGBE_FLAG2_TEMP_SENSOR_CAPABLE         BIT(3)
+#define TXGBE_FLAG2_TEMP_SENSOR_EVENT           BIT(4)
+#define TXGBE_FLAG2_SEARCH_FOR_SFP              BIT(5)
+#define TXGBE_FLAG2_SFP_NEEDS_RESET             BIT(6)
+#define TXGBE_FLAG2_PF_RESET_REQUESTED          BIT(7)
+#define TXGBE_FLAG2_FDIR_REQUIRES_REINIT        BIT(8)
+#define TXGBE_FLAG2_RSS_FIELD_IPV4_UDP          BIT(9)
+#define TXGBE_FLAG2_RSS_FIELD_IPV6_UDP          BIT(10)
+#define TXGBE_FLAG2_RSS_ENABLED                 BIT(12)
+#define TXGBE_FLAG2_PTP_PPS_ENABLED             BIT(11)
+#define TXGBE_FLAG2_EEE_CAPABLE                 BIT(14)
+#define TXGBE_FLAG2_EEE_ENABLED                 BIT(15)
+#define TXGBE_FLAG2_VXLAN_REREG_NEEDED          BIT(16)
+#define TXGBE_FLAG2_DEV_RESET_REQUESTED         BIT(18)
+#define TXGBE_FLAG2_RESET_INTR_RECEIVED         BIT(19)
+#define TXGBE_FLAG2_GLOBAL_RESET_REQUESTED      BIT(20)
+#define TXGBE_FLAG2_CLOUD_SWITCH_ENABLED        BIT(21)
+#define TXGBE_FLAG2_MNG_REG_ACCESS_DISABLED     BIT(22)
+#define KR                                      BIT(23)
+#define TXGBE_FLAG2_KR_TRAINING                 BIT(24)
+#define TXGBE_FLAG2_KR_AUTO                     BIT(25)
+#define TXGBE_FLAG2_LINK_DOWN                   BIT(26)
+#define TXGBE_FLAG2_KR_PRO_DOWN                 BIT(27)
+#define TXGBE_FLAG2_KR_PRO_REINIT               BIT(28)
+#define TXGBE_FLAG2_ECC_ERR_RESET               BIT(29)
+#define TXGBE_FLAG2_PCIE_NEED_RECOVER           BIT(31)
+
+/* preset defaults */
+#define TXGBE_FLAGS_SP_INIT (TXGBE_FLAG_MSI_CAPABLE \
+			   | TXGBE_FLAG_MSIX_CAPABLE \
+			   | TXGBE_FLAG_MQ_CAPABLE \
+			   | TXGBE_FLAG_SRIOV_CAPABLE)
 
 #define TXGBE_SET_FLAG(_input, _flag, _result) \
 	((_flag <= _result) ? \
@@ -419,6 +476,45 @@ enum txgbe_isb_idx {
 	TXGBE_ISB_VEC0,
 	TXGBE_ISB_VEC1,
 	TXGBE_ISB_MAX
+};
+
+#define TXGBE_MAX_VF_MC_ENTRIES         30
+#define TXGBE_MAX_VF_FUNCTIONS          64
+
+struct vf_data_storage {
+	struct pci_dev *vfdev;
+	u8 __iomem *b4_addr;
+	u32 b4_buf[16];
+	unsigned char vf_mac_addresses[ETH_ALEN];
+	u16 vf_mc_hashes[TXGBE_MAX_VF_MC_ENTRIES];
+	u16 num_vf_mc_hashes;
+	u16 default_vf_vlan_id;
+	u16 vlans_enabled;
+	bool clear_to_send;
+	bool pf_set_mac;
+	u16 pf_vlan; /* When set, guest VLAN config not allowed. */
+	u16 pf_qos;
+	u16 min_tx_rate;
+	u16 max_tx_rate;
+	u16 vlan_count;
+	u8 spoofchk_enabled;
+	int link_enable;
+	int link_state;
+
+#ifdef HAVE_NDO_SET_VF_RSS_QUERY_EN
+	bool rss_query_enabled;
+#endif
+	u8 trusted;
+	int xcast_mode;
+	unsigned int vf_api;
+};
+
+struct vf_macvlans {
+	struct list_head l;
+	int vf;
+	bool free;
+	bool is_macvlan;
+	u8 vf_macvlan[ETH_ALEN];
 };
 
 /* board specific private data structure */
@@ -448,6 +544,8 @@ struct txgbe_adapter {
 	int num_rx_queues;
 	u16 rx_itr_setting;
 	u16 rx_work_limit;
+	int num_rx_pools; /* does not include pools assigned to VFs */
+	int num_rx_queues_per_pool;
 
 	/* TX */
 	struct txgbe_ring *tx_ring[TXGBE_MAX_TX_QUEUES] ____cacheline_aligned_in_smp;
@@ -547,7 +645,27 @@ struct txgbe_adapter {
 	dma_addr_t isb_dma;
 	u32 *isb_mem;
 	u32 isb_tag[TXGBE_ISB_MAX];
+
+	unsigned int num_vfs;
+	struct vf_data_storage *vfinfo;
+	struct vf_macvlans vf_mvs;
+	struct vf_macvlans *mv_list;
+	u8  vf_mode;
+#ifdef CONFIG_PCI_IOV
+	u32 timer_event_accumulator;
+	u32 vferr_refcount;
+#endif
+	unsigned int num_vmdqs; /* does not include pools assigned to VFs */
+	unsigned int queues_per_pool;
+	u8 default_up;
 };
+
+/* must account for pools assigned to VFs. */
+#ifdef CONFIG_PCI_IOV
+#define VMDQ_P(p)       ((p) + adapter->ring_feature[RING_F_VMDQ].offset)
+#else
+#define VMDQ_P(p)       (p)
+#endif
 
 static inline u32 txgbe_misc_isb(struct txgbe_adapter *adapter,
 				 enum txgbe_isb_idx idx)
@@ -687,6 +805,15 @@ void txgbe_set_rx_drop_en(struct txgbe_adapter *adapter);
 
 void txgbe_store_reta(struct txgbe_adapter *adapter);
 
+void txgbe_set_vlan_anti_spoofing(struct txgbe_hw *hw, bool enable, int vf);
+void txgbe_set_ethertype_anti_spoofing(struct txgbe_hw *hw,
+				       bool enable, int vf);
+
+#ifdef CONFIG_PCI_IOV
+void txgbe_sriov_reinit(struct txgbe_adapter *adapter);
+#endif
+
+void txgbe_full_sync_mac_table(struct txgbe_adapter *adapter);
 /**
  * interrupt masking operations. each bit in PX_ICn correspond to a interrupt.
  * disable a interrupt by writing to PX_IMS with the corresponding bit=1
@@ -762,6 +889,11 @@ __maybe_unused static struct txgbe_msg *txgbe_hw_to_msg(const struct txgbe_hw *h
 	return (struct txgbe_msg *)&adapter->msg_enable;
 }
 
+static inline struct device *pci_dev_to_dev(struct pci_dev *pdev)
+{
+	return &pdev->dev;
+}
+
 #define txgbe_dbg(hw, fmt, arg...) \
 	netdev_dbg(txgbe_hw_to_netdev(hw), fmt, ##arg)
 
@@ -805,5 +937,26 @@ enum {
 #define ERROR_REPORT1 ERROR_REPORT
 #define ERROR_REPORT2 ERROR_REPORT
 #define ERROR_REPORT3 ERROR_REPORT
+
+#define hw_dbg(hw, format, arg...) \
+	netdev_dbg(ngbe_hw_to_netdev(hw), format, ## arg)
+#define e_dev_info(format, arg...) \
+	dev_info(pci_dev_to_dev(adapter->pdev), format, ## arg)
+#define e_dev_warn(format, arg...) \
+	dev_warn(pci_dev_to_dev(adapter->pdev), format, ## arg)
+#define e_dev_err(format, arg...) \
+	dev_err(pci_dev_to_dev(adapter->pdev), format, ## arg)
+#define e_dev_notice(format, arg...) \
+	dev_notice(pci_dev_to_dev(adapter->pdev), format, ## arg)
+#define e_dbg(msglvl, format, arg...) \
+	netif_dbg(adapter, msglvl, adapter->netdev, format, ## arg)
+#define e_info(msglvl, format, arg...) \
+	netif_info(adapter, msglvl, adapter->netdev, format, ## arg)
+#define e_err(msglvl, format, arg...) \
+	netif_err(adapter, msglvl, adapter->netdev, format, ## arg)
+#define e_warn(msglvl, format, arg...) \
+	netif_warn(adapter, msglvl, adapter->netdev, format, ## arg)
+#define e_crit(msglvl, format, arg...) \
+	netif_crit(adapter, msglvl, adapter->netdev, format, ## arg)
 
 #endif /* _TXGBE_H_ */
