@@ -224,6 +224,9 @@ s32 txgbe_set_link_to_kx(struct txgbe_hw *hw,
 			 bool autoneg);
 
 u8 fmgr_cmd_op(struct txgbe_hw *hw, u32 cmd, u32 cmd_addr);
-u32 txgbe_flash_read_dword(struct txgbe_hw *hw, u32 addr);
+int txgbe_flash_read_dword(struct txgbe_hw *hw, u32 addr, u32 *data);
+
+int txgbe_is_lldp(struct txgbe_hw *hw);
+s32 txgbe_hic_write_lldp(struct txgbe_hw *hw, u32 open);
 
 #endif /* _TXGBE_HW_H_ */
