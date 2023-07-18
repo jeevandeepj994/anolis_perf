@@ -2543,6 +2543,8 @@ struct txgbe_mac_operations {
 	s32 (*init_thermal_sensor_thresh)(struct txgbe_hw *hw);
 	s32 (*disable_rx)(struct txgbe_hw *hw);
 	s32 (*enable_rx)(struct txgbe_hw *hw);
+	s32 (*disable_sec_tx_path)(struct txgbe_hw *hw);
+	s32 (*enable_sec_tx_path)(struct txgbe_hw *hw);
 };
 
 struct txgbe_phy_operations {
