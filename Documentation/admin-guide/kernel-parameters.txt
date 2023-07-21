@@ -1008,6 +1008,10 @@
 			List of driver names to be probed asynchronously.
 			Format: <driver_name1>,<driver_name2>...
 
+	driver_force_sync_probe= [KNL]
+			Force to load diveces synchronously to ensure the
+			sequence of device. Note: Only used in RAMOS!
+
 	drm.edid_firmware=[<connector>:]<file>[,[<connector>:]<file>]
 			Broken monitors, graphic adapters, KVMs and EDIDless
 			panels may send no or incorrect EDID data sets.
