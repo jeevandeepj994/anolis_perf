@@ -3130,7 +3130,6 @@ again:
 	 */
 	if (!cgroup_reclaim(sc)) {
 		unsigned long total_high_wmark = 0;
-		unsigned long total_min_wmark = 0;
 		unsigned long free, anon;
 		unsigned long min_cache_kbytes;
 		int z;
@@ -3145,7 +3144,6 @@ again:
 				continue;
 
 			total_high_wmark += high_wmark_pages(zone);
-			total_min_wmark += min_wmark_pages(zone);
 		}
 
 		/*
@@ -3166,10 +3164,8 @@ again:
 		 * given watermark.
 		 */
 		min_cache_kbytes = READ_ONCE(sysctl_min_cache_kbytes);
-		if (min_cache_kbytes) {
-			sc->file_is_reserved = (sc->may_deactivate & DEACTIVATE_FILE) &&
-					file <= min(total_min_wmark, pgdat->min_cache_pages);
-		}
+		if (min_cache_kbytes)
+			sc->file_is_reserved = file <= pgdat->min_cache_pages;
 	}
 
 	shrink_node_memcgs(pgdat, sc);
