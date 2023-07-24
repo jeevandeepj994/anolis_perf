@@ -290,7 +290,7 @@ s32 ngbe_check_mdi_phy_id(struct ngbe_hw *hw)
 	}
 
 	if (hw->phy.type == ngbe_phy_m88e1512_unknown) {
-		phy_mode = ngbe_flash_read_dword(hw, 0xff010);
+		ngbe_flash_read_dword(hw, 0xff010, &phy_mode);
 		switch (hw->bus.lan_id) {
 		case 0:
 			value = (u8)phy_mode;
@@ -431,8 +431,8 @@ s32 ngbe_phy_init(struct ngbe_hw *hw)
 	if (hw->phy.type == ngbe_phy_internal || hw->phy.type == ngbe_phy_internal_yt8521s_sfi) {
 		value = NGBE_INTPHY_INT_LSC | NGBE_INTPHY_INT_ANC;
 		ret_val = TCALL(hw, phy.ops.write_reg, 0x12, 0xa42, value);
-		adapter->gphy_efuse[0] = ngbe_flash_read_dword(hw, 0xfe010 + lan_id * 8);
-		adapter->gphy_efuse[1] = ngbe_flash_read_dword(hw, 0xfe010 + lan_id * 8 + 4);
+		ngbe_flash_read_dword(hw, 0xfe010 + lan_id * 8, &adapter->gphy_efuse[0]);
+		ngbe_flash_read_dword(hw, 0xfe010 + lan_id * 8 + 4, &adapter->gphy_efuse[1]);
 	} else if (hw->phy.type == ngbe_phy_m88e1512 ||
 				hw->phy.type == ngbe_phy_m88e1512_sfi) {
 		TCALL(hw, phy.ops.write_reg_mdi, 22, 0, 2);

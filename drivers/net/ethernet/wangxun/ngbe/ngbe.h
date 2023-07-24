@@ -643,6 +643,8 @@ struct ngbe_adapter {
 #ifdef CONFIG_HWMON
 	struct hwmon_buff ngbe_hwmon_buff;
 #endif /* CONFIG_HWMON */
+	u64 eth_priv_flags;
+#define NGBE_ETH_PRIV_FLAG_LLDP		BIT(0)
 };
 
 struct ngbe_cb {
