@@ -126,7 +126,8 @@ s32 ngbe_get_copper_link_capabilities(struct ngbe_hw *hw,
 		ngbe_phy_read_reg_ext_yt(hw, 0xA001, 0, &value);
 		spin_unlock_irqrestore(&hw->phy_lock, flags);
 		if ((value & 7) == 1) {
-			*speed = NGBE_LINK_SPEED_1GB_FULL;
+			*speed = NGBE_LINK_SPEED_1GB_FULL |
+				 NGBE_LINK_SPEED_100_FULL;
 			hw->phy.link_mode = NGBE_PHYSICAL_LAYER_1000BASE_T;
 		}
 	}
@@ -1858,14 +1859,19 @@ s32 ngbe_check_mac_link_yt(struct ngbe_hw *hw, u32 *speed, bool *link_up, bool w
 
 	speed_sta = value & 0xC000;
 	if (*link_up) {
-		if (speed_sta == 0x8000)
+		if (speed_sta == 0x8000) {
 			*speed = NGBE_LINK_SPEED_1GB_FULL;
-		else if (speed_sta == 0x4000)
+			wr32m(hw, NGBE_CFG_LED_CTL, 0xE | BIT(17), BIT(1) | BIT(17));
+		} else if (speed_sta == 0x4000) {
 			*speed = NGBE_LINK_SPEED_100_FULL;
-		else if (speed_sta == 0x0000)
+			wr32m(hw, NGBE_CFG_LED_CTL, 0xE | BIT(17), BIT(2) | BIT(17));
+		} else if (speed_sta == 0x0000) {
 			*speed = NGBE_LINK_SPEED_10_FULL;
+			wr32m(hw, NGBE_CFG_LED_CTL, 0xE | BIT(17), BIT(3) | BIT(17));
+		}
 	} else {
 		*speed = NGBE_LINK_SPEED_UNKNOWN;
+		wr32m(hw, NGBE_CFG_LED_CTL, 0xE | BIT(17), 0);
 	}
 
 	return status;
