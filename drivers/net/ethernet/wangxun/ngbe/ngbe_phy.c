@@ -490,17 +490,19 @@ s32 ngbe_phy_init(struct ngbe_hw *hw)
 		value |= NGBE_M88E1512_POWER;
 		TCALL(hw, phy.ops.write_reg_mdi, 0, 0, value);
 	} else if (hw->phy.type == ngbe_phy_yt8521s_sfi) {
-		/* power down in Fiber mode */
-		spin_lock_irqsave(&hw->phy_lock, flags);
-		ngbe_phy_read_reg_sds_mii_yt(hw, 0x0, 0, &value);
-		value |= NGBE_YT_PHY_POWER;
-		ngbe_phy_write_reg_sds_mii_yt(hw, 0x0, 0, value);
+		if (!((hw->subsystem_device_id & NGBE_NCSI_MASK) == NGBE_NCSI_SUP)) {
+			/* power down in Fiber mode */
+			spin_lock_irqsave(&hw->phy_lock, flags);
+			ngbe_phy_read_reg_sds_mii_yt(hw, 0x0, 0, &value);
+			value |= NGBE_YT_PHY_POWER;
+			ngbe_phy_write_reg_sds_mii_yt(hw, 0x0, 0, value);
 
-		/* power down in UTP mode */
-		ngbe_phy_read_reg_mdi(hw, 0x0, 0, &value);
-		value |= NGBE_YT_PHY_POWER;
-		ngbe_phy_write_reg_mdi(hw, 0x0, 0, value);
-		spin_unlock_irqrestore(&hw->phy_lock, flags);
+			/* power down in UTP mode */
+			ngbe_phy_read_reg_mdi(hw, 0x0, 0, &value);
+			value |= NGBE_YT_PHY_POWER;
+			ngbe_phy_write_reg_mdi(hw, 0x0, 0, value);
+			spin_unlock_irqrestore(&hw->phy_lock, flags);
+		}
 	}
 
 	return ret_val;
@@ -612,6 +614,9 @@ s32 ngbe_phy_reset_yt(struct ngbe_hw *hw)
 
 	if (hw->phy.type != ngbe_phy_yt8521s_sfi)
 		return NGBE_ERR_PHY_TYPE;
+
+	if ((hw->subsystem_device_id & NGBE_NCSI_MASK) == NGBE_NCSI_SUP)
+		return status;
 
 	/* Don't reset PHY if it's shut down due to overtemp. */
 	if (!hw->phy.reset_if_overtemp &&
@@ -877,6 +882,9 @@ u32 ngbe_phy_setup_link_yt(struct ngbe_hw *hw,
 	u16 value_r9 = 0;
 	unsigned long flags;
 
+	if ((hw->subsystem_device_id & NGBE_NCSI_MASK) == NGBE_NCSI_SUP)
+		return ret_val;
+
 	hw->phy.autoneg_advertised = 0;
 
 	/* check chip_mode first */
@@ -963,30 +971,62 @@ skip_an:
 		ngbe_phy_write_reg_mdi(hw, 0x0, 0, value);
 		spin_unlock_irqrestore(&hw->phy_lock, flags);
 	} else if ((value & 7) == 1) {/* fiber_to_rgmii */
-		hw->phy.autoneg_advertised |= NGBE_LINK_SPEED_1GB_FULL;
+		if (!hw->mac.autoneg) {
+			switch (speed) {
+			case NGBE_LINK_SPEED_1GB_FULL:
+				value = NGBE_LINK_SPEED_1GB_FULL;
+				break;
+			case NGBE_LINK_SPEED_100_FULL:
+				value = NGBE_LINK_SPEED_100_FULL;
+				break;
+			default:
+				value = NGBE_LINK_SPEED_1GB_FULL;
+				break;
+			}
+			hw->phy.autoneg_advertised |= value;
+			goto skip_an_fiber;
+		}
+
+		value = 0;
+		if (speed & NGBE_LINK_SPEED_1GB_FULL)
+			hw->phy.autoneg_advertised |= NGBE_LINK_SPEED_1GB_FULL;
+		if (speed & NGBE_LINK_SPEED_100_FULL)
+			hw->phy.autoneg_advertised |= NGBE_LINK_SPEED_100_FULL;
+skip_an_fiber:
+		spin_lock_irqsave(&hw->phy_lock, flags);
+		ngbe_phy_read_reg_ext_yt(hw, 0xA006, 0, &value);
+		if (hw->phy.autoneg_advertised & NGBE_LINK_SPEED_1GB_FULL)
+			value |= 0x1;
+		else if (hw->phy.autoneg_advertised & NGBE_LINK_SPEED_100_FULL)
+			value &= ~0x1;
+		ngbe_phy_write_reg_ext_yt(hw, 0xA006, 0, value);
+
+		/* close auto sensing */
+		ngbe_phy_read_reg_sds_ext_yt(hw, 0xA5, 0, &value);
+		value &= ~0x8000;
+		ngbe_phy_write_reg_sds_ext_yt(hw, 0xA5, 0, value);
+
+		ngbe_phy_read_reg_ext_yt(hw, 0xA001, 0, &value);
+		value &= ~0x8000;
+		ngbe_phy_write_reg_ext_yt(hw, 0xA001, 0, value);
+		spin_unlock_irqrestore(&hw->phy_lock, flags);
 
 		/* RGMII_Config1 : Config rx and tx training delay */
 		spin_lock_irqsave(&hw->phy_lock, flags);
 		ngbe_phy_write_reg_ext_yt(hw, 0xA003, 0, 0x3cf1);
 		ngbe_phy_write_reg_ext_yt(hw, 0xA001, 0, 0x8041);
 
-		ngbe_phy_read_reg_sds_ext_yt(hw, 0xA5, 0, &value);
-		value &= ~0x8000;
-		ngbe_phy_write_reg_sds_ext_yt(hw, 0xA5, 0, value);
-
-		ngbe_phy_read_reg_ext_yt(hw, 0xA006, 0, &value);
-		value |= 0x1;
-		ngbe_phy_write_reg_ext_yt(hw, 0xA006, 0, value);
-
-		ngbe_phy_read_reg_ext_yt(hw, 0xA001, 0, &value);
-		value &= ~0x8000;
-		ngbe_phy_write_reg_ext_yt(hw, 0xA001, 0, value);
-
 		/* software reset */
-		if (hw->mac.autoneg)
+		if (hw->mac.autoneg) {
 			ngbe_phy_write_reg_sds_mii_yt(hw, 0x0, 0, 0x9340);
-		else
-			ngbe_phy_write_reg_sds_mii_yt(hw, 0x0, 0, 0x8140);
+		} else {
+			value = 0x8100;
+			if (speed & NGBE_LINK_SPEED_1GB_FULL)
+				value |= 0x40;
+			if (speed & NGBE_LINK_SPEED_100_FULL)
+				value |= 0x2000;
+			ngbe_phy_write_reg_sds_mii_yt(hw, 0x0, 0, value);
+		}
 		spin_unlock_irqrestore(&hw->phy_lock, flags);
 	} else if ((value & 7) == 2) {
 		/* power on in UTP mode */
