@@ -5529,7 +5529,7 @@ void ngbe_update_stats(struct ngbe_adapter *adapter)
 	net_stats->rx_length_errors = hwstats->rlec;
 	net_stats->rx_crc_errors = hwstats->crcerrs;
 	total_mpc = rd32(hw, NGBE_RDB_MPCNT);
-	net_stats->rx_missed_errors = total_mpc;
+	net_stats->rx_missed_errors += total_mpc;
 }
 
 static bool ngbe_ring_tx_pending(struct ngbe_adapter *adapter)
