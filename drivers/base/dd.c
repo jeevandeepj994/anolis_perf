@@ -62,6 +62,10 @@ static bool initcalls_done;
 #define ASYNC_DRV_NAMES_MAX_LEN	256
 static char async_probe_drv_names[ASYNC_DRV_NAMES_MAX_LEN];
 
+/* Save the sync probe drivers' name from kernel cmdline */
+#define SYNC_DRV_NAMES_MAX_LEN	256
+static char sync_probe_drv_names[SYNC_DRV_NAMES_MAX_LEN];
+
 /*
  * In some cases, like suspend to RAM or hibernation, It might be reasonable
  * to prohibit probing of devices as it could be unsafe.
@@ -783,6 +787,11 @@ static inline bool cmdline_requested_async_probing(const char *drv_name)
 	return parse_option_str(async_probe_drv_names, drv_name);
 }
 
+static inline bool cmdline_requested_force_sync_probing(const char *drv_name)
+{
+	return parse_option_str(sync_probe_drv_names, drv_name);
+}
+
 /* The option format is "driver_async_probe=drv_name1,drv_name2,..." */
 static int __init save_async_options(char *buf)
 {
@@ -794,8 +803,21 @@ static int __init save_async_options(char *buf)
 }
 __setup("driver_async_probe=", save_async_options);
 
+/* The option format is "driver_force_sync_probe=drv_name1,drv_name2,..." */
+static int __init save_force_sync_options(char *buf)
+{
+	if (strlen(buf) >= SYNC_DRV_NAMES_MAX_LEN)
+		pr_warn("Too long list of driver names for 'driver_sync_probe'!\n");
+
+	strlcpy(sync_probe_drv_names, buf, SYNC_DRV_NAMES_MAX_LEN);
+	return 1;
+}
+__setup("driver_force_sync_probe=", save_force_sync_options);
+
 bool driver_allows_async_probing(struct device_driver *drv)
 {
+	if (cmdline_requested_force_sync_probing(drv->name))
+		return false;
 	switch (drv->probe_type) {
 	case PROBE_PREFER_ASYNCHRONOUS:
 		return true;
