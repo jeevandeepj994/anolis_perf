@@ -62,6 +62,9 @@ static int dw_reg_read(void *context, unsigned int reg, unsigned int *val)
 {
 	struct dw_i2c_dev *dev = context;
 
+	if ((dev->flags & MODEL_MASK) == MODEL_SUNWAY)
+		reg = reg << 7;
+
 	*val = readl_relaxed(dev->base + reg);
 
 	return 0;
@@ -70,6 +73,9 @@ static int dw_reg_read(void *context, unsigned int reg, unsigned int *val)
 static int dw_reg_write(void *context, unsigned int reg, unsigned int val)
 {
 	struct dw_i2c_dev *dev = context;
+
+	if ((dev->flags & MODEL_MASK) == MODEL_SUNWAY)
+		reg = reg << 7;
 
 	writel_relaxed(val, dev->base + reg);
 
@@ -148,6 +154,8 @@ int i2c_dw_init_regmap(struct dw_i2c_dev *dev)
 		return ret;
 
 	reg = readl(dev->base + DW_IC_COMP_TYPE);
+	if ((dev->flags & MODEL_MASK) == MODEL_SUNWAY)
+		reg = readl(dev->base + (DW_IC_COMP_TYPE << 7));
 	i2c_dw_release_lock(dev);
 
 	if (reg == swab32(DW_IC_COMP_TYPE_VALUE)) {
