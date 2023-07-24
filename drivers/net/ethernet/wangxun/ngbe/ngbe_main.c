@@ -5765,6 +5765,7 @@ static int ngbe_probe(struct pci_dev *pdev,
 	u32 devcap = 0;
 	netdev_features_t hw_features;
 	struct ngbe_ring_feature *feature;
+	u16 pvalue = 0;
 
 	err = pci_enable_device_mem(pdev);
 	if (err)
@@ -6068,6 +6069,10 @@ static int ngbe_probe(struct pci_dev *pdev,
 no_info_string:
 	e_info(probe, "WangXun(R) Gigabit Network Connection\n");
 	cards_found++;
+
+	pcie_capability_read_word(pdev, PCI_EXP_DEVCTL2, &pvalue);
+	pvalue = pvalue | 0x10;
+	pcie_capability_write_word(pdev, PCI_EXP_DEVCTL2, pvalue);
 
 	return 0;
 err_register:
