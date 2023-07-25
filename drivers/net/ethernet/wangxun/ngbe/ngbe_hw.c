@@ -77,7 +77,7 @@ static s32 ngbe_setup_copper_link(struct ngbe_hw *hw,
 	struct ngbe_adapter *adapter = hw->back;
 
 	/* Setup the PHY according to input speed */
-	if (!((hw->subsystem_device_id & NGBE_OEM_MASK) == NGBE_SUBID_RGMII_FPGA))
+	if (!((hw->subsystem_device_id & NGBE_OEM_MASK) == RGMII_FPGA))
 		status = TCALL(hw, phy.ops.setup_link, speed, need_restart_AN);
 
 	adapter->flags |= NGBE_FLAG_NEED_ANC_CHECK;
@@ -112,7 +112,7 @@ s32 ngbe_get_copper_link_capabilities(struct ngbe_hw *hw,
 		  NGBE_LINK_SPEED_1GB_FULL;
 	}
 
-	if ((hw->subsystem_device_id & NGBE_OEM_MASK) == NGBE_SUBID_RGMII_FPGA) {
+	if ((hw->subsystem_device_id & NGBE_OEM_MASK) == RGMII_FPGA) {
 		*speed = NGBE_LINK_SPEED_1GB_FULL;
 		hw->phy.link_mode = NGBE_PHYSICAL_LAYER_1000BASE_T;
 		*autoneg = false;
@@ -272,16 +272,6 @@ s32 ngbe_reset_hw(struct ngbe_hw *hw)
 	u32 reset = 0;
 	u32 i;
 	struct ngbe_mac_info *mac = &hw->mac;
-	u32 sr_pcs_ctl = 0;
-	u32 sr_pma_mmd_ctl1 = 0;
-	u32 sr_an_mmd_ctl = 0;
-	u32 sr_an_mmd_adv_reg2 = 0;
-	u32 vr_xs_or_pcs_mmd_digi_ctl1 = 0;
-	u32 curr_vr_xs_or_pcs_mmd_digi_ctl1 = 0;
-	u32 curr_sr_pcs_ctl = 0;
-	u32 curr_sr_pma_mmd_ctl1 = 0;
-	u32 curr_sr_an_mmd_ctl = 0;
-	u32 curr_sr_an_mmd_adv_reg2 = 0;
 	u32 reset_status = 0;
 	u32 rst_delay = 0;
 	struct ngbe_adapter *adapter = NULL;
@@ -290,13 +280,6 @@ s32 ngbe_reset_hw(struct ngbe_hw *hw)
 	status = TCALL(hw, mac.ops.stop_adapter);
 	if (status != 0)
 		goto reset_hw_out;
-
-	/* Identify PHY and related function pointers */
-	if (!((hw->subsystem_device_id & NGBE_OEM_MASK) == NGBE_SUBID_RGMII_FPGA)) {
-		status = TCALL(hw, phy.ops.init);
-		if (status)
-			goto reset_hw_out;
-	}
 
 	if (ngbe_get_media_type(hw) == ngbe_media_type_copper) {
 		mac->ops.setup_link = ngbe_setup_copper_link;
@@ -361,30 +344,6 @@ s32 ngbe_reset_hw(struct ngbe_hw *hw)
 	status = ngbe_reset_misc(hw);
 	if (status != 0)
 		goto reset_hw_out;
-
-	if (!hw->mac.orig_link_settings_stored) {
-		hw->mac.orig_sr_pcs_ctl2 = sr_pcs_ctl;
-		hw->mac.orig_sr_pma_mmd_ctl1 = sr_pma_mmd_ctl1;
-		hw->mac.orig_sr_an_mmd_ctl = sr_an_mmd_ctl;
-		hw->mac.orig_sr_an_mmd_adv_reg2 = sr_an_mmd_adv_reg2;
-		hw->mac.orig_vr_xs_or_pcs_mmd_digi_ctl1 =
-						vr_xs_or_pcs_mmd_digi_ctl1;
-		hw->mac.orig_link_settings_stored = true;
-	} else {
-		/* If MNG FW is running on a multi-speed device that
-		 * doesn't autoneg with out driver support we need to
-		 * leave LMS in the state it was before we MAC reset.
-		 * Likewise if we support WoL we don't want change the
-		 * LMS state.
-		 */
-		hw->mac.orig_sr_pcs_ctl2 = curr_sr_pcs_ctl;
-		hw->mac.orig_sr_pma_mmd_ctl1 = curr_sr_pma_mmd_ctl1;
-		hw->mac.orig_sr_an_mmd_ctl = curr_sr_an_mmd_ctl;
-		hw->mac.orig_sr_an_mmd_adv_reg2 =
-					curr_sr_an_mmd_adv_reg2;
-		hw->mac.orig_vr_xs_or_pcs_mmd_digi_ctl1 =
-					curr_vr_xs_or_pcs_mmd_digi_ctl1;
-	}
 
 	/* Store the permanent mac address */
 	TCALL(hw, mac.ops.get_mac_addr, hw->mac.perm_addr);
@@ -1306,9 +1265,8 @@ void ngbe_disable_rx(struct ngbe_hw *hw)
 		wr32(hw, NGBE_RDB_PB_CTL, rxctrl);
 
 		/* OCP NCSI BMC need it */
-		if (!(((hw->subsystem_device_id & NGBE_OEM_MASK) == NGBE_SUBID_OCP_CARD) ||
-		      ((hw->subsystem_device_id & NGBE_WOL_MASK) == NGBE_WOL_SUP) ||
-			   ((hw->subsystem_device_id & NGBE_NCSI_MASK) == NGBE_NCSI_SUP) ||
+		if (!(hw->ncsi_enabled ||
+		      (hw->subsystem_device_id & NGBE_WOL_MASK) == NGBE_WOL_SUP ||
 			    adapter->eth_priv_flags & NGBE_ETH_PRIV_FLAG_LLDP)) {
 		/* disable mac receiver */
 			wr32m(hw, NGBE_MAC_RX_CFG,
@@ -1704,7 +1662,7 @@ s32 ngbe_get_link_capabilities(struct ngbe_hw *hw,
 							NGBE_PHYSICAL_LAYER_100BASE_TX;
 	}
 
-	if ((hw->subsystem_device_id & NGBE_OEM_MASK) == NGBE_SUBID_RGMII_FPGA) {
+	if ((hw->subsystem_device_id & NGBE_OEM_MASK) == RGMII_FPGA) {
 		*speed = NGBE_LINK_SPEED_1GB_FULL;
 		hw->phy.link_mode = NGBE_PHYSICAL_LAYER_1000BASE_T;
 		*autoneg = false;
@@ -1730,7 +1688,7 @@ s32 ngbe_check_mac_link(struct ngbe_hw *hw,
 	s32 status = 0;
 	u16 speed_sta = 0;
 
-	if ((hw->subsystem_device_id & NGBE_OEM_MASK) == NGBE_SUBID_RGMII_FPGA) {
+	if ((hw->subsystem_device_id & NGBE_OEM_MASK) == RGMII_FPGA) {
 		*link_up = true;
 		*speed = NGBE_LINK_SPEED_1GB_FULL;
 		return status;
@@ -2697,7 +2655,7 @@ static s32 ngbe_fc_autoneg_copper(struct ngbe_hw *hw)
 	u8 technology_ability_reg = 0;
 	u8 lp_technology_ability_reg = 0;
 
-	if (!((hw->subsystem_device_id & NGBE_OEM_MASK) == NGBE_SUBID_RGMII_FPGA)) {
+	if (!((hw->subsystem_device_id & NGBE_OEM_MASK) == RGMII_FPGA)) {
 		TCALL(hw, phy.ops.get_adv_pause, &technology_ability_reg);
 		TCALL(hw, phy.ops.get_lp_adv_pause, &lp_technology_ability_reg);
 	}
@@ -2949,7 +2907,7 @@ s32 ngbe_setup_fc(struct ngbe_hw *hw)
 	 * and copper.
 	 */
 	if (hw->phy.media_type == ngbe_media_type_copper &&
-	    !((hw->subsystem_device_id & NGBE_OEM_MASK) == NGBE_SUBID_RGMII_FPGA))
+	    !((hw->subsystem_device_id & NGBE_OEM_MASK) == RGMII_FPGA))
 		ret_val = TCALL(hw, phy.ops.set_adv_pause, pcap_backplane);
 
 out:

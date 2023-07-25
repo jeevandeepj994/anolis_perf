@@ -18,13 +18,6 @@
 #include "ngbe_hw.h"
 
 char ngbe_driver_name[] = "ngbe";
-static const char ngbe_driver_string[] =
-			"WangXun Gigabit PCI Express Network Driver";
-static const char ngbe_copyright[] =
-		"Copyright (c) 2018 -2022 Beijing WangXun Technology Co., Ltd";
-
-#define DRV_VERSION     __stringify(1.2.3anolis)
-const char ngbe_driver_version[32] = DRV_VERSION;
 
 static struct workqueue_struct *ngbe_wq;
 
@@ -385,36 +378,70 @@ s32 ngbe_init_ops(struct ngbe_hw *hw)
  *  ngbe_init_shared_code - Initialize the shared code
  *  @hw: pointer to hardware structure
  **/
-s32 ngbe_init_shared_code(struct ngbe_hw *hw)
+static int ngbe_init_shared_code(struct ngbe_hw *hw)
 {
-	if ((hw->subsystem_device_id & NGBE_OEM_MASK) == NGBE_SUBID_M88E1512_SFP ||
-	    (hw->subsystem_device_id & NGBE_OEM_MASK) == NGBE_SUBID_LY_M88E1512_SFP)
-		hw->phy.type = ngbe_phy_m88e1512_sfi;
-	else if ((hw->subsystem_device_id & NGBE_OEM_MASK) == NGBE_SUBID_M88E1512_RJ45 ||
-		 (hw->subsystem_device_id & NGBE_OEM_MASK) == NGBE_SUBID_M88E1512_RJ45)
-		hw->phy.type = ngbe_phy_m88e1512;
-	else if ((hw->subsystem_device_id & NGBE_OEM_MASK) == NGBE_SUBID_M88E1512_MIX)
-		hw->phy.type = ngbe_phy_m88e1512_unknown;
-	else if ((hw->subsystem_device_id & NGBE_OEM_MASK) == NGBE_SUBID_YT8521S_SFP ||
-		 (hw->subsystem_device_id & NGBE_OEM_MASK) == NGBE_SUBID_YT8521S_SFP_GPIO ||
-		(hw->subsystem_device_id & NGBE_OEM_MASK) == NGBE_SUBID_LY_YT8521S_SFP)
-		hw->phy.type = ngbe_phy_yt8521s_sfi;
-	else if ((hw->subsystem_device_id & NGBE_OEM_MASK) == NGBE_SUBID_INTERNAL_YT8521S_SFP ||
-		 (hw->subsystem_device_id & NGBE_OEM_MASK) == NGBE_SUBID_INTERNAL_YT8521S_SFP_GPIO)
-		hw->phy.type = ngbe_phy_internal_yt8521s_sfi;
-	else
-		hw->phy.type = ngbe_phy_internal;
+	int wol_mask = 0, ncsi_mask = 0;
+	u16 type_mask = 0, val;
+	u32 lan_en;
 
-	if ((hw->subsystem_device_id & NGBE_OEM_MASK) == NGBE_SUBID_LY_M88E1512_SFP ||
-	    (hw->subsystem_device_id & NGBE_OEM_MASK) == NGBE_SUBID_LY_YT8521S_SFP ||
-		(hw->subsystem_device_id & NGBE_OEM_MASK) == NGBE_SUBID_YT8521S_SFP_GPIO ||
-		(hw->subsystem_device_id & NGBE_OEM_MASK) == NGBE_SUBID_INTERNAL_YT8521S_SFP_GPIO)
+	lan_en = rd32(hw, NGBE_MIS_PWR);
+	if (!(lan_en & BIT(hw->bus.lan_id + 28)))
+		return -EIO;
+	type_mask = (u16)(hw->subsystem_device_id & NGBE_OEM_MASK);
+	ncsi_mask = hw->subsystem_device_id & NGBE_NCSI_MASK;
+	wol_mask = hw->subsystem_device_id & NGBE_WOL_MASK;
+
+	val = rd32(hw, NGBE_CFG_PORT_ST);
+	hw->mac_type = (val & BIT(7)) >> 7 ?
+		       em_mac_type_rgmii :
+		       em_mac_type_mdi;
+
+	hw->wol_enabled = (wol_mask == NGBE_WOL_SUP) ? 1 : 0;
+	hw->ncsi_enabled = (ncsi_mask == NGBE_NCSI_SUP ||
+			   type_mask == OCP_CARD) ? 1 : 0;
+
+	switch (type_mask) {
+	case LY_YT8521S_SFP:
+	case LY_M88E1512_SFP:
+	case YT8521S_SFP_GPIO:
+	case INTERNAL_YT8521S_SFP_GPIO:
 		hw->gpio_ctl = 1;
+		break;
+	default:
+		hw->gpio_ctl = 0;
+		break;
+	}
+
+	switch (type_mask) {
+	case M88E1512_SFP:
+	case LY_M88E1512_SFP:
+		hw->phy.type = ngbe_phy_m88e1512_sfi;
+		break;
+	case M88E1512_RJ45:
+		hw->phy.type = ngbe_phy_m88e1512;
+		break;
+	case M88E1512_MIX:
+		hw->phy.type = ngbe_phy_m88e1512_unknown;
+		break;
+	case YT8521S_SFP:
+	case YT8521S_SFP_GPIO:
+	case LY_YT8521S_SFP:
+		hw->phy.type = ngbe_phy_yt8521s_sfi;
+		break;
+	case INTERNAL_YT8521S_SFP:
+	case INTERNAL_YT8521S_SFP_GPIO:
+		hw->phy.type = ngbe_phy_internal_yt8521s_sfi;
+		break;
+	default:
+		hw->phy.type = ngbe_phy_internal;
+		break;
+	}
 
 	/* select claus22 */
 	wr32(hw, NGBE_MDIO_CLAUSE_SELECT, 0xF);
+	ngbe_init_ops(hw);
 
-	return ngbe_init_ops(hw);
+	return 0;
 }
 
 /**
@@ -802,7 +829,7 @@ static void ngbe_handle_phy_event(struct ngbe_hw *hw)
 	reg = rd32(hw, NGBE_GPIO_INTSTATUS);
 	wr32(hw, NGBE_GPIO_EOI, reg);
 
-	if (!((hw->subsystem_device_id & NGBE_OEM_MASK) == NGBE_SUBID_RGMII_FPGA))
+	if (!((hw->subsystem_device_id & NGBE_OEM_MASK) == RGMII_FPGA))
 		TCALL(hw, phy.ops.check_event);
 
 	adapter->lsc_int++;
@@ -1294,24 +1321,23 @@ static int ngbe_non_sfp_link_config(struct ngbe_hw *hw)
 {
 	u32 speed;
 	u32 ret = NGBE_ERR_LINK_SETUP;
+	struct ngbe_adapter *adapter = hw->back;
 
 	if (hw->mac.autoneg)
 		speed = hw->phy.autoneg_advertised;
 	else
 		speed = hw->phy.force_speed;
 
-	if ((hw->subsystem_device_id & NGBE_OEM_MASK) == NGBE_SUBID_OCP_CARD ||
-	    (hw->subsystem_device_id & NGBE_NCSI_MASK) == NGBE_NCSI_SUP ||
-		(hw->subsystem_device_id & NGBE_OEM_MASK) == NGBE_SUBID_RGMII_FPGA)
+	if (hw->ncsi_enabled ||
+	    (hw->subsystem_device_id & NGBE_OEM_MASK) == RGMII_FPGA ||
+		adapter->eth_priv_flags & NGBE_ETH_PRIV_FLAG_LLDP)
 		return 0;
 
-		if (hw->phy.type == ngbe_phy_internal ||
-			hw->phy.type == ngbe_phy_internal_yt8521s_sfi) {
-			mdelay(50);
-			if (hw->phy.type == ngbe_phy_internal ||
-			    hw->phy.type == ngbe_phy_internal_yt8521s_sfi)
-				TCALL(hw, phy.ops.setup_once);
-		}
+	if (hw->phy.type == ngbe_phy_internal ||
+	    hw->phy.type == ngbe_phy_internal_yt8521s_sfi) {
+		hw->phy.ops.phy_resume(hw);
+		TCALL(hw, phy.ops.setup_once);
+	}
 
 	ret = TCALL(hw, mac.ops.setup_link, speed, false);
 
@@ -3900,9 +3926,8 @@ void ngbe_disable_device(struct ngbe_adapter *adapter)
 	del_timer_sync(&adapter->service_timer);
 
 	/*OCP NCSI need it*/
-	if (!(((hw->subsystem_device_id & NGBE_OEM_MASK) == NGBE_SUBID_OCP_CARD) ||
-	      ((hw->subsystem_device_id & NGBE_WOL_MASK) == NGBE_WOL_SUP) ||
-		   ((hw->subsystem_device_id & NGBE_NCSI_MASK) == NGBE_NCSI_SUP) ||
+	if (!(hw->ncsi_enabled ||
+	      (hw->subsystem_device_id & NGBE_WOL_MASK) == NGBE_WOL_SUP ||
 		    adapter->eth_priv_flags & NGBE_ETH_PRIV_FLAG_LLDP))
 		wr32m(hw, NGBE_MAC_TX_CFG, NGBE_MAC_TX_CFG_TE, 0);
 
@@ -5859,6 +5884,10 @@ static int ngbe_probe(struct pci_dev *pdev,
 		goto err_sw_init;
 	}
 
+	err = hw->phy.ops.init(hw);
+	if (err)
+		goto err_sw_init;
+
 	netdev->features |= NETIF_F_SG | NETIF_F_IP_CSUM;
 	netdev->features |= NETIF_F_IPV6_CSUM;
 
@@ -6036,8 +6065,7 @@ static int ngbe_probe(struct pci_dev *pdev,
 
 	TCALL(hw, mac.ops.set_fw_drv_ver, 0xFF, 0xFF, 0xFF, 0xFF);
 
-	if (((hw->subsystem_device_id & NGBE_NCSI_MASK) == NGBE_NCSI_SUP) ||
-	    ((hw->subsystem_device_id & NGBE_OEM_MASK) == NGBE_SUBID_OCP_CARD))
+	if (hw->ncsi_enabled)
 		e_info(probe, "NCSI : support");
 	else
 		e_info(probe, "NCSI : unsupported");
@@ -6367,9 +6395,6 @@ static struct pci_driver ngbe_driver = {
 static int __init ngbe_init_module(void)
 {
 	int ret;
-
-	pr_info("%s - version %s\n", ngbe_driver_string, ngbe_driver_version);
-	pr_info("%s\n", ngbe_copyright);
 
 	ngbe_wq = create_singlethread_workqueue(ngbe_driver_name);
 	if (!ngbe_wq) {
