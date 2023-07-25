@@ -419,8 +419,11 @@ s32 ngbe_phy_init(struct ngbe_hw *hw)
 	struct ngbe_adapter *adapter = hw->back;
 	unsigned long flags;
 
+	if ((hw->subsystem_device_id & NGBE_OEM_MASK) == RGMII_FPGA)
+		return 0;
 	/* init phy.addr according to HW design */
 	hw->phy.addr = 0;
+	spin_lock_init(&hw->phy_lock);
 
 	/* Identify the PHY or SFP module */
 	ret_val = TCALL(hw, phy.ops.identify);
@@ -490,7 +493,16 @@ s32 ngbe_phy_init(struct ngbe_hw *hw)
 		value |= NGBE_M88E1512_POWER;
 		TCALL(hw, phy.ops.write_reg_mdi, 0, 0, value);
 	} else if (hw->phy.type == ngbe_phy_yt8521s_sfi) {
-		if (!((hw->subsystem_device_id & NGBE_NCSI_MASK) == NGBE_NCSI_SUP)) {
+		/*enable yt8521s interrupt*/
+		/* select sds area register */
+		spin_lock_irqsave(&hw->phy_lock, flags);
+		ngbe_phy_write_reg_ext_yt(hw, 0xa000, 0, 0x00);
+
+		/* enable interrupt */
+		value = 0x0C0C;
+		hw->phy.ops.write_reg_mdi(hw, 0x12, 0, value);
+		spin_unlock_irqrestore(&hw->phy_lock, flags);
+		if (!hw->ncsi_enabled) {
 			/* power down in Fiber mode */
 			spin_lock_irqsave(&hw->phy_lock, flags);
 			ngbe_phy_read_reg_sds_mii_yt(hw, 0x0, 0, &value);
@@ -641,7 +653,7 @@ s32 ngbe_phy_reset_yt(struct ngbe_hw *hw)
 	if (hw->phy.type != ngbe_phy_yt8521s_sfi)
 		return NGBE_ERR_PHY_TYPE;
 
-	if ((hw->subsystem_device_id & NGBE_NCSI_MASK) == NGBE_NCSI_SUP)
+	if (hw->ncsi_enabled)
 		return status;
 
 	/* Don't reset PHY if it's shut down due to overtemp. */
@@ -778,8 +790,7 @@ u32 ngbe_phy_setup_link(struct ngbe_hw *hw,
 	}
 
 	/* restart AN and wait AN done interrupt */
-	if (((hw->subsystem_device_id & NGBE_NCSI_MASK) == NGBE_NCSI_SUP) ||
-	    ((hw->subsystem_device_id & NGBE_OEM_MASK) == NGBE_SUBID_OCP_CARD)) {
+	if (hw->ncsi_enabled) {
 		if (need_restart_AN)
 			value = NGBE_MDI_PHY_RESTART_AN | NGBE_MDI_PHY_ANE;
 		else
@@ -908,7 +919,7 @@ u32 ngbe_phy_setup_link_yt(struct ngbe_hw *hw,
 	u16 value_r9 = 0;
 	unsigned long flags;
 
-	if ((hw->subsystem_device_id & NGBE_NCSI_MASK) == NGBE_NCSI_SUP)
+	if (hw->ncsi_enabled)
 		return ret_val;
 
 	hw->phy.autoneg_advertised = 0;
@@ -1494,19 +1505,6 @@ s32 ngbe_phy_setup(struct ngbe_hw *hw)
 	int i;
 	u16 value = 0;
 
-	for (i = 0; i < 15; i++) {
-		if (!rd32m(hw, NGBE_MIS_ST, NGBE_MIS_ST_GPHY_IN_RST(hw->bus.lan_id)))
-			break;
-
-		mdelay(1);
-	}
-
-	if (i == 15) {
-		ERROR_REPORT1(hw, NGBE_ERROR_POLLING,
-			      "GPhy reset exceeds maximum times.\n");
-		return NGBE_ERR_PHY_TIMEOUT;
-	}
-
 	ngbe_gphy_efuse_calibration(hw);
 	TCALL(hw, phy.ops.write_reg, 20, 0xa46, 2);
 	ngbe_gphy_wait_mdio_access_on(hw);
@@ -1522,6 +1520,28 @@ s32 ngbe_phy_setup(struct ngbe_hw *hw)
 		return NGBE_ERR_PHY_TIMEOUT;
 
 	return NGBE_OK;
+}
+
+static int ngbe_genphy_suspend(struct ngbe_hw *hw)
+{
+	struct ngbe_adapter *adapter = hw->back;
+	u16 val;
+
+	if (adapter->eth_priv_flags & NGBE_ETH_PRIV_FLAG_LLDP ||
+	    hw->ncsi_enabled)
+		return 0;
+	hw->phy.ops.read_reg(hw, 0x0, 0x0, &val);
+
+	return hw->phy.ops.write_reg(hw, 0x0, 0x0, val | 0x800);
+}
+
+static int ngbe_genphy_resume(struct ngbe_hw *hw)
+{
+	u16 val;
+
+	hw->phy.ops.read_reg(hw, 0x0, 0x0, &val);
+
+	return hw->phy.ops.write_reg(hw, 0x0, 0x0, val & (~0x800));
 }
 
 s32 ngbe_init_phy_ops_common(struct ngbe_hw *hw)
@@ -1541,6 +1561,8 @@ s32 ngbe_init_phy_ops_common(struct ngbe_hw *hw)
 	phy->ops.get_lp_adv_pause = ngbe_phy_get_lp_advertised_pause;
 	phy->ops.set_adv_pause = ngbe_phy_set_pause_adv;
 	phy->ops.setup_once = ngbe_phy_setup;
+	phy->ops.phy_suspend = ngbe_genphy_suspend;
+	phy->ops.phy_resume = ngbe_genphy_resume;
 
 	return NGBE_OK;
 }

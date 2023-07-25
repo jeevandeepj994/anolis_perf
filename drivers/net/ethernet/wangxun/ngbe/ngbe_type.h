@@ -29,17 +29,17 @@
 #define NGBE_DEV_ID_EM_WX1860A1L				0x010b
 
 /* Subsystem ID */
-#define NGBE_SUBID_M88E1512_SFP					0x0003
-#define NGBE_SUBID_OCP_CARD						0x0040
-#define NGBE_SUBID_LY_M88E1512_SFP				0x0050
-#define NGBE_SUBID_M88E1512_RJ45				0x0051
-#define NGBE_SUBID_M88E1512_MIX					0x0052
-#define NGBE_SUBID_YT8521S_SFP					0x0060
-#define NGBE_SUBID_INTERNAL_YT8521S_SFP			0x0061
-#define NGBE_SUBID_YT8521S_SFP_GPIO				0x0062
-#define NGBE_SUBID_INTERNAL_YT8521S_SFP_GPIO	0x0064
-#define NGBE_SUBID_LY_YT8521S_SFP				0x0070
-#define NGBE_SUBID_RGMII_FPGA					0x0080
+#define M88E1512_SFP                          0x0003
+#define OCP_CARD                              0x0040
+#define LY_M88E1512_SFP                       0x0050
+#define M88E1512_RJ45                         0x0051
+#define M88E1512_MIX                          0x0052
+#define YT8521S_SFP                           0x0060
+#define LY_YT8521S_SFP                        0x0070
+#define INTERNAL_YT8521S_SFP                  0x0061
+#define YT8521S_SFP_GPIO                      0x0062
+#define INTERNAL_YT8521S_SFP_GPIO             0x0064
+#define RGMII_FPGA                            0x0080
 
 #define NGBE_OEM_MASK				0x00FF
 
@@ -1467,6 +1467,8 @@ struct ngbe_phy_operations {
 	s32 (*get_lp_adv_pause)(struct ngbe_hw *hw, u8 *pause_bit);
 	s32 (*set_adv_pause)(struct ngbe_hw *hw, u16 pause_bit);
 	s32 (*setup_once)(struct ngbe_hw *hw);
+	int (*phy_suspend)(struct ngbe_hw *hw);
+	int (*phy_resume)(struct ngbe_hw *hw);
 };
 
 struct ngbe_mac_operations {
@@ -1674,6 +1676,12 @@ struct ngbe_flash_info {
 	u16 address_bits;
 };
 
+enum em_mac_type {
+	em_mac_type_unknown = 0,
+	em_mac_type_mdi,
+	em_mac_type_rgmii
+};
+
 struct ngbe_hw {
 	u8 __iomem *hw_addr;
 	void *back;
@@ -1698,12 +1706,14 @@ struct ngbe_hw {
 	bool force_full_reset;
 	bool adapter_stopped;
 	bool wol_enabled;
+	bool ncsi_enabled;
 
 	ngbe_physical_layer link_mode;
 	enum ngbe_reset_type reset_type;
 	u16 tpid[8];
 
 	spinlock_t phy_lock;	/* Used to protect phy registers. */
+	enum em_mac_type mac_type;
 };
 
 /* Host Interface Command Structures */
