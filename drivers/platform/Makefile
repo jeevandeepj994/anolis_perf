@@ -11,3 +11,4 @@ obj-$(CONFIG_OLPC_EC)		+= olpc/
 obj-$(CONFIG_GOLDFISH)		+= goldfish/
 obj-$(CONFIG_CHROME_PLATFORMS)	+= chrome/
 obj-$(CONFIG_ARM_CPU_RESCTRL)	+= mpam/
+obj-$(CONFIG_LOONGARCH)		+= loongarch/
