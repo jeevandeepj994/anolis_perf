@@ -56,6 +56,8 @@ extern int psp_mutex_lock_timeout(struct psp_mutex *mutex, uint64_t ms);
 extern int psp_mutex_unlock(struct psp_mutex *mutex);
 extern int psp_mutex_enabled;
 
+static int csv_comm_mode = CSV_COMM_MAILBOX_ON;
+
 /* Trusted Memory Region (TMR):
  *   The TMR is a 1MB area that must be 1MB aligned.  Use the page allocator
  *   to allocate the memory, which will return aligned memory for the specified
@@ -88,7 +90,9 @@ static void sev_irq_handler(int irq, void *data, unsigned int status)
 
 	/* Check if it is SEV command completion: */
 	reg = ioread32(sev->io_regs + sev->vdata->cmdresp_reg);
-	if (reg & PSP_CMDRESP_RESP) {
+	if ((reg & PSP_CMDRESP_RESP) ||
+	    ((boot_cpu_data.x86_vendor == X86_VENDOR_HYGON) &&
+	     (csv_comm_mode == CSV_COMM_RINGBUFFER_ON))) {
 		sev->int_rcvd = 1;
 		wake_up(&sev->int_queue);
 	}
@@ -109,12 +113,30 @@ static int sev_wait_cmd_ioc(struct sev_device *sev,
 	return 0;
 }
 
+static int csv_wait_cmd_ioc_ring_buffer(struct sev_device *sev,
+					unsigned int *reg,
+					unsigned int timeout)
+{
+	int ret;
+
+	ret = wait_event_timeout(sev->int_queue,
+			sev->int_rcvd, timeout * HZ);
+	if (!ret)
+		return -ETIMEDOUT;
+
+	*reg = ioread32(sev->io_regs + sev->vdata->cmdbuff_addr_lo_reg);
+
+	return 0;
+}
+
 static int sev_cmd_buffer_len(int cmd)
 {
 	if (boot_cpu_data.x86_vendor == X86_VENDOR_HYGON) {
 		switch (cmd) {
 		case CSV_CMD_HGSC_CERT_IMPORT:
 			return sizeof(struct csv_data_hgsc_cert_import);
+		case CSV_CMD_RING_BUFFER:
+			return sizeof(struct csv_data_ring_buffer);
 		default:
 			break;
 		}
@@ -352,6 +374,155 @@ int psp_do_cmd(int cmd, void *data, int *psp_ret)
 }
 EXPORT_SYMBOL_GPL(psp_do_cmd);
 
+static int __csv_ring_buffer_enter_locked(int *error)
+{
+	struct psp_device *psp = psp_master;
+	struct sev_device *sev;
+	struct csv_data_ring_buffer *data;
+	struct csv_ringbuffer_queue *low_queue;
+	struct csv_ringbuffer_queue *hi_queue;
+	int ret = 0;
+
+	if (!psp || !psp->sev_data)
+		return -ENODEV;
+
+	sev = psp->sev_data;
+
+	if (csv_comm_mode == CSV_COMM_RINGBUFFER_ON)
+		return -EEXIST;
+
+	data = kzalloc(sizeof(*data), GFP_KERNEL);
+	if (!data)
+		return -ENOMEM;
+
+	low_queue = &sev->ring_buffer[CSV_COMMAND_PRIORITY_LOW];
+	hi_queue = &sev->ring_buffer[CSV_COMMAND_PRIORITY_HIGH];
+
+	data->queue_lo_cmdptr_address = __psp_pa(low_queue->cmd_ptr.data_align);
+	data->queue_lo_statval_address = __psp_pa(low_queue->stat_val.data_align);
+	data->queue_hi_cmdptr_address = __psp_pa(hi_queue->cmd_ptr.data_align);
+	data->queue_hi_statval_address = __psp_pa(hi_queue->stat_val.data_align);
+	data->queue_lo_size = 1;
+	data->queue_hi_size = 1;
+	data->int_on_empty = 1;
+
+	ret = __sev_do_cmd_locked(CSV_CMD_RING_BUFFER, data, error);
+	if (!ret) {
+		iowrite32(0, sev->io_regs + sev->vdata->cmdbuff_addr_hi_reg);
+		csv_comm_mode = CSV_COMM_RINGBUFFER_ON;
+	}
+
+	kfree(data);
+	return ret;
+}
+
+static int csv_get_cmd_status(struct sev_device *sev, int prio, int index)
+{
+	struct csv_queue *queue = &sev->ring_buffer[prio].stat_val;
+	struct csv_statval_entry *statval = (struct csv_statval_entry *)queue->data;
+
+	return statval[index].status;
+}
+
+static int __csv_do_ringbuf_cmds_locked(int *psp_ret)
+{
+	struct psp_device *psp = psp_master;
+	struct sev_device *sev;
+	unsigned int rb_tail;
+	unsigned int rb_ctl;
+	int last_cmd_index;
+	unsigned int reg, ret = 0;
+
+	if (!psp || !psp->sev_data)
+		return -ENODEV;
+
+	if (psp_dead)
+		return -EBUSY;
+
+	sev = psp->sev_data;
+
+	/* update rb tail */
+	rb_tail = ioread32(sev->io_regs + sev->vdata->cmdbuff_addr_hi_reg);
+	rb_tail &= (~PSP_RBTAIL_QHI_TAIL_MASK);
+	rb_tail |= (sev->ring_buffer[CSV_COMMAND_PRIORITY_HIGH].cmd_ptr.tail
+						<< PSP_RBTAIL_QHI_TAIL_SHIFT);
+	rb_tail &= (~PSP_RBTAIL_QLO_TAIL_MASK);
+	rb_tail |= sev->ring_buffer[CSV_COMMAND_PRIORITY_LOW].cmd_ptr.tail;
+	iowrite32(rb_tail, sev->io_regs + sev->vdata->cmdbuff_addr_hi_reg);
+
+	/* update rb ctl to trigger psp irq */
+	sev->int_rcvd = 0;
+
+	/* PSP response to x86 only when all queue is empty or error happends */
+	rb_ctl = PSP_RBCTL_X86_WRITES |
+		 PSP_RBCTL_RBMODE_ACT |
+		 PSP_RBCTL_CLR_INTSTAT;
+	iowrite32(rb_ctl, sev->io_regs + sev->vdata->cmdresp_reg);
+
+	/* wait for all commands in ring buffer completed */
+	ret = csv_wait_cmd_ioc_ring_buffer(sev, &reg, psp_timeout * 10);
+	if (ret) {
+		if (psp_ret)
+			*psp_ret = 0;
+		dev_err(sev->dev, "csv ringbuffer mode command timed out, disabling PSP\n");
+		psp_dead = true;
+
+		return ret;
+	}
+
+	/* cmd error happends */
+	if (reg & PSP_RBHEAD_QPAUSE_INT_STAT)
+		ret = -EFAULT;
+
+	if (psp_ret) {
+		last_cmd_index = (reg & PSP_RBHEAD_QHI_HEAD_MASK)
+					>> PSP_RBHEAD_QHI_HEAD_SHIFT;
+		*psp_ret = csv_get_cmd_status(sev, CSV_COMMAND_PRIORITY_HIGH,
+					      last_cmd_index);
+		if (*psp_ret == 0) {
+			last_cmd_index = reg & PSP_RBHEAD_QLO_HEAD_MASK;
+			*psp_ret = csv_get_cmd_status(sev,
+					CSV_COMMAND_PRIORITY_LOW, last_cmd_index);
+		}
+	}
+
+	return ret;
+}
+
+static int csv_do_ringbuf_cmds(int *psp_ret)
+{
+	int mutex_enabled = READ_ONCE(psp_mutex_enabled);
+	struct sev_user_data_status data;
+	int rc;
+
+	if (is_hygon_psp && mutex_enabled) {
+		if (psp_mutex_lock_timeout(&psp_misc->data_pg_aligned->mb_mutex,
+						PSP_MUTEX_TIMEOUT) != 1) {
+			return -EBUSY;
+		}
+	} else {
+		mutex_lock(&sev_cmd_mutex);
+	}
+
+	rc = __csv_ring_buffer_enter_locked(psp_ret);
+	if (rc)
+		goto cmd_unlock;
+
+	rc = __csv_do_ringbuf_cmds_locked(psp_ret);
+
+	/* exit ringbuf mode by send CMD in mailbox mode */
+	__sev_do_cmd_locked(SEV_CMD_PLATFORM_STATUS, &data, NULL);
+	csv_comm_mode = CSV_COMM_MAILBOX_ON;
+
+cmd_unlock:
+	if (is_hygon_psp && mutex_enabled)
+		psp_mutex_unlock(&psp_misc->data_pg_aligned->mb_mutex);
+	else
+		mutex_unlock(&sev_cmd_mutex);
+
+	return rc;
+}
+
 static int __sev_platform_init_locked(int *error)
 {
 	struct psp_device *psp = psp_master;
@@ -433,6 +604,11 @@ static int __sev_platform_shutdown_locked(int *error)
 	ret = __sev_do_cmd_locked(SEV_CMD_SHUTDOWN, NULL, error);
 	if (ret)
 		return ret;
+
+	if (boot_cpu_data.x86_vendor == X86_VENDOR_HYGON) {
+		csv_comm_mode = CSV_COMM_MAILBOX_ON;
+		csv_ring_buffer_queue_free();
+	}
 
 	sev->state = SEV_STATE_UNINIT;
 	dev_dbg(sev->dev, "SEV firmware shutdown\n");
@@ -1127,6 +1303,141 @@ int sev_guest_df_flush(int *error)
 }
 EXPORT_SYMBOL_GPL(sev_guest_df_flush);
 
+static int __csv_ring_buffer_queue_init(struct csv_ringbuffer_queue *ring_buffer)
+{
+	int ret = 0;
+	void *cmd_ptr_buffer = NULL;
+	void *stat_val_buffer = NULL;
+
+	memset((void *)ring_buffer, 0, sizeof(struct csv_ringbuffer_queue));
+
+	cmd_ptr_buffer = kzalloc(CSV_RING_BUFFER_LEN, GFP_KERNEL);
+	if (!cmd_ptr_buffer)
+		return -ENOMEM;
+
+	csv_queue_init(&ring_buffer->cmd_ptr, cmd_ptr_buffer,
+		       CSV_RING_BUFFER_LEN, CSV_RING_BUFFER_ESIZE);
+
+	stat_val_buffer = kzalloc(CSV_RING_BUFFER_LEN, GFP_KERNEL);
+	if (!stat_val_buffer) {
+		ret = -ENOMEM;
+		goto free_cmdptr;
+	}
+
+	csv_queue_init(&ring_buffer->stat_val, stat_val_buffer,
+		       CSV_RING_BUFFER_LEN, CSV_RING_BUFFER_ESIZE);
+	return 0;
+
+free_cmdptr:
+	kfree(cmd_ptr_buffer);
+
+	return ret;
+}
+
+int csv_fill_cmd_queue(int prio, int cmd, void *data, uint16_t flags)
+{
+	struct psp_device *psp = psp_master;
+	struct sev_device *sev;
+	struct csv_cmdptr_entry cmdptr = { };
+
+	if (!psp || !psp->sev_data)
+		return -ENODEV;
+
+	sev = psp->sev_data;
+
+	cmdptr.cmd_buf_ptr = __psp_pa(data);
+	cmdptr.cmd_id = cmd;
+	cmdptr.cmd_flags = flags;
+
+	if (csv_enqueue_cmd(&sev->ring_buffer[prio].cmd_ptr, &cmdptr, 1) != 1)
+		return -EFAULT;
+
+	return 0;
+}
+EXPORT_SYMBOL_GPL(csv_fill_cmd_queue);
+
+int csv_check_stat_queue_status(int *psp_ret)
+{
+	struct psp_device *psp = psp_master;
+	struct sev_device *sev;
+	unsigned int len;
+	int prio;
+
+	if (!psp || !psp->sev_data)
+		return -ENODEV;
+
+	sev = psp->sev_data;
+
+	for (prio = CSV_COMMAND_PRIORITY_HIGH;
+	     prio < CSV_COMMAND_PRIORITY_NUM; prio++) {
+		do {
+			struct csv_statval_entry statval;
+
+			len = csv_dequeue_stat(&sev->ring_buffer[prio].stat_val,
+					       &statval, 1);
+			if (len) {
+				if (statval.status != 0) {
+					*psp_ret = statval.status;
+					return -EFAULT;
+				}
+			}
+		} while (len);
+	}
+
+	return 0;
+}
+EXPORT_SYMBOL_GPL(csv_check_stat_queue_status);
+
+int csv_ring_buffer_queue_init(void)
+{
+	struct psp_device *psp = psp_master;
+	struct sev_device *sev;
+	int i, ret = 0;
+
+	if (!psp || !psp->sev_data)
+		return -ENODEV;
+
+	sev = psp->sev_data;
+
+	for (i = CSV_COMMAND_PRIORITY_HIGH; i < CSV_COMMAND_PRIORITY_NUM; i++) {
+		ret = __csv_ring_buffer_queue_init(&sev->ring_buffer[i]);
+		if (ret)
+			return ret;
+	}
+
+	return 0;
+}
+EXPORT_SYMBOL_GPL(csv_ring_buffer_queue_init);
+
+int csv_ring_buffer_queue_free(void)
+{
+	struct psp_device *psp = psp_master;
+	struct sev_device *sev;
+	struct csv_ringbuffer_queue *ring_buffer;
+	int i;
+
+	if (!psp || !psp->sev_data)
+		return -ENODEV;
+
+	sev = psp->sev_data;
+
+	for (i = 0; i < CSV_COMMAND_PRIORITY_NUM; i++) {
+		ring_buffer = &sev->ring_buffer[i];
+
+		if (ring_buffer->cmd_ptr.data) {
+			kfree((void *)ring_buffer->cmd_ptr.data);
+			ring_buffer->cmd_ptr.data = 0;
+		}
+
+		if (ring_buffer->stat_val.data) {
+			kfree((void *)ring_buffer->stat_val.data);
+			ring_buffer->stat_val.data = 0;
+		}
+	}
+	return 0;
+}
+EXPORT_SYMBOL_GPL(csv_ring_buffer_queue_free);
+
 static void sev_exit(struct kref *ref)
 {
 	misc_deregister(&misc_dev->misc);
@@ -1269,6 +1580,15 @@ int sev_issue_cmd_external_user(struct file *filep, unsigned int cmd,
 	return sev_do_cmd(cmd, data, error);
 }
 EXPORT_SYMBOL_GPL(sev_issue_cmd_external_user);
+
+int csv_issue_ringbuf_cmds_external_user(struct file *filep, int *psp_ret)
+{
+	if (!filep || filep->f_op != &sev_fops)
+		return -EBADF;
+
+	return csv_do_ringbuf_cmds(psp_ret);
+}
+EXPORT_SYMBOL_GPL(csv_issue_ringbuf_cmds_external_user);
 
 void sev_pci_init(void)
 {
