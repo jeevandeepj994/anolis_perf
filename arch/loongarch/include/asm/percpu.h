@@ -8,15 +8,29 @@
 #include <asm/cmpxchg.h>
 #include <asm/loongarch.h>
 
+/*
+ * The "address" (in fact, offset from $r21) of a per-CPU variable is close to
+ * the loading address of main kernel image, but far from where the modules are
+ * loaded. Tell the compiler this fact when using explicit relocs.
+ */
+#if defined(MODULE) && defined(CONFIG_AS_HAS_EXPLICIT_RELOCS)
+#define PER_CPU_ATTRIBUTES    __attribute__((model("extreme")))
+#endif
+
 /* Use r21 for fast access */
-register unsigned long __my_cpu_offset __asm__("$r21");
+static inline unsigned long __kern_my_cpu_offset(void)
+{
+	register unsigned long off __asm__("$r21");
+
+	return off;
+}
+#define __my_cpu_offset __kern_my_cpu_offset()
 
 static inline void set_my_cpu_offset(unsigned long off)
 {
-	__my_cpu_offset = off;
+	asm volatile("move $r21, %0"::"r"(off));
 	csr_write64(off, PERCPU_BASE_KS);
 }
-#define __my_cpu_offset __my_cpu_offset
 
 #define PERCPU_OP(op, asm_op, c_op)					\
 static inline unsigned long __percpu_##op(void *ptr,			\
