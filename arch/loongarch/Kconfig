@@ -426,6 +426,13 @@ config NODES_SHIFT
 	default "6"
 	depends on NUMA
 
+config VA_BITS_40
+	bool "40-bits"
+	default y
+	depends on 64BIT
+	help
+	  Support a maximum at least 40 bits of application virtual memory.
+
 config FORCE_MAX_ZONEORDER
 	int "Maximum zone order"
 	range 14 64 if PAGE_SIZE_64KB
@@ -490,6 +497,9 @@ config ARCH_SPARSEMEM_ENABLE
 	  or have huge holes in the physical address space for other reasons.
 	  See <file:Documentation/vm/numa.rst> for more.
 
+config SYS_SUPPORTS_HUGETLBFS
+        def_bool y
+
 config ARCH_ENABLE_THP_MIGRATION
 	def_bool y
 	depends on TRANSPARENT_HUGEPAGE
@@ -509,6 +519,14 @@ config ARCH_MMAP_RND_BITS_MAX
 	default 18
 
 menu "Power management options"
+
+config ARCH_HIBERNATION_POSSIBLE
+	def_bool y
+
+config ARCH_SUSPEND_POSSIBLE
+	def_bool y
+
+source "kernel/power/Kconfig"
 
 source "drivers/acpi/Kconfig"
 
