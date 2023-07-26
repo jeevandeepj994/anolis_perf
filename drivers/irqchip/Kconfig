@@ -672,4 +672,12 @@ config IMS_MSI_ARRAY
 	  Support for IMS Interrupt Message Store MSI controller
 	  with IMS slot storage in a slot array in device memory
 
+config PHYTIUM_IXIC
+	bool "Phytium pd2008 SoC PCI Legacy Interrupt Controller"
+	depends on ARCH_PHYTIUM
+	select IRQ_DOMAIN
+	select IRQ_DOMAIN_HIERARCHY
+	help
+	  This enables support PCI Legacy Interrupt on Phytium pd2008 SoC.
+
 endmenu
