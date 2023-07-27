@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: LGPL-2.1
+// SPDX-License-Identifier: (LGPL-2.1 OR BSD-2-Clause)
 
 /*
  * Common eBPF ELF object loading operations.
@@ -7,19 +7,6 @@
  * Copyright (C) 2015 Wang Nan <wangnan0@huawei.com>
  * Copyright (C) 2015 Huawei Inc.
  * Copyright (C) 2017 Nicira, Inc.
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU Lesser General Public
- * License as published by the Free Software Foundation;
- * version 2.1 of the License (not later!)
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public
- * License along with this program; if not,  see <http://www.gnu.org/licenses>
  */
 
 #ifndef _GNU_SOURCE
@@ -472,7 +459,8 @@ static int bpf_object__elf_init(struct bpf_object *obj)
 		obj->efile.fd = open(obj->path, O_RDONLY);
 		if (obj->efile.fd < 0) {
 			char errmsg[STRERR_BUFSIZE];
-			char *cp = str_error(errno, errmsg, sizeof(errmsg));
+			char *cp = libbpf_strerror_r(errno, errmsg,
+						     sizeof(errmsg));
 
 			pr_warning("failed to open %s: %s\n", obj->path, cp);
 			return -errno;
@@ -813,7 +801,8 @@ static int bpf_object__elf_collect(struct bpf_object *obj)
 						      data->d_size, name, idx);
 			if (err) {
 				char errmsg[STRERR_BUFSIZE];
-				char *cp = str_error(-err, errmsg, sizeof(errmsg));
+				char *cp = libbpf_strerror_r(-err, errmsg,
+							     sizeof(errmsg));
 
 				pr_warning("failed to alloc program %s (%s): %s",
 					   name, obj->path, cp);
@@ -1142,7 +1131,7 @@ bpf_object__create_maps(struct bpf_object *obj)
 
 		*pfd = bpf_create_map_xattr(&create_attr);
 		if (*pfd < 0 && create_attr.btf_key_type_id) {
-			cp = str_error(errno, errmsg, sizeof(errmsg));
+			cp = libbpf_strerror_r(errno, errmsg, sizeof(errmsg));
 			pr_warning("Error in bpf_create_map_xattr(%s):%s(%d). Retrying without BTF.\n",
 				   map->name, cp, errno);
 			create_attr.btf_fd = 0;
@@ -1157,7 +1146,7 @@ bpf_object__create_maps(struct bpf_object *obj)
 			size_t j;
 
 			err = *pfd;
-			cp = str_error(errno, errmsg, sizeof(errmsg));
+			cp = libbpf_strerror_r(errno, errmsg, sizeof(errmsg));
 			pr_warning("failed to create map (name: '%s'): %s\n",
 				   map->name, cp);
 			for (j = 0; j < i; j++)
@@ -1341,7 +1330,7 @@ load_program(enum bpf_prog_type type, enum bpf_attach_type expected_attach_type,
 	}
 
 	ret = -LIBBPF_ERRNO__LOAD;
-	cp = str_error(errno, errmsg, sizeof(errmsg));
+	cp = libbpf_strerror_r(errno, errmsg, sizeof(errmsg));
 	pr_warning("load bpf program failed: %s\n", cp);
 
 	if (log_buf && log_buf[0] != '\0') {
@@ -1379,7 +1368,7 @@ out:
 
 int
 bpf_program__load(struct bpf_program *prog,
-		  char *license, u32 kern_version)
+		  char *license, __u32 kern_version)
 {
 	int err = 0, fd, i;
 
@@ -1657,7 +1646,7 @@ static int check_path(const char *path)
 
 	dir = dirname(dname);
 	if (statfs(dir, &st_fs)) {
-		cp = str_error(errno, errmsg, sizeof(errmsg));
+		cp = libbpf_strerror_r(errno, errmsg, sizeof(errmsg));
 		pr_warning("failed to statfs %s: %s\n", dir, cp);
 		err = -errno;
 	}
@@ -1693,7 +1682,7 @@ int bpf_program__pin_instance(struct bpf_program *prog, const char *path,
 	}
 
 	if (bpf_obj_pin(prog->instances.fds[instance], path)) {
-		cp = str_error(errno, errmsg, sizeof(errmsg));
+		cp = libbpf_strerror_r(errno, errmsg, sizeof(errmsg));
 		pr_warning("failed to pin program: %s\n", cp);
 		return -errno;
 	}
@@ -1711,7 +1700,7 @@ static int make_dir(const char *path)
 		err = -errno;
 
 	if (err) {
-		cp = str_error(-err, errmsg, sizeof(errmsg));
+		cp = libbpf_strerror_r(-err, errmsg, sizeof(errmsg));
 		pr_warning("failed to mkdir %s: %s\n", path, cp);
 	}
 	return err;
@@ -1773,7 +1762,7 @@ int bpf_map__pin(struct bpf_map *map, const char *path)
 	}
 
 	if (bpf_obj_pin(map->fd, path)) {
-		cp = str_error(errno, errmsg, sizeof(errmsg));
+		cp = libbpf_strerror_r(errno, errmsg, sizeof(errmsg));
 		pr_warning("failed to pin map: %s\n", cp);
 		return -errno;
 	}
