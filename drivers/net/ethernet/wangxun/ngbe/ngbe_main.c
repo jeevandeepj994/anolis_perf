@@ -5871,8 +5871,6 @@ static int ngbe_probe(struct pci_dev *pdev,
 							 NETIF_F_TSO |
 							 NETIF_F_TSO6;
 
-	netdev->hw_enc_features |= NETIF_F_SG | NETIF_F_IP_CSUM;
-
 	/* MTU range: 68 - 9414 */
 	netdev->min_mtu = ETH_MIN_MTU;
 	netdev->max_mtu = NGBE_MAX_JUMBO_FRAME_SIZE - (ETH_HLEN + ETH_FCS_LEN);
