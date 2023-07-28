@@ -106,7 +106,7 @@ config EFI_GENERIC_STUB
 
 config EFI_ZBOOT
 	def_bool y
-	depends on EFI_GENERIC_STUB && !ARM
+	depends on EFI_GENERIC_STUB && !ARM && !ARM64
 	select HAVE_KERNEL_GZIP
 	select HAVE_KERNEL_LZ4
 	select HAVE_KERNEL_LZMA
