@@ -1073,6 +1073,12 @@ static ssize_t kidled_scan_period_store(struct kobject *kobj,
 	if (ret || secs > KIDLED_MAX_SCAN_DURATION)
 		return -EINVAL;
 
+	/* Disable kidled when mglru enabled */
+	if (secs && lru_gen_enabled()) {
+		pr_warn("%s: Failed to enable kidled due to mglru enabled\n", __func__);
+		return -EINVAL;
+	}
+
 	kidled_set_scan_duration(secs);
 	wake_up_interruptible(&kidled_wait);
 	kidled_slab_scan_enabled();

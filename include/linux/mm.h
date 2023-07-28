@@ -1062,14 +1062,14 @@ vm_fault_t finish_mkwrite_fault(struct vm_fault *vmf);
  * sets it, so none of the operations on it need to be atomic.
  */
 
-/* Page flags: | [SECTION] | [NODE] | ZONE | [LAST_CPUPID] | [KIDLED_AGE] | ... | FLAGS | */
+/* Page flags: | [SECTION] | [NODE] | ZONE | [LAST_CPUPID] | [KIDLED_AGE] or [LRU_GEN] | ... | FLAGS | */
 #define SECTIONS_PGOFF		((sizeof(unsigned long)*8) - SECTIONS_WIDTH)
 #define NODES_PGOFF		(SECTIONS_PGOFF - NODES_WIDTH)
 #define ZONES_PGOFF		(NODES_PGOFF - ZONES_WIDTH)
 #define LAST_CPUPID_PGOFF	(ZONES_PGOFF - LAST_CPUPID_WIDTH)
 #define KASAN_TAG_PGOFF		(LAST_CPUPID_PGOFF - KASAN_TAG_WIDTH)
 #define KIDLED_AGE_PGOFF	(KASAN_TAG_PGOFF - KIDLED_AGE_WIDTH)
-#define LRU_GEN_PGOFF		(KIDLED_AGE_PGOFF - LRU_GEN_WIDTH)
+#define LRU_GEN_PGOFF		(KASAN_TAG_PGOFF - LRU_GEN_WIDTH)
 #define LRU_REFS_PGOFF		(LRU_GEN_PGOFF - LRU_REFS_WIDTH)
 
 /*
@@ -3393,6 +3393,14 @@ static inline int seal_check_future_write(int seals, struct vm_area_struct *vma)
 }
 
 extern int sysctl_enable_multithread_ra_boost;
+
+/* Indicate coldpgs is enabled or not */
+extern bool coldpgs_enabled;
+
+static inline bool is_coldpgs_enabled(void)
+{
+	return coldpgs_enabled;
+}
 
 #ifdef CONFIG_ASYNC_FORK
 #define ASYNC_FORK_CANDIDATE	0

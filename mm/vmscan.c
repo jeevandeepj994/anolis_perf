@@ -201,6 +201,9 @@ int vm_swappiness = 60;
 /* The min page cache should be reserved in the system */
 unsigned long sysctl_min_cache_kbytes;
 
+/* Indicate coldpgs module is enabled or not */
+bool coldpgs_enabled;
+
 /*
  * Even vm_swappiness is set to 0, swapout can happen in
  * global reclaim when there is few page cache.  When
@@ -2929,6 +2932,8 @@ DEFINE_STATIC_KEY_ARRAY_FALSE(lru_gen_caps, NR_LRU_GEN_CAPS);
 #define get_cap(cap)	static_branch_unlikely(&lru_gen_caps[cap])
 #endif
 
+EXPORT_SYMBOL(lru_gen_caps);
+
 /******************************************************************************
  *                          shorthand helpers
  ******************************************************************************/
@@ -5198,6 +5203,12 @@ static ssize_t store_enabled(struct kobject *kobj, struct kobj_attribute *attr,
 		caps = -1;
 	else if (kstrtouint(buf, 0, &caps))
 		return -EINVAL;
+
+	if (caps && (is_kidled_enabled() || is_coldpgs_enabled())) {
+		pr_warn("%s: Failed to enable mglru due to kidled/coldpgs enabled\n",
+			__func__);
+		return -EINVAL;
+	}
 
 	for (i = 0; i < NR_LRU_GEN_CAPS; i++) {
 		bool enabled = caps & BIT(i);

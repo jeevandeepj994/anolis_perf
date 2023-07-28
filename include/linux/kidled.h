@@ -198,6 +198,8 @@ static inline void kidled_reset_scan_control(struct kidled_scan_control *p)
 	p->scan_target = KIDLED_SCAN_PAGE;
 }
 
+#define is_kidled_enabled() kidled_get_current_scan_duration()
+
 /*
  * Compare with global kidled_scan_control, return true if equals.
  */
