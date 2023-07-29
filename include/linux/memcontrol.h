@@ -471,6 +471,7 @@ struct mem_cgroup {
 
 #ifdef CONFIG_DUPTEXT
 	bool allow_duptext;
+	nodemask_t duptext_nodes;
 #endif
 
 #ifdef CONFIG_TEXT_UNEVICTABLE
