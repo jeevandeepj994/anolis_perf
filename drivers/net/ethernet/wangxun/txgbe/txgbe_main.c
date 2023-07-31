@@ -4524,6 +4524,30 @@ static void txgbe_get_stats64(struct net_device *netdev,
 	stats->rx_missed_errors = netdev->stats.rx_missed_errors;
 }
 
+static void txgbe_update_xoff_rx_lfc(struct txgbe_adapter *adapter)
+{
+	struct txgbe_hw *hw = &adapter->hw;
+	struct txgbe_hw_stats *hwstats = &adapter->stats;
+	int i;
+	u32 data;
+
+	if (hw->fc.current_mode != txgbe_fc_full &&
+	    hw->fc.current_mode != txgbe_fc_rx_pause)
+		return;
+
+	data = rd32(hw, TXGBE_MAC_LXOFFRXC);
+
+	hwstats->lxoffrxc += data;
+
+	/* refill credits (no tx hang) if we received xoff */
+	if (!data)
+		return;
+
+	for (i = 0; i < adapter->num_tx_queues; i++)
+		clear_bit(__TXGBE_HANG_CHECK_ARMED,
+			  &adapter->tx_ring[i]->state);
+}
+
 /**
  * txgbe_update_stats - Update the board statistics counters.
  * @adapter: board private structure
@@ -4607,6 +4631,8 @@ void txgbe_update_stats(struct txgbe_adapter *adapter)
 	}
 
 	hwstats->gprc += rd32(hw, TXGBE_PX_GPRC);
+
+	txgbe_update_xoff_rx_lfc(adapter);
 
 	hwstats->o2bgptc += rd32(hw, TXGBE_TDM_OS2BMC_CNT);
 	if (txgbe_check_mng_access(&adapter->hw)) {
