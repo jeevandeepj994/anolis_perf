@@ -14,11 +14,22 @@
 #include <linux/module.h>
 #include <linux/page_dup.h>
 #include <linux/cpuset.h>
+#include <linux/swap.h>
+#include <linux/sched/mm.h>
 
 #include "internal.h"
 
 DEFINE_STATIC_KEY_FALSE(duptext_enabled_key);
 struct xarray dup_pages[MAX_NUMNODES];
+
+#define DUPTEXT_REFRESH_KICK 0
+
+struct duptext_refresh {
+	struct delayed_work dwork;
+	struct mm_struct *mm;
+};
+
+static void duptext_refresh_workfn(struct work_struct *work);
 
 /* XXX copy_huge_page without cond_resched */
 static void copy_huge_page(struct page *dst, struct page *src)
@@ -205,6 +216,19 @@ static inline bool memcg_allow_duptext(struct mm_struct *mm)
 
 	return allow_duptext;
 }
+static inline bool memcg_allow_duptext_refresh(struct mm_struct *mm)
+{
+	struct mem_cgroup *memcg;
+	bool allow_duptext_refresh = false;
+
+	memcg = get_mem_cgroup_from_mm(mm);
+	if (memcg) {
+		allow_duptext_refresh = memcg->allow_duptext_refresh;
+		css_put(&memcg->css);
+	}
+
+	return allow_duptext_refresh;
+}
 static inline int duptext_target_node(struct mm_struct *mm, int page_node)
 {
 	struct mem_cgroup *memcg;
@@ -233,6 +257,10 @@ static inline int duptext_target_node(struct mm_struct *mm, int page_node)
 static inline bool memcg_allow_duptext(struct mm_struct *mm)
 {
 	return true;
+}
+static inline bool memcg_allow_duptext_refresh(struct mm_struct *mm)
+{
+	return false;
 }
 static inline int duptext_target_node(struct mm_struct *mm, int page_node)
 {
@@ -329,8 +357,35 @@ struct page *__dup_page(struct page *page, struct vm_area_struct *vma)
 	if (likely(page_node == target_node))
 		return NULL;
 
-	if (unlikely(PageDirty(hpage) || PageWriteback(hpage) || !PageUptodate(hpage)))
+	if (unlikely(PageDirty(hpage) || PageWriteback(hpage) || !PageUptodate(hpage))) {
+		struct duptext_refresh *refresh;
+		int delay_ms;
+
+		if (memcg_allow_duptext_refresh(mm) &&
+		    !test_bit(DUPTEXT_REFRESH_KICK, &mm->duptext_flags)) {
+			refresh = kmalloc(sizeof(struct duptext_refresh), GFP_ATOMIC);
+			if (!refresh)
+				return NULL;
+
+			if (test_and_set_bit(DUPTEXT_REFRESH_KICK, &mm->duptext_flags)) {
+				kfree(refresh);
+				return NULL;
+			}
+
+			mmgrab(mm);
+			refresh->mm = mm;
+			INIT_DELAYED_WORK(&refresh->dwork, duptext_refresh_workfn);
+			/*
+			 * Dirty page lasts (dirty_writeback_interval +
+			 * dirty_expire_interval) centiseconds at most,
+			 * if the writeback time doesn't count.
+			 */
+			delay_ms = (dirty_writeback_interval + dirty_expire_interval) * 10;
+			schedule_delayed_work(&refresh->dwork, msecs_to_jiffies(delay_ms));
+		}
+
 		return NULL;
+	}
 
 	if (page_has_private(hpage) &&
 	    !try_to_release_page(hpage, GFP_ATOMIC))
@@ -555,3 +610,46 @@ static int __init duptext_init(void)
 	return ret;
 }
 module_init(duptext_init);
+
+/*
+ * Currently the way to refresh duptext, in order to apply duptext to
+ * pages which were dirty, wirteback, or !uptodate before, is simply
+ * to zap the page range of corresponding vma, and then make process
+ * fault again.
+ *
+ * FIXME Optimize with walk_page_range() if obvious overhead is found
+ * in current implementation. However, there are a few points to note.
+ * 1. How to determine "numa_node_id()" of specific mm, in the context
+ *    of asynchronous work.
+ * 2. Implementation with walk_page_range() is complex and error-prone.
+ */
+static void duptext_refresh_mm(struct mm_struct *mm)
+{
+	struct vm_area_struct *vma;
+
+	mmap_read_lock(mm);
+	for (vma = mm->mmap; vma; vma = vma->vm_next) {
+		if (!__dup_page_suitable(vma, mm))
+			continue;
+		zap_page_range(vma, vma->vm_start, vma->vm_end - vma->vm_start);
+		cond_resched();
+	}
+	mmap_read_unlock(mm);
+}
+
+static void duptext_refresh_workfn(struct work_struct *work)
+{
+	struct duptext_refresh *refresh = container_of(to_delayed_work(work),
+						struct duptext_refresh, dwork);
+	struct mm_struct *mm = refresh->mm;
+
+	if (!duptext_enabled() ||
+	    atomic_read(&mm->mm_users) == 0)
+		goto out;
+
+	duptext_refresh_mm(mm);
+
+out:
+	mmdrop(mm);
+	kfree(refresh);
+}

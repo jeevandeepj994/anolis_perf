@@ -624,6 +624,10 @@ struct mm_struct {
 #endif
 		} lru_gen;
 #endif /* CONFIG_LRU_GEN */
+
+#ifdef CONFIG_DUPTEXT
+		unsigned long duptext_flags;
+#endif
 	} __randomize_layout;
 
 	CK_KABI_RESERVE(1)
