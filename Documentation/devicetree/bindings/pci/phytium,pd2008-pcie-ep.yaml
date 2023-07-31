@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+%YAML 1.2
+---
+Example:
+
+ep0: ep@0x29030000 {
+        compatible = "phytium,pd2008-pcie-ep";
+        reg = <0x0 0x29030000 0x0 0x10000>,
+              <0x11 0x00000000 0x1 0x00000000>,
+              <0x0 0x29101000 0x0 0x1000>;
+        reg-names = "reg", "mem", "hpb";
+        max-outbound-regions = <3>;
+        max-functions = /bits/ 8 <1>;
+};
