@@ -160,6 +160,7 @@ static ssize_t ngbe_dbg_data_ops_read(struct file *filp, char __user *buffer,
 		if (queue >= adapter->num_rx_queues)
 			return 0;
 
+		queue += VMDQ_P(0) * adapter->queues_per_pool;
 		ring = adapter->rx_ring[queue];
 
 		return simple_read_from_buffer(buffer, size, ppos,
@@ -172,6 +173,7 @@ static ssize_t ngbe_dbg_data_ops_read(struct file *filp, char __user *buffer,
 		if (queue >= adapter->num_tx_queues)
 			return 0;
 
+		queue += VMDQ_P(0) * adapter->queues_per_pool;
 		ring = adapter->tx_ring[queue];
 
 		return simple_read_from_buffer(buffer, size, ppos,
