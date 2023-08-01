@@ -1399,7 +1399,8 @@ ssize_t fuse_direct_io(struct fuse_io_priv *io, struct iov_iter *iter,
 	int write = flags & FUSE_DIO_WRITE;
 	int cuse = flags & FUSE_DIO_CUSE;
 	struct file *file = io->iocb->ki_filp;
-	struct inode *inode = file->f_mapping->host;
+	struct address_space *mapping = file->f_mapping;
+	struct inode *inode = mapping->host;
 	struct fuse_file *ff = file->private_data;
 	struct fuse_conn *fc = ff->fc;
 	size_t nmax = write ? fc->max_write : fc->max_read;
@@ -1410,6 +1411,7 @@ ssize_t fuse_direct_io(struct fuse_io_priv *io, struct iov_iter *iter,
 	ssize_t res = 0;
 	struct fuse_req *req;
 	int err = 0;
+	bool fopen_direct_io = ff->open_flags & FOPEN_DIRECT_IO;
 
 	if (io->async)
 		req = fuse_get_req_for_background(fc, iov_iter_npages(iter,
@@ -1425,6 +1427,14 @@ ssize_t fuse_direct_io(struct fuse_io_priv *io, struct iov_iter *iter,
 		fuse_sync_writes(inode);
 		if (!write)
 			inode_unlock(inode);
+	}
+
+	if (fopen_direct_io && write) {
+		res = invalidate_inode_pages2_range(mapping, idx_from, idx_to);
+		if (res) {
+			fuse_put_request(fc, req);
+			return res;
+		}
 	}
 
 	io->should_dirty = !write && iter_is_iovec(iter);
