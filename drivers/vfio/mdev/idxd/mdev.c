@@ -1023,6 +1023,7 @@ static void idxd_vdcm_remove(struct mdev_device *mdev)
 	mutex_unlock(&wq->wq_lock);
 
 	vfio_unregister_group_dev(&vidxd->vdev);
+	vfio_uninit_group_dev(&vidxd->vdev);
 
 	kfree(vidxd);
 }
