@@ -874,6 +874,9 @@ struct fuse_conn {
 	/* meta strong consistency */
 	unsigned int invaldir_allentry:1;
 
+	/* relax restrictions in FOPEN_DIRECT_IO mode */
+	unsigned int direct_io_relax:1;
+
 	/** The number of requests waiting for completion */
 	atomic_t num_waiting;
 
