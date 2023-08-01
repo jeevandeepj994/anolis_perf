@@ -17,8 +17,10 @@
 
 #define NGBE_MAX_FDIR_INDICES               7
 #define NGBE_MAX_RSS_INDICES                8
+#define NGBE_MAX_VMDQ_INDICES               8
 #define NGBE_MAX_MSIX_Q_VECTORS_EMERALD     9
 #define NGBE_MAX_MSIX_VECTORS_EMERALD       9
+#define NGBE_RSS_DISABLED_MASK              0
 
 #define NGBE_MAX_RX_QUEUES		(NGBE_MAX_FDIR_INDICES + 1)
 #define NGBE_MAX_TX_QUEUES		(NGBE_MAX_FDIR_INDICES + 1)
@@ -126,6 +128,7 @@
 #define NGBE_RX_HDR_SIZE                       NGBE_RXBUFFER_256
 #define NGBE_RX_BUFFER_WRITE                   16      /* Must be power of 2 */
 
+#define NGBE_MAX_VF_MC_ENTRIES                 30
 #define NGBE_MAX_VF_FUNCTIONS                  8
 #define MAX_RX_QUEUES                          8
 #define MAX_TX_QUEUES                          8
@@ -158,6 +161,8 @@
 #define NGBE_INTR_MISC(A) BIT((A)->num_q_vectors)
 #define NGBE_INTR_MISC_VMDQ(A) BIT(((A)->num_q_vectors + (A)->ring_feature[RING_F_VMDQ].offset))
 #define NGBE_MAX_MACVLANS      8
+
+#define VMDQ_P(p)       ((p) + adapter->ring_feature[RING_F_VMDQ].offset)
 
 /* VLAN info */
 #define NGBE_TX_FLAGS_VLAN_SHIFT       16
@@ -527,6 +532,48 @@ struct hwmon_buff {
 };
 #endif /* CONFIG_HWMON */
 
+struct vf_stats {
+	u64 gprc;
+	u64 gorc;
+	u64 gptc;
+	u64 gotc;
+	u64 mprc;
+};
+
+struct vf_data_storage {
+	struct pci_dev *vfdev;
+	u8 __iomem *b4_addr;
+	u32 b4_buf[16];
+	unsigned char vf_mac_addresses[ETH_ALEN];
+	u16 vf_mc_hashes[NGBE_MAX_VF_MC_ENTRIES];
+	u16 num_vf_mc_hashes;
+	u16 default_vf_vlan_id;
+	u16 vlans_enabled;
+	bool clear_to_send;
+	struct vf_stats vfstats;
+	struct vf_stats last_vfstats;
+	struct vf_stats saved_rst_vfstats;
+	bool pf_set_mac;
+	u16 pf_vlan; /* When set, guest VLAN config not allowed. */
+	u16 pf_qos;
+	u16 min_tx_rate;
+	u16 max_tx_rate;
+	u16 vlan_count;
+	u8 spoofchk_enabled;
+
+	u8 trusted;
+	int xcast_mode;
+	unsigned int vf_api;
+};
+
+struct vf_macvlans {
+	struct list_head l;
+	int vf;
+	bool free;
+	bool is_macvlan;
+	u8 vf_macvlan[ETH_ALEN];
+};
+
 /* board specific private data structure */
 struct ngbe_adapter {
 	u8 __iomem *io_addr;    /* Mainly for iounmap use */
@@ -577,6 +624,7 @@ struct ngbe_adapter {
 	struct ngbe_ring *tx_ring[MAX_TX_QUEUES] ____cacheline_aligned_in_smp;
 	u32 tx_timeout_count;
 	u64 restart_queue;
+	u16 irq_remap_offset;
 
 	/* RX */
 	struct ngbe_ring *rx_ring[MAX_RX_QUEUES];
@@ -600,9 +648,17 @@ struct ngbe_adapter {
 	unsigned long link_check_timeout;
 	u64 lsc_int;
 
+	DECLARE_BITMAP(active_vfs, NGBE_MAX_VF_FUNCTIONS);
 	unsigned int num_vfs;
+	struct vf_data_storage *vfinfo;
+	struct vf_macvlans vf_mvs;
+	struct vf_macvlans *mv_list;
+	u32 timer_event_accumulator;
+	u32 vferr_refcount;
+
 	u8 default_up;
 
+	unsigned int num_vmdqs;
 	unsigned int queues_per_pool;
 	u32 wol;
 	u32 led_reg;
@@ -863,7 +919,7 @@ void ngbe_do_reset(struct net_device *netdev);
 u32 ngbe_rss_indir_tbl_entries(struct ngbe_adapter *adapter);
 
 void ngbe_vlan_strip_enable(struct ngbe_adapter *adapter);
-void ngbe_ptp_overflow_check(struct ngbe_adapter *adapter);
+void ngbe_ptp_overflow_chqueues_per_pooleck(struct ngbe_adapter *adapter);
 void ngbe_ptp_rx_hang(struct ngbe_adapter *adapter);
 int ngbe_ptp_get_ts_config(struct ngbe_adapter *adapter, struct ifreq *ifr);
 int ngbe_ptp_set_ts_config(struct ngbe_adapter *adapter, struct ifreq *ifr);
@@ -874,6 +930,12 @@ void ngbe_ptp_check_pps_event(struct ngbe_adapter *adapter);
 void ngbe_ptp_rx_hwtstamp(struct ngbe_adapter *adapter, struct sk_buff *skb);
 void ngbe_ptp_start_cyclecounter(struct ngbe_adapter *adapter);
 void ngbe_ptp_suspend(struct ngbe_adapter *adapter);
+void ngbe_ptp_overflow_check(struct ngbe_adapter *adapter);
 void ngbe_set_ethtool_ops(struct net_device *netdev);
+
+void ngbe_full_sync_mac_table(struct ngbe_adapter *adapter);
+int ngbe_add_mac_filter(struct ngbe_adapter *adapter, u8 *addr, u16 pool);
+int ngbe_del_mac_filter(struct ngbe_adapter *adapter, u8 *addr, u16 pool);
+void ngbe_sriov_reinit(struct ngbe_adapter *adapter);
 
 #endif /* _NGBE_H_ */
