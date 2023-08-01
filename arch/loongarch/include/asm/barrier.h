@@ -18,9 +18,10 @@
 #define mb()		fast_mb()
 #define iob()		fast_iob()
 
+/*Memory barrier for multiprocessors*/
 #define __smp_mb()	__asm__ __volatile__("dbar 0" : : : "memory")
 #define __smp_rmb()	__asm__ __volatile__("dbar 0" : : : "memory")
-#define __smp_wmb()	__asm__ __volatile__("dbar 0" : : : "memory")
+#define __smp_wmb()	(__asm__ __volatile__("dbar 0" : : : "memory"))
 
 #ifdef CONFIG_SMP
 #define __WEAK_LLSC_MB		"	dbar 0  \n"
