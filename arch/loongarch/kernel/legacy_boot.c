@@ -221,7 +221,7 @@ static int acpi_parse_madt_pch_pic_entries(void)
 	return 0;
 }
 
-int legacy_madt_table_init(void)
+int __init legacy_madt_table_init(void)
 {
 	int error;
 
@@ -404,7 +404,7 @@ static unsigned long init_initrd(void)
 }
 #endif
 
-void fw_init_cmdline(unsigned long argc, unsigned long cmdp)
+void __init fw_init_cmdline(unsigned long argc, unsigned long cmdp)
 {
 	int i;
 	char **_fw_argv;
@@ -508,16 +508,6 @@ unsigned int bpi_init(void)
 	return list_find(efi_bp);
 }
 
-static void register_addrs_set(u64 *registers, const u64 addr, int num)
-{
-	u64 i;
-
-	for (i = 0; i < num; i++) {
-		*registers = (i << 44) | addr;
-		registers++;
-	}
-}
-
 static int get_bpi_version(u64 *signature)
 {
 	u8 data[9];
@@ -538,7 +528,7 @@ static void __init parse_bpi_flags(void)
 		clear_bit(EFI_BOOT, &efi.flags);
 }
 
-unsigned long legacy_boot_init(unsigned long argc, unsigned long cmdptr, unsigned long bpi)
+unsigned long __init legacy_boot_init(unsigned long argc, unsigned long cmdptr, unsigned long bpi)
 {
 	int ret;
 
