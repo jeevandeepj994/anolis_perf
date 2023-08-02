@@ -66,7 +66,7 @@ struct loongsonlist_screeninfo {
 	struct  _extension_list_hdr header;
 	struct  screen_info si;
 };
-unsigned long legacy_boot_init(unsigned long argc,
+unsigned long __init legacy_boot_init(unsigned long argc,
 		unsigned long cmdptr, unsigned long bpi);
 extern int bpi_version;
 extern struct boot_params *efi_bp;
@@ -75,7 +75,7 @@ extern int set_processor_mask(u32 id, u32 flags);
 extern int __init setup_legacy_IRQ(void);
 extern struct loongson_system_configuration loongson_sysconf;
 extern unsigned long long smp_group[MAX_PACKAGES];
-extern int legacy_madt_table_init(void);
+extern int __init legacy_madt_table_init(void);
 extern struct pch_pic *pch_pic_priv[MAX_IO_PICS];
 extern struct irq_domain *get_cpudomain(void);
 extern int __init cpuintc_acpi_init(union acpi_subtable_headers *header,
