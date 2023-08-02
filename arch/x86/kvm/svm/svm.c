@@ -1521,6 +1521,15 @@ static void svm_set_rflags(struct kvm_vcpu *vcpu, unsigned long rflags)
 	to_svm(vcpu)->vmcb->save.rflags = rflags;
 }
 
+static bool svm_get_if_flag(struct kvm_vcpu *vcpu)
+{
+	struct vmcb *vmcb = to_svm(vcpu)->vmcb;
+
+	return sev_es_guest(vcpu->kvm)
+		? vmcb->control.int_state & SVM_GUEST_INTERRUPT_MASK
+		: kvm_get_rflags(vcpu) & X86_EFLAGS_IF;
+}
+
 static void svm_cache_reg(struct kvm_vcpu *vcpu, enum kvm_reg reg)
 {
 	switch (reg) {
@@ -2750,7 +2759,7 @@ static int svm_get_msr(struct kvm_vcpu *vcpu, struct msr_data *msr_info)
 static int svm_complete_emulated_msr(struct kvm_vcpu *vcpu, int err)
 {
 	struct vcpu_svm *svm = to_svm(vcpu);
-	if (!sev_es_guest(svm->vcpu.kvm) || !err)
+	if (!err || !sev_es_guest(vcpu->kvm) || WARN_ON_ONCE(!svm->ghcb))
 		return kvm_complete_insn_gp(&svm->vcpu, err);
 
 	ghcb_set_sw_exit_info_1(svm->ghcb, 1);
@@ -3480,14 +3489,7 @@ bool svm_interrupt_blocked(struct kvm_vcpu *vcpu)
 	if (!gif_set(svm))
 		return true;
 
-	if (sev_es_guest(svm->vcpu.kvm)) {
-		/*
-		 * SEV-ES guests to not expose RFLAGS. Use the VMCB interrupt mask
-		 * bit to determine the state of the IF flag.
-		 */
-		if (!(vmcb->control.int_state & SVM_GUEST_INTERRUPT_MASK))
-			return true;
-	} else if (is_guest_mode(vcpu)) {
+	if (is_guest_mode(vcpu)) {
 		/* As long as interrupts are being delivered...  */
 		if ((svm->nested.ctl.int_ctl & V_INTR_MASKING_MASK)
 		    ? !(svm->nested.hsave->save.rflags & X86_EFLAGS_IF)
@@ -3498,7 +3500,7 @@ bool svm_interrupt_blocked(struct kvm_vcpu *vcpu)
 		if (nested_exit_on_intr(svm))
 			return false;
 	} else {
-		if (!(kvm_get_rflags(vcpu) & X86_EFLAGS_IF))
+		if (!svm_get_if_flag(vcpu))
 			return true;
 	}
 
@@ -3604,6 +3606,8 @@ static void svm_flush_tlb_gva(struct kvm_vcpu *vcpu, gva_t gva)
 
 static void svm_prepare_guest_switch(struct kvm_vcpu *vcpu)
 {
+	if (sev_es_guest(vcpu->kvm))
+		sev_es_unmap_ghcb(to_svm(vcpu));
 }
 
 static inline void sync_cr8_to_lapic(struct kvm_vcpu *vcpu)
@@ -4508,6 +4512,7 @@ static struct kvm_x86_ops svm_x86_ops __initdata = {
 	.cache_reg = svm_cache_reg,
 	.get_rflags = svm_get_rflags,
 	.set_rflags = svm_set_rflags,
+	.get_if_flag = svm_get_if_flag,
 
 	.tlb_flush_all = svm_flush_tlb,
 	.tlb_flush_current = svm_flush_tlb,

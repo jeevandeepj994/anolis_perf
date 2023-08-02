@@ -94,7 +94,7 @@ static bool __sev_recycle_asids(int min_asid, int max_asid)
 	return true;
 }
 
-static int sev_asid_new(struct kvm_sev_info *sev)
+static int sev_asid_new(bool es_active)
 {
 	int pos, min_asid, max_asid;
 	bool retry = true;
@@ -105,8 +105,8 @@ static int sev_asid_new(struct kvm_sev_info *sev)
 	 * SEV-enabled guests must use asid from min_sev_asid to max_sev_asid.
 	 * SEV-ES-enabled guest can use from 1 to min_sev_asid - 1.
 	 */
-	min_asid = sev->es_active ? 0 : min_sev_asid - 1;
-	max_asid = sev->es_active ? min_sev_asid - 1 : max_sev_asid;
+	min_asid = es_active ? 0 : min_sev_asid - 1;
+	max_asid = es_active ? min_sev_asid - 1 : max_sev_asid;
 again:
 	pos = find_next_zero_bit(sev_asid_bitmap, max_sev_asid, min_asid);
 	if (pos >= max_asid) {
@@ -194,6 +194,7 @@ static void sev_unbind_asid(struct kvm *kvm, unsigned int handle)
 static int sev_guest_init(struct kvm *kvm, struct kvm_sev_cmd *argp)
 {
 	struct kvm_sev_info *sev = &to_kvm_svm(kvm)->sev_info;
+	bool es_active = argp->id == KVM_SEV_ES_INIT;
 	int asid, ret;
 
 	if (kvm->created_vcpus)
@@ -203,7 +204,7 @@ static int sev_guest_init(struct kvm *kvm, struct kvm_sev_cmd *argp)
 	if (unlikely(sev->active))
 		return ret;
 
-	asid = sev_asid_new(sev);
+	asid = sev_asid_new(es_active);
 	if (asid < 0)
 		return ret;
 
@@ -212,6 +213,7 @@ static int sev_guest_init(struct kvm *kvm, struct kvm_sev_cmd *argp)
 		goto e_free;
 
 	sev->active = true;
+	sev->es_active = es_active;
 	sev->asid = asid;
 	INIT_LIST_HEAD(&sev->regions_list);
 
@@ -220,16 +222,6 @@ static int sev_guest_init(struct kvm *kvm, struct kvm_sev_cmd *argp)
 e_free:
 	sev_asid_free(asid);
 	return ret;
-}
-
-static int sev_es_guest_init(struct kvm *kvm, struct kvm_sev_cmd *argp)
-{
-	if (!sev_es)
-		return -ENOTTY;
-
-	to_kvm_svm(kvm)->sev_info.es_active = true;
-
-	return sev_guest_init(kvm, argp);
 }
 
 static int sev_bind_asid(struct kvm *kvm, unsigned int handle, int *error)
@@ -602,49 +594,65 @@ static int sev_es_sync_vmsa(struct vcpu_svm *svm)
 	return 0;
 }
 
-static int sev_launch_update_vmsa(struct kvm *kvm, struct kvm_sev_cmd *argp)
+static int __sev_launch_update_vmsa(struct kvm *kvm, struct kvm_vcpu *vcpu,
+				    int *error)
 {
-	struct kvm_sev_info *sev = &to_kvm_svm(kvm)->sev_info;
 	struct sev_data_launch_update_vmsa *vmsa;
-	int i, ret;
-
-	if (!sev_es_guest(kvm))
-		return -ENOTTY;
+	struct vcpu_svm *svm = to_svm(vcpu);
+	int ret;
 
 	vmsa = kzalloc(sizeof(*vmsa), GFP_KERNEL);
 	if (!vmsa)
 		return -ENOMEM;
 
-	for (i = 0; i < kvm->created_vcpus; i++) {
-		struct vcpu_svm *svm = to_svm(kvm->vcpus[i]);
+	/* Perform some pre-encryption checks against the VMSA */
+	ret = sev_es_sync_vmsa(svm);
+	if (ret)
+		goto e_free;
 
-		/* Perform some pre-encryption checks against the VMSA */
-		ret = sev_es_sync_vmsa(svm);
-		if (ret)
-			goto e_free;
+	/*
+	 * The LAUNCH_UPDATE_VMSA command will perform in-place encryption of
+	 * the VMSA memory content (i.e it will write the same memory region
+	 * with the guest's key), so invalidate it first.
+	 */
+	clflush_cache_range(svm->vmsa, PAGE_SIZE);
 
-		/*
-		 * The LAUNCH_UPDATE_VMSA command will perform in-place
-		 * encryption of the VMSA memory content (i.e it will write
-		 * the same memory region with the guest's key), so invalidate
-		 * it first.
-		 */
-		clflush_cache_range(svm->vmsa, PAGE_SIZE);
+	vmsa->handle = to_kvm_svm(kvm)->sev_info.handle;
+	vmsa->address = __sme_pa(svm->vmsa);
+	vmsa->len = PAGE_SIZE;
+	ret = sev_issue_cmd(kvm, SEV_CMD_LAUNCH_UPDATE_VMSA, vmsa, error);
 
-		vmsa->handle = sev->handle;
-		vmsa->address = __sme_pa(svm->vmsa);
-		vmsa->len = PAGE_SIZE;
-		ret = sev_issue_cmd(kvm, SEV_CMD_LAUNCH_UPDATE_VMSA, vmsa,
-				    &argp->error);
-		if (ret)
-			goto e_free;
+	if (ret)
+		goto e_free;
 
-		svm->vcpu.arch.guest_state_protected = true;
-	}
+	vcpu->arch.guest_state_protected = true;
 
 e_free:
 	kfree(vmsa);
 	return ret;
+}
+
+static int sev_launch_update_vmsa(struct kvm *kvm, struct kvm_sev_cmd *argp)
+{
+	struct kvm_vcpu *vcpu;
+	int i, ret;
+
+	if (!sev_es_guest(kvm))
+		return -ENOTTY;
+
+	kvm_for_each_vcpu(i, vcpu, kvm) {
+		ret = mutex_lock_killable(&vcpu->mutex);
+		if (ret)
+			return ret;
+
+		ret = __sev_launch_update_vmsa(kvm, vcpu, &argp->error);
+
+		mutex_unlock(&vcpu->mutex);
+		if (ret)
+			return ret;
+	}
+
+	return 0;
 }
 
 static int sev_launch_measure(struct kvm *kvm, struct kvm_sev_cmd *argp)
@@ -2125,11 +2133,14 @@ int svm_mem_enc_op(struct kvm *kvm, void __user *argp)
 	mutex_lock(&kvm->lock);
 
 	switch (sev_cmd.id) {
+	case KVM_SEV_ES_INIT:
+		if (!sev_es) {
+			r = -ENOTTY;
+			goto out;
+		}
+		fallthrough;
 	case KVM_SEV_INIT:
 		r = sev_guest_init(kvm, &sev_cmd);
-		break;
-	case KVM_SEV_ES_INIT:
-		r = sev_es_guest_init(kvm, &sev_cmd);
 		break;
 	case KVM_SEV_LAUNCH_START:
 		r = sev_launch_start(kvm, &sev_cmd);
@@ -2507,51 +2518,39 @@ void sev_guest_memory_reclaimed(struct kvm *kvm)
  * Pages used by hardware to hold guest encrypted state must be flushed before
  * returning them to the system.
  */
-static void sev_flush_guest_memory(struct vcpu_svm *svm, void *va,
-				   unsigned long len)
+static void sev_flush_encrypted_page(struct kvm_vcpu *vcpu, void *va)
 {
+	int asid = to_kvm_svm(vcpu->kvm)->sev_info.asid;
+
 	/*
-	 * If hardware enforced cache coherency for encrypted mappings of the
-	 * same physical page is supported, nothing to do.
+	 * Note!  The address must be a kernel address, as regular page walk
+	 * checks are performed by VM_PAGE_FLUSH, i.e. operating on a user
+	 * address is non-deterministic and unsafe.  This function deliberately
+	 * takes a pointer to deter passing in a user address.
 	 */
-	if (boot_cpu_has(X86_FEATURE_SME_COHERENT))
+	unsigned long addr = (unsigned long)va;
+
+	/*
+	 * If CPU enforced cache coherency for encrypted mappings of the
+	 * same physical page is supported, use CLFLUSHOPT instead. NOTE: cache
+	 * flush is still needed in order to work properly with DMA devices.
+	 */
+	if (boot_cpu_has(X86_FEATURE_SME_COHERENT)) {
+		clflush_cache_range(va, PAGE_SIZE);
 		return;
-
-	/*
-	 * If the VM Page Flush MSR is supported, use it to flush the page
-	 * (using the page virtual address and the guest ASID).
-	 */
-	if (boot_cpu_has(X86_FEATURE_VM_PAGE_FLUSH)) {
-		struct kvm_sev_info *sev;
-		unsigned long va_start;
-		u64 start, stop;
-
-		/* Align start and stop to page boundaries. */
-		va_start = (unsigned long)va;
-		start = (u64)va_start & PAGE_MASK;
-		stop = PAGE_ALIGN((u64)va_start + len);
-
-		if (start < stop) {
-			sev = &to_kvm_svm(svm->vcpu.kvm)->sev_info;
-
-			while (start < stop) {
-				wrmsrl(MSR_AMD64_VM_PAGE_FLUSH,
-				       start | sev->asid);
-
-				start += PAGE_SIZE;
-			}
-
-			return;
-		}
-
-		WARN(1, "Address overflow, using WBINVD\n");
 	}
 
 	/*
-	 * Hardware should always have one of the above features,
-	 * but if not, use WBINVD and issue a warning.
+	 * VM Page Flush takes a host virtual address and a guest ASID.  Fall
+	 * back to WBINVD if this faults so as not to make any problems worse
+	 * by leaving stale encrypted data in the cache.
 	 */
-	WARN_ONCE(1, "Using WBINVD to flush guest memory\n");
+	if (WARN_ON_ONCE(wrmsrl_safe(MSR_AMD64_VM_PAGE_FLUSH, addr | asid)))
+		goto do_wbinvd;
+
+	return;
+
+do_wbinvd:
 	wbinvd_on_all_cpus();
 }
 
@@ -2565,7 +2564,8 @@ void sev_free_vcpu(struct kvm_vcpu *vcpu)
 	svm = to_svm(vcpu);
 
 	if (vcpu->arch.guest_state_protected)
-		sev_flush_guest_memory(svm, svm->vmsa, PAGE_SIZE);
+		sev_flush_encrypted_page(vcpu, svm->vmsa);
+
 	__free_page(virt_to_page(svm->vmsa));
 
 	if (svm->ghcb_sa_free)
@@ -2783,7 +2783,7 @@ vmgexit_err:
 	return -EINVAL;
 }
 
-static void pre_sev_es_run(struct vcpu_svm *svm)
+void sev_es_unmap_ghcb(struct vcpu_svm *svm)
 {
 	if (!svm->ghcb)
 		return;
@@ -2818,9 +2818,6 @@ void pre_sev_run(struct vcpu_svm *svm, int cpu)
 {
 	struct svm_cpu_data *sd = per_cpu(svm_data, cpu);
 	int asid = sev_get_asid(svm->vcpu.kvm);
-
-	/* Perform any SEV-ES pre-run actions */
-	pre_sev_es_run(svm);
 
 	/* Assign the asid allocated with this SEV guest */
 	svm->vmcb->control.asid = asid;
@@ -3249,5 +3246,8 @@ void sev_vcpu_deliver_sipi_vector(struct kvm_vcpu *vcpu, u8 vector)
 	 * the guest will set the CS and RIP. Set SW_EXIT_INFO_2 to a
 	 * non-zero value.
 	 */
+	if (!svm->ghcb)
+		return;
+
 	ghcb_set_sw_exit_info_2(svm->ghcb, 1);
 }
