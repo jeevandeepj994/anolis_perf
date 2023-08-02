@@ -889,7 +889,7 @@ static void __cpuacct_get_usage_result(struct cpuacct *ca, int cpu,
 		res->steal = 0;
 
 		elapse = clock - schedstat_val(se->cg_init_time);
-		complement = res->idle + se->sum_exec_raw + ineff;
+		complement = res->idle + se->sum_exec_runtime + ineff;
 		if (elapse > complement)
 			res->steal = elapse - complement;
 
