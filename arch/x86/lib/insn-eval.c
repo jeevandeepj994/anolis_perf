@@ -1442,7 +1442,7 @@ void __user *insn_get_addr_ref(struct insn *insn, struct pt_regs *regs)
 	}
 }
 
-unsigned long insn_get_effective_ip(struct pt_regs *regs)
+int insn_get_effective_ip(struct pt_regs *regs, unsigned long *ip)
 {
 	unsigned long seg_base = 0;
 
@@ -1455,10 +1455,12 @@ unsigned long insn_get_effective_ip(struct pt_regs *regs)
 	if (!user_64bit_mode(regs)) {
 		seg_base = insn_get_seg_base(regs, INAT_SEG_REG_CS);
 		if (seg_base == -1L)
-			return 0;
+			return -EINVAL;
 	}
 
-	return seg_base + regs->ip;
+	*ip = seg_base + regs->ip;
+
+	return 0;
 }
 
 /**
@@ -1471,18 +1473,17 @@ unsigned long insn_get_effective_ip(struct pt_regs *regs)
  *
  * Returns:
  *
- * Number of instruction bytes copied.
- *
- * 0 if nothing was copied.
+ * - number of instruction bytes copied.
+ * - 0 if nothing was copied.
+ * - -EINVAL if the linear address of the instruction could not be calculated
  */
 int insn_fetch_from_user(struct pt_regs *regs, unsigned char buf[MAX_INSN_SIZE])
 {
 	unsigned long ip;
 	int not_copied;
 
-	ip = insn_get_effective_ip(regs);
-	if (!ip)
-		return 0;
+	if (insn_get_effective_ip(regs, &ip))
+		return -EINVAL;
 
 	not_copied = copy_from_user(buf, (void __user *)ip, MAX_INSN_SIZE);
 
@@ -1500,18 +1501,17 @@ int insn_fetch_from_user(struct pt_regs *regs, unsigned char buf[MAX_INSN_SIZE])
  *
  * Returns:
  *
- * Number of instruction bytes copied.
- *
- * 0 if nothing was copied.
+ *  - number of instruction bytes copied.
+ *  - 0 if nothing was copied.
+ *  - -EINVAL if the linear address of the instruction could not be calculated.
  */
 int insn_fetch_from_user_inatomic(struct pt_regs *regs, unsigned char buf[MAX_INSN_SIZE])
 {
 	unsigned long ip;
 	int not_copied;
 
-	ip = insn_get_effective_ip(regs);
-	if (!ip)
-		return 0;
+	if (insn_get_effective_ip(regs, &ip))
+		return -EINVAL;
 
 	not_copied = __copy_from_user_inatomic(buf, (void __user *)ip, MAX_INSN_SIZE);
 
