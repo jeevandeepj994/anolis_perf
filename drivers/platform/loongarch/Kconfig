@@ -21,7 +21,6 @@ config LOONGSON_GENERIC_LAPTOP
 	depends on BACKLIGHT_CLASS_DEVICE
 	depends on INPUT
 	depends on MACH_LOONGSON64
-	select ACPI_VIDEO
 	select INPUT_SPARSEKMAP
 	default y
 	help
