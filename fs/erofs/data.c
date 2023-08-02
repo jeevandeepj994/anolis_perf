@@ -56,7 +56,7 @@ void *__erofs_bread(struct super_block *sb, struct erofs_buf *buf,
 
 	if (!page || page->index != index) {
 		erofs_put_metabuf(buf);
-		if (EROFS_SB(sb)->bootstrap) {
+		if (sb && EROFS_SB(sb)->bootstrap) {
 			unsigned int nofs_flag;
 
 			nofs_flag = memalloc_nofs_save();
