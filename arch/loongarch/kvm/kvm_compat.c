@@ -41,3 +41,21 @@ int kvm_set_spte_hva(struct kvm *kvm, unsigned long hva, pte_t pte)
 {
 	return _kvm_set_spte_hva(kvm, hva, pte);
 }
+
+void kvm_arch_sync_dirty_log(struct kvm *kvm, struct kvm_memory_slot *memslot)
+{
+
+}
+
+int kvm_arch_vcpu_precreate(struct kvm *kvm, unsigned int id)
+{
+	return 0;
+}
+
+void kvm_arch_flush_remote_tlbs_memslot(struct kvm *kvm,
+					struct kvm_memory_slot *memslot)
+{
+#ifndef CONFIG_HAVE_KVM_ARCH_TLB_FLUSH_ALL
+	kvm_flush_remote_tlbs(kvm);
+#endif
+}

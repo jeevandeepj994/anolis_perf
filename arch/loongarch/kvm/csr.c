@@ -12,6 +12,7 @@
 #include "ls_irq.h"
 #include "kvm_compat.h"
 #include "kvmcsr.h"
+#include "irq.h"
 
 static inline int CASE_READ_SW_GCSR(csr, regid, csrid)
 {
