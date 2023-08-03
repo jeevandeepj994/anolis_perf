@@ -270,6 +270,18 @@ static void bsp_init_hygon(struct cpuinfo_x86 *c)
 	}
 }
 
+static void init_hygon_cap(struct cpuinfo_x86 *c)
+{
+	/* Test for Extended Feature Flags presence */
+	if (cpuid_eax(0x8C860000) >= 0x8C860000) {
+		/*
+		 * Store Extended Feature Flags of the CPU capability
+		 * bit array
+		 */
+		c->x86_capability[CPUID_8C86_0000_EDX] = cpuid_edx(0x8C860000);
+	}
+}
+
 static void early_detect_mem_encrypt(struct cpuinfo_x86 *c)
 {
 	u64 msr;
@@ -444,6 +456,8 @@ static void init_hygon(struct cpuinfo_x86 *c)
 		set_cpu_bug(c, X86_BUG_SYSRET_SS_ATTRS);
 
 	check_null_seg_clears_base(c);
+
+	init_hygon_cap(c);
 }
 
 static void cpu_detect_tlb_hygon(struct cpuinfo_x86 *c)
