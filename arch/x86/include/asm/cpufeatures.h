@@ -438,6 +438,8 @@
 /* AMD Secure Encrypted Virtualization - Encrypted State */
 #define X86_FEATURE_SEV_ES		(19*32 + 3)
 #define X86_FEATURE_SME_COHERENT	(19*32 + 10) /* "" AMD hardware-enforced cache coherency */
+/* HYGON Secure Isolated Virtualization */
+#define X86_FEATURE_CSV3		(19*32 + 30) /* HYGON Secure Isolated Virtualization */
 
 /* HYGON-defined CPU features, CPUID level 0x8c860000:0 (EDX), word 21 */
 #define X86_FEATURE_SM3			(21*32 + 1) /* SM3 instructions */
