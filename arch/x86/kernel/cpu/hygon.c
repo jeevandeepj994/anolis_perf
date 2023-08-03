@@ -270,6 +270,76 @@ static void bsp_init_hygon(struct cpuinfo_x86 *c)
 	}
 }
 
+static void early_detect_mem_encrypt(struct cpuinfo_x86 *c)
+{
+	u64 msr;
+	u32 eax;
+	char *cap;
+	const char *csv_flag = "csv";
+	const char *csv2_flag = "csv2";
+
+	eax = cpuid_eax(0x8000001f);
+
+	/* Check whether SME or CSV is supported */
+	if (!(eax & (BIT(0) | BIT(1))))
+		return;
+
+	/* If BIOS has not enabled SME then don't advertise the SME feature. */
+	rdmsrl(MSR_K8_SYSCFG, msr);
+	if (!(msr & MSR_K8_SYSCFG_MEM_ENCRYPT))
+		goto clear_all;
+
+	/*
+	 * Always adjust physical address bits. Even though this will be a
+	 * value above 32-bits this is still done for CONFIG_X86_32 so that
+	 * accurate values are reported.
+	 */
+	c->x86_phys_bits -= (cpuid_ebx(0x8000001f) >> 6) & 0x3f;
+
+	/* Don't advertise SME and CSV features under CONFIG_X86_32. */
+	if (IS_ENABLED(CONFIG_X86_32))
+		goto clear_all;
+
+	/*
+	 * If BIOS has not enabled CSV then don't advertise the CSV and CSV2
+	 * feature.
+	 */
+	rdmsrl(MSR_K7_HWCR, msr);
+	if (!(msr & MSR_K7_HWCR_SMMLOCK))
+		goto clear_csv;
+
+#ifdef CONFIG_X86_FEATURE_NAMES
+	if (eax & BIT(1)) {
+		if ((x86_cap_flags[X86_FEATURE_SEV] != NULL) &&
+		    (!WARN_ON(strlen(csv_flag) >
+			      strlen(x86_cap_flags[X86_FEATURE_SEV])))) {
+			cap = (char *)x86_cap_flags[X86_FEATURE_SEV];
+
+			memset(cap, 0, strlen(x86_cap_flags[X86_FEATURE_SEV]));
+			memcpy(cap, csv_flag, strlen(csv_flag));
+		}
+	}
+	if (eax & BIT(3)) {
+		if ((x86_cap_flags[X86_FEATURE_SEV_ES] != NULL) &&
+		    (!WARN_ON(strlen(csv2_flag) >
+			      strlen(x86_cap_flags[X86_FEATURE_SEV_ES])))) {
+			cap = (char *)x86_cap_flags[X86_FEATURE_SEV_ES];
+
+			memset(cap, 0, strlen(x86_cap_flags[X86_FEATURE_SEV_ES]));
+			memcpy(cap, csv2_flag, strlen(csv2_flag));
+		}
+	}
+#endif
+
+	return;
+
+clear_all:
+	setup_clear_cpu_cap(X86_FEATURE_SME);
+clear_csv:
+	setup_clear_cpu_cap(X86_FEATURE_SEV);
+	setup_clear_cpu_cap(X86_FEATURE_SEV_ES);
+}
+
 static void early_init_hygon(struct cpuinfo_x86 *c)
 {
 	u32 dummy;
@@ -314,6 +384,8 @@ static void early_init_hygon(struct cpuinfo_x86 *c)
 	set_cpu_cap(c, X86_FEATURE_VMMCALL);
 
 	hygon_get_topology_early(c);
+
+	early_detect_mem_encrypt(c);
 }
 
 static void init_hygon(struct cpuinfo_x86 *c)
