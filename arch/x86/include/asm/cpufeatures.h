@@ -13,7 +13,7 @@
 /*
  * Defines x86 CPU feature bits
  */
-#define NCAPINTS			20	   /* N 32-bit words worth of info */
+#define NCAPINTS			22	   /* N 32-bit words worth of info */
 #define NBUGINTS			1	   /* N 32-bit bug flags */
 
 /*
@@ -438,6 +438,10 @@
 /* AMD Secure Encrypted Virtualization - Encrypted State */
 #define X86_FEATURE_SEV_ES		(19*32 + 3)
 #define X86_FEATURE_SME_COHERENT	(19*32 + 10) /* "" AMD hardware-enforced cache coherency */
+
+/* HYGON-defined CPU features, CPUID level 0x8c860000:0 (EDX), word 21 */
+#define X86_FEATURE_SM3			(21*32 + 1) /* SM3 instructions */
+#define X86_FEATURE_SM4			(21*32 + 2) /* SM4 instructions */
 
 /*
  * BUG word(s)
