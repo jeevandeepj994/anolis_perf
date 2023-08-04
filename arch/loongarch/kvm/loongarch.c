@@ -28,6 +28,7 @@
 #include "kvmcpu.h"
 #include <asm/setup.h>
 #include <asm/time.h>
+#include <asm/paravirt.h>
 
 #include "intc/ls3a_ipi.h"
 #include "intc/ls7a_irq.h"
@@ -89,7 +90,38 @@ struct kvm_stats_debugfs_item debugfs_entries[] = {
 	VM_STAT("set_ls7a_ioapic", set_ls7a_ioapic),
 	VM_STAT("get_ls7a_ioapic", get_ls7a_ioapic),
 	VM_STAT("set_ls3a_ext_irq", set_ls3a_ext_irq),
+	VM_STAT("get_ls3a_ext_irq", get_ls3a_ext_irq),
+	VM_STAT("ls3a_ext_irq", trigger_ls3a_ext_irq),
 	{NULL}
+};
+
+static const struct trace_print_flags kvm_trace_symbol_exit_types[] = {
+	{ KVM_TRACE_EXIT_INT,		"Interrupt" },
+	{ KVM_TRACE_EXIT_TLBLD,		"TLB (LD)" },
+	{ KVM_TRACE_EXIT_TLBST,		"TLB (ST)" },
+	{ KVM_TRACE_EXIT_TLBI,		"TLB Ifetch" },
+	{ KVM_TRACE_EXIT_TLBMOD,	"TLB Mod" },
+	{ KVM_TRACE_EXIT_TLBRI,		"TLB RI" },
+	{ KVM_TRACE_EXIT_TLBXI,		"TLB XI" },
+	{ KVM_TRACE_EXIT_TLBPE,		"TLB Previlege Error" },
+	{ KVM_TRACE_EXIT_ADDE,		"Address Error" },
+	{ KVM_TRACE_EXIT_UNALIGN,	"Address unalign" },
+	{ KVM_TRACE_EXIT_ODB,		"Out boundary" },
+	{ KVM_TRACE_EXIT_SYSCALL,	"System Call" },
+	{ KVM_TRACE_EXIT_BP,		"Breakpoint" },
+	{ KVM_TRACE_EXIT_INE,		"Reserved Inst" },
+	{ KVM_TRACE_EXIT_IPE,		"Inst prev error" },
+	{ KVM_TRACE_EXIT_FPDIS,		"FPU disable" },
+	{ KVM_TRACE_EXIT_LSXDIS,	"LSX disable" },
+	{ KVM_TRACE_EXIT_LASXDIS,	"LASX disable" },
+	{ KVM_TRACE_EXIT_FPE,		"FPE" },
+	{ KVM_TRACE_EXIT_WATCH,		"DEBUG" },
+	{ KVM_TRACE_EXIT_GSPR,		"GSPR" },
+	{ KVM_TRACE_EXIT_HC,		"Hypercall" },
+	{ KVM_TRACE_EXIT_GCM,		"CSR Mod" },
+	{ KVM_TRACE_EXIT_IDLE,		"IDLE" },
+	{ KVM_TRACE_EXIT_CACHE,		"CACHE" },
+	{ KVM_TRACE_EXIT_SIGNAL,	"Signal" },
 };
 
 bool kvm_trace_guest_mode_change;
@@ -145,11 +177,11 @@ void kvm_update_stolen_time(struct kvm_vcpu *vcpu)
 	if (st->version & 1)
 		st->version += 1; /* first time write, random junk */
 	st->version += 1;
-	smp_wmb();/*Memory barrier for multiprocessors*/
+	smp_wmb();
 	st->steal += current->sched_info.run_delay -
 		vcpu->arch.st.last_steal;
 	vcpu->arch.st.last_steal = current->sched_info.run_delay;
-	smp_wmb();/*Memory barrier for multiprocessors*/
+	smp_wmb();
 	st->version += 1;
 
 	kvm_unmap_gfn(vcpu, &map, &vcpu->arch.st.cache, true, false);
@@ -245,7 +277,6 @@ int kvm_arch_hardware_enable(void)
 	gcfg |= KVM_GCFG_MATC_ROOT;
 	gcfg |= KVM_GCFG_TIT;
 	kvm_write_csr_gcfg(gcfg);
-
 	kvm_flush_tlb_all();
 
 	/* Enable using TGID  */
@@ -508,20 +539,19 @@ static enum hrtimer_restart kvm_swtimer_wakeup(struct hrtimer *timer)
 	return kvm_count_timeout(vcpu);
 }
 
-
 static void _kvm_vcpu_init(struct kvm_vcpu *vcpu)
 {
 	int i;
 
 	for_each_possible_cpu(i)
 		vcpu->arch.vpid[i] = 0;
+
 	hrtimer_init(&vcpu->arch.swtimer, CLOCK_MONOTONIC,
 			HRTIMER_MODE_ABS_PINNED);
 	vcpu->arch.swtimer.function = kvm_swtimer_wakeup;
 	vcpu->arch.fpu_enabled = true;
 	vcpu->arch.lsx_enabled = true;
 }
-
 
 int kvm_arch_vcpu_create(struct kvm_vcpu *vcpu)
 {
@@ -530,12 +560,12 @@ int kvm_arch_vcpu_create(struct kvm_vcpu *vcpu)
 	vcpu->arch.vcpu_run = kvm_enter_guest;
 	vcpu->arch.handle_exit = _kvm_handle_exit;
 	vcpu->arch.host_ecfg = (kvm_read_csr_ecfg() & KVM_ECFG_VS);
+
 	/*
 	 * kvm all exceptions share one exception entry, and host <-> guest switch
 	 * also switch excfg.VS field, keep host excfg.VS info here
 	 */
 	vcpu->arch.csr = kzalloc(sizeof(struct loongarch_csrs), GFP_KERNEL);
-
 	if (!vcpu->arch.csr)
 		return -ENOMEM;
 
@@ -543,7 +573,6 @@ int kvm_arch_vcpu_create(struct kvm_vcpu *vcpu)
 	vcpu->arch.last_sched_cpu = -1;
 	vcpu->arch.last_exec_cpu = -1;
 	_kvm_vcpu_init(vcpu);
-
 	return 0;
 }
 
@@ -551,6 +580,7 @@ static void _kvm_vcpu_uninit(struct kvm_vcpu *vcpu)
 {
 	int cpu;
 	struct kvm_context *context;
+
 	/*
 	 * If the VCPU is freed and reused as another VCPU, we don't want the
 	 * matching pointer wrongly hanging around in last_vcpu.
@@ -574,7 +604,6 @@ void kvm_arch_vcpu_destroy(struct kvm_vcpu *vcpu)
 		kvm_release_pfn(cache->pfn, cache->dirty, cache);
 	kfree(vcpu->arch.csr);
 }
-
 #define KVM_GUESTDBG_VALID_MASK (KVM_GUESTDBG_ENABLE | \
 		KVM_GUESTDBG_USE_SW_BP | KVM_GUESTDBG_SINGLESTEP)
 int kvm_arch_vcpu_ioctl_set_guest_debug(struct kvm_vcpu *vcpu,
@@ -612,7 +641,7 @@ int kvm_arch_vcpu_ioctl_run(struct kvm_vcpu *vcpu)
 		vcpu->mmio_needed = 0;
 	} else if (vcpu->arch.is_hypcall) {
 		/* set return value for hypercall v0 register */
-		vcpu->arch.gprs[KVM_REG_V0] = run->hypercall.ret;
+		vcpu->arch.gprs[KVM_REG_A0] = run->hypercall.ret;
 		vcpu->arch.is_hypcall = 0;
 	}
 
@@ -1024,7 +1053,6 @@ static int _kvm_set_reg(struct kvm_vcpu *vcpu, const struct kvm_one_reg *reg)
 	ret = -EINVAL;
 	if ((reg->id & KVM_REG_SIZE_MASK) == KVM_REG_SIZE_U64) {
 		u64 __user *uaddr64 = (u64 __user *)(long)reg->addr;
-
 		ret = get_user(v, uaddr64);
 	} else if ((reg->id & KVM_REG_SIZE_MASK) == KVM_REG_SIZE_U32) {
 		u32 __user *uaddr32 = (u32 __user *)(long)reg->addr;
@@ -1130,7 +1158,7 @@ static int kvm_vm_ioctl_get_irqchip(struct kvm *kvm, struct loongarch_kvm_irqchi
 		r = kvm_get_ls7a_ioapic(kvm, (void *)chip->data);
 		break;
 	case KVM_IRQCHIP_LS3A_GIPI:
-		if (dlen != sizeof(gipiState)) {
+		if (dlen != sizeof(struct gipiState)) {
 			kvm_err("get gipi state err dlen:%d\n", dlen);
 			goto dlen_err;
 		}
@@ -1173,7 +1201,7 @@ static int kvm_vm_ioctl_set_irqchip(struct kvm *kvm, struct loongarch_kvm_irqchi
 		r = kvm_set_ls7a_ioapic(kvm, (void *)chip->data);
 		break;
 	case KVM_IRQCHIP_LS3A_GIPI:
-		if (dlen != sizeof(gipiState)) {
+		if (dlen != sizeof(struct gipiState)) {
 			kvm_err("set gipi state err dlen:%d\n", dlen);
 			goto dlen_err;
 		}
@@ -1352,7 +1380,6 @@ long kvm_arch_vcpu_ioctl(struct file *filp, unsigned int ioctl,
 	}
 	case KVM_CHECK_EXTENSION: {
 		unsigned int ext;
-
 		if (copy_from_user(&ext, argp, sizeof(ext)))
 			return -EFAULT;
 		switch (ext) {
@@ -1372,7 +1399,6 @@ long kvm_arch_vcpu_ioctl(struct file *filp, unsigned int ioctl,
 	{
 		int i;
 		struct  kvm_loongarch_vcpu_state vcpu_state;
-
 		r = -EFAULT;
 
 		vcpu_state.online_vcpus = vcpu->kvm->arch.online_vcpus;
@@ -1393,7 +1419,6 @@ long kvm_arch_vcpu_ioctl(struct file *filp, unsigned int ioctl,
 	{
 		int i;
 		struct  kvm_loongarch_vcpu_state vcpu_state;
-
 		r = -EFAULT;
 
 		if (copy_from_user(&vcpu_state, argp, sizeof(struct kvm_loongarch_vcpu_state)))
@@ -1487,7 +1512,6 @@ create_irqchip_unlock:
 	case KVM_GET_IRQCHIP: {
 		struct loongarch_kvm_irqchip *kchip;
 		struct loongarch_kvm_irqchip uchip;
-
 		if (copy_from_user(&uchip, argp, sizeof(struct loongarch_kvm_irqchip)))
 			goto out;
 		kchip = memdup_user(argp, uchip.len);
@@ -1512,7 +1536,6 @@ get_irqchip_out:
 	case KVM_SET_IRQCHIP: {
 		struct loongarch_kvm_irqchip *kchip;
 		struct loongarch_kvm_irqchip uchip;
-
 		if (copy_from_user(&uchip, argp, sizeof(struct loongarch_kvm_irqchip)))
 			goto out;
 
@@ -1903,10 +1926,8 @@ void kvm_own_lasx(struct kvm_vcpu *vcpu)
 	 * Enable FP if enabled in guest, since we're restoring FP context
 	 * anyway.
 	 */
-	if (_kvm_guest_has_lsx(&vcpu->arch)) {
-		/* Enable LSX for guest */
+	if (_kvm_guest_has_lsx(&vcpu->arch))
 		kvm_set_csr_euen(KVM_EUEN_LSXEN);
-	}
 
 	/*
 	 * Enable FPU if enabled in guest, since we're restoring FPU context
@@ -1965,6 +1986,7 @@ void kvm_lose_fpu(struct kvm_vcpu *vcpu)
 {
 	preempt_disable();
 	if (cpu_has_lasx && (vcpu->arch.aux_inuse & KVM_LARCH_LASX)) {
+
 #ifdef CONFIG_CPU_HAS_LASX
 		kvm_save_lasx(vcpu);
 		trace_kvm_aux(vcpu, KVM_TRACE_AUX_SAVE, KVM_TRACE_AUX_FPU_LSX_LASX);
@@ -1973,12 +1995,14 @@ void kvm_lose_fpu(struct kvm_vcpu *vcpu)
 		disable_lasx();
 		disable_lsx();
 #endif
+
 		if (vcpu->arch.aux_inuse & KVM_LARCH_FPU)
 			kvm_clear_csr_euen(KVM_EUEN_FPEN);
 
 		vcpu->arch.aux_inuse &= ~(KVM_LARCH_FPU |
 					 KVM_LARCH_LSX | KVM_LARCH_LASX);
 	} else if (cpu_has_lsx && vcpu->arch.aux_inuse & KVM_LARCH_LSX) {
+
 #ifdef CONFIG_CPU_HAS_LASX
 		kvm_save_lsx(vcpu);
 		trace_kvm_aux(vcpu, KVM_TRACE_AUX_SAVE, KVM_TRACE_AUX_FPU_LSX);
@@ -1986,6 +2010,7 @@ void kvm_lose_fpu(struct kvm_vcpu *vcpu)
 		/* Disable LSX & FPU */
 		disable_lsx();
 #endif
+
 		if (vcpu->arch.aux_inuse & KVM_LARCH_FPU)
 			kvm_clear_csr_euen(KVM_EUEN_FPEN);
 

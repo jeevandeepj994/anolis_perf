@@ -93,7 +93,7 @@ struct kvm_ls3a_extirq_state {
 	uint8_t ext_sw_ipmap[EXTIOI_IRQS];
 	uint8_t ext_sw_coremap[EXTIOI_IRQS];
 	uint8_t ext_sw_ipisr[KVM_MAX_VCPUS][LS3A_INTC_IP][EXTIOI_IRQS_BITMAP_SIZE];
-} LS3AExtirqState;
+};
 
 struct ls3a_kvm_extirq {
 	spinlock_t lock;
@@ -128,5 +128,4 @@ void msi_irq_handler(struct kvm *kvm, int irq, int level);
 int kvm_setup_ls3a_extirq(struct kvm *kvm);
 int kvm_enable_ls3a_extirq(struct kvm *kvm, bool enable);
 void kvm_dump_ls3a_extirq_state(struct seq_file *m, struct ls3a_kvm_extirq *irqchip);
-int kvm_vcpu_ioctl_interrupt(struct kvm_vcpu *vcpu, struct kvm_loongarch_interrupt *irq);
 #endif

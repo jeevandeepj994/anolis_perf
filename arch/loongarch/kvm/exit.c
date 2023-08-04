@@ -20,7 +20,6 @@
 #include <asm/numa.h>
 #include "kvmcpu.h"
 #include <linux/kvm_host.h>
-
 #include "trace.h"
 #include "kvm_compat.h"
 #include "kvmcsr.h"
@@ -48,7 +47,7 @@ static int _kvm_fault_ni(struct kvm_vcpu *vcpu)
 	return RESUME_HOST;
 }
 
-static int _kvm_handle_csr(struct kvm_vcpu *vcpu, larch_inst inst)
+static int _kvm_handle_csr(struct kvm_vcpu *vcpu, union loongarch_instruction inst)
 {
 	enum emulation_result er = EMULATE_DONE;
 	unsigned int rd, rj, csrid;
@@ -85,7 +84,7 @@ static int _kvm_handle_csr(struct kvm_vcpu *vcpu, larch_inst inst)
 	return er;
 }
 
-static int _kvm_emu_cache(struct kvm_vcpu *vcpu, larch_inst inst)
+static int _kvm_emu_cache(struct kvm_vcpu *vcpu, union loongarch_instruction inst)
 {
 	return EMULATE_DONE;
 }
@@ -94,7 +93,7 @@ static int _kvm_trap_handle_gspr(struct kvm_vcpu *vcpu)
 {
 	enum emulation_result er = EMULATE_DONE;
 	struct kvm_run *run = vcpu->run;
-	larch_inst inst;
+	union loongarch_instruction inst;
 	unsigned long curr_pc;
 	int rd, rj;
 	unsigned int index;
@@ -181,7 +180,7 @@ static int _kvm_trap_handle_gspr(struct kvm_vcpu *vcpu)
 static int _kvm_check_hypcall(struct kvm_vcpu *vcpu)
 {
 	enum emulation_result ret;
-	larch_inst inst;
+	union loongarch_instruction inst;
 	unsigned long curr_pc;
 	unsigned int code;
 
@@ -385,7 +384,7 @@ static int _kvm_handle_read_fault(struct kvm_vcpu *vcpu)
 {
 	struct kvm_run *run = vcpu->run;
 	ulong badv = vcpu->arch.badv;
-	larch_inst inst;
+	union loongarch_instruction inst;
 	enum emulation_result er = EMULATE_DONE;
 	int ret = RESUME_GUEST;
 
@@ -423,7 +422,7 @@ static int _kvm_handle_write_fault(struct kvm_vcpu *vcpu)
 {
 	struct kvm_run *run = vcpu->run;
 	ulong badv = vcpu->arch.badv;
-	larch_inst inst;
+	union loongarch_instruction inst;
 	enum emulation_result er = EMULATE_DONE;
 	int ret = RESUME_GUEST;
 
@@ -467,7 +466,6 @@ static int _kvm_handle_debug(struct kvm_vcpu *vcpu)
 	vcpu->run->exit_reason = KVM_EXIT_DEBUG;
 	return RESUME_HOST;
 }
-
 
 static exit_handle_fn _kvm_fault_tables[KVM_INT_START] = {
 	[KVM_EXCCODE_TLBL]		= _kvm_handle_read_fault,

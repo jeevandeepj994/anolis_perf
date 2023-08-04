@@ -99,7 +99,7 @@ int _kvm_handle_pv_hcall(struct kvm_vcpu *vcpu)
 		break;
 	};
 
-	vcpu->arch.gprs[KVM_REG_V0] = hyp_ret;
+	vcpu->arch.gprs[KVM_REG_A0] = hyp_ret;
 
 	return RESUME_GUEST;
 }

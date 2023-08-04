@@ -456,15 +456,15 @@ static int loongson_spi_pci_register(struct pci_dev *pdev,
 	/* Enable device in PCI config */
 	ret = pci_enable_device(pdev);
 	if (ret < 0) {
-		dev_err("loongson-pci (%s): Cannot enable PCI device\n",
-			ci_name(pdev));
+		dev_err(&pdev->dev, "loongson-pci (%s): Cannot enable PCI device\n",
+			pci_name(pdev));
 		goto err_out;
 	}
 
 	/* request the mem regions */
 	ret = pci_request_region(pdev, 0, "loongson-spi io");
 	if (ret < 0) {
-		dev_err("loongson-spi (%s): cannot request region 0.\n",
+		dev_err(&pdev->dev, "loongson-spi (%s): cannot request region 0.\n",
 			pci_name(pdev));
 		goto err_out;
 	}

@@ -9,32 +9,9 @@
 
 extern int  _kvm_set_spte_hva(struct kvm *kvm, unsigned long hva, pte_t pte);
 
-int kvm_arch_check_processor_compat(void)
+int kvm_arch_check_processor_compat(void *opaque)
 {
 	return 0;
-}
-
-int kvm_vm_ioctl_clear_dirty_log(struct kvm *kvm, struct kvm_clear_dirty_log *log)
-{
-	struct kvm_memslots *slots;
-	struct kvm_memory_slot *memslot;
-	bool is_dirty = false;
-	int r;
-
-	mutex_lock(&kvm->slots_lock);
-
-	r = kvm_clear_dirty_log_protect(kvm, log, &is_dirty);
-
-	if (is_dirty) {
-		slots = kvm_memslots(kvm);
-		memslot = id_to_memslot(slots, log->slot);
-
-		/* Let implementation handle TLB/GVA invalidation */
-		kvm_flush_remote_tlbs(kvm);
-	}
-
-	mutex_unlock(&kvm->slots_lock);
-	return r;
 }
 
 int kvm_set_spte_hva(struct kvm *kvm, unsigned long hva, pte_t pte)

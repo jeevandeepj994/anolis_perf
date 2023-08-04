@@ -41,7 +41,7 @@ int _kvm_emu_idle(struct kvm_vcpu *vcpu)
 	return EMULATE_DONE;
 }
 
-int _kvm_emu_mmio_write(struct kvm_vcpu *vcpu, larch_inst inst)
+int _kvm_emu_mmio_write(struct kvm_vcpu *vcpu, union loongarch_instruction inst)
 {
 	struct kvm_run *run = vcpu->run;
 	unsigned int rd, op8, opcode;
@@ -164,7 +164,7 @@ out_fail:
 }
 
 
-int _kvm_emu_mmio_read(struct kvm_vcpu *vcpu, larch_inst inst)
+int _kvm_emu_mmio_read(struct kvm_vcpu *vcpu, union loongarch_instruction inst)
 {
 	unsigned int op8, opcode, rd;
 	int ret = 0;
