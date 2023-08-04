@@ -156,30 +156,30 @@ static inline int arch_atomic_sub_if_positive(int i, atomic_t *v)
 
 	if (__builtin_constant_p(i)) {
 		__asm__ __volatile__(
-		"1:	ll.w	%1, %2		# atomic_sub_if_positive\n"
-		"	addi.w	%0, %1, %3				\n"
-		"	move	%1, %0					\n"
-		"	bltz	%0, 2f					\n"
-		"	sc.w	%1, %2					\n"
-		"	beqz	%1, 1b					\n"
-		"	b	3f					"
-		"2:							\n"
+		"1:	ll.w	%1, %2\n"
+		"	addi.w	%0, %1, %3\n"
+		"	move	%1, %0\n"
+		"	bltz	%0, 2f\n"
+		"	sc.w	%1, %2\n"
+		"	beqz	%1, 1b\n"
+		"	b	3f\n"
+		"2:\n"
 		__WEAK_LLSC_MB
-		"3:							"
+		"3:\n"
 		: "=&r" (result), "=&r" (temp), "+ZC" (v->counter)
 		: "I" (-i));
 	} else {
 		__asm__ __volatile__(
-		"1:	ll.w	%1, %2		# atomic_sub_if_positive\n"
-		"	sub.w	%0, %1, %3				\n"
-		"	move	%1, %0					\n"
-		"	bltz	%0, 2f					\n"
-		"	sc.w	%1, %2					\n"
-		"	beqz	%1, 1b					\n"
-		"	b	3f					"
-		"2:							\n"
+		"1:	ll.w	%1, %2\n"
+		"	sub.w	%0, %1, %3\n"
+		"	move	%1, %0\n"
+		"	bltz	%0, 2f\n"
+		"	sc.w	%1, %2\n"
+		"	beqz	%1, 1b\n"
+		"	b	3f\n"
+		"2:\n"
 		__WEAK_LLSC_MB
-		"3:							"
+		"3:\n"
 		: "=&r" (result), "=&r" (temp), "+ZC" (v->counter)
 		: "r" (i));
 	}
@@ -321,30 +321,30 @@ static inline long arch_atomic64_sub_if_positive(long i, atomic64_t *v)
 
 	if (__builtin_constant_p(i)) {
 		__asm__ __volatile__(
-		"1:	ll.d	%1, %2	# atomic64_sub_if_positive	\n"
-		"	addi.d	%0, %1, %3				\n"
-		"	move	%1, %0					\n"
-		"	bltz	%0, 2f					\n"
-		"	sc.d	%1, %2					\n"
-		"	beqz	%1, 1b					\n"
-		"	b	3f					"
-		"2:							\n"
+		"1:	ll.d	%1, %2\n"
+		"	addi.d	%0, %1, %3\n"
+		"	move	%1, %0\n"
+		"	bltz	%0, 2f\n"
+		"	sc.d	%1, %2\n"
+		"	beqz	%1, 1b\n"
+		"	b	3f\n"
+		"2:\n"
 		__WEAK_LLSC_MB
-		"3:							"
+		"3:\n"
 		: "=&r" (result), "=&r" (temp), "+ZC" (v->counter)
 		: "I" (-i));
 	} else {
 		__asm__ __volatile__(
-		"1:	ll.d	%1, %2	# atomic64_sub_if_positive	\n"
-		"	sub.d	%0, %1, %3				\n"
-		"	move	%1, %0					\n"
-		"	bltz	%0, 2f					\n"
-		"	sc.d	%1, %2					\n"
-		"	beqz	%1, 1b					\n"
-		"	b	3f					"
-		"2:							\n"
+		"1:	ll.d	%1, %2\n"
+		"	sub.d	%0, %1, %3\n"
+		"	move	%1, %0\n"
+		"	bltz	%0, 2f\n"
+		"	sc.d	%1, %2\n"
+		"	beqz	%1, 1b\n"
+		"	b	3f\n"
+		"2:\n"
 		__WEAK_LLSC_MB
-		"3:							"
+		"3:\n"
 		: "=&r" (result), "=&r" (temp), "+ZC" (v->counter)
 		: "r" (i));
 	}

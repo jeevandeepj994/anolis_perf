@@ -235,7 +235,7 @@ static int hkey_map(void)
 	status = acpi_evaluate_object_typed(hkey_handle,
 			METHOD_NAME__KMAP, NULL, &buf, ACPI_TYPE_PACKAGE);
 	if (status != AE_OK) {
-		dev_err(": ACPI exception: %s\n",
+		pr_err(": ACPI exception: %s\n",
 				acpi_format_exception(status));
 		return -1;
 	}
@@ -266,13 +266,13 @@ static int event_init(struct generic_sub_driver *sub_driver)
 
 	ret = hkey_map();
 	if (ret) {
-		dev_err("Fail to parse keymap from DSDT.\n");
+		pr_err("Fail to parse keymap from DSDT.\n");
 		return ret;
 	}
 
 	ret = sparse_keymap_setup(generic_inputdev, hotkey_keycode_map, NULL);
 	if (ret) {
-		dev_err("Fail to setup input device keymap\n");
+		pr_err("Fail to setup input device keymap\n");
 		input_free_device(generic_inputdev);
 
 		return ret;
