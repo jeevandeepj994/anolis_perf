@@ -32,6 +32,10 @@ static const int amd_erratum_383[];
 static const int amd_erratum_400[];
 static const int amd_erratum_1054[];
 static bool cpu_has_amd_erratum(struct cpuinfo_x86 *cpu, const int *erratum);
+static const int amd_div0[] =
+	AMD_LEGACY_ERRATUM(AMD_MODEL_RANGE(0x17, 0x00, 0x0, 0x2f, 0xf),
+			   AMD_MODEL_RANGE(0x17, 0x50, 0x0, 0x5f, 0xf));
+
 
 /*
  * nodes_per_socket: Stores the number of nodes per socket.
@@ -1051,6 +1055,11 @@ static void init_amd(struct cpuinfo_x86 *c)
 		msr_set_bit(MSR_K7_HWCR, MSR_K7_HWCR_IRPERF_EN_BIT);
 
 	check_null_seg_clears_base(c);
+
+	if (cpu_has_amd_erratum(c, amd_div0)) {
+		pr_notice_once("AMD Zen1 DIV0 bug detected. Disable SMT for full protection.\n");
+		setup_force_cpu_bug(X86_BUG_DIV0);
+	}
 }
 
 #ifdef CONFIG_X86_32
@@ -1247,3 +1256,13 @@ u32 amd_get_highest_perf(void)
 	return 255;
 }
 EXPORT_SYMBOL_GPL(amd_get_highest_perf);
+
+/*
+ * Issue a DIV 0/1 insn to clear any division data from previous DIV
+ * operations.
+ */
+void noinstr amd_clear_divider(void)
+{
+	asm volatile(ALTERNATIVE("", "div %2\n\t", X86_BUG_DIV0)
+		     :: "a" (0), "d" (0), "r" (1));
+}
