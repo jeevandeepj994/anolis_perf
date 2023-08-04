@@ -118,6 +118,12 @@
 #define KVM_ESTAT_IS_WIDTH		15
 #define KVM_ESTAT_IS			(_ULCAST_(0x7fff) << KVM_ESTAT_IS_SHIFT)
 
+#define KEVS_KEVW	(KVM_ECFG_VS_SHIFT + KVM_ECFG_VS_WIDTH - 1)
+#define KGGS_KGGW	(KVM_GSTAT_GID_SHIFT + KVM_GSTAT_GID_WIDTH - 1)
+#define KGTS_KGTW	(KVM_GTLBC_TGID_SHIFT + KVM_GTLBC_TGID_WIDTH - 1)
+#define KCP_PK		(KVM_CRMD_PG | PLV_KERN)
+#define KCDS_PK		((1 << KVM_CRMD_DACM_SHIFT) | (1 << KVM_CRMD_DACF_SHIFT) | KCP_PK)
+
 #define KVM_CSR_ERA			0x6	/* ERA */
 #define KVM_CSR_BADV			0x7	/* Bad virtual address */
 #define KVM_CSR_BADI			0x8	/* Bad instruction */

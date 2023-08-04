@@ -13,6 +13,8 @@
 #define ls3a_ext_irq_lock(s, flags)	spin_lock_irqsave(&s->lock, flags)
 #define ls3a_ext_irq_unlock(s, flags)	spin_unlock_irqrestore(&s->lock, flags)
 
+extern int kvm_vcpu_ioctl_interrupt(struct kvm_vcpu *vcpu,
+			     struct kvm_loongarch_interrupt *irq);
 void ext_deactive_core_isr(struct kvm *kvm, int irq_num, int vcpu_id)
 {
 	int ipnum;
@@ -28,8 +30,8 @@ void ext_deactive_core_isr(struct kvm *kvm, int irq_num, int vcpu_id)
 
 	bitmap_clear((void *)state->ext_sw_ipisr[vcpu_id][ipnum + 2], irq_num, 1);
 	found1 = find_next_bit((void *)state->ext_sw_ipisr[vcpu_id][ipnum + 2], EXTIOI_IRQS, 0);
-	kvm_debug("vcpu_id %d irqnum %d found:0x%lx ipnum %d down\n", vcpu_id, irq_num,
-			found1, ipnum);
+	kvm_debug("vcpu_id %d irqnum %d found:0x%lx ipnum %d down\n",
+			vcpu_id, irq_num, found1, ipnum);
 	if (found1 == EXTIOI_IRQS) {
 		irq.cpu = vcpu_id;
 		irq.irq = -(ipnum + 2);		/* IP2~IP5 */
@@ -60,8 +62,9 @@ void ext_irq_update_core(struct kvm *kvm, int irq_num, int level)
 	vcpu_id = state->ext_sw_coremap[irq_num];
 	ipnum = state->ext_sw_ipmap[irq_num];
 
-	if (vcpu_id > (nrcpus - 1))
+	if (vcpu_id > (nrcpus - 1)) {
 		vcpu_id = 0;
+	}
 
 	if (level == 1) {
 		if (test_bit(irq_num, (void *)state->ext_en.reg_u8) == false)
@@ -362,7 +365,7 @@ static int ls3a_ext_intctl_writeb(struct kvm_vcpu *vcpu,
 
 		mask = 0x1;
 		for (i = 0; i < 8; i++) {
-			if ((old_data_u8 & mask)&&(val_data_u8 & mask))
+			if ((old_data_u8 & mask) && (val_data_u8 & mask))
 				ext_irq_update_core(kvm, i + reg_count * 8, 0);
 			mask = mask << 1;
 		}
@@ -475,7 +478,7 @@ static int ls3a_ext_intctl_writew(struct kvm_vcpu *vcpu,
 
 		mask = 0x1;
 		for (i = 0; i < 8 * sizeof(old_data_u32); i++) {
-			if ((old_data_u32 & mask)&&(val_data_u32 & mask))
+			if ((old_data_u32 & mask) && (val_data_u32 & mask))
 				ext_irq_update_core(kvm, i + reg_count * 32, 0);
 			mask = mask << 1;
 		}
@@ -578,13 +581,12 @@ static int ls3a_ext_intctl_writel(struct kvm_vcpu *vcpu,
 
 		mask = 0x1;
 		for (i = 0; i < 8 * sizeof(old_data_u64); i++) {
-			if ((old_data_u64 & mask)&&(val_data_u64 & mask))
+			if ((old_data_u64 & mask) && (val_data_u64 & mask))
 				ext_irq_update_core(kvm, i + reg_count * 64, 0);
 			mask = mask << 1;
 		}
 	} else if ((offset >= EXTIOI_COREISR_START) && (offset < EXTIOI_COREISR_END)) {
 		int bits;
-
 		vcpu_id = (offset >> 8) & 0xff;
 		reg_count = (offset & 0x1f) / 8;
 
@@ -820,7 +822,6 @@ int kvm_get_ls3a_extirq(struct kvm *kvm, struct kvm_loongarch_ls3a_extirq_state 
 	struct ls3a_kvm_extirq *v_extirq = ls3a_ext_irqchip(kvm);
 	struct kvm_ls3a_extirq_state *extirq_state = &(v_extirq->ls3a_ext_irq);
 	unsigned long flags;
-
 	if (!v_extirq)
 		return -EINVAL;
 
@@ -838,7 +839,6 @@ int kvm_set_ls3a_extirq(struct kvm *kvm, struct kvm_loongarch_ls3a_extirq_state 
 	struct ls3a_kvm_extirq *v_extirq = ls3a_ext_irqchip(kvm);
 	struct kvm_ls3a_extirq_state *extirq_state = &(v_extirq->ls3a_ext_irq);
 	unsigned long flags;
-
 	if (!v_extirq)
 		return -EINVAL;
 

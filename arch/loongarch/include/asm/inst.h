@@ -183,6 +183,7 @@ union loongarch_instruction {
 	struct reg3_format reg3_format;
 	struct reg2_format reg2_format;
 	struct reg2i12_format reg2i12_format;
+	struct reg2i14_format reg2i14_format;
 	struct reg2i16_format reg2i16_format;
 	struct reg2csr_format	reg2csr_format;
 	struct reg0i15_format	reg0i15_format;
