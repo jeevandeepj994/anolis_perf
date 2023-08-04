@@ -21,6 +21,7 @@
 #include <linux/elf.h>
 #include <linux/errno.h>
 #include <linux/mm.h>
+#include <linux/nospec.h>
 #include <linux/ptrace.h>
 #include <linux/regset.h>
 #include <linux/sched.h>

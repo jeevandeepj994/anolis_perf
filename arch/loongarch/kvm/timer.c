@@ -64,7 +64,7 @@ static void kvm_resume_hrtimer(struct kvm_vcpu *vcpu, ktime_t now, u64 stable_ti
 
 	/* Stable timer decreased to zero or
 	 * initialize to zero, set 4 second timer
-	 */
+	*/
 	delta = div_u64(stable_timer * MNSEC_PER_SEC, vcpu->arch.timer_mhz);
 	expire = ktime_add_ns(now, delta);
 

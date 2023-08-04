@@ -5,6 +5,7 @@
 #include <linux/efi.h>
 #include <linux/initrd.h>
 #include <linux/memblock.h>
+#include <linux/printk.h>
 
 #include <asm/bootinfo.h>
 #include <asm/loongson.h>
@@ -14,7 +15,7 @@ void __init memblock_init(void)
 {
 	u32 i, mem_type;
 	u64 mem_start, mem_end, mem_size;
-	efi_memory_desc_t *md;
+
 	if (g_mmap) {
 		/* parse memory information */
 		for (i = 0; i < g_mmap->map_count; i++) {
@@ -25,8 +26,8 @@ void __init memblock_init(void)
 
 			switch (mem_type) {
 			case ADDRESS_TYPE_SYSRAM:
-			pr_info("add memory region memblock - base:
-					%lx size: %x\n", mem_start, mem_size);
+			pr_info("add memory region memblock - base:%lx size: %x\n",
+					mem_start, mem_size);
 				memblock_add(mem_start, mem_size);
 				if (max_low_pfn < (mem_end >> PAGE_SHIFT))
 					max_low_pfn = mem_end >> PAGE_SHIFT;
@@ -39,6 +40,9 @@ void __init memblock_init(void)
 			 __pa_symbol(&_end) - __pa_symbol(&_text));
 		return;
 	}
+
+	efi_memory_desc_t *md;
+
 	/* Parse memory information */
 	for_each_efi_memory_desc(md) {
 		mem_type = md->type;

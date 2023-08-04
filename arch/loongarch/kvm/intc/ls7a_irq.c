@@ -12,7 +12,6 @@
 void ls7a_ioapic_lock(struct ls7a_kvm_ioapic *s, unsigned long *flags)
 {
 	unsigned long tmp;
-
 	spin_lock_irqsave(&s->lock, tmp);
 	*flags = tmp;
 }
@@ -20,7 +19,6 @@ void ls7a_ioapic_lock(struct ls7a_kvm_ioapic *s, unsigned long *flags)
 void ls7a_ioapic_unlock(struct ls7a_kvm_ioapic *s, unsigned long *flags)
 {
 	unsigned long tmp;
-
 	tmp = *flags;
 	spin_unlock_irqrestore(&s->lock, tmp);
 }
@@ -102,7 +100,6 @@ int kvm_ls7a_ioapic_set_irq(struct kvm *kvm, int irq, int level)
 	struct ls7a_kvm_ioapic *s;
 	struct kvm_ls7a_ioapic_state *state;
 	uint64_t mask = 1ULL << irq;
-
 	s = ls7a_ioapic_irqchip(kvm);
 	state = &s->ls7a_ioapic;
 	BUG_ON(irq < 0 || irq >= LS7A_IOAPIC_NUM_PINS);
@@ -270,7 +267,6 @@ static int ls7a_ioapic_reg_write(struct ls7a_kvm_ioapic *s,
 			WARN_ONCE(1, "Abnormal address access:addr 0x%llx,len %d\n", addr, len);
 			break;
 		}
-
 	} else if (len == 1) {
 		data = *(unsigned char *)val;
 		if (offset >= LS7A_HTMSI_VEC_OFFSET) {
@@ -417,7 +413,6 @@ static int ls7a_ioapic_reg_read(struct ls7a_kvm_ioapic *s,
 		}
 		if (val != NULL)
 			*(uint32_t *)val = result;
-
 	} else if (len == 1) {
 		if (offset >= LS7A_HTMSI_VEC_OFFSET) {
 			offset_tmp = offset - LS7A_HTMSI_VEC_OFFSET;
@@ -574,7 +569,6 @@ int kvm_set_ls7a_ioapic(struct kvm *kvm, struct ls7a_ioapic_state *state)
 void kvm_destroy_ls7a_ioapic(struct kvm *kvm)
 {
 	struct ls7a_kvm_ioapic *vpic = kvm->arch.v_ioapic;
-
 	if (!vpic)
 		return;
 	kvm_io_bus_unregister_dev(vpic->kvm, KVM_MMIO_BUS,
