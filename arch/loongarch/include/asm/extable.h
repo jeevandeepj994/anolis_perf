@@ -15,6 +15,8 @@
  * on our cache or tlb entries.
  */
 
+#define ARCH_HAS_RELATIVE_EXTABLE
+
 struct exception_table_entry {
 	int insn, fixup;
 	short type, data;
