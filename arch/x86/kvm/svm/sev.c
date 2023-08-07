@@ -31,7 +31,6 @@
 #define __ex(x) __kvm_handle_fault_on_reboot(x)
 
 static u8 sev_enc_bit;
-static int sev_flush_asids(void);
 static DECLARE_RWSEM(sev_deactivate_lock);
 static DEFINE_MUTEX(sev_bitmap_lock);
 unsigned int max_sev_asid;
@@ -52,9 +51,15 @@ struct enc_region {
 	unsigned long size;
 };
 
-static int sev_flush_asids(void)
+/* Called with the sev_bitmap_lock held, or on shutdown  */
+static int sev_flush_asids(int min_asid, int max_asid)
 {
-	int ret, error = 0;
+	int ret, pos, error = 0;
+
+	/* Check if there are any ASIDs to reclaim before performing a flush */
+	pos = find_next_bit(sev_reclaim_asid_bitmap, max_asid, min_asid);
+	if (pos >= max_asid)
+		return -EBUSY;
 
 	/*
 	 * DEACTIVATE will clear the WBINVD indicator causing DF_FLUSH to fail,
@@ -76,14 +81,7 @@ static int sev_flush_asids(void)
 /* Must be called with the sev_bitmap_lock held */
 static bool __sev_recycle_asids(int min_asid, int max_asid)
 {
-	int pos;
-
-	/* Check if there are any ASIDs to reclaim before performing a flush */
-	pos = find_next_bit(sev_reclaim_asid_bitmap, max_sev_asid, min_asid);
-	if (pos >= max_asid)
-		return false;
-
-	if (sev_flush_asids())
+	if (sev_flush_asids(min_asid, max_asid))
 		return false;
 
 	/* The flush process will flush all reclaimable SEV and SEV-ES ASIDs */
@@ -451,6 +449,7 @@ static void sev_clflush_pages(struct page *pages[], unsigned long npages)
 		page_virtual = kmap_atomic(pages[i]);
 		clflush_cache_range(page_virtual, PAGE_SIZE);
 		kunmap_atomic(page_virtual);
+		cond_resched();
 	}
 }
 
@@ -2435,8 +2434,13 @@ void __init sev_hardware_setup(void)
 	bool sev_es_supported = false;
 	bool sev_supported = false;
 
-	/* Does the CPU support SEV? */
-	if (!boot_cpu_has(X86_FEATURE_SEV))
+	/*
+	 * SEV must obviously be supported in hardware.  Sanity check that the
+	 * CPU supports decode assists, which is mandatory for SEV guests to
+	 * support instruction emulation.
+	 */
+	if (!boot_cpu_has(X86_FEATURE_SEV) ||
+	    WARN_ON_ONCE(!boot_cpu_has(X86_FEATURE_DECODEASSISTS)))
 		goto out;
 
 	/* Retrieve SEV CPUID information */
@@ -2461,12 +2465,20 @@ void __init sev_hardware_setup(void)
 		goto out;
 
 	sev_reclaim_asid_bitmap = bitmap_zalloc(max_sev_asid, GFP_KERNEL);
-	if (!sev_reclaim_asid_bitmap)
+	if (!sev_reclaim_asid_bitmap) {
+		bitmap_free(sev_asid_bitmap);
+		sev_asid_bitmap = NULL;
 		goto out;
+	}
 
 	if (boot_cpu_data.x86_vendor == X86_VENDOR_HYGON) {
-		if (alloc_trans_mempool())
+		if (alloc_trans_mempool()) {
+			bitmap_free(sev_asid_bitmap);
+			sev_asid_bitmap = NULL;
+			bitmap_free(sev_reclaim_asid_bitmap);
+			sev_reclaim_asid_bitmap = NULL;
 			goto out;
+		}
 		pr_info("CSV supported: %u ASIDs\n",
 			max_sev_asid - min_sev_asid + 1);
 	} else {
@@ -2503,13 +2515,14 @@ void sev_hardware_teardown(void)
 	if (!svm_sev_enabled())
 		return;
 
+	/* No need to take sev_bitmap_lock, all VMs have been destroyed. */
+	sev_flush_asids(0, max_sev_asid);
+
 	if (boot_cpu_data.x86_vendor == X86_VENDOR_HYGON)
 		free_trans_mempool();
 
 	bitmap_free(sev_asid_bitmap);
 	bitmap_free(sev_reclaim_asid_bitmap);
-
-	sev_flush_asids();
 }
 
 void sev_guest_memory_reclaimed(struct kvm *kvm)
