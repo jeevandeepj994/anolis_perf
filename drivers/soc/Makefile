@@ -30,4 +30,3 @@ obj-y				+= xilinx/
 obj-$(CONFIG_ARCH_ZX)		+= zte/
 obj-$(CONFIG_SOC_KENDRYTE)	+= kendryte/
 obj-y				+= thead/
-obj-y				+= alibaba/
