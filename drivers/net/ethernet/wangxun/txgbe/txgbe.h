@@ -660,6 +660,7 @@ struct txgbe_adapter {
 	unsigned int queues_per_pool;
 	u8 default_up;
 	u64 eth_priv_flags;
+	u8 an37;
 };
 
 /* must account for pools assigned to VFs. */

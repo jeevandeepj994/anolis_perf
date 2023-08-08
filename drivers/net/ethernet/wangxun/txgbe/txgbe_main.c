@@ -3880,6 +3880,8 @@ static int txgbe_sw_init(struct txgbe_adapter *adapter)
 	adapter->tx_work_limit = TXGBE_DEFAULT_TX_WORK;
 	adapter->rx_work_limit = TXGBE_DEFAULT_RX_WORK;
 
+	adapter->an37 = 1;
+
 	adapter->num_vmdqs = 1;
 
 	if (txgbe_is_lldp(hw))
