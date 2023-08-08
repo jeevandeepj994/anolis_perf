@@ -6388,6 +6388,115 @@ txgbe_features_check(struct sk_buff *skb, struct net_device *dev,
 	return features;
 }
 
+static netdev_features_t txgbe_fix_features(struct net_device *netdev, netdev_features_t features)
+{
+	struct txgbe_adapter *adapter = netdev_priv(netdev);
+
+	/* If Rx checksum is disabled, then RSC/LRO should also be disabled */
+	if (!(features & NETIF_F_RXCSUM))
+		features &= ~NETIF_F_LRO;
+
+	/* Turn off LRO if not RSC capable */
+	if (!(adapter->flags2 & TXGBE_FLAG2_RSC_CAPABLE))
+		features &= ~NETIF_F_LRO;
+
+	if (!(features & NETIF_F_HW_VLAN_CTAG_RX))
+		features &= ~NETIF_F_HW_VLAN_STAG_RX;
+	else
+		features |= NETIF_F_HW_VLAN_STAG_RX;
+	if (!(features & NETIF_F_HW_VLAN_CTAG_TX))
+		features &= ~NETIF_F_HW_VLAN_STAG_TX;
+	else
+		features |= NETIF_F_HW_VLAN_STAG_TX;
+
+	return features;
+}
+
+static int txgbe_set_features(struct net_device *netdev, netdev_features_t features)
+{
+	struct txgbe_adapter *adapter = netdev_priv(netdev);
+	bool need_reset = false;
+
+	/* Make sure RSC matches LRO, reset if change */
+	if (!(features & NETIF_F_LRO)) {
+		if (adapter->flags2 & TXGBE_FLAG2_RSC_ENABLED)
+			need_reset = true;
+		adapter->flags2 &= ~TXGBE_FLAG2_RSC_ENABLED;
+	} else if ((adapter->flags2 & TXGBE_FLAG2_RSC_CAPABLE) &&
+		   !(adapter->flags2 & TXGBE_FLAG2_RSC_ENABLED)) {
+		if (adapter->rx_itr_setting == 1 ||
+		    adapter->rx_itr_setting > TXGBE_MIN_RSC_ITR) {
+			adapter->flags2 |= TXGBE_FLAG2_RSC_ENABLED;
+			need_reset = true;
+		} else if ((netdev->features ^ features) & NETIF_F_LRO) {
+			e_info(probe, "rx-usecs set too low, falling back to GRO\n");
+		}
+	}
+
+	/* Check if Flow Director n-tuple support was enabled or disabled.  If
+	 * the state changed, we need to reset.
+	 */
+	switch (features & NETIF_F_NTUPLE) {
+	case NETIF_F_NTUPLE:
+		/* turn off ATR, enable perfect filters and reset */
+		if (!(adapter->flags & TXGBE_FLAG_FDIR_PERFECT_CAPABLE))
+			need_reset = true;
+
+		adapter->flags &= ~TXGBE_FLAG_FDIR_HASH_CAPABLE;
+		adapter->flags |= TXGBE_FLAG_FDIR_PERFECT_CAPABLE;
+		break;
+	default:
+		/* turn off perfect filters, enable ATR and reset */
+		if (adapter->flags & TXGBE_FLAG_FDIR_PERFECT_CAPABLE)
+			need_reset = true;
+
+		adapter->flags &= ~TXGBE_FLAG_FDIR_PERFECT_CAPABLE;
+
+		/* We cannot enable ATR if VMDq is enabled */
+		if (adapter->flags & TXGBE_FLAG_VMDQ_ENABLED)
+			break;
+
+		/* We cannot enable ATR if we have 2 or more traffic classes */
+		if (netdev_get_num_tc(netdev) > 1)
+			break;
+
+		/* We cannot enable ATR if RSS is disabled */
+		if (adapter->ring_feature[RING_F_RSS].limit <= 1)
+			break;
+
+		/* A sample rate of 0 indicates ATR disabled */
+		if (!adapter->atr_sample_rate)
+			break;
+
+		adapter->flags |= TXGBE_FLAG_FDIR_HASH_CAPABLE;
+		break;
+	}
+
+	if (features & NETIF_F_HW_VLAN_CTAG_RX && features & NETIF_F_HW_VLAN_STAG_RX)
+		txgbe_vlan_strip_enable(adapter);
+	else
+		txgbe_vlan_strip_disable(adapter);
+
+	if (features & NETIF_F_RXHASH) {
+		if (!(adapter->flags2 & TXGBE_FLAG2_RSS_ENABLED)) {
+			wr32m(&adapter->hw, TXGBE_RDB_RA_CTL,
+			      TXGBE_RDB_RA_CTL_RSS_EN, TXGBE_RDB_RA_CTL_RSS_EN);
+			adapter->flags2 |= TXGBE_FLAG2_RSS_ENABLED;
+		}
+	} else {
+		if (adapter->flags2 & TXGBE_FLAG2_RSS_ENABLED) {
+			wr32m(&adapter->hw, TXGBE_RDB_RA_CTL,
+			      TXGBE_RDB_RA_CTL_RSS_EN, ~TXGBE_RDB_RA_CTL_RSS_EN);
+			adapter->flags2 &= ~TXGBE_FLAG2_RSS_ENABLED;
+		}
+	}
+
+	if (need_reset)
+		txgbe_do_reset(netdev);
+
+	return 0;
+}
+
 static const struct net_device_ops txgbe_netdev_ops = {
 	.ndo_open               = txgbe_open,
 	.ndo_stop               = txgbe_close,
@@ -6410,6 +6519,8 @@ static const struct net_device_ops txgbe_netdev_ops = {
 	.ndo_set_vf_vlan        = txgbe_ndo_set_vf_vlan,
 	.ndo_set_vf_rate        = txgbe_ndo_set_vf_bw,
 	.ndo_get_vf_config      = txgbe_ndo_get_vf_config,
+	.ndo_fix_features       = txgbe_fix_features,
+	.ndo_set_features       = txgbe_set_features,
 };
 
 void txgbe_assign_netdev_ops(struct net_device *dev)
