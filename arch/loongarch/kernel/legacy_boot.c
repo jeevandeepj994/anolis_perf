@@ -305,104 +305,30 @@ int setup_legacy_IRQ(void)
  * Manage initrd
  */
 #ifdef CONFIG_BLK_DEV_INITRD
-static unsigned long init_initrd(unsigned long ps, unsigned long z)
-{
-	static int initialized;
-
-	if (!ps || !z)
-		return 0;
-
-	initrd_start = (unsigned long)__va(ps);
-	initrd_end = initrd_start + z;
-	/*
-	 * Board specific code or command line parser should have
-	 * already set up initrd_start and initrd_end. In these cases
-	 * perfom sanity checks and use them if all looks good.
-	 */
-	if (initrd_start < PAGE_OFFSET || initrd_end <= initrd_start) {
-		pr_err("initrd start load address error!");
-		goto disable;
-	}
-
-	if (initrd_start & ~PAGE_MASK) {
-		pr_err("initrd start must be page aligned\n");
-		goto disable;
-	}
-
-	memblock_reserve(__pa(initrd_start), z);
-	initrd_below_start_ok = 1;
-
-	if (!initialized)
-		pr_info("Initial ramdisk at: 0x%lx (%lu bytes)\n",
-				initrd_start, z);
-	initialized = 1;
-
-	return 0;
-disable:
-	pr_err("disabling initrd\n");
-	initrd_start = 0;
-	initrd_end = 0;
-	return 0;
-}
-
-static int early_initrd(char *p)
-{
-	unsigned long start, size;
-	char *endp;
-
-	if (!efi_bp)
-		return 0;
-	start = memparse(p, &endp);
-	if (*endp == ',')
-		size = memparse(endp + 1, NULL);
-
-	if (start + size > PFN_PHYS(max_low_pfn)) {
-		pr_err("Initrd physical address is out of memory!");
-		return 0;
-	}
-
-	init_initrd(start, size);
-
-	return 0;
-}
-early_param("initrd", early_initrd);
-
 static int rd_start_early(char *p)
 {
-	unsigned long start;
-
-	if (!efi_bp)
-		return 0;
-
-	start = memparse(p, &p);
-	initrd_start = start;
-	initrd_end += start;
-	init_initrd(__pa(start), initrd_end - start);
-
+	phys_initrd_start = __pa(memparse(p, &p));
 	return 0;
 }
 early_param("rd_start", rd_start_early);
 
 static int rd_size_early(char *p)
 {
-	unsigned long size;
+	phys_initrd_size = memparse(p, &p);
 
-	if (!efi_bp)
-		return 0;
-	size = memparse(p, &p);
-	initrd_end += size;
-
-	init_initrd(__pa(initrd_start), size);
 	return 0;
 }
 early_param("rd_size", rd_size_early);
-
-#else  /* !CONFIG_BLK_DEV_INITRD */
-static unsigned long init_initrd(void)
-{
-	return 0;
-}
 #endif
+
+void __init loongarch_reserve_initrd_mem(void)
+{
+	/* The small fdt method should be skipped directly to avoid two reserved operations. */
+	if (!fw_arg2)
+		return;
+
+	reserve_initrd_mem();
+}
 
 void __init fw_init_cmdline(unsigned long argc, unsigned long cmdp)
 {
