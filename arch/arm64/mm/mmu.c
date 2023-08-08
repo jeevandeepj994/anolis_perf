@@ -584,7 +584,7 @@ early_param("crashkernel", enable_crash_mem_map);
 
 static unsigned long __ro_after_init kfence_pool_size = ((CONFIG_KFENCE_NUM_OBJECTS + 1) * 2 * PAGE_SIZE);
 
-bool __ro_after_init kfence_early_init = IS_ENABLED(CONFIG_KFENCE);
+bool __ro_after_init kfence_early_init = !!CONFIG_KFENCE_SAMPLE_INTERVAL;
 
 static int __init parse_kfence_early_init_num_objects(char *arg)
 {
@@ -668,8 +668,7 @@ static void __init map_mem(pgd_t *pgdp)
 	early_kfence_pool = arm64_kfence_alloc_pool();
 
 	if (!can_set_block_and_cont_map() ||
-	    (split_disabled &&
-	     (can_set_direct_map() || arm64_kfence_can_set_direct_map())))
+	    (split_disabled && can_set_direct_map()))
 		flags = NO_BLOCK_MAPPINGS | NO_CONT_MAPPINGS;
 
 	/*
@@ -1994,8 +1993,7 @@ int arch_add_memory(int nid, u64 start, u64 size,
 	 * it is possible to protect/unprotect single pages in the KFENCE pool.
 	 */
 	if (!can_set_block_and_cont_map() ||
-	    (split_disabled &&
-	     (can_set_direct_map() || arm64_kfence_can_set_direct_map())))
+	    (split_disabled && can_set_direct_map()))
 		flags = NO_BLOCK_MAPPINGS | NO_CONT_MAPPINGS;
 
 	__create_pgd_mapping(swapper_pg_dir, start, __phys_to_virt(start),
