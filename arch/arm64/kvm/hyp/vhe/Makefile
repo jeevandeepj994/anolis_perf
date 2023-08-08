@@ -3,6 +3,9 @@
 # Makefile for Kernel-based Virtual Machine module, HYP/nVHE part
 #
 
+CFLAGS_REMOVE_switch.o = -fprofile-use -fprofile-correction -Wno-missing-profile \
+		-Wno-coverage-mismatch -Wno-error=coverage-mismatch
+
 asflags-y := -D__KVM_VHE_HYPERVISOR__
 ccflags-y := -D__KVM_VHE_HYPERVISOR__ \
 		-fno-stack-protector \
