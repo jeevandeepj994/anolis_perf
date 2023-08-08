@@ -1424,49 +1424,6 @@ s32 txgbe_enable_sec_rx_path(struct txgbe_hw *hw)
 }
 
 /**
- *  txgbe_disable_sec_tx_path - Stops the transmit data path
- *  @hw: pointer to hardware structure
- *
- *  Stops the transmit data path and waits for the HW to internally empty
- *  the tx security block
- **/
-s32 txgbe_disable_sec_tx_path(struct txgbe_hw *hw)
-{
-#define TXGBE_MAX_SECTX_POLL 40
-
-	int i;
-	int secrxreg;
-
-	wr32m(hw, TXGBE_TSC_CTL, TXGBE_TSC_CTL_TX_DIS, TXGBE_TSC_CTL_TX_DIS);
-	for (i = 0; i < TXGBE_MAX_SECTX_POLL; i++) {
-		secrxreg = rd32(hw, TXGBE_TSC_ST);
-		if (!(secrxreg & TXGBE_TSC_ST_SECTX_RDY))
-			usec_delay(1000);
-		else
-			break;
-	}
-
-	/* For informational purposes only */
-	if (i >= TXGBE_MAX_SECTX_POLL)
-		ERROR_REPORT2(hw, TXGBE_ERROR_INVALID_STATE, "disable tx sec failed.\n");
-
-	return 0;
-}
-
-/**
- * txgbe_enable_sec_Tx_path - Enables the transmit data path
- * @hw: pointer to hardware structure
- *
- * Enables the transmit data path.
- **/
-s32 txgbe_enable_sec_tx_path(struct txgbe_hw *hw)
-{
-	wr32m(hw, TXGBE_TSC_CTL, TXGBE_TSC_CTL_TX_DIS, 0);
-	TXGBE_WRITE_FLUSH(hw);
-	return 0;
-}
-
-/**
  *  txgbe_get_san_mac_addr_offset - Get SAN MAC address offset from the EEPROM
  *  @hw: pointer to hardware structure
  *  @san_mac_offset: SAN MAC address offset
@@ -2644,6 +2601,7 @@ s32 txgbe_setup_mac_link_multispeed_fiber(struct txgbe_hw *hw,
 	u32 speedcnt = 0;
 	u32 i = 0;
 	bool autoneg, link_up = false;
+	struct txgbe_adapter *adapter = hw->back;
 
 	/* Mask off requested but non-supported speeds */
 	status = TCALL(hw, mac.ops.get_link_capabilities,
@@ -2701,6 +2659,7 @@ s32 txgbe_setup_mac_link_multispeed_fiber(struct txgbe_hw *hw,
 	}
 
 	if (speed & TXGBE_LINK_SPEED_1GB_FULL) {
+		u32 curr_autoneg = 2;
 		speedcnt++;
 		if (highest_link_speed == TXGBE_LINK_SPEED_UNKNOWN)
 			highest_link_speed = TXGBE_LINK_SPEED_1GB_FULL;
@@ -2711,7 +2670,14 @@ s32 txgbe_setup_mac_link_multispeed_fiber(struct txgbe_hw *hw,
 		if (status != 0)
 			return status;
 
-		if (link_speed == TXGBE_LINK_SPEED_1GB_FULL && link_up)
+		if (link_speed == TXGBE_LINK_SPEED_1GB_FULL) {
+			curr_autoneg = txgbe_rd32_epcs(hw, TXGBE_SR_MII_MMD_CTL);
+			curr_autoneg = !!(curr_autoneg & (0x1 << 12));
+		}
+
+		if (link_speed == TXGBE_LINK_SPEED_1GB_FULL &&
+		    link_up &&
+			adapter->an37 == curr_autoneg)
 			goto out;
 
 		/* Allow module to change analog characteristics (10G->1G) */
@@ -3199,8 +3165,6 @@ s32 txgbe_init_ops(struct txgbe_hw *hw)
 	mac->ops.start_hw = txgbe_start_hw;
 	mac->ops.get_san_mac_addr = txgbe_get_san_mac_addr;
 	mac->ops.get_wwn_prefix = txgbe_get_wwn_prefix;
-	mac->ops.disable_sec_tx_path = txgbe_disable_sec_tx_path;
-	mac->ops.enable_sec_tx_path = txgbe_enable_sec_tx_path;
 
 	/* LEDs */
 	mac->ops.led_on = txgbe_led_on;
@@ -3284,7 +3248,7 @@ s32 txgbe_get_link_capabilities(struct txgbe_hw *hw,
 	    hw->phy.sfp_type == txgbe_sfp_type_1g_sx_core0 ||
 	    hw->phy.sfp_type == txgbe_sfp_type_1g_sx_core1) {
 		*speed = TXGBE_LINK_SPEED_1GB_FULL;
-		*autoneg = false;
+		*autoneg = true;
 	} else if (hw->phy.multispeed_fiber) {
 		*speed = TXGBE_LINK_SPEED_10GB_FULL |
 			  TXGBE_LINK_SPEED_1GB_FULL;
@@ -3540,6 +3504,7 @@ s32 txgbe_set_hard_rate_select_speed(struct txgbe_hw *hw,
 static s32 txgbe_set_sgmii_an37_ability(struct txgbe_hw *hw)
 {
 	u32 value;
+	struct txgbe_adapter *adapter = hw->back;
 
 	txgbe_wr32_epcs(hw, TXGBE_VR_XS_OR_PCS_MMD_DIGI_CTL1, 0x3002);
 	/* for sgmii + external phy, set to 0x0105 (phy sgmii mode) */
@@ -3553,8 +3518,12 @@ static s32 txgbe_set_sgmii_an37_ability(struct txgbe_hw *hw)
 	}
 	txgbe_wr32_epcs(hw, TXGBE_SR_MII_MMD_DIGI_CTL, 0x0200);
 	value = txgbe_rd32_epcs(hw, TXGBE_SR_MII_MMD_CTL);
-	value = (value & ~0x1200) | (0x1 << 12) | (0x1 << 9);
+	value = (value & ~0x1200) | (0x1 << 9);
+	if (adapter->an37)
+		value |= (0x1 << 12);
+
 	txgbe_wr32_epcs(hw, TXGBE_SR_MII_MMD_CTL, value);
+
 	return 0;
 }
 
@@ -3650,9 +3619,6 @@ s32 txgbe_set_link_to_kx4(struct txgbe_hw *hw, bool autoneg)
 	}
 
 	wr32m(hw, TXGBE_MAC_TX_CFG, TXGBE_MAC_TX_CFG_TE, ~TXGBE_MAC_TX_CFG_TE);
-	wr32m(hw, TXGBE_MAC_RX_CFG, TXGBE_MAC_RX_CFG_RE, ~TXGBE_MAC_RX_CFG_RE);
-
-	TCALL(hw, mac.ops.disable_sec_tx_path);
 
 	/* 2. Disable xpcs AN-73 */
 	if (!autoneg)
@@ -3814,9 +3780,6 @@ s32 txgbe_set_link_to_kx4(struct txgbe_hw *hw, bool autoneg)
 	}
 
 out:
-	TCALL(hw, mac.ops.enable_sec_tx_path);
-	wr32m(hw, TXGBE_MAC_RX_CFG, TXGBE_MAC_RX_CFG_RE, TXGBE_MAC_RX_CFG_RE);
-
 	return status;
 }
 
@@ -3848,8 +3811,6 @@ s32 txgbe_set_link_to_kx(struct txgbe_hw *hw, u32 speed, bool autoneg)
 	}
 
 	wr32m(hw, TXGBE_MAC_TX_CFG, TXGBE_MAC_TX_CFG_TE, ~TXGBE_MAC_TX_CFG_TE);
-	wr32m(hw, TXGBE_MAC_RX_CFG, TXGBE_MAC_RX_CFG_RE, ~TXGBE_MAC_RX_CFG_RE);
-	TCALL(hw, mac.ops.disable_sec_tx_path);
 
 	/* 2. Disable xpcs AN-73 */
 	if (!autoneg)
@@ -4032,9 +3993,6 @@ s32 txgbe_set_link_to_kx(struct txgbe_hw *hw, u32 speed, bool autoneg)
 	txgbe_wr32_epcs(hw, TXGBE_PHY_TX_EQ_CTL1, value);
 
 out:
-	TCALL(hw, mac.ops.enable_sec_tx_path);
-	wr32m(hw, TXGBE_MAC_RX_CFG, TXGBE_MAC_RX_CFG_RE, TXGBE_MAC_RX_CFG_RE);
-
 	return status;
 }
 
@@ -4061,8 +4019,6 @@ static s32 txgbe_set_link_to_sfi(struct txgbe_hw *hw, u32 speed)
 	}
 
 	wr32m(hw, TXGBE_MAC_TX_CFG, TXGBE_MAC_TX_CFG_TE, ~TXGBE_MAC_TX_CFG_TE);
-	wr32m(hw, TXGBE_MAC_RX_CFG, TXGBE_MAC_RX_CFG_RE, ~TXGBE_MAC_RX_CFG_RE);
-	TCALL(hw, mac.ops.disable_sec_tx_path);
 
 	/* 2. Disable xpcs AN-73 */
 	txgbe_wr32_epcs(hw, TXGBE_SR_AN_MMD_CTL, 0x0);
@@ -4312,9 +4268,6 @@ static s32 txgbe_set_link_to_sfi(struct txgbe_hw *hw, u32 speed)
 	}
 
 out:
-	TCALL(hw, mac.ops.enable_sec_tx_path);
-	wr32m(hw, TXGBE_MAC_RX_CFG, TXGBE_MAC_RX_CFG_RE, TXGBE_MAC_RX_CFG_RE);
-
 	return status;
 }
 
@@ -4389,12 +4342,14 @@ s32 txgbe_setup_mac_link(struct txgbe_hw *hw,
 		} else {
 			txgbe_set_link_to_kx(hw, speed, 0);
 			txgbe_set_sgmii_an37_ability(hw);
+			hw->phy.autoneg_advertised |= speed;
 		}
 	} else if (txgbe_get_media_type(hw) == txgbe_media_type_fiber) {
 		txgbe_set_link_to_sfi(hw, speed);
 		if (speed == TXGBE_LINK_SPEED_1GB_FULL) {
 			txgbe_setup_fc(hw);
 			txgbe_set_sgmii_an37_ability(hw);
+			hw->phy.autoneg_advertised |= TXGBE_LINK_SPEED_1GB_FULL;
 		}
 	}
 
