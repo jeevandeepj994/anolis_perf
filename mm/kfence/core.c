@@ -1885,10 +1885,10 @@ void kfence_init_late(void)
 		goto fail;
 	}
 
-	if (list_empty(&ready_list) && !static_branch_unlikely(&kfence_once_inited))
-		goto fail;
-
 	stop_machine(kfence_update_pool_root, &ready_list, NULL);
+
+	if (RB_EMPTY_ROOT(&kfence_pool_root))
+		goto fail;
 
 	__start_kfence();
 	goto out;
