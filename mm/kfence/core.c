@@ -1476,6 +1476,7 @@ static bool update_kfence_node_map(void)
 	synchronize_rcu();
 
 	if (!kfence_flush_all_and_wait()) {
+		kfence_node_map = old_node_map;
 		kfree(new_node_map);
 		return false;
 	}
