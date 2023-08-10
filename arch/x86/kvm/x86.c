@@ -8591,7 +8591,8 @@ int kvm_emulate_hypercall(struct kvm_vcpu *vcpu)
 		a3 &= 0xFFFFFFFF;
 	}
 
-	if (kvm_x86_ops.get_cpl(vcpu) != 0 && nr != KVM_HC_VM_ATTESTATION) {
+	if (kvm_x86_ops.get_cpl(vcpu) != 0 &&
+			!(nr == KVM_HC_VM_ATTESTATION || nr == KVM_HC_PSP_OP)) {
 		ret = -KVM_EPERM;
 		goto out;
 	}
@@ -8654,6 +8655,9 @@ int kvm_emulate_hypercall(struct kvm_vcpu *vcpu)
 		ret = -KVM_ENOSYS;
 		if (kvm_x86_ops.vm_attestation)
 			ret = kvm_x86_ops.vm_attestation(vcpu->kvm, a0, a1);
+		break;
+	case KVM_HC_PSP_OP:
+		ret = kvm_pv_psp_op(vcpu->kvm, a0, a1, a2, a3);
 		break;
 	default:
 		ret = -KVM_ENOSYS;
