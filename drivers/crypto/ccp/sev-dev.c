@@ -22,6 +22,7 @@
 #include <linux/firmware.h>
 #include <linux/gfp.h>
 #include <linux/cpufeature.h>
+#include <linux/psp-csv.h>
 
 #include <asm/smp.h>
 
@@ -150,6 +151,22 @@ static int sev_cmd_buffer_len(int cmd)
 			return sizeof(struct csv_data_hgsc_cert_import);
 		case CSV_CMD_RING_BUFFER:
 			return sizeof(struct csv_data_ring_buffer);
+		case CSV_CMD_LAUNCH_ENCRYPT_DATA:
+			return sizeof(struct csv_data_launch_encrypt_data);
+		case CSV_CMD_LAUNCH_ENCRYPT_VMCB:
+			return sizeof(struct csv_data_launch_encrypt_vmcb);
+		case CSV_CMD_UPDATE_NPT:
+			return sizeof(struct csv_data_update_npt);
+		case CSV_CMD_SET_SMR:
+			return sizeof(struct csv_data_set_smr);
+		case CSV_CMD_SET_SMCR:
+			return sizeof(struct csv_data_set_smcr);
+		case CSV_CMD_SET_GUEST_PRIVATE_MEMORY:
+			return sizeof(struct csv_data_set_guest_private_memory);
+		case CSV_CMD_DBG_READ_VMSA:
+			return sizeof(struct csv_data_dbg_read_vmsa);
+		case CSV_CMD_DBG_READ_MEM:
+			return sizeof(struct csv_data_dbg_read_mem);
 		default:
 			break;
 		}
