@@ -1733,6 +1733,9 @@ int kvm_pv_send_ipi(struct kvm *kvm, unsigned long ipi_bitmap_low,
 		    unsigned long ipi_bitmap_high, u32 min,
 		    unsigned long icr, int op_64_bit);
 
+int kvm_pv_psp_op(struct kvm *kvm, int cmd, gpa_t data_gpa,
+		gpa_t psp_ret_gpa, gpa_t table_gpa);
+
 void kvm_define_user_return_msr(unsigned index, u32 msr);
 int kvm_probe_user_return_msr(u32 msr);
 int kvm_set_user_return_msr(unsigned index, u64 val, u64 mask);
