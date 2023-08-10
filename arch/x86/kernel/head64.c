@@ -42,6 +42,7 @@
 #include <asm/trapnr.h>
 #include <asm/sev.h>
 #include <asm/tdx.h>
+#include <asm/csv_command.h>
 
 /*
  * Manage page tables very early on.
@@ -298,6 +299,14 @@ unsigned long __head __startup_64(unsigned long physaddr,
 		for (; vaddr < vaddr_end; vaddr += PMD_SIZE) {
 			i = pmd_index(vaddr);
 			pmd[i] -= sme_get_me_mask();
+		}
+
+		if (csv_active()) {
+			vaddr = (unsigned long)__start_bss_decrypted;
+			vaddr_end = (unsigned long)__end_bss_decrypted;
+			csv_early_reset_memory(bp);
+			csv_early_update_memory_dec((unsigned long)vaddr,
+						(vaddr_end - vaddr) >> PAGE_SHIFT);
 		}
 	}
 
