@@ -34,9 +34,16 @@ enum migrate_reason {
 /* In mm/debug.c; also keep sync with include/trace/events/migrate.h */
 extern const char *migrate_reason_names[MR_TYPES];
 
+enum dma_migrate_mode {
+	DMA_MIGRATE_DEFAULT,
+	DMA_MIGRATE_POLLING,
+	DMA_MIGRATE_INTERRUPT
+};
+
 extern bool migrate_use_dma(void);
 extern int dma_migrate_pages_copy(const struct list_head *pages,
-				  const struct list_head *new_pages);
+				  const struct list_head *new_pages,
+				  enum dma_migrate_mode mode);
 
 #ifdef CONFIG_MIGRATION
 
