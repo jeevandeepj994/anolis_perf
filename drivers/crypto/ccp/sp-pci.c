@@ -300,6 +300,12 @@ static const struct tee_vdata teev1 = {
 	.ring_rptr_reg          = 0x10554,
 };
 
+static const struct sev_vdata csvv1 = {
+	.cmdresp_reg		= 0x10580,
+	.cmdbuff_addr_lo_reg	= 0x105e0,
+	.cmdbuff_addr_hi_reg	= 0x105e4,
+};
+
 static const struct psp_vdata pspv1 = {
 	.sev			= &sevv1,
 	.feature_reg		= 0x105fc,
@@ -329,6 +335,13 @@ static const struct psp_vdata pspv3 = {
 	.feature_reg		= 0x109fc,
 	.inten_reg		= 0x10690,
 	.intsts_reg		= 0x10694,
+};
+
+static const struct psp_vdata psp_csvv1 = {
+	.sev			= &csvv1,
+	.feature_reg		= 0x105fc,
+	.inten_reg		= 0x10670,
+	.intsts_reg		= 0x10674,
 };
 #endif
 
@@ -378,6 +391,15 @@ static const struct sp_dev_vdata dev_vdata[] = {
 		.psp_vdata = &pspv2,
 #endif
 	},
+	{	/* 6 */
+		.bar = 2,
+#ifdef CONFIG_CRYPTO_DEV_SP_CCP
+		.ccp_vdata = &ccpv5a,
+#endif
+#ifdef CONFIG_CRYPTO_DEV_SP_PSP
+		.psp_vdata = &psp_csvv1,
+#endif
+	},
 };
 static const struct pci_device_id sp_pci_table[] = {
 	{ PCI_VDEVICE(AMD, 0x1537), (kernel_ulong_t)&dev_vdata[0] },
@@ -389,6 +411,7 @@ static const struct pci_device_id sp_pci_table[] = {
 	{ PCI_VDEVICE(AMD, 0x14CA), (kernel_ulong_t)&dev_vdata[5] },
 	{ PCI_VDEVICE(HYGON, 0x1456), (kernel_ulong_t)&dev_vdata[1] },
 	{ PCI_VDEVICE(HYGON, 0x1468), (kernel_ulong_t)&dev_vdata[2] },
+	{ PCI_VDEVICE(HYGON, 0x1486), (kernel_ulong_t)&dev_vdata[6] },
 	/* Last entry must be zero */
 	{ 0, }
 };
