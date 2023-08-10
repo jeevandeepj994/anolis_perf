@@ -28,6 +28,7 @@
 #include <asm/proto.h>
 #include <asm/memtype.h>
 #include <asm/set_memory.h>
+#include <asm/csv_command.h>
 
 #include "../mm_internal.h"
 
@@ -2015,6 +2016,9 @@ static int __set_memory_enc_pgtable(unsigned long addr, int numpages, bool enc)
 	 * as above.
 	 */
 	cpa_flush(&cpa, 0);
+
+	if (csv_active())
+		csv_memory_enc_dec(addr, numpages, enc);
 
 	/* Notify hypervisor that we have successfully set/clr encryption attribute. */
 	if (!ret) {
