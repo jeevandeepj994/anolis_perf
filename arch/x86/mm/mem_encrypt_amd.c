@@ -30,6 +30,7 @@
 #include <asm/processor-flags.h>
 #include <asm/msr.h>
 #include <asm/cmdline.h>
+#include <asm/csv_command.h>
 
 #include "mm_internal.h"
 
@@ -320,11 +321,19 @@ static void __init __set_clr_pte_enc(pte_t *kpte, int level, bool enc)
 	 */
 	clflush_cache_range(__va(pa), size);
 
-	/* Encrypt/decrypt the contents in-place */
-	if (enc)
-		sme_early_encrypt(pa, size);
-	else
-		sme_early_decrypt(pa, size);
+	/*
+	 * The in-place enc/dec action does not work for CSV guest. In CSV,
+	 * besides setting/clearing the c-bit of the page, the page will
+	 * not be private/shared memory until the secure processor update
+	 * NPT.
+	 */
+	if (!csv_active()) {
+		/* Encrypt/decrypt the contents in-place */
+		if (enc)
+			sme_early_encrypt(pa, size);
+		else
+			sme_early_decrypt(pa, size);
+	}
 
 	/* Change the page encryption mask. */
 	new_pte = pfn_pte(pfn, new_prot);
@@ -398,6 +407,9 @@ static int __init early_set_memory_enc_dec(unsigned long vaddr,
 	early_set_mem_enc_dec_hypercall(start, PAGE_ALIGN(size) >> PAGE_SHIFT, enc);
 out:
 	__flush_tlb_all();
+
+	if (csv_active())
+		csv_early_memory_enc_dec(vaddr_end - size, size, enc);
 	return ret;
 }
 
