@@ -733,7 +733,7 @@ int migrate_page(struct address_space *mapping,
 	if (rc != MIGRATEPAGE_SUCCESS)
 		return rc;
 
-	if (mode != MIGRATE_SYNC_NO_COPY)
+	if (mode != MIGRATE_SYNC_NO_COPY && mode != MIGRATE_ASYNC_NO_COPY)
 		migrate_page_copy(newpage, page);
 	else
 		migrate_page_states(newpage, page);
@@ -749,7 +749,7 @@ static bool buffer_migrate_lock_buffers(struct buffer_head *head,
 	struct buffer_head *bh = head;
 
 	/* Simple case, sync compaction */
-	if (mode != MIGRATE_ASYNC) {
+	if (mode != MIGRATE_ASYNC && mode != MIGRATE_ASYNC_NO_COPY) {
 		do {
 			lock_buffer(bh);
 			bh = bh->b_this_page;
@@ -840,7 +840,7 @@ recheck_buffers:
 
 	} while (bh != head);
 
-	if (mode != MIGRATE_SYNC_NO_COPY)
+	if (mode != MIGRATE_SYNC_NO_COPY && mode != MIGRATE_ASYNC_NO_COPY)
 		migrate_page_copy(newpage, page);
 	else
 		migrate_page_states(newpage, page);
@@ -1616,6 +1616,52 @@ static int migrate_hugetlbs(struct list_head *from, new_page_t get_new_page,
 	return nr_failed;
 }
 
+static int migrate_pages_copy(struct list_head *pages,
+			      struct list_head *new_pages,
+			      int nr_move_pages,
+			      enum migrate_mode mode)
+{
+	int (*migratepage) (struct address_space *, struct page *,
+			    struct page *, enum migrate_mode);
+	struct address_space *mapping;
+	enum dma_migrate_mode dma_mode;
+	struct page *page;
+	bool is_lru;
+
+	if (!migrate_use_dma(nr_move_pages))
+		return -EINVAL;
+
+	/*
+	 * Check if all pages support being copied via dma. At this point
+	 * the validation is safe, cause all pages are under the page lock.
+	 */
+	list_for_each_entry(page, pages, lru) {
+		mapping = page_mapping(page);
+		is_lru = !__PageMovable(page);
+		if (likely(is_lru)) {
+			/* migrate_page is supported when mapping is NULL */
+			if (mapping) {
+				migratepage = mapping->a_ops->migratepage;
+				/*
+				 * Currently only three migratepage callbacks
+				 * and fallback_migrate_page are supported.
+				 */
+				if (migratepage &&
+				    migratepage != migrate_page &&
+				    migratepage != buffer_migrate_page &&
+				    migratepage != buffer_migrate_page_norefs)
+					return -EINVAL;
+			}
+		} else {
+			return -EINVAL;
+		}
+	}
+
+	dma_mode = (mode == MIGRATE_ASYNC) ? DMA_MIGRATE_POLLING :
+					     DMA_MIGRATE_DEFAULT;
+	return dma_migrate_pages_copy(pages, new_pages, dma_mode);
+}
+
 /*
  * migrate_pages_batch() first unmaps pages in the from list as many as
  * possible, then move the unmapped pages.
@@ -1634,6 +1680,7 @@ int migrate_pages_batch(struct list_head *from, new_page_t get_new_page,
 	int retry = 1;
 	int thp_retry = 1;
 	int nr_failed = 0;
+	int nr_move_pages = 0;
 	int nr_retry_pages = 0;
 	int pass = 0;
 	bool is_thp = false;
@@ -1733,6 +1780,7 @@ int migrate_pages_batch(struct list_head *from, new_page_t get_new_page,
 			case MIGRATEPAGE_UNMAP:
 				list_move_tail(&page->lru, &unmap_pages);
 				list_add_tail(&dst->lru, &new_pages);
+				nr_move_pages += nr_pages;
 				break;
 			default:
 				/*
@@ -1757,6 +1805,13 @@ int migrate_pages_batch(struct list_head *from, new_page_t get_new_page,
 move:
 	/* Flush TLBs for all unmapped pages */
 	try_to_unmap_flush();
+
+	if (!migrate_pages_copy(&unmap_pages, &new_pages, nr_move_pages, mode)) {
+		if (mode == MIGRATE_ASYNC)
+			mode = MIGRATE_ASYNC_NO_COPY;
+		else
+			mode = MIGRATE_SYNC_NO_COPY;
+	}
 
 	retry = 1;
 	for (pass = 0; pass < nr_pass && (retry || thp_retry); pass++) {
