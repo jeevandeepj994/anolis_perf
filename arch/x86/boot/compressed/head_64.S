@@ -570,6 +570,8 @@ SYM_FUNC_START_LOCAL_NOALIGN(.Lrelocated)
  */
 	pushq	%rsi
 	call	set_sev_encryption_mask
+	/* Check CSV guest */
+	call	set_csv_status
 	call	load_stage2_idt
 
 	/* Pass boot_params to initialize_identity_maps() */
