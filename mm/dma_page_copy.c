@@ -19,7 +19,7 @@ static void dma_async_callback(void *arg)
 }
 
 static int __dma_page_copy_sg(struct scatterlist *src, struct scatterlist *dst,
-			      unsigned int nents)
+			      unsigned int nents, enum dma_migrate_mode mode)
 {
 	struct dma_async_tx_descriptor *tx;
 	struct dma_chan *dma_copy_chan = NULL;
@@ -29,6 +29,7 @@ static int __dma_page_copy_sg(struct scatterlist *src, struct scatterlist *dst,
 	enum dma_status status;
 	unsigned int nr_sgs, nr_sgd = 0;
 	unsigned long flags;
+	bool use_polling;
 	int err = 0;
 	DECLARE_COMPLETION_ONSTACK(done);
 
@@ -54,8 +55,21 @@ static int __dma_page_copy_sg(struct scatterlist *src, struct scatterlist *dst,
 		goto unmap_sg;
 	}
 
+	switch (mode) {
+	case DMA_MIGRATE_POLLING:
+		use_polling = true;
+		break;
+	case DMA_MIGRATE_INTERRUPT:
+		use_polling = false;
+		break;
+	case DMA_MIGRATE_DEFAULT:
+		/* fall-through */
+	default:
+		use_polling = dma_migrate_polling;
+	}
+
 	/* prep DMA scatterlist memcpy */
-	flags = dma_migrate_polling ? 0 : DMA_PREP_INTERRUPT;
+	flags = use_polling ? 0 : DMA_PREP_INTERRUPT;
 	tx = dmaengine_prep_dma_memcpy_sg(dma_copy_chan, dst, nents,
 					src, nents, flags);
 	if (!tx) {
@@ -64,7 +78,7 @@ static int __dma_page_copy_sg(struct scatterlist *src, struct scatterlist *dst,
 		goto unmap_sg;
 	}
 
-	if (!dma_migrate_polling) {
+	if (!use_polling) {
 		tx->callback = dma_async_callback;
 		tx->callback_param = &done;
 	}
@@ -77,7 +91,7 @@ static int __dma_page_copy_sg(struct scatterlist *src, struct scatterlist *dst,
 		goto unmap_sg;
 	}
 
-	if (dma_migrate_polling) {
+	if (use_polling) {
 		status = dma_sync_wait(dma_copy_chan, cookie);
 		if (status != DMA_COMPLETE)
 			err = -EIO;
@@ -108,7 +122,8 @@ bool migrate_use_dma(void)
 }
 
 int dma_migrate_pages_copy(const struct list_head *pages,
-			  const struct list_head *new_pages)
+			  const struct list_head *new_pages,
+			  enum dma_migrate_mode mode)
 {
 	struct page *page, *newpage;
 	struct scatterlist *src_sg, *dst_sg = NULL;
@@ -160,7 +175,7 @@ int dma_migrate_pages_copy(const struct list_head *pages,
 			sg_mark_end(src_ptr - 1);
 			sg_mark_end(dst_ptr - 1);
 
-			if (__dma_page_copy_sg(src_sg, dst_sg, nents)) {
+			if (__dma_page_copy_sg(src_sg, dst_sg, nents, mode)) {
 				err = -ENODEV;
 				goto done;
 			}
@@ -179,7 +194,7 @@ int dma_migrate_pages_copy(const struct list_head *pages,
 		sg_mark_end(src_ptr - 1);
 		sg_mark_end(dst_ptr - 1);
 
-		if (__dma_page_copy_sg(src_sg, dst_sg, nents)) {
+		if (__dma_page_copy_sg(src_sg, dst_sg, nents, mode)) {
 			err = -ENODEV;
 			goto done;
 		}
