@@ -2064,6 +2064,21 @@ config EFI_MIXED
 
 	   If unsure, say N.
 
+config HYGON_CSV
+	bool "Hygon secure virtualization CSV support"
+	default n
+	depends on CPU_SUP_HYGON && AMD_MEM_ENCRYPT && CMA
+	help
+	  CSV feature integrates secure processor, memory encryption and
+	  memory isolation to provide the ability to protect guest's private
+	  data. The CSV guest's context like CPU registers, control block
+	  and nested page table is accessed only by the guest itself and
+	  the secure processor. Neither other guests nor the host can tamper
+	  with the guest's context.
+
+	  Say yes to enable support for the Hygon secure virtualization
+	  on hygon processor.
+
 source "kernel/Kconfig.hz"
 
 config KEXEC
