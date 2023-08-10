@@ -40,7 +40,7 @@ enum dma_migrate_mode {
 	DMA_MIGRATE_INTERRUPT
 };
 
-extern bool migrate_use_dma(void);
+extern bool migrate_use_dma(int nr_move_pages);
 extern int dma_migrate_pages_copy(const struct list_head *pages,
 				  const struct list_head *new_pages,
 				  enum dma_migrate_mode mode);

@@ -10,6 +10,7 @@
 static bool dma_migrate_enabled __read_mostly;
 static unsigned int dma_migrate_segment = 32;
 static bool dma_migrate_polling __read_mostly = true;
+static int dma_migrate_min_pages __read_mostly = 32;
 
 static void dma_async_callback(void *arg)
 {
@@ -116,9 +117,10 @@ unmap_sg:
 	return err;
 }
 
-bool migrate_use_dma(void)
+bool migrate_use_dma(int nr_move_pages)
 {
-	return READ_ONCE(dma_migrate_enabled);
+	return READ_ONCE(dma_migrate_enabled) &&
+	       nr_move_pages >= READ_ONCE(dma_migrate_min_pages);
 }
 
 int dma_migrate_pages_copy(const struct list_head *pages,
@@ -276,10 +278,36 @@ static struct kobj_attribute dma_migrate_polling_attr =
 	__ATTR(dma_migrate_polling, 0644, migrate_dma_polling_show,
 	       migrate_dma_polling_store);
 
+static ssize_t dma_migrate_min_pages_show(struct kobject *kobj,
+					  struct kobj_attribute *attr, char *buf)
+{
+	return sysfs_emit(buf, "%d\n", dma_migrate_min_pages);
+}
+
+static ssize_t dma_migrate_min_pages_store(struct kobject *kobj,
+					   struct kobj_attribute *attr,
+					   const char *buf, size_t count)
+{
+	unsigned int nr_min_pages;
+	int err;
+
+	err = kstrtouint(buf, 10, &nr_min_pages);
+	if (err)
+		return -EINVAL;
+
+	dma_migrate_min_pages = nr_min_pages;
+
+	return count;
+}
+static struct kobj_attribute dma_migrate_min_pages_attr =
+	__ATTR(dma_migrate_min_pages, 0644, dma_migrate_min_pages_show,
+	       dma_migrate_min_pages_store);
+
 static struct attribute *migrate_attrs[] = {
 	&dma_migrate_enabled_attr.attr,
 	&dma_migrate_segment_attr.attr,
 	&dma_migrate_polling_attr.attr,
+	&dma_migrate_min_pages_attr.attr,
 	NULL,
 };
 
