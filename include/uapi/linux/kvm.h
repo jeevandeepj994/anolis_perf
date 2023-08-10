@@ -1864,4 +1864,25 @@ struct kvm_hyperv_eventfd {
 #define KVM_X86_NOTIFY_VMEXIT_ENABLED		(1ULL << 0)
 #define KVM_X86_NOTIFY_VMEXIT_USER		(1ULL << 1)
 
+/* CSV command */
+enum csv_cmd_id {
+	KVM_CSV_NR_MIN = 0xc0,
+
+	KVM_CSV_INIT = KVM_CSV_NR_MIN,
+	KVM_CSV_LAUNCH_ENCRYPT_DATA,
+	KVM_CSV_LAUNCH_ENCRYPT_VMCB,
+
+	KVM_CSV_NR_MAX,
+};
+
+struct kvm_csv_init_data {
+	__u64 nodemask;
+};
+
+struct kvm_csv_launch_encrypt_data {
+	__u64 gpa;
+	__u64 uaddr;
+	__u32 len;
+};
+
 #endif /* __LINUX_KVM_H */
