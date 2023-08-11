@@ -164,4 +164,5 @@ ifeq ($(CONFIG_X86_64),y)
 	obj-y				+= vsmp_64.o
 endif
 
+obj-$(CONFIG_HYGON_CSV)			+= csv_command.o
 obj-$(CONFIG_IMA_SECURE_AND_OR_TRUSTED_BOOT)	+= ima_arch.o

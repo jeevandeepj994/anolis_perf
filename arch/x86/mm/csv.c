@@ -18,6 +18,7 @@
 #include <asm/cacheflush.h>
 #include <asm/set_memory.h>
 #include <asm/csv.h>
+#include <asm/csv_command.h>
 
 #undef  pr_fmt
 #define pr_fmt(fmt) "CSV-CMA: " fmt
@@ -212,8 +213,10 @@ void __init early_csv_reserve_mem(void)
 {
 	unsigned long total_pages;
 
-	if (!(boot_cpu_data.x86_vendor == X86_VENDOR_HYGON &&
-	      boot_cpu_data.x86_model >= 0x4))
+	/*
+	 * Only Hygon host reserves CMA for CSV.
+	 */
+	if (!csv_enable())
 		return;
 
 	if (cma_alloc_areas(CSV_CMA_AREAS))
