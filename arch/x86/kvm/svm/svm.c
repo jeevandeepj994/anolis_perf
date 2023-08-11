@@ -3836,6 +3836,8 @@ static noinstr void svm_vcpu_enter_exit(struct kvm_vcpu *vcpu,
 	guest_enter_irqoff();
 	lockdep_hardirqs_on(CALLER_ADDR0);
 
+	amd_clear_divider();
+
 	if (sev_es_guest(svm->vcpu.kvm)) {
 		__svm_sev_es_vcpu_run(svm->vmcb_pa);
 	} else {
