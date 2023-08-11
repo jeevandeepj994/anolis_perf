@@ -3565,7 +3565,7 @@ static int txgbe_set_priv_flags(struct net_device *dev, u32 flags)
 }
 
 static const struct ethtool_ops txgbe_ethtool_ops = {
-	.supported_coalesce_params = ETHTOOL_COALESCE_RX_USECS,
+	.supported_coalesce_params = ETHTOOL_COALESCE_RX_USECS | ETHTOOL_COALESCE_TX_MAX_FRAMES_IRQ,
 	.get_link_ksettings     = txgbe_get_link_ksettings,
 	.set_link_ksettings     = txgbe_set_link_ksettings,
 	.get_drvinfo            = txgbe_get_drvinfo,
