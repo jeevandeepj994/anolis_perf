@@ -1,3 +1,12 @@
+# SPDX-License-Identifier: GPL-2.0-only
+# The IOVA library may also be used by non-IOMMU_API users
+config IOMMU_IOVA
+	tristate
+
+# The IOASID library may also be used by non-IOMMU_API users
+config IOASID
+	tristate
+
 # IOMMU_API always gets selected by whoever wants it.
 config IOMMU_API
 	bool
@@ -188,9 +197,10 @@ config INTEL_IOMMU
 
 config INTEL_IOMMU_SVM
 	bool "Support for Shared Virtual Memory with Intel IOMMU"
-	depends on INTEL_IOMMU && X86
+	depends on INTEL_IOMMU && X86_64
 	select PCI_PASID
 	select MMU_NOTIFIER
+	select IOASID
 	help
 	  Shared Virtual Memory (SVM) provides a facility for devices
 	  to access DMA resources through process address space by
