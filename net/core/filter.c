@@ -4856,6 +4856,12 @@ bpf_base_func_proto(enum bpf_func_id func_id)
 		return &bpf_map_update_elem_proto;
 	case BPF_FUNC_map_delete_elem:
 		return &bpf_map_delete_elem_proto;
+	case BPF_FUNC_map_push_elem:
+		return &bpf_map_push_elem_proto;
+	case BPF_FUNC_map_pop_elem:
+		return &bpf_map_pop_elem_proto;
+	case BPF_FUNC_map_peek_elem:
+		return &bpf_map_peek_elem_proto;
 	case BPF_FUNC_get_prandom_u32:
 		return &bpf_get_prandom_u32_proto;
 	case BPF_FUNC_get_smp_processor_id:
@@ -6850,6 +6856,25 @@ static u32 sk_skb_convert_ctx_access(enum bpf_access_type type,
 		*insn++ = BPF_LDX_MEM(BPF_SIZEOF(void *), si->dst_reg,
 				      si->src_reg, off);
 		break;
+        case offsetof(struct __sk_buff, cb[0]) ...
+             offsetofend(struct __sk_buff, cb[4]) - 1:
+                BUILD_BUG_ON(sizeof_field(struct sk_skb_cb, data) < 20);
+                BUILD_BUG_ON((offsetof(struct sk_buff, cb) +
+                              offsetof(struct sk_skb_cb, data)) %
+                             sizeof(__u64));
+
+                prog->cb_access = 1;
+                off  = si->off;
+                off -= offsetof(struct __sk_buff, cb[0]);
+                off += offsetof(struct sk_buff, cb);
+                off += offsetof(struct sk_skb_cb, data);
+                if (type == BPF_WRITE)
+                        *insn++ = BPF_STX_MEM(BPF_SIZE(si->code), si->dst_reg,
+                                              si->src_reg, off);
+                else
+                        *insn++ = BPF_LDX_MEM(BPF_SIZE(si->code), si->dst_reg,
+                                              si->src_reg, off);
+                break;
 	default:
 		return bpf_convert_ctx_access(type, si, insn_buf, prog,
 					      target_size);
