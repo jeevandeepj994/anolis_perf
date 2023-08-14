@@ -2588,7 +2588,7 @@ void sev_free_vcpu(struct kvm_vcpu *vcpu)
 	__free_page(virt_to_page(svm->vmsa));
 
 	if (svm->ghcb_sa_free)
-		kfree(svm->ghcb_sa);
+		kvfree(svm->ghcb_sa);
 }
 
 static void dump_ghcb(struct vcpu_svm *svm)
@@ -2684,19 +2684,24 @@ static int sev_es_validate_vmgexit(struct vcpu_svm *svm)
 {
 	struct kvm_vcpu *vcpu;
 	struct ghcb *ghcb;
-	u64 exit_code = 0;
+	u64 exit_code;
+	u64 reason;
 
 	ghcb = svm->ghcb;
 
-	/* Only GHCB Usage code 0 is supported */
-	if (ghcb->ghcb_usage)
-		goto vmgexit_err;
-
 	/*
-	 * Retrieve the exit code now even though is may not be marked valid
+	 * Retrieve the exit code now even though it may not be marked valid
 	 * as it could help with debugging.
 	 */
 	exit_code = ghcb_get_sw_exit_code(ghcb);
+
+	/* Only GHCB Usage code 0 is supported */
+	if (ghcb->ghcb_usage) {
+		reason = GHCB_ERR_INVALID_USAGE;
+		goto vmgexit_err;
+	}
+
+	reason = GHCB_ERR_MISSING_INPUT;
 
 	if (!ghcb_sw_exit_code_is_valid(ghcb) ||
 	    !ghcb_sw_exit_info_1_is_valid(ghcb) ||
@@ -2776,6 +2781,7 @@ static int sev_es_validate_vmgexit(struct vcpu_svm *svm)
 	case SVM_VMGEXIT_UNSUPPORTED_EVENT:
 		break;
 	default:
+		reason = GHCB_ERR_INVALID_EVENT;
 		goto vmgexit_err;
 	}
 
@@ -2784,22 +2790,26 @@ static int sev_es_validate_vmgexit(struct vcpu_svm *svm)
 vmgexit_err:
 	vcpu = &svm->vcpu;
 
-	if (ghcb->ghcb_usage) {
+	if (reason == GHCB_ERR_INVALID_USAGE) {
 		vcpu_unimpl(vcpu, "vmgexit: ghcb usage %#x is not valid\n",
 			    ghcb->ghcb_usage);
+	} else if (reason == GHCB_ERR_INVALID_EVENT) {
+		vcpu_unimpl(vcpu, "vmgexit: exit code %#llx is not valid\n",
+			    exit_code);
 	} else {
-		vcpu_unimpl(vcpu, "vmgexit: exit reason %#llx is not valid\n",
+		vcpu_unimpl(vcpu, "vmgexit: exit code %#llx input is not valid\n",
 			    exit_code);
 		dump_ghcb(svm);
 	}
 
-	vcpu->run->exit_reason = KVM_EXIT_INTERNAL_ERROR;
-	vcpu->run->internal.suberror = KVM_INTERNAL_ERROR_UNEXPECTED_EXIT_REASON;
-	vcpu->run->internal.ndata = 2;
-	vcpu->run->internal.data[0] = exit_code;
-	vcpu->run->internal.data[1] = vcpu->arch.last_vmentry_cpu;
+	/* Clear the valid entries fields */
+	memset(ghcb->save.valid_bitmap, 0, sizeof(ghcb->save.valid_bitmap));
 
-	return -EINVAL;
+	ghcb_set_sw_exit_info_1(ghcb, 2);
+	ghcb_set_sw_exit_info_2(ghcb, reason);
+
+	/* Resume the guest to "return" the error code. */
+	return 1;
 }
 
 void sev_es_unmap_ghcb(struct vcpu_svm *svm)
@@ -2820,7 +2830,7 @@ void sev_es_unmap_ghcb(struct vcpu_svm *svm)
 			svm->ghcb_sa_sync = false;
 		}
 
-		kfree(svm->ghcb_sa);
+		kvfree(svm->ghcb_sa);
 		svm->ghcb_sa = NULL;
 		svm->ghcb_sa_free = false;
 	}
@@ -2857,7 +2867,7 @@ void pre_sev_run(struct vcpu_svm *svm, int cpu)
 }
 
 #define GHCB_SCRATCH_AREA_LIMIT		(16ULL * PAGE_SIZE)
-static bool setup_vmgexit_scratch(struct vcpu_svm *svm, bool sync, u64 len)
+static int setup_vmgexit_scratch(struct vcpu_svm *svm, bool sync, u64 len)
 {
 	struct vmcb_control_area *control = &svm->vmcb->control;
 	struct ghcb *ghcb = svm->ghcb;
@@ -2868,14 +2878,14 @@ static bool setup_vmgexit_scratch(struct vcpu_svm *svm, bool sync, u64 len)
 	scratch_gpa_beg = ghcb_get_sw_scratch(ghcb);
 	if (!scratch_gpa_beg) {
 		pr_err("vmgexit: scratch gpa not provided\n");
-		return false;
+		goto e_scratch;
 	}
 
 	scratch_gpa_end = scratch_gpa_beg + len;
 	if (scratch_gpa_end < scratch_gpa_beg) {
 		pr_err("vmgexit: scratch length (%#llx) not valid for scratch address (%#llx)\n",
 		       len, scratch_gpa_beg);
-		return false;
+		goto e_scratch;
 	}
 
 	if ((scratch_gpa_beg & PAGE_MASK) == control->ghcb_gpa) {
@@ -2893,7 +2903,7 @@ static bool setup_vmgexit_scratch(struct vcpu_svm *svm, bool sync, u64 len)
 		    scratch_gpa_end > ghcb_scratch_end) {
 			pr_err("vmgexit: scratch area is outside of GHCB shared buffer area (%#llx - %#llx)\n",
 			       scratch_gpa_beg, scratch_gpa_end);
-			return false;
+			goto e_scratch;
 		}
 
 		scratch_va = (void *)svm->ghcb;
@@ -2906,18 +2916,18 @@ static bool setup_vmgexit_scratch(struct vcpu_svm *svm, bool sync, u64 len)
 		if (len > GHCB_SCRATCH_AREA_LIMIT) {
 			pr_err("vmgexit: scratch area exceeds KVM limits (%#llx requested, %#llx limit)\n",
 			       len, GHCB_SCRATCH_AREA_LIMIT);
-			return false;
+			goto e_scratch;
 		}
-		scratch_va = kzalloc(len, GFP_KERNEL);
+		scratch_va = kvzalloc(len, GFP_KERNEL);
 		if (!scratch_va)
-			return false;
+			return -ENOMEM;
 
 		if (kvm_read_guest(svm->vcpu.kvm, scratch_gpa_beg, scratch_va, len)) {
 			/* Unable to copy scratch area from guest */
 			pr_err("vmgexit: kvm_read_guest for scratch area failed\n");
 
-			kfree(scratch_va);
-			return false;
+			kvfree(scratch_va);
+			return -EFAULT;
 		}
 
 		/*
@@ -2933,7 +2943,13 @@ static bool setup_vmgexit_scratch(struct vcpu_svm *svm, bool sync, u64 len)
 	svm->ghcb_sa = scratch_va;
 	svm->ghcb_sa_len = len;
 
-	return true;
+	return 0;
+
+e_scratch:
+	ghcb_set_sw_exit_info_1(ghcb, 2);
+	ghcb_set_sw_exit_info_2(ghcb, GHCB_ERR_INVALID_SCRATCH_AREA);
+
+	return 1;
 }
 
 static void set_ghcb_msr_bits(struct vcpu_svm *svm, u64 value, u64 mask,
@@ -2984,7 +3000,7 @@ static int sev_handle_vmgexit_msr_protocol(struct vcpu_svm *svm)
 
 		ret = svm_invoke_exit_handler(svm, SVM_EXIT_CPUID);
 		if (!ret) {
-			ret = -EINVAL;
+			/* Error, keep GHCB MSR value as-is */
 			break;
 		}
 
@@ -3020,10 +3036,18 @@ static int sev_handle_vmgexit_msr_protocol(struct vcpu_svm *svm)
 						GHCB_MSR_TERM_REASON_POS);
 		pr_info("SEV-ES guest requested termination: %#llx:%#llx\n",
 			reason_set, reason_code);
-		fallthrough;
+
+		vcpu->run->exit_reason = KVM_EXIT_SYSTEM_EVENT;
+		vcpu->run->system_event.type = KVM_SYSTEM_EVENT_SEV_TERM |
+					       KVM_SYSTEM_EVENT_NDATA_VALID;
+		vcpu->run->system_event.ndata = 1;
+		vcpu->run->system_event.data[1] = control->ghcb_gpa;
+
+		return 0;
 	}
 	default:
-		ret = -EINVAL;
+		/* Error, keep GHCB MSR value as-is */
+		break;
 	}
 
 	trace_kvm_vmgexit_msr_protocol_exit(svm->vcpu.vcpu_id,
@@ -3046,14 +3070,18 @@ int sev_handle_vmgexit(struct vcpu_svm *svm)
 
 	if (!ghcb_gpa) {
 		vcpu_unimpl(&svm->vcpu, "vmgexit: GHCB gpa is not set\n");
-		return -EINVAL;
+
+		/* Without a GHCB, just return right back to the guest */
+		return 1;
 	}
 
 	if (kvm_vcpu_map(&svm->vcpu, ghcb_gpa >> PAGE_SHIFT, &svm->ghcb_map)) {
 		/* Unable to map GHCB from guest */
 		vcpu_unimpl(&svm->vcpu, "vmgexit: error mapping GHCB [%#llx] from guest\n",
 			    ghcb_gpa);
-		return -EINVAL;
+
+		/* Without a GHCB, just return right back to the guest */
+		return 1;
 	}
 
 	svm->ghcb = svm->ghcb_map.hva;
@@ -3071,10 +3099,10 @@ int sev_handle_vmgexit(struct vcpu_svm *svm)
 	ghcb_set_sw_exit_info_1(ghcb, 0);
 	ghcb_set_sw_exit_info_2(ghcb, 0);
 
-	ret = -EINVAL;
 	switch (exit_code) {
 	case SVM_VMGEXIT_MMIO_READ:
-		if (!setup_vmgexit_scratch(svm, true, control->exit_info_2))
+		ret = setup_vmgexit_scratch(svm, true, control->exit_info_2);
+		if (ret)
 			break;
 
 		ret = kvm_sev_es_mmio_read(&svm->vcpu,
@@ -3083,7 +3111,8 @@ int sev_handle_vmgexit(struct vcpu_svm *svm)
 					   svm->ghcb_sa);
 		break;
 	case SVM_VMGEXIT_MMIO_WRITE:
-		if (!setup_vmgexit_scratch(svm, false, control->exit_info_2))
+		ret = setup_vmgexit_scratch(svm, false, control->exit_info_2);
+		if (ret)
 			break;
 
 		ret = kvm_sev_es_mmio_write(&svm->vcpu,
@@ -3112,11 +3141,8 @@ int sev_handle_vmgexit(struct vcpu_svm *svm)
 		default:
 			pr_err("svm: vmgexit: unsupported AP jump table request - exit_info_1=%#llx\n",
 			       control->exit_info_1);
-			ghcb_set_sw_exit_info_1(ghcb, 1);
-			ghcb_set_sw_exit_info_2(ghcb,
-						X86_TRAP_UD |
-						SVM_EVTINJ_TYPE_EXEPT |
-						SVM_EVTINJ_VALID);
+			ghcb_set_sw_exit_info_1(ghcb, 2);
+			ghcb_set_sw_exit_info_2(ghcb, GHCB_ERR_INVALID_INPUT);
 		}
 
 		ret = 1;
@@ -3126,6 +3152,7 @@ int sev_handle_vmgexit(struct vcpu_svm *svm)
 		vcpu_unimpl(&svm->vcpu,
 			    "vmgexit: unsupported event - exit_info_1=%#llx, exit_info_2=%#llx\n",
 			    control->exit_info_1, control->exit_info_2);
+		ret = -EINVAL;
 		break;
 	default:
 		ret = svm_invoke_exit_handler(svm, exit_code);
@@ -3138,6 +3165,7 @@ int sev_es_string_io(struct vcpu_svm *svm, int size, unsigned int port, int in)
 {
 	int count;
 	int bytes;
+	int r;
 
 	if (svm->vmcb->control.exit_info_2 > INT_MAX)
 		return -EINVAL;
@@ -3146,8 +3174,9 @@ int sev_es_string_io(struct vcpu_svm *svm, int size, unsigned int port, int in)
 	if (unlikely(check_mul_overflow(count, size, &bytes)))
 		return -EINVAL;
 
-	if (!setup_vmgexit_scratch(svm, in, bytes))
-		return -EINVAL;
+	r = setup_vmgexit_scratch(svm, in, bytes);
+	if (r)
+		return r;
 
 	return kvm_sev_es_string_io(&svm->vcpu, size, port, svm->ghcb_sa, count, in);
 }
