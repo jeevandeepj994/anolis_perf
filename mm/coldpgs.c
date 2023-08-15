@@ -87,6 +87,7 @@ static struct static_key_false *my_frontswap_enabled_key;
 static struct frontswap_ops **my_frontswap_ops;
 static struct frontswap_ops *my_zswap_frontswap_ops;
 static bool *my_frontswap_writethrough_enabled;
+static bool *my_coldpgs_enabled;
 #ifdef CONFIG_DEBUG_FS
 static u64 *my_frontswap_succ_stores;
 static u64 *my_frontswap_failed_stores;
@@ -111,7 +112,11 @@ static void (*my_p4d_clear_bad)(p4d_t *);
 #else
 #define my_p4d_clear_bad(p4d) do { } while (0)
 #endif
+#ifndef __PAGETABLE_PUD_FOLDED
 static void (*my_pud_clear_bad)(pud_t *);
+#else
+#define my_pud_clear_bad(p4d) do { } while (0)
+#endif
 static void (*my_pmd_clear_bad)(pmd_t *);
 static pmd_t *(*my_mm_find_pmd)(struct mm_struct *, unsigned long);
 static int (*my_do_swap_page)(struct vm_fault *);
@@ -119,6 +124,16 @@ static unsigned long (*my_node_page_state)(struct pglist_data *pgdat,
 				enum node_stat_item item);
 static void (*my___mod_lruvec_state)(struct lruvec *,
 		enum node_stat_item, int val);
+
+static inline void enable_coldpgs(void)
+{
+	*my_coldpgs_enabled = true;
+}
+
+static inline void disable_coldpgs(void)
+{
+	*my_coldpgs_enabled = false;
+}
 
 static unsigned long my_lruvec_page_state_local(struct lruvec *lruvec,
 							enum node_stat_item idx)
@@ -2089,6 +2104,7 @@ static int __init reclaim_coldpgs_resolve_symbols(void)
 	reclaim_coldpgs_resolve_symbol(frontswap_ops);
 	reclaim_coldpgs_resolve_symbol(zswap_frontswap_ops);
 	reclaim_coldpgs_resolve_symbol(frontswap_writethrough_enabled);
+	reclaim_coldpgs_resolve_symbol(coldpgs_enabled);
 #ifdef CONFIG_DEBUG_FS
 	reclaim_coldpgs_resolve_symbol(frontswap_succ_stores);
 	reclaim_coldpgs_resolve_symbol(frontswap_failed_stores);
@@ -2110,7 +2126,9 @@ static int __init reclaim_coldpgs_resolve_symbols(void)
 #if CONFIG_PGTABLE_LEVELS > 4
 	reclaim_coldpgs_resolve_symbol(p4d_clear_bad);
 #endif
+#ifndef __PAGETABLE_PUD_FOLDED
 	reclaim_coldpgs_resolve_symbol(pud_clear_bad);
+#endif
 	reclaim_coldpgs_resolve_symbol(pmd_clear_bad);
 	reclaim_coldpgs_resolve_symbol(mm_find_pmd);
 	reclaim_coldpgs_resolve_symbol(do_swap_page);
@@ -2132,6 +2150,12 @@ static int __init reclaim_coldpgs_init(void)
 	ret = reclaim_coldpgs_resolve_symbols();
 	if (ret)
 		return ret;
+
+	if (lru_gen_enabled()) {
+		pr_warn("%s: Failed to load coldpgs due to MGLRU enabled\n",
+			__func__);
+		return -EPERM;
+	}
 
 	/*
 	 * Initialize global control. The version is figured out from the
@@ -2176,6 +2200,8 @@ static int __init reclaim_coldpgs_init(void)
 		return ret;
 	}
 
+	enable_coldpgs();
+
 	pr_info("%s (%s) loaded\n", DRIVER_DESC, DRIVER_VERSION);
 
 	return 0;
@@ -2185,6 +2211,8 @@ static void __exit reclaim_coldpgs_exit(void)
 {
 	my_cgroup_rm_cftypes(reclaim_coldpgs_files);
 	sysfs_remove_group(mm_kobj, &reclaim_coldpgs_attr_group);
+
+	disable_coldpgs();
 
 	pr_info("%s (%s) unloaded\n", DRIVER_DESC, DRIVER_VERSION);
 }

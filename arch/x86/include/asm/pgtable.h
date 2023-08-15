@@ -819,10 +819,11 @@ static inline unsigned long pmd_page_vaddr(pmd_t pmd)
 static inline int pmd_bad(pmd_t pmd)
 {
 #ifdef CONFIG_ASYNC_FORK
-	return (pmd_flags(pmd) & ~_PAGE_USER & ~_PAGE_RW) !=
-		(_KERNPG_TABLE & ~_PAGE_RW);
+	return (pmd_flags(pmd) & ~(_PAGE_USER | _PAGE_ACCESSED | _PAGE_RW)) !=
+		(_KERNPG_TABLE & ~(_PAGE_ACCESSED | _PAGE_RW));
 #else
-	return (pmd_flags(pmd) & ~_PAGE_USER) != _KERNPG_TABLE;
+	return (pmd_flags(pmd) & ~(_PAGE_USER | _PAGE_ACCESSED)) !=
+		(_KERNPG_TABLE & ~_PAGE_ACCESSED);
 #endif
 }
 
@@ -1403,10 +1404,10 @@ static inline bool arch_has_pfn_modify_check(void)
 	return boot_cpu_has_bug(X86_BUG_L1TF);
 }
 
-#define arch_faults_on_old_pte arch_faults_on_old_pte
-static inline bool arch_faults_on_old_pte(void)
+#define arch_has_hw_pte_young arch_has_hw_pte_young
+static inline bool arch_has_hw_pte_young(void)
 {
-	return false;
+	return true;
 }
 
 #endif	/* __ASSEMBLY__ */
