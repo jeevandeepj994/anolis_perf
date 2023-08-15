@@ -76,6 +76,10 @@ struct blkg_iostat_set {
 	struct u64_stats_sync		sync;
 	struct blkg_iostat		cur;
 	struct blkg_iostat		last;
+
+	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
+	CK_KABI_RESERVE(3)
 };
 
 /*

@@ -13,6 +13,7 @@
 #ifndef __LINUX_DMA_FENCE_H
 #define __LINUX_DMA_FENCE_H
 
+#include <linux/ck_kabi.h>
 #include <linux/err.h>
 #include <linux/wait.h>
 #include <linux/list.h>
@@ -261,6 +262,8 @@ struct dma_fence_ops {
 	 */
 	void (*timeline_value_str)(struct dma_fence *fence,
 				   char *str, int size);
+
+	CK_KABI_RESERVE(1)
 };
 
 void dma_fence_init(struct dma_fence *fence, const struct dma_fence_ops *ops,
