@@ -7,6 +7,7 @@
 #ifndef _BPF_LOCAL_STORAGE_H
 #define _BPF_LOCAL_STORAGE_H
 
+#include <linux/ck_kabi.h>
 #include <linux/bpf.h>
 #include <linux/rculist.h>
 #include <linux/list.h>
@@ -85,6 +86,8 @@ struct bpf_local_storage {
 				 */
 	struct rcu_head rcu;
 	raw_spinlock_t lock;	/* Protect adding/removing from the "list" */
+
+	CK_KABI_RESERVE(1)
 };
 
 /* U16_MAX is much more than enough for sk local storage

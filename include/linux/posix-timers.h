@@ -2,6 +2,7 @@
 #ifndef _linux_POSIX_TIMERS_H
 #define _linux_POSIX_TIMERS_H
 
+#include <linux/ck_kabi.h>
 #include <linux/spinlock.h>
 #include <linux/list.h>
 #include <linux/alarmtimer.h>
@@ -134,6 +135,11 @@ struct posix_cputimers {
 struct posix_cputimers_work {
 	struct callback_head	work;
 	unsigned int		scheduled;
+
+	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
+	CK_KABI_RESERVE(3)
+	CK_KABI_RESERVE(4)
 };
 
 static inline void posix_cputimers_init(struct posix_cputimers *pct)

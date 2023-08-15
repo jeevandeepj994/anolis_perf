@@ -585,6 +585,9 @@ struct btf_func_model {
 	u8 ret_size;
 	u8 nr_args;
 	u8 arg_size[MAX_BPF_FUNC_ARGS];
+
+	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
 };
 
 /* Restore arguments before returning from trampoline to let original function
@@ -653,6 +656,8 @@ struct bpf_ksym {
 	struct list_head	 lnode;
 	struct latch_tree_node	 tnode;
 	bool			 prog;
+
+	CK_KABI_RESERVE(1)
 };
 
 enum bpf_tramp_prog_type {
@@ -673,6 +678,8 @@ struct bpf_tramp_image {
 		struct rcu_head rcu;
 		struct work_struct work;
 	};
+
+	CK_KABI_RESERVE(1)
 };
 
 struct bpf_trampoline {
@@ -975,6 +982,8 @@ struct bpf_link_ops {
 	void (*show_fdinfo)(const struct bpf_link *link, struct seq_file *seq);
 	int (*fill_link_info)(const struct bpf_link *link,
 			      struct bpf_link_info *info);
+
+	CK_KABI_RESERVE(1)
 };
 
 struct bpf_link_primer {
@@ -1400,6 +1409,10 @@ int bpf_obj_get_user(const char __user *pathname, int flags);
 
 struct bpf_iter_aux_info {
 	struct bpf_map *map;
+
+	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
+	CK_KABI_RESERVE(3)
 };
 
 typedef int (*bpf_iter_attach_target_t)(struct bpf_prog *prog,
