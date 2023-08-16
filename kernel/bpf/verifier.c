@@ -12875,6 +12875,10 @@ BTF_ID(func, check_preempt_wakeup)
 BTF_ID(func, select_idle_cpu)
 BTF_SET_END(btf_customized_allow_fmodret)
 
+BTF_SET_START(bpf_mptcp_fmodret_ids)
+BTF_ID(func, update_socket_protocol)
+BTF_SET_END(bpf_mptcp_fmodret_ids)
+
 int sysctl_bpf_customized_fmodret __read_mostly;
 static int check_attach_modify_return(unsigned long addr, const char *func_name, u32 btf_id)
 {
@@ -12884,6 +12888,9 @@ static int check_attach_modify_return(unsigned long addr, const char *func_name,
 
 	if (sysctl_bpf_customized_fmodret &&
 	    btf_id_set_contains(&btf_customized_allow_fmodret, btf_id))
+		return 0;
+
+	if (btf_id_set_contains(&bpf_mptcp_fmodret_ids, btf_id))
 		return 0;
 
 	return -EINVAL;
