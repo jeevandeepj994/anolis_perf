@@ -733,7 +733,7 @@ int migrate_page(struct address_space *mapping,
 	if (rc != MIGRATEPAGE_SUCCESS)
 		return rc;
 
-	if (mode != MIGRATE_SYNC_NO_COPY)
+	if (mode != MIGRATE_SYNC_NO_COPY && mode != MIGRATE_ASYNC_NO_COPY)
 		migrate_page_copy(newpage, page);
 	else
 		migrate_page_states(newpage, page);
@@ -749,7 +749,7 @@ static bool buffer_migrate_lock_buffers(struct buffer_head *head,
 	struct buffer_head *bh = head;
 
 	/* Simple case, sync compaction */
-	if (mode != MIGRATE_ASYNC) {
+	if (mode != MIGRATE_ASYNC && mode != MIGRATE_ASYNC_NO_COPY) {
 		do {
 			lock_buffer(bh);
 			bh = bh->b_this_page;
@@ -840,7 +840,7 @@ recheck_buffers:
 
 	} while (bh != head);
 
-	if (mode != MIGRATE_SYNC_NO_COPY)
+	if (mode != MIGRATE_SYNC_NO_COPY && mode != MIGRATE_ASYNC_NO_COPY)
 		migrate_page_copy(newpage, page);
 	else
 		migrate_page_states(newpage, page);
@@ -1045,16 +1045,117 @@ out:
 	return rc;
 }
 
-static int __unmap_and_move(struct page *page, struct page *newpage,
-				int force, enum migrate_mode mode)
+/*
+ * To record some information during migration, we use some unused
+ * fields (mapping and private) of struct page of the newly allocated
+ * destination page.
+ */
+static void __migrate_page_record(struct page *dst,
+				  unsigned long page_was_mapped,
+				  struct anon_vma *anon_vma)
+{
+	dst->mapping = (void *)anon_vma;
+	dst->private = page_was_mapped;
+}
+
+static void __migrate_page_extract(struct page *dst,
+				   int *page_was_mappedp,
+				   struct anon_vma **anon_vmap)
+{
+	*anon_vmap = (void *)dst->mapping;
+	*page_was_mappedp = dst->private;
+	dst->mapping = NULL;
+	dst->private = 0;
+}
+
+/* Restore the source page to the original state upon failure */
+static void migrate_page_undo_src(struct page *src,
+				  int page_was_mapped,
+				  struct anon_vma *anon_vma,
+				  bool locked,
+				  struct list_head *ret)
+{
+	if (page_was_mapped)
+		remove_migration_ptes(src, src, false);
+	/* Drop an anon_vma reference if we took one */
+	if (anon_vma)
+		put_anon_vma(anon_vma);
+	if (locked)
+		unlock_page(src);
+	if (ret)
+		list_move_tail(&src->lru, ret);
+}
+
+/* Restore the destination page to the original state upon failure */
+static void migrate_page_undo_dst(struct page *dst,
+				  bool locked,
+				  free_page_t put_new_page,
+				  unsigned long private)
+{
+	if (locked)
+		unlock_page(dst);
+	if (put_new_page)
+		put_new_page(dst, private);
+	else
+		put_page(dst);
+}
+
+/* Cleanup src page upon migration success */
+static void migrate_page_done(struct page *src,
+			      enum migrate_reason reason)
+{
+	/*
+	 * Compaction can migrate also non-LRU pages which are
+	 * not accounted to NR_ISOLATED_*. They can be recognized
+	 * as __PageMovable
+	 */
+	if (likely(!__PageMovable(src)))
+		mod_node_page_state(page_pgdat(src), NR_ISOLATED_ANON +
+				    page_is_file_lru(src), -compound_nr(src));
+
+	if (reason != MR_MEMORY_FAILURE)
+		/* We release the page in page_handle_poison. */
+		put_page(src);
+}
+
+/* Obtain the lock on page, remove all ptes. */
+static int migrate_page_unmap(new_page_t get_new_page, free_page_t put_new_page,
+			      unsigned long private, struct page *src,
+			      struct page **dstp, enum migrate_mode mode,
+			      enum migrate_reason reason, struct list_head *ret)
 {
 	int rc = -EAGAIN;
+	struct page *dst = NULL;
 	int page_was_mapped = 0;
 	struct anon_vma *anon_vma = NULL;
-	bool is_lru = !__PageMovable(page);
+	bool is_lru = !__PageMovable(src);
+	bool locked = false;
+	bool dst_locked = false;
 
-	if (!trylock_page(page)) {
-		if (!force || mode == MIGRATE_ASYNC)
+	if (page_count(src) == 1) {
+		/* page was freed from under us. So we are done. */
+		ClearPageActive(src);
+		ClearPageUnevictable(src);
+		if (unlikely(__PageMovable(src))) {
+			lock_page(src);
+			if (!PageMovable(src))
+				__ClearPageIsolated(src);
+			unlock_page(src);
+		}
+		list_del(&src->lru);
+		migrate_page_done(src, reason);
+		return MIGRATEPAGE_SUCCESS;
+	}
+
+	dst = get_new_page(src, private);
+	if (!dst)
+		return -ENOMEM;
+	*dstp = dst;
+
+	dst->private = 0;
+
+	if (!trylock_page(src)) {
+		if (mode == MIGRATE_ASYNC)
 			goto out;
 
 		/*
@@ -1073,19 +1174,20 @@ static int __unmap_and_move(struct page *page, struct page *newpage,
 		if (current->flags & PF_MEMALLOC)
 			goto out;
 
-		lock_page(page);
+		lock_page(src);
 	}
+	locked = true;
 
 	/*
 	 * Check PG_dup with page lock here. A page can become PG_dup after the
 	 * check of suitable_migration_source or vma_migratable.
 	 */
-	if (page_dup_any(page)) {
+	if (page_dup_any(src)) {
 		rc = -EBUSY;
-		goto out_unlock;
+		goto out;
 	}
 
-	if (PageWriteback(page)) {
+	if (PageWriteback(src)) {
 		/*
 		 * Only in the case of a full synchronous migration is it
 		 * necessary to wait for PageWriteback. In the async case,
@@ -1098,15 +1200,13 @@ static int __unmap_and_move(struct page *page, struct page *newpage,
 			break;
 		default:
 			rc = -EBUSY;
-			goto out_unlock;
+			goto out;
 		}
-		if (!force)
-			goto out_unlock;
-		wait_on_page_writeback(page);
+		wait_on_page_writeback(src);
 	}
 
 	/*
-	 * By try_to_unmap(), page->mapcount goes down to 0 here. In this case,
+	 * By try_to_unmap(), src->mapcount goes down to 0 here. In this case,
 	 * we cannot notice that anon_vma is freed while we migrates a page.
 	 * This get_anon_vma() delays freeing anon_vma pointer until the end
 	 * of migration. File cache pages are no problem because of page_lock()
@@ -1119,23 +1219,24 @@ static int __unmap_and_move(struct page *page, struct page *newpage,
 	 * because that implies that the anon page is no longer mapped
 	 * (and cannot be remapped so long as we hold the page lock).
 	 */
-	if (PageAnon(page) && !PageKsm(page))
-		anon_vma = page_get_anon_vma(page);
+	if (PageAnon(src) && !PageKsm(src))
+		anon_vma = page_get_anon_vma(src);
 
 	/*
 	 * Block others from accessing the new page when we get around to
 	 * establishing additional references. We are usually the only one
-	 * holding a reference to newpage at this point. We used to have a BUG
-	 * here if trylock_page(newpage) fails, but would like to allow for
-	 * cases where there might be a race with the previous use of newpage.
+	 * holding a reference to dst at this point. We used to have a BUG
+	 * here if trylock_page(dst) fails, but would like to allow for
+	 * cases where there might be a race with the previous use of dst.
 	 * This is much like races on refcount of oldpage: just don't BUG().
 	 */
-	if (unlikely(!trylock_page(newpage)))
-		goto out_unlock;
+	if (unlikely(!trylock_page(dst)))
+		goto out;
+	dst_locked = true;
 
 	if (unlikely(!is_lru)) {
-		rc = move_to_new_page(newpage, page, mode);
-		goto out_unlock_both;
+		__migrate_page_record(dst, page_was_mapped, anon_vma);
+		return MIGRATEPAGE_UNMAP;
 	}
 
 	/*
@@ -1150,131 +1251,110 @@ static int __unmap_and_move(struct page *page, struct page *newpage,
 	 * invisible to the vm, so the page can not be migrated.  So try to
 	 * free the metadata, so the page can be freed.
 	 */
-	if (!page->mapping) {
-		VM_BUG_ON_PAGE(PageAnon(page), page);
-		if (page_has_private(page)) {
-			try_to_free_buffers(page);
-			goto out_unlock_both;
+	if (!src->mapping) {
+		VM_BUG_ON_PAGE(PageAnon(src), src);
+		if (page_has_private(src)) {
+			try_to_free_buffers(src);
+			goto out;
 		}
-	} else if (page_mapped(page)) {
+	} else if (page_mapped(src)) {
 		/* Establish migration ptes */
-		VM_BUG_ON_PAGE(PageAnon(page) && !PageKsm(page) && !anon_vma,
-				page);
-		try_to_unmap(page, TTU_MIGRATION|TTU_IGNORE_MLOCK);
+		VM_BUG_ON_PAGE(PageAnon(src) && !PageKsm(src) && !anon_vma,
+			       src);
+		try_to_unmap(src, mode == MIGRATE_ASYNC ?
+			     TTU_MIGRATION|TTU_IGNORE_MLOCK|TTU_BATCH_FLUSH :
+			     TTU_MIGRATION|TTU_IGNORE_MLOCK);
 		page_was_mapped = 1;
 	}
 
-	if (!page_mapped(page))
-		rc = move_to_new_page(newpage, page, mode);
+	if (!page_mapped(src)) {
+		__migrate_page_record(dst, page_was_mapped, anon_vma);
+		return MIGRATEPAGE_UNMAP;
+	}
 
-	if (page_was_mapped)
-		remove_migration_ptes(page,
-			rc == MIGRATEPAGE_SUCCESS ? newpage : page, false);
-
-out_unlock_both:
-	unlock_page(newpage);
-out_unlock:
-	/* Drop an anon_vma reference if we took one */
-	if (anon_vma)
-		put_anon_vma(anon_vma);
-	unlock_page(page);
 out:
 	/*
-	 * If migration is successful, decrease refcount of the newpage
-	 * which will not free the page because new page owner increased
-	 * refcounter. As well, if it is LRU page, add the page to LRU
-	 * list in here. Use the old state of the isolated source page to
-	 * determine if we migrated a LRU page. newpage was already unlocked
-	 * and possibly modified by its owner - don't rely on the page
-	 * state.
+	 * A page that has not been unmapped will be restored to
+	 * right list unless we want to retry.
 	 */
-	if (rc == MIGRATEPAGE_SUCCESS) {
-		if (unlikely(!is_lru))
-			put_page(newpage);
-		else
-			putback_lru_page(newpage);
-	}
+	if (rc == -EAGAIN)
+		ret = NULL;
+
+	migrate_page_undo_src(src, page_was_mapped, anon_vma, locked, ret);
+	migrate_page_undo_dst(dst, dst_locked, put_new_page, private);
 
 	return rc;
 }
 
-/*
- * Obtain the lock on page, remove all ptes and migrate the page
- * to the newly allocated page in newpage.
- */
-static int unmap_and_move(new_page_t get_new_page,
-				   free_page_t put_new_page,
-				   unsigned long private, struct page *page,
-				   int force, enum migrate_mode mode,
-				   enum migrate_reason reason,
-				   struct list_head *ret)
+/* Migrate the page to the newly allocated page in dst. */
+static int migrate_page_move(free_page_t put_new_page, unsigned long private,
+			     struct page *src, struct page *dst,
+			     enum migrate_mode mode, enum migrate_reason reason,
+			     struct list_head *ret)
 {
-	int rc = MIGRATEPAGE_SUCCESS;
-	struct page *newpage = NULL;
+	int rc;
+	int page_was_mapped = 0;
+	struct anon_vma *anon_vma = NULL;
+	bool is_lru = !__PageMovable(src);
+	struct list_head *prev;
 
-	if (!thp_migration_supported() && PageTransHuge(page))
-		return -ENOSYS;
+	__migrate_page_extract(dst, &page_was_mapped, &anon_vma);
+	prev = dst->lru.prev;
+	list_del(&dst->lru);
 
-	if (page_count(page) == 1) {
-		/* page was freed from under us. So we are done. */
-		ClearPageActive(page);
-		ClearPageUnevictable(page);
-		if (unlikely(__PageMovable(page))) {
-			lock_page(page);
-			if (!PageMovable(page))
-				__ClearPageIsolated(page);
-			unlock_page(page);
-		}
+	rc = move_to_new_page(dst, src, mode);
+
+	if (rc)
 		goto out;
-	}
 
-	newpage = get_new_page(page, private);
-	if (!newpage)
-		return -ENOMEM;
+	if (unlikely(!is_lru))
+		goto out_unlock_both;
 
-	rc = __unmap_and_move(page, newpage, force, mode);
-	if (rc == MIGRATEPAGE_SUCCESS)
-		set_page_owner_migrate_reason(newpage, reason);
+	if (page_was_mapped)
+		remove_migration_ptes(src, dst, false);
 
-out:
-	if (rc != -EAGAIN) {
-		/*
-		 * A page that has been migrated has all references
-		 * removed and will be freed. A page that has not been
-		 * migrated will have kept its references and be restored.
-		 */
-		list_del(&page->lru);
-	}
+out_unlock_both:
+	unlock_page(dst);
+	set_page_owner_migrate_reason(dst, reason);
+	/*
+	 * If migration is successful, decrease refcount of the dst
+	 * which will not free the page because new page owner increased
+	 * refcounter. As well, if it is LRU page, add the page to LRU
+	 * list in here. Use the old state of the isolated source page to
+	 * determine if we migrated a LRU page. dst was already unlocked
+	 * and possibly modified by its owner - don't rely on the page
+	 * state.
+	 */
+	if (unlikely(!is_lru))
+		put_page(dst);
+	else
+		putback_lru_page(dst);
 
 	/*
-	 * If migration is successful, releases reference grabbed during
-	 * isolation. Otherwise, restore the page to right list unless
-	 * we want to retry.
+	 * A page that has been migrated has all references removed
+	 * and will be freed.
 	 */
-	if (rc == MIGRATEPAGE_SUCCESS) {
-		/*
-		 * Compaction can migrate also non-LRU pages which are
-		 * not accounted to NR_ISOLATED_*. They can be recognized
-		 * as __PageMovable
-		 */
-		if (likely(!__PageMovable(page)))
-			mod_node_page_state(page_pgdat(page), NR_ISOLATED_ANON +
-					page_is_file_lru(page), -thp_nr_pages(page));
+	list_del(&src->lru);
+	/* Drop an anon_vma reference if we took one */
+	if (anon_vma)
+		put_anon_vma(anon_vma);
+	unlock_page(src);
+	migrate_page_done(src, reason);
 
-		if (reason != MR_MEMORY_FAILURE)
-			/*
-			 * We release the page in page_handle_poison.
-			 */
-			put_page(page);
-	} else {
-		if (rc != -EAGAIN)
-			list_add_tail(&page->lru, ret);
-
-		if (put_new_page)
-			put_new_page(newpage, private);
-		else
-			put_page(newpage);
+	return rc;
+out:
+	/*
+	 * A page that has not been migrated will be restored to
+	 * right list unless we want to retry.
+	 */
+	if (rc == -EAGAIN) {
+		list_add(&dst->lru, prev);
+		__migrate_page_record(dst, page_was_mapped, anon_vma);
+		return rc;
 	}
+
+	migrate_page_undo_src(src, page_was_mapped, anon_vma, true, ret);
+	migrate_page_undo_dst(dst, true, put_new_page, private);
 
 	return rc;
 }
@@ -1308,18 +1388,6 @@ static int unmap_and_move_huge_page(new_page_t get_new_page,
 	struct page *new_hpage;
 	struct anon_vma *anon_vma = NULL;
 	struct address_space *mapping = NULL;
-
-	/*
-	 * Migratability of hugepages depends on architectures and their size.
-	 * This check is necessary because some callers of hugepage migration
-	 * like soft offline and memory hotremove don't walk through page
-	 * tables or check whether the hugepage is pmd-based or not before
-	 * kicking migration.
-	 */
-	if (!hugepage_migration_supported(page_hstate(hpage))) {
-		list_move_tail(&hpage->lru, ret);
-		return -ENOSYS;
-	}
 
 	new_hpage = get_new_page(hpage, private);
 	if (!new_hpage)
@@ -1420,18 +1488,452 @@ out:
 	return rc;
 }
 
-static inline int try_split_thp(struct page *page, struct page **page2,
-				struct list_head *from)
+static inline int try_split_thp(struct page *page, struct list_head *split_pages)
 {
-	int rc = 0;
+	int rc;
 
 	lock_page(page);
-	rc = split_huge_page_to_list(page, from);
+	rc = split_huge_page_to_list(page, split_pages);
 	unlock_page(page);
 	if (!rc)
-		list_safe_reset_next(page, *page2, lru);
+		list_move_tail(&page->lru, split_pages);
 
 	return rc;
+}
+
+#ifdef CONFIG_TRANSPARENT_HUGEPAGE
+#define NR_MAX_BATCHED_MIGRATION	HPAGE_PMD_NR
+#else
+#define NR_MAX_BATCHED_MIGRATION	512
+#endif
+#define NR_MAX_MIGRATE_PAGES_RETRY	10
+#define NR_MAX_MIGRATE_ASYNC_RETRY	3
+#define NR_MAX_MIGRATE_SYNC_RETRY					\
+	(NR_MAX_MIGRATE_PAGES_RETRY - NR_MAX_MIGRATE_ASYNC_RETRY)
+
+struct migrate_pages_stats {
+	int nr_succeeded;	/* Normal and large pages migrated successfully, in
+				   units of base pages */
+	int nr_failed_pages;	/* Normal and large pages failed to be migrated, in
+				   units of base pages.  Untried pages aren't counted */
+	int nr_thp_succeeded;	/* THP migrated successfully */
+	int nr_thp_failed;	/* THP failed to be migrated */
+	int nr_thp_split;	/* THP split before migrating */
+};
+
+/*
+ * Returns the number of hugetlb pages that were not migrated, or an error code
+ * after NR_MAX_MIGRATE_PAGES_RETRY attempts or if no hugetlb pages are movable
+ * any more because the list has become empty or no retryable hugetlb pages
+ * exist any more. It is caller's responsibility to call putback_movable_pages()
+ * only if ret != 0.
+ */
+static int migrate_hugetlbs(struct list_head *from, new_page_t get_new_page,
+			    free_page_t put_new_page, unsigned long private,
+			    enum migrate_mode mode, int reason,
+			    struct migrate_pages_stats *stats,
+			    struct list_head *ret_pages)
+{
+	int retry = 1;
+	int nr_failed = 0;
+	int nr_retry_pages = 0;
+	int pass = 0;
+	struct page *page, *page2;
+	int rc, nr_pages;
+
+	for (pass = 0; pass < NR_MAX_MIGRATE_PAGES_RETRY && retry; pass++) {
+		retry = 0;
+		nr_retry_pages = 0;
+
+		list_for_each_entry_safe(page, page2, from, lru) {
+			if (!PageHuge(page))
+				continue;
+
+			nr_pages = compound_nr(page);
+
+			cond_resched();
+
+			/*
+			 * Migratability of hugepages depends on architectures and
+			 * their size.  This check is necessary because some callers
+			 * of hugepage migration like soft offline and memory
+			 * hotremove don't walk through page tables or check whether
+			 * the hugepage is pmd-based or not before kicking migration.
+			 */
+			if (!hugepage_migration_supported(page_hstate(page))) {
+				nr_failed++;
+				stats->nr_failed_pages += nr_pages;
+				list_move_tail(&page->lru, ret_pages);
+				continue;
+			}
+
+			rc = unmap_and_move_huge_page(get_new_page,
+						      put_new_page, private, page,
+						      pass > 2, mode, reason, ret_pages);
+			/*
+			 * The rules are:
+			 *	Success: hugetlb page will be put back
+			 *	-EAGAIN: stay on the from list
+			 *	-ENOMEM: stay on the from list
+			 *	Other errno: put on ret_pages list
+			 */
+			switch(rc) {
+			case -ENOMEM:
+				/*
+				 * When memory is low, don't bother to try to migrate
+				 * other pages, just exit.
+				 */
+				stats->nr_failed_pages += nr_pages + nr_retry_pages;
+				return -ENOMEM;
+			case -EAGAIN:
+				retry++;
+				nr_retry_pages += nr_pages;
+				break;
+			case MIGRATEPAGE_SUCCESS:
+				stats->nr_succeeded += nr_pages;
+				break;
+			default:
+				/*
+				 * Permanent failure (-EBUSY, etc.):
+				 * unlike -EAGAIN case, the failed page is
+				 * removed from migration page list and not
+				 * retried in the next outer loop.
+				 */
+				nr_failed++;
+				stats->nr_failed_pages += nr_pages;
+				break;
+			}
+		}
+	}
+	/*
+	 * nr_failed is number of hugetlb pages failed to be migrated.  After
+	 * NR_MAX_MIGRATE_PAGES_RETRY attempts, give up and count retried hugetlb
+	 * pages as failed.
+	 */
+	nr_failed += retry;
+	stats->nr_failed_pages += nr_retry_pages;
+
+	return nr_failed;
+}
+
+static int migrate_pages_copy(struct list_head *pages,
+			      struct list_head *new_pages,
+			      int nr_move_pages,
+			      enum migrate_mode mode)
+{
+	int (*migratepage) (struct address_space *, struct page *,
+			    struct page *, enum migrate_mode);
+	struct address_space *mapping;
+	enum dma_migrate_mode dma_mode;
+	struct page *page;
+	bool is_lru;
+
+	if (!migrate_use_dma(nr_move_pages))
+		return -EINVAL;
+
+	/*
+	 * Check if all pages support being copied via dma. At this point
+	 * the validation is safe, cause all pages are under the page lock.
+	 */
+	list_for_each_entry(page, pages, lru) {
+		mapping = page_mapping(page);
+		is_lru = !__PageMovable(page);
+		if (likely(is_lru)) {
+			/* migrate_page is supported when mapping is NULL */
+			if (mapping) {
+				migratepage = mapping->a_ops->migratepage;
+				/*
+				 * Currently only three migratepage callbacks
+				 * and fallback_migrate_page are supported.
+				 */
+				if (migratepage &&
+				    migratepage != migrate_page &&
+				    migratepage != buffer_migrate_page &&
+				    migratepage != buffer_migrate_page_norefs)
+					return -EINVAL;
+			}
+		} else {
+			return -EINVAL;
+		}
+	}
+
+	dma_mode = (mode == MIGRATE_ASYNC) ? DMA_MIGRATE_POLLING :
+					     DMA_MIGRATE_DEFAULT;
+	return dma_migrate_pages_copy(pages, new_pages, dma_mode);
+}
+
+/*
+ * migrate_pages_batch() first unmaps pages in the from list as many as
+ * possible, then move the unmapped pages.
+ *
+ * We only batch migration if mode == MIGRATE_ASYNC to avoid to wait a
+ * lock or bit when we have locked more than one page.  Which may cause
+ * deadlock (e.g., for loop device).  So, if mode != MIGRATE_ASYNC, the
+ * length of the from list must be <= 1.
+ */
+int migrate_pages_batch(struct list_head *from, new_page_t get_new_page,
+		free_page_t put_new_page, unsigned long private,
+		enum migrate_mode mode, int reason, struct list_head *ret_pages,
+		struct list_head *thp_split_pages, struct migrate_pages_stats *stats,
+		int nr_pass)
+{
+	int retry = 1;
+	int thp_retry = 1;
+	int nr_failed = 0;
+	int nr_move_pages = 0;
+	int nr_retry_pages = 0;
+	int pass = 0;
+	bool is_thp = false;
+	struct page *page, *page2;
+	struct page *dst = NULL, *dst2;
+	int rc, rc_saved = 0, nr_pages;
+	LIST_HEAD(unmap_pages);
+	LIST_HEAD(new_pages);
+	bool nosplit = (reason == MR_NUMA_MISPLACED);
+
+	VM_WARN_ON_ONCE(mode != MIGRATE_ASYNC &&
+			!list_empty(from) && !list_is_singular(from));
+	for (pass = 0; pass < nr_pass && (retry || thp_retry); pass++) {
+		retry = 0;
+		thp_retry = 0;
+		nr_retry_pages = 0;
+
+		list_for_each_entry_safe(page, page2, from, lru) {
+			/*
+			 * THP statistics is based on the source huge page.
+			 * Capture required information that might get lost
+			 * during migration.
+			 */
+			is_thp = PageTransHuge(page) && !PageHuge(page);
+			nr_pages = compound_nr(page);
+			cond_resched();
+
+			/*
+			 * THP migration might be unsupported or the
+			 * allocation could've failed so we should
+			 * retry on the same page with the THP split
+			 * to base pages.
+			 *
+			 * Sub-pages are put in thp_split_pages, and
+			 * we will migrate them after the rest of the
+			 * list is processed.
+			 */
+			if (!thp_migration_supported() && is_thp) {
+				stats->nr_thp_failed++;
+				if (!try_split_thp(page, thp_split_pages)) {
+					stats->nr_thp_split++;
+					continue;
+				}
+				stats->nr_failed_pages += nr_pages;
+				list_move_tail(&page->lru, ret_pages);
+				continue;
+			}
+
+			rc = migrate_page_unmap(get_new_page, put_new_page, private,
+						page, &dst, mode, reason,
+						ret_pages);
+			/*
+			 * The rules are:
+			 *	Success: page will be freed
+			 *	Unmap: page will be put on unmap_pages list,
+			 *	       new page put on new_pages list
+			 *	-EAGAIN: stay on the from list
+			 *	-ENOMEM: stay on the from list
+			 *	Other errno: put on ret_pages list
+			 */
+			switch(rc) {
+			case -ENOMEM:
+				/*
+				 * When memory is low, don't bother to try to migrate
+				 * other pages, move unmapped pages, then exit.
+				 */
+				if (is_thp) {
+					stats->nr_thp_failed++;
+					/* THP NUMA faulting doesn't split THP to retry. */
+					if (!nosplit && !try_split_thp(page, thp_split_pages)) {
+						stats->nr_thp_split++;
+						break;
+					}
+				} else
+					nr_failed++;
+
+				stats->nr_failed_pages += nr_pages + nr_retry_pages;
+				/* nr_failed isn't updated for not used */
+				stats->nr_thp_failed += thp_retry;
+				rc_saved = rc;
+				if (list_empty(&unmap_pages))
+					goto out;
+				else
+					goto move;
+			case -EAGAIN:
+				if (is_thp)
+					thp_retry++;
+				else
+					retry++;
+				nr_retry_pages += nr_pages;
+				break;
+			case MIGRATEPAGE_SUCCESS:
+				stats->nr_succeeded += nr_pages;
+				if (is_thp)
+					stats->nr_thp_succeeded++;
+				break;
+			case MIGRATEPAGE_UNMAP:
+				list_move_tail(&page->lru, &unmap_pages);
+				list_add_tail(&dst->lru, &new_pages);
+				nr_move_pages += nr_pages;
+				break;
+			default:
+				/*
+				 * Permanent failure (-EBUSY, etc.):
+				 * unlike -EAGAIN case, the failed page is
+				 * removed from migration page list and not
+				 * retried in the next outer loop.
+				 */
+				if (is_thp)
+					stats->nr_thp_failed++;
+				else
+					nr_failed++;
+
+				stats->nr_failed_pages += nr_pages;
+				break;
+			}
+		}
+	}
+	nr_failed += retry;
+	stats->nr_thp_failed += thp_retry;
+	stats->nr_failed_pages += nr_retry_pages;
+move:
+	/* Flush TLBs for all unmapped pages */
+	try_to_unmap_flush();
+
+	if (!migrate_pages_copy(&unmap_pages, &new_pages, nr_move_pages, mode)) {
+		if (mode == MIGRATE_ASYNC)
+			mode = MIGRATE_ASYNC_NO_COPY;
+		else
+			mode = MIGRATE_SYNC_NO_COPY;
+	}
+
+	retry = 1;
+	for (pass = 0; pass < nr_pass && (retry || thp_retry); pass++) {
+		retry = 0;
+		thp_retry = 0;
+		nr_retry_pages = 0;
+
+		dst = list_first_entry(&new_pages, struct page, lru);
+		dst2 = list_next_entry(dst, lru);
+		list_for_each_entry_safe(page, page2, &unmap_pages, lru) {
+			is_thp = PageTransHuge(page) && !PageHuge(page);
+			nr_pages = compound_nr(page);
+
+			cond_resched();
+
+			rc = migrate_page_move(put_new_page, private,
+					       page, dst, mode,
+					       reason, ret_pages);
+			/*
+			 * The rules are:
+			 *	Success: page will be freed
+			 *	-EAGAIN: stay on the unmap_pages list
+			 *	Other errno: put on ret_pages list
+			 */
+			switch(rc) {
+			case -EAGAIN:
+				if (is_thp)
+					thp_retry++;
+				else
+					retry++;
+				nr_retry_pages += nr_pages;
+				break;
+			case MIGRATEPAGE_SUCCESS:
+				stats->nr_succeeded += nr_pages;
+				if (is_thp)
+					stats->nr_thp_succeeded++;
+				break;
+			default:
+				if (is_thp)
+					stats->nr_thp_failed++;
+				else
+					nr_failed++;
+
+				stats->nr_failed_pages += nr_pages;
+				break;
+			}
+			dst = dst2;
+			dst2 = list_next_entry(dst, lru);
+		}
+	}
+	nr_failed += retry;
+	stats->nr_thp_failed += thp_retry;
+	stats->nr_failed_pages += nr_retry_pages;
+
+	if (rc_saved)
+		rc = rc_saved;
+	else
+		rc = nr_failed + stats->nr_thp_failed;
+out:
+	/* Cleanup remaining pages */
+	dst = list_first_entry(&new_pages, struct page, lru);
+	dst2 = list_next_entry(dst, lru);
+	list_for_each_entry_safe(page, page2, &unmap_pages, lru) {
+		int page_was_mapped = 0;
+		struct anon_vma *anon_vma = NULL;
+
+		__migrate_page_extract(dst, &page_was_mapped, &anon_vma);
+		migrate_page_undo_src(page, page_was_mapped, anon_vma,
+				       true, ret_pages);
+		list_del(&dst->lru);
+		migrate_page_undo_dst(dst, true, put_new_page, private);
+		dst = dst2;
+		dst2 = list_next_entry(dst, lru);
+	}
+
+	return rc;
+}
+
+static int migrate_pages_sync(struct list_head *from, new_page_t get_new_page,
+		free_page_t put_new_page, unsigned long private,
+		enum migrate_mode mode, int reason, struct list_head *ret_pages,
+		struct list_head *thp_split_pages, struct migrate_pages_stats *stats)
+{
+	int rc, nr_failed = 0;
+	LIST_HEAD(pages);
+	struct migrate_pages_stats astats;
+
+	memset(&astats, 0, sizeof(astats));
+	/* Try to migrate in batch with MIGRATE_ASYNC mode firstly */
+	rc = migrate_pages_batch(from, get_new_page, put_new_page, private, MIGRATE_ASYNC,
+				 reason, &pages, thp_split_pages, &astats,
+				 NR_MAX_MIGRATE_ASYNC_RETRY);
+	stats->nr_succeeded += astats.nr_succeeded;
+	stats->nr_thp_succeeded += astats.nr_thp_succeeded;
+	stats->nr_thp_split += astats.nr_thp_split;
+	if (rc < 0) {
+		stats->nr_failed_pages += astats.nr_failed_pages;
+		stats->nr_thp_failed += astats.nr_thp_failed;
+		list_splice_tail(&pages, ret_pages);
+		return rc;
+	}
+	stats->nr_thp_failed += astats.nr_thp_split;
+	nr_failed += astats.nr_thp_split;
+	/*
+	 * Fall back to migrate all failed pages one by one synchronously. All
+	 * failed pages except split THPs will be retried, so their failure
+	 * isn't counted
+	 */
+	list_splice_tail_init(&pages, from);
+	while (!list_empty(from)) {
+		list_move(from->next, &pages);
+		rc = migrate_pages_batch(&pages, get_new_page, put_new_page,
+					 private, mode, reason, ret_pages,
+					 thp_split_pages, stats,
+					 NR_MAX_MIGRATE_SYNC_RETRY);
+		list_splice_tail_init(&pages, ret_pages);
+		if (rc < 0)
+			return rc;
+		nr_failed += rc;
+	}
+
+	return nr_failed;
 }
 
 /*
@@ -1447,155 +1949,87 @@ static inline int try_split_thp(struct page *page, struct page **page2,
  * @mode:		The migration mode that specifies the constraints for
  *			page migration, if any.
  * @reason:		The reason for page migration.
+ * @ret_succeeded:	Set to the number of normal pages migrated successfully if
+ *			the caller passes a non-NULL pointer.
  *
- * The function returns after 10 attempts or if no pages are movable any more
- * because the list has become empty or no retryable pages exist any more.
- * It is caller's responsibility to call putback_movable_pages() to return pages
- * to the LRU or free list only if ret != 0.
+ * The function returns after NR_MAX_MIGRATE_PAGES_RETRY attempts or if no pages
+ * are movable any more because the list has become empty or no retryable pages
+ * exist any more. It is caller's responsibility to call putback_movable_pages()
+ * only if ret != 0.
  *
- * Returns the number of pages that were not migrated, or an error code.
+ * Returns the number of {normal page, THP, hugetlb} that were not migrated, or
+ * an error code. The number of THP splits will be considered as the number of
+ * non-migrated THP, no matter how many subpages of the THP are migrated successfully.
  */
 int migrate_pages(struct list_head *from, new_page_t get_new_page,
 		free_page_t put_new_page, unsigned long private,
-		enum migrate_mode mode, int reason)
+		enum migrate_mode mode, int reason, unsigned int *ret_succeeded)
 {
-	int retry = 1;
-	int thp_retry = 1;
-	int nr_failed = 0;
-	int nr_succeeded = 0;
-	int nr_thp_succeeded = 0;
-	int nr_thp_failed = 0;
-	int nr_thp_split = 0;
-	int pass = 0;
-	bool is_thp = false;
+	int rc, rc_gather;
+	int nr_pages;
 	struct page *page;
 	struct page *page2;
 	int swapwrite = current->flags & PF_SWAPWRITE;
-	int rc, nr_subpages;
+	LIST_HEAD(pages);
 	LIST_HEAD(ret_pages);
-	bool nosplit = (reason == MR_NUMA_MISPLACED);
-
-	if (batch_migrate_enabled())
-		return migrate_pages_in_batch(from, get_new_page, put_new_page,
-					      private, mode, reason);
+	LIST_HEAD(thp_split_pages);
+	struct migrate_pages_stats stats;
 
 	if (!swapwrite)
 		current->flags |= PF_SWAPWRITE;
 
-	for (pass = 0; pass < 10 && (retry || thp_retry); pass++) {
-		retry = 0;
-		thp_retry = 0;
+	memset(&stats, 0, sizeof(stats));
+	rc_gather = migrate_hugetlbs(from, get_new_page, put_new_page, private, mode, reason,
+			      &stats, &ret_pages);
+	if (rc_gather < 0)
+		goto out;
 
-		list_for_each_entry_safe(page, page2, from, lru) {
-retry:
-			/*
-			 * THP statistics is based on the source huge page.
-			 * Capture required information that might get lost
-			 * during migration.
-			 */
-			is_thp = PageTransHuge(page) && !PageHuge(page);
-			nr_subpages = thp_nr_pages(page);
-			cond_resched();
-
-			if (PageHuge(page))
-				rc = unmap_and_move_huge_page(get_new_page,
-						put_new_page, private, page,
-						pass > 2, mode, reason,
-						&ret_pages);
-			else
-				rc = unmap_and_move(get_new_page, put_new_page,
-						private, page, pass > 2, mode,
-						reason, &ret_pages);
-			/*
-			 * The rules are:
-			 *	Success: non hugetlb page will be freed, hugetlb
-			 *		 page will be put back
-			 *	-EAGAIN: stay on the from list
-			 *	-ENOMEM: stay on the from list
-			 *	Other errno: put on ret_pages list then splice to
-			 *		     from list
-			 */
-			switch(rc) {
-			/*
-			 * THP migration might be unsupported or the
-			 * allocation could've failed so we should
-			 * retry on the same page with the THP split
-			 * to base pages.
-			 *
-			 * Head page is retried immediately and tail
-			 * pages are added to the tail of the list so
-			 * we encounter them after the rest of the list
-			 * is processed.
-			 */
-			case -ENOSYS:
-				/* THP migration is unsupported */
-				if (is_thp) {
-					if (!try_split_thp(page, &page2, from)) {
-						nr_thp_split++;
-						goto retry;
-					}
-
-					nr_thp_failed++;
-					nr_failed += nr_subpages;
-					break;
-				}
-
-				/* Hugetlb migration is unsupported */
-				nr_failed++;
-				break;
-			case -ENOMEM:
-				/*
-				 * When memory is low, don't bother to try to migrate
-				 * other pages, just exit.
-				 * THP NUMA faulting doesn't split THP to retry.
-				 */
-				if (is_thp && !nosplit) {
-					if (!try_split_thp(page, &page2, from)) {
-						nr_thp_split++;
-						goto retry;
-					}
-
-					nr_thp_failed++;
-					nr_failed += nr_subpages;
-					goto out;
-				}
-				nr_failed++;
-				goto out;
-			case -EAGAIN:
-				if (is_thp) {
-					thp_retry++;
-					break;
-				}
-				retry++;
-				break;
-			case MIGRATEPAGE_SUCCESS:
-				if (is_thp) {
-					nr_thp_succeeded++;
-					nr_succeeded += nr_subpages;
-					break;
-				}
-				nr_succeeded++;
-				break;
-			default:
-				/*
-				 * Permanent failure (-EBUSY, etc.):
-				 * unlike -EAGAIN case, the failed page is
-				 * removed from migration page list and not
-				 * retried in the next outer loop.
-				 */
-				if (is_thp) {
-					nr_thp_failed++;
-					nr_failed += nr_subpages;
-					break;
-				}
-				nr_failed++;
-				break;
-			}
+again:
+	nr_pages = 0;
+	list_for_each_entry_safe(page, page2, from, lru) {
+		/* Retried hugetlb pages will be kept in list  */
+		if (PageHuge(page)) {
+			list_move_tail(&page->lru, &ret_pages);
+			continue;
 		}
+
+		nr_pages += compound_nr(page);
+		if (nr_pages >= NR_MAX_BATCHED_MIGRATION)
+			break;
 	}
-	nr_failed += retry + thp_retry;
-	nr_thp_failed += thp_retry;
-	rc = nr_failed;
+	if (nr_pages >= NR_MAX_BATCHED_MIGRATION)
+		list_cut_before(&pages, from, &page2->lru);
+	else
+		list_splice_init(from, &pages);
+	if (mode == MIGRATE_ASYNC)
+		rc = migrate_pages_batch(&pages, get_new_page, put_new_page,
+					 private, mode, reason, &ret_pages,
+					 &thp_split_pages, &stats,
+					 NR_MAX_MIGRATE_PAGES_RETRY);
+	else
+		rc = migrate_pages_sync(&pages, get_new_page, put_new_page,
+					private, mode, reason, &ret_pages,
+					&thp_split_pages, &stats);
+	list_splice_tail_init(&pages, &ret_pages);
+	if (rc < 0) {
+		rc_gather = rc;
+		list_splice_tail(&thp_split_pages, &ret_pages);
+		goto out;
+	}
+	if (!list_empty(&thp_split_pages)) {
+		/*
+		 * Failure isn't counted since all split pages of a large page
+		 * is counted as 1 failure already.  And, we only try to migrate
+		 * with minimal effort, force MIGRATE_ASYNC mode and retry once.
+		 */
+		migrate_pages_batch(&thp_split_pages, get_new_page, put_new_page,
+				    private, MIGRATE_ASYNC, reason, &ret_pages,
+				    NULL, &stats, 1);
+		list_splice_tail_init(&thp_split_pages, &ret_pages);
+	}
+	rc_gather += rc;
+	if (!list_empty(from))
+		goto again;
 out:
 	/*
 	 * Put the permanent failure page back to migration list, they
@@ -1603,18 +2037,29 @@ out:
 	 */
 	list_splice(&ret_pages, from);
 
-	count_vm_events(PGMIGRATE_SUCCESS, nr_succeeded);
-	count_vm_events(PGMIGRATE_FAIL, nr_failed);
-	count_vm_events(THP_MIGRATION_SUCCESS, nr_thp_succeeded);
-	count_vm_events(THP_MIGRATION_FAIL, nr_thp_failed);
-	count_vm_events(THP_MIGRATION_SPLIT, nr_thp_split);
-	trace_mm_migrate_pages(nr_succeeded, nr_failed, nr_thp_succeeded,
-			       nr_thp_failed, nr_thp_split, mode, reason);
+	/*
+	 * Return 0 in case all subpages of fail-to-migrate THPs are
+	 * migrated successfully.
+	 */
+	if (list_empty(from))
+		rc_gather = 0;
+
+	count_vm_events(PGMIGRATE_SUCCESS, stats.nr_succeeded);
+	count_vm_events(PGMIGRATE_FAIL, stats.nr_failed_pages);
+	count_vm_events(THP_MIGRATION_SUCCESS, stats.nr_thp_succeeded);
+	count_vm_events(THP_MIGRATION_FAIL, stats.nr_thp_failed);
+	count_vm_events(THP_MIGRATION_SPLIT, stats.nr_thp_split);
+	trace_mm_migrate_pages(stats.nr_succeeded, stats.nr_failed_pages,
+			       stats.nr_thp_succeeded, stats.nr_thp_failed,
+			       stats.nr_thp_split, mode, reason);
 
 	if (!swapwrite)
 		current->flags &= ~PF_SWAPWRITE;
 
-	return rc;
+	if (ret_succeeded)
+		*ret_succeeded = stats.nr_succeeded;
+
+	return rc_gather;
 }
 
 struct page *alloc_migration_target(struct page *page, unsigned long private)
@@ -1683,7 +2128,7 @@ static int do_move_pages_to_node(struct mm_struct *mm,
 	};
 
 	err = migrate_pages(pagelist, alloc_migration_target, NULL,
-			(unsigned long)&mtc, MIGRATE_SYNC, MR_SYSCALL);
+		(unsigned long)&mtc, MIGRATE_SYNC, MR_SYSCALL, NULL);
 	if (err)
 		putback_movable_pages(pagelist);
 	return err;
@@ -1783,7 +2228,7 @@ static int move_pages_and_store_status(struct mm_struct *mm, int node,
 		 * well.
 		 */
 		if (err > 0)
-			err += nr_pages - i - 1;
+			err += nr_pages - i;
 		return err;
 	}
 	return store_status(status, start, node, i - start);
@@ -1862,8 +2307,12 @@ static int do_pages_move(struct mm_struct *mm, nodemask_t task_nodes,
 
 		err = move_pages_and_store_status(mm, current_node, &pagelist,
 				status, start, i, nr_pages);
-		if (err)
+		if (err) {
+			/* We have accounted for page i */
+			if (err > 0)
+				err--;
 			goto out;
+		}
 		current_node = NUMA_NO_NODE;
 	}
 out_flush:
@@ -2180,7 +2629,7 @@ int migrate_misplaced_page(struct page *page, struct vm_area_struct *vma,
 	list_add(&page->lru, &migratepages);
 	nr_remaining = migrate_pages(&migratepages, alloc_misplaced_dst_page,
 				     NULL, node, MIGRATE_ASYNC,
-				     MR_NUMA_MISPLACED);
+				     MR_NUMA_MISPLACED, NULL);
 	if (nr_remaining) {
 		if (!list_empty(&migratepages)) {
 			list_del(&page->lru);
@@ -3195,689 +3644,3 @@ void migrate_vma_finalize(struct migrate_vma *migrate)
 }
 EXPORT_SYMBOL(migrate_vma_finalize);
 #endif /* CONFIG_DEVICE_PRIVATE */
-
-static void __migrate_page_record(struct page *newpage,
-				  int page_was_mapped,
-				  struct anon_vma *anon_vma)
-{
-	newpage->mapping = (struct address_space *)anon_vma;
-	newpage->private = page_was_mapped;
-}
-
-static void __migrate_page_extract(struct page *newpage,
-				   int *page_was_mappedp,
-				   struct anon_vma **anon_vmap)
-{
-	*anon_vmap = (struct anon_vma *)newpage->mapping;
-	*page_was_mappedp = newpage->private;
-	newpage->mapping = NULL;
-	newpage->private = 0;
-}
-
-static void migrate_page_undo_page(struct page *page,
-				   int page_was_mapped,
-				   struct anon_vma *anon_vma,
-				   bool locked,
-				   struct list_head *ret)
-{
-	if (page_was_mapped)
-		remove_migration_ptes(page, page, false);
-	if (anon_vma)
-		put_anon_vma(anon_vma);
-	if (locked)
-		unlock_page(page);
-	if (ret)
-		list_move_tail(&page->lru, ret);
-}
-
-static void migrate_page_undo_newpage(struct page *newpage,
-				      bool locked,
-				      free_page_t put_new_page,
-				      unsigned long private)
-{
-	if (locked)
-		unlock_page(newpage);
-	if (put_new_page)
-		put_new_page(newpage, private);
-	else
-		put_page(newpage);
-}
-
-static void migrate_page_done(struct page *page,
-			      enum migrate_reason reason)
-{
-	/*
-	 * Compaction can migrate also non-LRU pages which are
-	 * not accounted to NR_ISOLATED_*. They can be recognized
-	 * as __PageMovable
-	 */
-	if (likely(!__PageMovable(page)))
-		mod_node_page_state(page_pgdat(page), NR_ISOLATED_ANON +
-				    page_is_file_lru(page), -thp_nr_pages(page));
-
-	if (reason != MR_MEMORY_FAILURE)
-		/*
-		 * We release the page in page_handle_poison.
-		 */
-		put_page(page);
-}
-
-/* Obtain the lock on page, remove all ptes. */
-static int migrate_page_unmap(new_page_t get_new_page, free_page_t put_new_page,
-			      unsigned long private, struct page *page,
-			      struct page **newpagep, int force, bool force_lock,
-			      enum migrate_mode mode, enum migrate_reason reason,
-			      struct list_head *ret)
-{
-	int rc = MIGRATEPAGE_UNMAP;
-	struct page *newpage = NULL;
-	int page_was_mapped = 0;
-	struct anon_vma *anon_vma = NULL;
-	bool is_lru = !__PageMovable(page);
-	bool locked = false;
-	bool newpage_locked = false;
-
-	if (!thp_migration_supported() && PageTransHuge(page))
-		return -ENOSYS;
-
-	if (page_count(page) == 1) {
-		/* page was freed from under us. So we are done. */
-		ClearPageActive(page);
-		ClearPageUnevictable(page);
-		if (unlikely(__PageMovable(page))) {
-			lock_page(page);
-			if (!PageMovable(page))
-				__ClearPageIsolated(page);
-			unlock_page(page);
-		}
-		list_del(&page->lru);
-		migrate_page_done(page, reason);
-		return MIGRATEPAGE_SUCCESS;
-	}
-
-	newpage = get_new_page(page, private);
-	if (!newpage)
-		return -ENOMEM;
-	*newpagep = newpage;
-
-	rc = -EAGAIN;
-	if (!trylock_page(page)) {
-		if (!force || mode == MIGRATE_ASYNC)
-			goto out;
-
-		/*
-		 * It's not safe for direct compaction to call lock_page.
-		 * For example, during page readahead pages are added locked
-		 * to the LRU. Later, when the IO completes the pages are
-		 * marked uptodate and unlocked. However, the queueing
-		 * could be merging multiple pages for one bio (e.g.
-		 * mpage_readahead). If an allocation happens for the
-		 * second or third page, the process can end up locking
-		 * the same page twice and deadlocking. Rather than
-		 * trying to be clever about what pages can be locked,
-		 * avoid the use of lock_page for direct compaction
-		 * altogether.
-		 */
-		if (current->flags & PF_MEMALLOC)
-			goto out;
-
-		/*
-		 * We have locked some pages, to avoid deadlock, we cannot
-		 * lock the page synchronously.  Go out to process (and
-		 * unlock) all the locked pages.  Then we can lock the page
-		 * synchronously.
-		 */
-		if (!force_lock) {
-			rc = -EDEADLOCK;
-			goto out;
-		}
-
-		lock_page(page);
-	}
-	locked = true;
-
-	/*
-	 * Check PG_dup with page lock here. A page can become PG_dup after the
-	 * check of suitable_migration_source or vma_migratable.
-	 */
-	if (page_dup_any(page)) {
-		rc = -EBUSY;
-		goto out;
-	}
-
-	if (PageWriteback(page)) {
-		/*
-		 * Only in the case of a full synchronous migration is it
-		 * necessary to wait for PageWriteback. In the async case,
-		 * the retry loop is too short and in the sync-light case,
-		 * the overhead of stalling is too much
-		 */
-		switch (mode) {
-		case MIGRATE_SYNC:
-		case MIGRATE_SYNC_NO_COPY:
-			break;
-		default:
-			rc = -EBUSY;
-			goto out;
-		}
-		if (!force)
-			goto out;
-		wait_on_page_writeback(page);
-	}
-
-	/*
-	 * By try_to_unmap(), page->mapcount goes down to 0 here. In this case,
-	 * we cannot notice that anon_vma is freed while we migrates a page.
-	 * This get_anon_vma() delays freeing anon_vma pointer until the end
-	 * of migration. File cache pages are no problem because of page_lock()
-	 * File Caches may use write_page() or lock_page() in migration, then,
-	 * just care Anon page here.
-	 *
-	 * Only page_get_anon_vma() understands the subtleties of
-	 * getting a hold on an anon_vma from outside one of its mms.
-	 * But if we cannot get anon_vma, then we won't need it anyway,
-	 * because that implies that the anon page is no longer mapped
-	 * (and cannot be remapped so long as we hold the page lock).
-	 */
-	if (PageAnon(page) && !PageKsm(page))
-		anon_vma = page_get_anon_vma(page);
-
-	/*
-	 * Block others from accessing the new page when we get around to
-	 * establishing additional references. We are usually the only one
-	 * holding a reference to newpage at this point. We used to have a BUG
-	 * here if trylock_page(newpage) fails, but would like to allow for
-	 * cases where there might be a race with the previous use of newpage.
-	 * This is much like races on refcount of oldpage: just don't BUG().
-	 */
-	if (unlikely(!trylock_page(newpage)))
-		goto out;
-	newpage_locked = true;
-
-	if (unlikely(!is_lru)) {
-		__migrate_page_record(newpage, page_was_mapped, anon_vma);
-		return MIGRATEPAGE_UNMAP;
-	}
-
-	/*
-	 * Corner case handling:
-	 * 1. When a new swap-cache page is read into, it is added to the LRU
-	 * and treated as swapcache but it has no rmap yet.
-	 * Calling try_to_unmap() against a page->mapping==NULL page will
-	 * trigger a BUG.  So handle it here.
-	 * 2. An orphaned page (see truncate_complete_page) might have
-	 * fs-private metadata. The page can be picked up due to memory
-	 * offlining.  Everywhere else except page reclaim, the page is
-	 * invisible to the vm, so the page can not be migrated.  So try to
-	 * free the metadata, so the page can be freed.
-	 */
-	if (!page->mapping) {
-		VM_BUG_ON_PAGE(PageAnon(page), page);
-		if (page_has_private(page)) {
-			try_to_free_buffers(page);
-			goto out;
-		}
-	} else if (page_mapped(page)) {
-		/* Establish migration ptes */
-		VM_BUG_ON_PAGE(PageAnon(page) && !PageKsm(page) && !anon_vma,
-				page);
-		try_to_unmap(page, TTU_MIGRATION|TTU_IGNORE_MLOCK | TTU_BATCH_FLUSH);
-		page_was_mapped = 1;
-	}
-
-	if (!page_mapped(page)) {
-		__migrate_page_record(newpage, page_was_mapped, anon_vma);
-		return MIGRATEPAGE_UNMAP;
-	}
-
-out:
-	/*
-	 * A page that has not been migrated will have kept its
-	 * references and be restored.
-	 */
-	/* restore the page to right list. */
-	if (rc == -EAGAIN || rc == -EDEADLOCK)
-		ret = NULL;
-	migrate_page_undo_page(page, page_was_mapped, anon_vma, locked, ret);
-	if (newpage)
-		migrate_page_undo_newpage(newpage, newpage_locked,
-					  put_new_page, private);
-
-	return rc;
-}
-
-/* Migrate the page to the newly allocated page in newpage. */
-static int migrate_page_move(free_page_t put_new_page, unsigned long private,
-			     struct page *page, struct page *newpage,
-			     enum migrate_mode mode, enum migrate_reason reason,
-			     struct list_head *ret)
-{
-	int rc;
-	int page_was_mapped = 0;
-	struct anon_vma *anon_vma = NULL;
-	bool is_lru = !__PageMovable(page);
-	struct list_head *prev;
-
-	__migrate_page_extract(newpage, &page_was_mapped, &anon_vma);
-	prev = newpage->lru.prev;
-	list_del(&newpage->lru);
-
-	rc = move_to_new_page(newpage, page, mode);
-	if (rc)
-		goto out;
-
-	/*
-	 * Decrease refcount of the newpage which will not free the
-	 * page because new page owner increased refcounter. As well,
-	 * if it is LRU page, add the page to LRU list in here. Use
-	 * the old state of the isolated source page to determine if
-	 * we migrated a LRU page. newpage already unlocked and
-	 * possibly modified by its owner - don't rely on the page
-	 * state.
-	 */
-	if (page_was_mapped)
-		remove_migration_ptes(page, newpage, false);
-	unlock_page(newpage);
-	if (unlikely(!is_lru))
-		put_page(newpage);
-	else
-		putback_lru_page(newpage);
-	set_page_owner_migrate_reason(newpage, reason);
-
-	/*
-	 * A page that has been migrated has all references removed
-	 * and will be freed.
-	 */
-	list_del(&page->lru);
-	migrate_page_undo_page(page, 0, anon_vma, true, NULL);
-	migrate_page_done(page, reason);
-
-	return rc;
-
-out:
-	if (rc == -EAGAIN) {
-		list_add(&newpage->lru, prev);
-		__migrate_page_record(newpage, page_was_mapped, anon_vma);
-		return rc;
-	}
-
-	migrate_page_undo_page(page, page_was_mapped, anon_vma, true, ret);
-	migrate_page_undo_newpage(newpage, true, put_new_page, private);
-
-	return rc;
-}
-
-static void migrate_pages_copy(struct list_head *pages,
-			      struct list_head *new_pages)
-{
-	struct page *page, *newpage;
-
-	if (migrate_use_dma() && !dma_migrate_pages_copy(pages, new_pages))
-		return;
-
-	newpage = list_first_entry(new_pages, struct page, lru);
-	list_for_each_entry(page, pages, lru) {
-		if (PageHuge(page) || PageTransHuge(page))
-			copy_huge_page(newpage, page);
-		else
-			copy_highpage(newpage, page);
-		newpage = list_next_entry(newpage, lru);
-	}
-}
-
-/*
- * migrate_pages_in_batch - variant of migrate_pages, migrate the pages
- * specified in batch mode.
- */
-int migrate_pages_in_batch(struct list_head *from, new_page_t get_new_page,
-			   free_page_t put_new_page, unsigned long private,
-			   enum migrate_mode mode, int reason)
-{
-	int retry = 1;
-	int thp_retry = 1;
-	int nr_failed = 0;
-	int nr_succeeded = 0;
-	int nr_thp_succeeded = 0;
-	int nr_thp_failed = 0;
-	int nr_thp_split = 0;
-	int pass = 0;
-	bool is_thp = false;
-	struct page *page, *page2;
-	struct page *newpage, *newpage2;
-	int swapwrite = current->flags & PF_SWAPWRITE;
-	int rc, rc_saved, nr_subpages;
-	LIST_HEAD(ret_pages);
-	LIST_HEAD(unmap_pages);
-	LIST_HEAD(new_pages);
-	bool nosplit = (reason == MR_NUMA_MISPLACED);
-	bool force_lock;
-
-	if (!swapwrite)
-		current->flags |= PF_SWAPWRITE;
-
-	for (pass = 0; pass < 10 && retry; pass++) {
-		retry = 0;
-
-		list_for_each_entry_safe(page, page2, from, lru) {
-			cond_resched();
-
-			if (!PageHuge(page))
-				continue;
-
-			rc = unmap_and_move_huge_page(get_new_page,
-					put_new_page, private, page,
-					pass > 2, mode, reason,
-					&ret_pages);
-			/*
-			 * The rules are:
-			 *	Success: hugetlb page will be put back
-			 *	-EAGAIN: stay on the from list
-			 *	-ENOMEM: stay on the from list
-			 *	Other errno: put on ret_pages list then splice to
-			 *		     from list
-			 */
-			switch (rc) {
-			case -ENOSYS:
-				/* Hugetlb migration is unsupported */
-				nr_failed++;
-				break;
-			case -ENOMEM:
-				nr_failed++;
-				break;
-			case -EAGAIN:
-				retry++;
-				break;
-			case MIGRATEPAGE_SUCCESS:
-				nr_succeeded++;
-				break;
-			default:
-				/*
-				 * Permanent failure (-EBUSY, etc.):
-				 * unlike -EAGAIN case, the failed page is
-				 * removed from migration page list and not
-				 * retried in the next outer loop.
-				 */
-				nr_failed++;
-				break;
-			}
-		}
-
-		/*
-		 * unmap_and_move_huge_page returns -ENOMEM when no enough
-		 * hugetlb, however there may be free non-hugetlb pages
-		 * available, so continue to migrate for non-hugetlb pages,
-		 * instead of goto out unconditionally.
-		 */
-		if (rc == -ENOMEM)
-			break;
-	}
-	nr_failed += retry;
-
-again:
-	rc_saved = 0;
-	force_lock = true;
-	retry = 1;
-	for (pass = 0; pass < 10 && (retry || thp_retry); pass++) {
-		retry = 0;
-		thp_retry = 0;
-
-		list_for_each_entry_safe(page, page2, from, lru) {
-retry:
-			/*
-			 * THP statistics is based on the source huge page.
-			 * Capture required information that might get lost
-			 * during migration.
-			 */
-			is_thp = PageTransHuge(page) && !PageHuge(page);
-			nr_subpages = thp_nr_pages(page);
-			cond_resched();
-
-			if (PageHuge(page))
-				continue;
-
-			newpage = NULL;
-			rc = migrate_page_unmap(get_new_page, put_new_page, private,
-						page, &newpage, pass > 2, force_lock,
-						mode, reason, &ret_pages);
-			/*
-			 * The rules are:
-			 *	Success: page will be freed
-			 *	Unmap: page will be put on unmap_pages list,
-			 *	       new page put on new_pages list
-			 *	-EAGAIN: stay on the from list
-			 *	-EDEADLOCK: stay on the from list
-			 *	-ENOMEM: stay on the from list
-			 *	Other errno: put on ret_pages list then splice to
-			 *		     from list
-			 */
-			switch (rc) {
-			/*
-			 * THP migration might be unsupported or the
-			 * allocation could've failed so we should
-			 * retry on the same page with the THP split
-			 * to base pages.
-			 *
-			 * Head page is retried immediately and tail
-			 * pages are added to the tail of the list so
-			 * we encounter them after the rest of the list
-			 * is processed.
-			 */
-			case -ENOSYS:
-				/* THP migration is unsupported */
-				if (is_thp) {
-					if (!try_split_thp(page, &page2, from)) {
-						nr_thp_split++;
-						goto retry;
-					}
-
-					nr_thp_failed++;
-					nr_failed += nr_subpages;
-					break;
-				}
-				nr_failed++;
-				break;
-			case -ENOMEM:
-				/*
-				 * When memory is low, don't bother to try to migrate
-				 * other pages, move unmapped pages, then exit.
-				 * THP NUMA faulting doesn't split THP to retry.
-				 */
-				if (is_thp && !nosplit) {
-					if (!try_split_thp(page, &page2, from)) {
-						nr_thp_split++;
-						goto retry;
-					}
-
-					nr_thp_failed++;
-					nr_failed += nr_subpages - 1;
-				}
-				nr_failed++;
-				if (list_empty(&unmap_pages))
-					goto out;
-				else
-					goto move;
-			case -EDEADLOCK:
-				/*
-				 * The page cannot be locked for potential deadlock.
-				 * Go move (and unlock) all locked pages.  Then we can
-				 * try again.
-				 */
-				rc_saved = rc;
-				goto move;
-			case -EAGAIN:
-				if (is_thp) {
-					thp_retry++;
-					break;
-				}
-				retry++;
-				break;
-			case MIGRATEPAGE_SUCCESS:
-				if (is_thp) {
-					nr_thp_succeeded++;
-					nr_succeeded += nr_subpages;
-					break;
-				}
-				nr_succeeded++;
-				break;
-			case MIGRATEPAGE_UNMAP:
-				/*
-				 * We have locked some pages, don't force lock
-				 * to avoid deadlock.
-				 */
-				force_lock = false;
-				list_move_tail(&page->lru, &unmap_pages);
-				list_add_tail(&newpage->lru, &new_pages);
-				break;
-			default:
-				/*
-				 * Permanent failure (-EBUSY, etc.):
-				 * unlike -EAGAIN case, the failed page is
-				 * removed from migration page list and not
-				 * retried in the next outer loop.
-				 */
-				if (is_thp) {
-					nr_thp_failed++;
-					nr_failed += nr_subpages;
-					break;
-				}
-				nr_failed++;
-				break;
-			}
-			continue;
-		}
-	}
-	nr_failed += retry + thp_retry;
-	nr_thp_failed += thp_retry;
-move:
-	try_to_unmap_flush();
-
-	if (mode == MIGRATE_SYNC) {
-		migrate_pages_copy(&unmap_pages, &new_pages);
-		mode = MIGRATE_SYNC_NO_COPY;
-	}
-
-	retry = 1;
-	thp_retry = 1;
-	for (pass = 0; pass < 10 && (retry || thp_retry); pass++) {
-		retry = 0;
-		thp_retry = 0;
-
-		newpage = list_first_entry(&new_pages, struct page, lru);
-		newpage2 = list_next_entry(newpage, lru);
-		list_for_each_entry_safe(page, page2, &unmap_pages, lru) {
-			/*
-			 * THP statistics is based on the source huge page.
-			 * Capture required information that might get lost
-			 * during migration.
-			 */
-			is_thp = PageTransHuge(page) && !PageHuge(page);
-			nr_subpages = thp_nr_pages(page);
-			cond_resched();
-
-			rc = migrate_page_move(put_new_page, private,
-					       page, newpage, mode,
-					       reason, &ret_pages);
-			/*
-			 * The rules are:
-			 *	Success: page will be freed
-			 *	-EAGAIN: stay on the unmap_pages list
-			 *	Other errno: put on ret_pages list then splice to
-			 *		     from list
-			 */
-			switch (rc) {
-			case -EAGAIN:
-				if (is_thp) {
-					thp_retry++;
-					break;
-				}
-				retry++;
-				break;
-			case MIGRATEPAGE_SUCCESS:
-				if (is_thp) {
-					nr_thp_succeeded++;
-					nr_succeeded += nr_subpages;
-					break;
-				}
-				nr_succeeded++;
-				break;
-			default:
-				/*
-				 * Permanent failure (-EBUSY, etc.):
-				 * unlike -EAGAIN case, the failed page is
-				 * removed from migration page list and not
-				 * retried in the next outer loop.
-				 */
-				if (is_thp) {
-					nr_thp_failed++;
-					nr_failed += nr_subpages;
-					break;
-				}
-				nr_failed++;
-				break;
-			}
-			newpage = newpage2;
-			newpage2 = list_next_entry(newpage, lru);
-		}
-	}
-	nr_failed += retry + thp_retry;
-	nr_thp_failed += thp_retry;
-
-	if (rc_saved)
-		rc = rc_saved;
-	else
-		rc = nr_failed;
-out:
-	/* Cleanup remaining pages */
-	newpage = list_first_entry(&new_pages, struct page, lru);
-	newpage2 = list_next_entry(newpage, lru);
-	list_for_each_entry_safe(page, page2, &unmap_pages, lru) {
-		int page_was_mapped = 0;
-		struct anon_vma *anon_vma = NULL;
-
-		__migrate_page_extract(newpage, &page_was_mapped, &anon_vma);
-		migrate_page_undo_page(page, page_was_mapped, anon_vma,
-				       true, &ret_pages);
-		list_del(&newpage->lru);
-		migrate_page_undo_newpage(newpage, true, put_new_page, private);
-		newpage = newpage2;
-		newpage2 = list_next_entry(newpage, lru);
-	}
-
-	/*
-	 * We have unlocked all locked pages, so we can force lock now, let's
-	 * try again.
-	 */
-	if (rc == -EDEADLOCK)
-		goto again;
-
-	/*
-	 * Put the permanent failure page back to migration list, they
-	 * will be put back to the right list by the caller.
-	 */
-	list_splice(&ret_pages, from);
-
-	count_vm_events(PGMIGRATE_SUCCESS, nr_succeeded);
-	count_vm_events(PGMIGRATE_FAIL, nr_failed);
-	count_vm_events(THP_MIGRATION_SUCCESS, nr_thp_succeeded);
-	count_vm_events(THP_MIGRATION_FAIL, nr_thp_failed);
-	count_vm_events(THP_MIGRATION_SPLIT, nr_thp_split);
-	trace_mm_migrate_pages(nr_succeeded, nr_failed, nr_thp_succeeded,
-			       nr_thp_failed, nr_thp_split, mode, reason);
-
-	if (!swapwrite)
-		current->flags &= ~PF_SWAPWRITE;
-
-	return rc;
-}
-
-DEFINE_STATIC_KEY_FALSE(batch_migrate_enabled_key);
-
-static int __init setup_batch_migrate(char *s)
-{
-	if (!strcmp(s, "1"))
-		static_branch_enable(&batch_migrate_enabled_key);
-	else if (!strcmp(s, "0"))
-		static_branch_disable(&batch_migrate_enabled_key);
-	return 1;
-}
-__setup("batch_migrate=", setup_batch_migrate);

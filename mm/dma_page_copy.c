@@ -10,6 +10,7 @@
 static bool dma_migrate_enabled __read_mostly;
 static unsigned int dma_migrate_segment = 32;
 static bool dma_migrate_polling __read_mostly = true;
+static int dma_migrate_min_pages __read_mostly = 32;
 
 static void dma_async_callback(void *arg)
 {
@@ -19,7 +20,7 @@ static void dma_async_callback(void *arg)
 }
 
 static int __dma_page_copy_sg(struct scatterlist *src, struct scatterlist *dst,
-			      unsigned int nents)
+			      unsigned int nents, enum dma_migrate_mode mode)
 {
 	struct dma_async_tx_descriptor *tx;
 	struct dma_chan *dma_copy_chan = NULL;
@@ -29,6 +30,7 @@ static int __dma_page_copy_sg(struct scatterlist *src, struct scatterlist *dst,
 	enum dma_status status;
 	unsigned int nr_sgs, nr_sgd = 0;
 	unsigned long flags;
+	bool use_polling;
 	int err = 0;
 	DECLARE_COMPLETION_ONSTACK(done);
 
@@ -54,8 +56,21 @@ static int __dma_page_copy_sg(struct scatterlist *src, struct scatterlist *dst,
 		goto unmap_sg;
 	}
 
+	switch (mode) {
+	case DMA_MIGRATE_POLLING:
+		use_polling = true;
+		break;
+	case DMA_MIGRATE_INTERRUPT:
+		use_polling = false;
+		break;
+	case DMA_MIGRATE_DEFAULT:
+		/* fall-through */
+	default:
+		use_polling = dma_migrate_polling;
+	}
+
 	/* prep DMA scatterlist memcpy */
-	flags = dma_migrate_polling ? 0 : DMA_PREP_INTERRUPT;
+	flags = use_polling ? 0 : DMA_PREP_INTERRUPT;
 	tx = dmaengine_prep_dma_memcpy_sg(dma_copy_chan, dst, nents,
 					src, nents, flags);
 	if (!tx) {
@@ -64,7 +79,7 @@ static int __dma_page_copy_sg(struct scatterlist *src, struct scatterlist *dst,
 		goto unmap_sg;
 	}
 
-	if (!dma_migrate_polling) {
+	if (!use_polling) {
 		tx->callback = dma_async_callback;
 		tx->callback_param = &done;
 	}
@@ -77,7 +92,7 @@ static int __dma_page_copy_sg(struct scatterlist *src, struct scatterlist *dst,
 		goto unmap_sg;
 	}
 
-	if (dma_migrate_polling) {
+	if (use_polling) {
 		status = dma_sync_wait(dma_copy_chan, cookie);
 		if (status != DMA_COMPLETE)
 			err = -EIO;
@@ -102,13 +117,15 @@ unmap_sg:
 	return err;
 }
 
-bool migrate_use_dma(void)
+bool migrate_use_dma(int nr_move_pages)
 {
-	return READ_ONCE(dma_migrate_enabled);
+	return READ_ONCE(dma_migrate_enabled) &&
+	       nr_move_pages >= READ_ONCE(dma_migrate_min_pages);
 }
 
 int dma_migrate_pages_copy(const struct list_head *pages,
-			  const struct list_head *new_pages)
+			  const struct list_head *new_pages,
+			  enum dma_migrate_mode mode)
 {
 	struct page *page, *newpage;
 	struct scatterlist *src_sg, *dst_sg = NULL;
@@ -160,7 +177,7 @@ int dma_migrate_pages_copy(const struct list_head *pages,
 			sg_mark_end(src_ptr - 1);
 			sg_mark_end(dst_ptr - 1);
 
-			if (__dma_page_copy_sg(src_sg, dst_sg, nents)) {
+			if (__dma_page_copy_sg(src_sg, dst_sg, nents, mode)) {
 				err = -ENODEV;
 				goto done;
 			}
@@ -179,7 +196,7 @@ int dma_migrate_pages_copy(const struct list_head *pages,
 		sg_mark_end(src_ptr - 1);
 		sg_mark_end(dst_ptr - 1);
 
-		if (__dma_page_copy_sg(src_sg, dst_sg, nents)) {
+		if (__dma_page_copy_sg(src_sg, dst_sg, nents, mode)) {
 			err = -ENODEV;
 			goto done;
 		}
@@ -192,28 +209,6 @@ done:
 }
 
 #ifdef CONFIG_SYSFS
-static ssize_t batch_migrate_enabled_show(struct kobject *kobj,
-					  struct kobj_attribute *attr, char *buf)
-{
-	return sysfs_emit(buf, "%d\n", !!static_branch_unlikely(&batch_migrate_enabled_key));
-}
-static ssize_t batch_migrate_enabled_store(struct kobject *kobj,
-					   struct kobj_attribute *attr,
-					   const char *buf, size_t count)
-{
-	if (!strncmp(buf, "1", 1))
-		static_branch_enable(&batch_migrate_enabled_key);
-	else if (!strncmp(buf, "0", 1))
-		static_branch_disable(&batch_migrate_enabled_key);
-	else
-		return -EINVAL;
-
-	return count;
-}
-static struct kobj_attribute batch_migrate_enabled_attr =
-	__ATTR(batch_migrate_enabled, 0644, batch_migrate_enabled_show,
-	       batch_migrate_enabled_store);
-
 static ssize_t dma_migrate_enabled_show(struct kobject *kobj,
 					struct kobj_attribute *attr, char *buf)
 {
@@ -283,11 +278,36 @@ static struct kobj_attribute dma_migrate_polling_attr =
 	__ATTR(dma_migrate_polling, 0644, migrate_dma_polling_show,
 	       migrate_dma_polling_store);
 
+static ssize_t dma_migrate_min_pages_show(struct kobject *kobj,
+					  struct kobj_attribute *attr, char *buf)
+{
+	return sysfs_emit(buf, "%d\n", dma_migrate_min_pages);
+}
+
+static ssize_t dma_migrate_min_pages_store(struct kobject *kobj,
+					   struct kobj_attribute *attr,
+					   const char *buf, size_t count)
+{
+	unsigned int nr_min_pages;
+	int err;
+
+	err = kstrtouint(buf, 10, &nr_min_pages);
+	if (err)
+		return -EINVAL;
+
+	dma_migrate_min_pages = nr_min_pages;
+
+	return count;
+}
+static struct kobj_attribute dma_migrate_min_pages_attr =
+	__ATTR(dma_migrate_min_pages, 0644, dma_migrate_min_pages_show,
+	       dma_migrate_min_pages_store);
+
 static struct attribute *migrate_attrs[] = {
-	&batch_migrate_enabled_attr.attr,
 	&dma_migrate_enabled_attr.attr,
 	&dma_migrate_segment_attr.attr,
 	&dma_migrate_polling_attr.attr,
+	&dma_migrate_min_pages_attr.attr,
 	NULL,
 };
 
