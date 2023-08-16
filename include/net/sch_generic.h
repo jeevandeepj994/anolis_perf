@@ -388,6 +388,8 @@ struct tcf_proto_ops {
 					      struct net *net,
 					      void *tmplt_priv);
 
+	CK_KABI_RESERVE(1)
+
 	struct module		*owner;
 	int			flags;
 };

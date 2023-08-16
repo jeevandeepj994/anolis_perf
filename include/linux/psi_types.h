@@ -1,6 +1,7 @@
 #ifndef _LINUX_PSI_TYPES_H
 #define _LINUX_PSI_TYPES_H
 
+#include <linux/ck_kabi.h>
 #include <linux/kthread.h>
 #include <linux/seqlock.h>
 #include <linux/types.h>
@@ -168,6 +169,9 @@ struct psi_group {
 	u64 polling_total[NR_PSI_STATES - 1];
 	u64 polling_next_update;
 	u64 polling_until;
+
+	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
 };
 
 #else /* CONFIG_PSI */

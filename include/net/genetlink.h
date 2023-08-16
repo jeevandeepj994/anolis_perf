@@ -15,6 +15,8 @@
  */
 struct genl_multicast_group {
 	char			name[GENL_NAMSIZ];
+
+	CK_KABI_RESERVE(1)
 };
 
 struct genl_ops;

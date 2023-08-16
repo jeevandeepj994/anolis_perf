@@ -278,6 +278,8 @@ struct acpi_device_power {
 	int state;		/* Current state */
 	struct acpi_device_power_flags flags;
 	struct acpi_device_power_state states[ACPI_D_STATE_COUNT];	/* Power states (D0-D3Cold) */
+
+	CK_KABI_RESERVE(1)
 };
 
 /* Performance Management */

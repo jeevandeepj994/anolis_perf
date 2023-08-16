@@ -3,6 +3,7 @@
 #define _LINUX_STAT_H
 
 
+#include <linux/ck_kabi.h>
 #include <asm/stat.h>
 #include <uapi/linux/stat.h>
 
@@ -46,6 +47,9 @@ struct kstat {
 	struct timespec64 btime;			/* File creation time */
 	u64		blocks;
 	u64		mnt_id;
+
+	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
 };
 
 #endif

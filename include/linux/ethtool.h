@@ -259,6 +259,8 @@ bool ethtool_convert_link_mode_to_legacy_u32(u32 *legacy_u32,
 struct ethtool_pause_stats {
 	u64 tx_pause_frames;
 	u64 rx_pause_frames;
+
+	CK_KABI_RESERVE(1)
 };
 
 /**
