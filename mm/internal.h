@@ -723,9 +723,9 @@ struct pgtable_share_struct {
 	unsigned long size;
 	unsigned long mode;
 };
-int ptshare_new_mm(struct file *file, struct vm_area_struct *vma);
-void ptshare_del_mm(struct vm_area_struct *vm);
-int ptshare_insert_vma(struct mm_struct *mm, struct vm_area_struct *vma);
+int pgtable_share_new_mm(struct file *file, struct vm_area_struct *vma);
+void pgtable_share_del_mm(struct vm_area_struct *vm);
+int pgtable_share_insert_vma(struct mm_struct *mm, struct vm_area_struct *vma);
 extern vm_fault_t find_shared_vma(struct vm_area_struct **vmap,
 				unsigned long *addrp, unsigned int flags);
 #endif	/* __MM_INTERNAL_H */

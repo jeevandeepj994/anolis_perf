@@ -57,9 +57,8 @@ static pmd_t
  * Find the shared pmd entries in host mm struct and install them into
  * guest page tables.
  */
-static int
-ptshare_copy_pmd(struct mm_struct *host_mm, struct mm_struct *guest_mm,
-			struct vm_area_struct *vma, unsigned long addr)
+static int pgtable_share_copy_pmd(struct mm_struct *host_mm, struct mm_struct *guest_mm,
+				  struct vm_area_struct *vma, unsigned long addr)
 {
 	pgd_t *guest_pgd;
 	p4d_t *guest_p4d;
@@ -152,8 +151,7 @@ find_shared_vma(struct vm_area_struct **vmap, unsigned long *addrp,
  * mm. This refcount is used to determine when the mm struct for shared
  * PTEs can be deleted.
  */
-int
-ptshare_new_mm(struct file *file, struct vm_area_struct *vma)
+int pgtable_share_new_mm(struct file *file, struct vm_area_struct *vma)
 {
 	struct mm_struct *new_mm;
 	struct pgtable_share_struct *info = NULL;
@@ -195,8 +193,7 @@ err_free:
 /*
  * insert vma into mm holding shared page tables
  */
-int
-ptshare_insert_vma(struct mm_struct *host_mm, struct vm_area_struct *vma)
+int pgtable_share_insert_vma(struct mm_struct *host_mm, struct vm_area_struct *vma)
 {
 	struct vm_area_struct *new_vma;
 	int err = 0;
@@ -223,7 +220,7 @@ ptshare_insert_vma(struct mm_struct *host_mm, struct vm_area_struct *vma)
 	 * Copy the PMD entries from host mm to guest so they use the
 	 * same PTEs
 	 */
-	err = ptshare_copy_pmd(host_mm, vma->vm_mm, vma, vma->vm_start);
+	err = pgtable_share_copy_pmd(host_mm, vma->vm_mm, vma, vma->vm_start);
 
 	return err;
 }
@@ -232,8 +229,7 @@ ptshare_insert_vma(struct mm_struct *host_mm, struct vm_area_struct *vma)
  * Free the mm struct created to hold shared PTEs and associated data
  * structures
  */
-static inline void
-free_ptshare_mm(struct pgtable_share_struct *info)
+static inline void free_pgtable_share_mm(struct pgtable_share_struct *info)
 {
 	mmput(info->mm);
 	kfree(info);
@@ -245,8 +241,7 @@ free_ptshare_mm(struct pgtable_share_struct *info)
  * reference to the mm struct holding shared PTEs has been dropped. If
  * so, it cleans up the mm struct and associated data structures
  */
-void
-ptshare_del_mm(struct vm_area_struct *vma)
+void pgtable_share_del_mm(struct vm_area_struct *vma)
 {
 	struct pgtable_share_struct *info;
 	struct file *file = vma->vm_file;
@@ -259,7 +254,7 @@ ptshare_del_mm(struct vm_area_struct *vma)
 		return;
 
 	if (refcount_dec_and_test(&info->refcnt)) {
-		free_ptshare_mm(info);
+		free_pgtable_share_mm(info);
 		file->f_mapping->ptshare_data = NULL;
 	}
 }
