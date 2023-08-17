@@ -104,7 +104,7 @@ vm_fault_t
 find_shared_vma(struct vm_area_struct **vmap, unsigned long *addrp,
 			unsigned int flags)
 {
-	struct ptshare_data *info;
+	struct pgtable_share_struct *info;
 	struct mm_struct *host_mm;
 	struct vm_area_struct *host_vma, *guest_vma = *vmap;
 	unsigned long host_addr;
@@ -156,7 +156,7 @@ int
 ptshare_new_mm(struct file *file, struct vm_area_struct *vma)
 {
 	struct mm_struct *new_mm;
-	struct ptshare_data *info = NULL;
+	struct pgtable_share_struct *info = NULL;
 	int retval = 0;
 	unsigned long start = vma->vm_start;
 	unsigned long len = vma->vm_end - vma->vm_start;
@@ -233,7 +233,7 @@ ptshare_insert_vma(struct mm_struct *host_mm, struct vm_area_struct *vma)
  * structures
  */
 static inline void
-free_ptshare_mm(struct ptshare_data *info)
+free_ptshare_mm(struct pgtable_share_struct *info)
 {
 	mmput(info->mm);
 	kfree(info);
@@ -248,7 +248,7 @@ free_ptshare_mm(struct ptshare_data *info)
 void
 ptshare_del_mm(struct vm_area_struct *vma)
 {
-	struct ptshare_data *info;
+	struct pgtable_share_struct *info;
 	struct file *file = vma->vm_file;
 
 	if (!file || (!file->f_mapping))

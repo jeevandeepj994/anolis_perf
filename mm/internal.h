@@ -714,9 +714,9 @@ static inline bool vma_is_shared(const struct vm_area_struct *vma)
 }
 
 /*
- * mm/ptshare.c
+ * mm/pgtable_share.c
  */
-struct ptshare_data {
+struct pgtable_share_struct {
 	struct mm_struct *mm;
 	refcount_t refcnt;
 	unsigned long start;
