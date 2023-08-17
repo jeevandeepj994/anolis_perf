@@ -1625,7 +1625,7 @@ unsigned long do_mmap(struct file *file, unsigned long addr,
 
 		vma = find_vma(mm, addr);
 		if (!((vma->vm_start | vma->vm_end) & (PMD_SIZE - 1))) {
-			struct ptshare_data *info = file->f_mapping->ptshare_data;
+			struct pgtable_share_struct *info = file->f_mapping->ptshare_data;
 			/*
 			 * If this mapping has not been set up for page table
 			 * sharing yet, do so by creating a new mm to hold the
@@ -2935,7 +2935,7 @@ int __do_munmap(struct mm_struct *mm, unsigned long start, size_t len,
 	 */
 	vma = find_vma_intersection(mm, start, end);
 	if (vma && unlikely(vma_is_shared(vma))) {
-		struct ptshare_data *info = NULL;
+		struct pgtable_share_struct *info = NULL;
 
 		if (vma->vm_file && vma->vm_file->f_mapping)
 			info = vma->vm_file->f_mapping->ptshare_data;
