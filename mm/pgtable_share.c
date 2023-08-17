@@ -13,7 +13,7 @@
 #include <asm/pgalloc.h>
 #include <linux/sched/mm.h>
 #include <linux/slab.h>
-#include "internal.h"
+#include <linux/pgtable_share.h>
 
 /*
  */

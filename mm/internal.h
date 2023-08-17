@@ -707,25 +707,4 @@ int vmap_pages_range_noflush(unsigned long addr, unsigned long end,
 void vunmap_range_noflush(unsigned long start, unsigned long end);
 
 DECLARE_PER_CPU(struct per_cpu_nodestat, boot_nodestats);
-
-static inline bool vma_is_shared(const struct vm_area_struct *vma)
-{
-	return vma->vm_flags & VM_SHARED_PT;
-}
-
-/*
- * mm/pgtable_share.c
- */
-struct pgtable_share_struct {
-	struct mm_struct *mm;
-	refcount_t refcnt;
-	unsigned long start;
-	unsigned long size;
-	unsigned long mode;
-};
-int pgtable_share_new_mm(struct file *file, struct vm_area_struct *vma);
-void pgtable_share_del_mm(struct vm_area_struct *vm);
-int pgtable_share_insert_vma(struct mm_struct *mm, struct vm_area_struct *vma);
-extern vm_fault_t find_shared_vma(struct vm_area_struct **vmap,
-				unsigned long *addrp, unsigned int flags);
 #endif	/* __MM_INTERNAL_H */
