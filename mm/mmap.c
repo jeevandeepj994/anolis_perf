@@ -1634,12 +1634,12 @@ unsigned long do_mmap(struct file *file, unsigned long addr,
 			if (info == NULL) {
 				int ret;
 
-				ret = ptshare_new_mm(file, vma);
+				ret = pgtable_share_new_mm(file, vma);
 				if (ret < 0)
 					return ret;
 
 				info = file->f_mapping->ptshare_data;
-				ret = ptshare_insert_vma(info->mm, vma);
+				ret = pgtable_share_insert_vma(info->mm, vma);
 				if (ret < 0)
 					addr = ret;
 				else
@@ -2942,7 +2942,7 @@ int __do_munmap(struct mm_struct *mm, unsigned long start, size_t len,
 		/* Don't allow partial munmaps */
 		if (info && ((start != info->start) || (len != info->size)))
 			return -EINVAL;
-		ptshare_del_mm(vma);
+		pgtable_share_del_mm(vma);
 	}
 
 	/*
