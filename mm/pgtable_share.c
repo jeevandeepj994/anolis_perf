@@ -236,6 +236,7 @@ int pgtable_share_insert_vma(struct mm_struct *host_mm, struct vm_area_struct *v
 		vm_area_free(new_vma);
 		return -ENOMEM;
 	}
+	get_file(vma->vm_file);
 
 	/*
 	 * Copy the PMD entries from host mm to guest so they use the
