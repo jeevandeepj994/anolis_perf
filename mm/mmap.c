@@ -2906,7 +2906,6 @@ int __do_munmap(struct mm_struct *mm, unsigned long start, size_t len,
 				start, end);
 			return -EINVAL;
 		}
-		pgtable_share_del_mm(vma);
 	}
 #endif
 

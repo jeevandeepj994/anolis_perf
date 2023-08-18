@@ -1580,8 +1580,18 @@ void unmap_vmas(struct mmu_gather *tlb,
 	mmu_notifier_range_init(&range, MMU_NOTIFY_UNMAP, 0, vma, vma->vm_mm,
 				start_addr, end_addr);
 	mmu_notifier_invalidate_range_start(&range);
-	for ( ; vma && vma->vm_start < end_addr; vma = vma->vm_next)
+	for ( ; vma && vma->vm_start < end_addr; vma = vma->vm_next) {
 		unmap_single_vma(tlb, vma, start_addr, end_addr, NULL);
+#ifdef CONFIG_PAGETABLE_SHARE
+		if (vma_is_pgtable_shared(vma)) {
+			struct pgtable_share_struct *info;
+
+			info = vma_get_pgtable_share_data(vma);
+			VM_BUG_ON_VMA(!info, vma);
+			pgtable_share_del_mm(vma);
+		}
+#endif
+	}
 	mmu_notifier_invalidate_range_end(&range);
 }
 

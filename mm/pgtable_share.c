@@ -315,8 +315,7 @@ void pgtable_share_del_mm(struct vm_area_struct *vma)
 	if (!info)
 		return;
 
-	if (refcount_dec_and_test(&info->refcnt)) {
+	vma_set_pgtable_share_data(vma, NULL);
+	if (refcount_dec_and_test(&info->refcnt))
 		free_pgtable_share_mm(info);
-		vma_set_pgtable_share_data(vma, NULL);
-	}
 }
