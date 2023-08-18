@@ -2333,6 +2333,14 @@ get_unmapped_area(struct file *file, unsigned long addr, unsigned long len,
 		pgoff = 0;
 		get_area = shmem_get_unmapped_area;
 	}
+#ifdef CONFIG_PAGETABLE_SHARE
+	/*
+	 * PMD alignment for pgtable shared memory. The identified
+	 * shared memory will be support later.
+	 */
+	if (flags & MAP_SHARED_PT)
+		get_area = thp_get_unmapped_area;
+#endif
 
 	addr = get_area(file, addr, len, pgoff, flags);
 	if (IS_ERR_VALUE(addr))

@@ -858,6 +858,13 @@ unsigned long thp_get_unmapped_area(struct file *filp, unsigned long addr,
 	unsigned long ret;
 	loff_t off = (loff_t)pgoff << PAGE_SHIFT;
 
+#ifdef CONFIG_PAGETABLE_SHARE
+	if (flags & MAP_SHARED_PT) {
+		ret = __thp_get_unmapped_area(filp, addr, len, off, flags, PMD_SIZE);
+		return (ret == 0) ? -ENOMEM : ret;
+	}
+#endif
+
 	if (!IS_DAX(filp->f_mapping->host) || !IS_ENABLED(CONFIG_FS_DAX_PMD))
 		goto out;
 
