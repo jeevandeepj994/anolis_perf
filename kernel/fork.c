@@ -98,6 +98,7 @@
 #include <linux/io_uring.h>
 #include <linux/fault_event.h>
 #include <linux/sched/mm.h>
+#include <linux/pgtable_share.h>
 
 #include <asm/pgalloc.h>
 #include <linux/uaccess.h>
@@ -620,6 +621,16 @@ static __latent_entropy int dup_mmap(struct mm_struct *mm,
 #endif
 		}
 
+#ifdef CONFIG_PAGETABLE_SHARE
+		/* Increase refcnt of pgtable shared vmas */
+		if (unlikely(vma_is_pgtable_shared(mpnt) && !retval)) {
+			struct pgtable_share_struct *info;
+
+			info = vma_get_pgtable_share_data(mpnt);
+			if (info)
+				refcount_inc(&info->refcnt);
+		}
+#endif
 		if (tmp->vm_ops && tmp->vm_ops->open)
 			tmp->vm_ops->open(tmp);
 
