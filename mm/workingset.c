@@ -242,6 +242,29 @@ static void *lru_gen_eviction(struct page *page)
 	return pack_shadow(mem_cgroup_id(memcg), pgdat, token, refs);
 }
 
+/*
+ * Tests if the shadow entry is for a page that was recently evicted.
+ * Fills in @memcgid, @pglist_data, @token, @workingset with the values
+ * unpacked from shadow.
+ */
+static bool lru_gen_test_recent(void *shadow, bool file, int *memcgid,
+		struct pglist_data **pgdat, unsigned long *token, bool *workingset)
+{
+	struct mem_cgroup *eviction_memcg;
+	struct lruvec *lruvec;
+	struct lru_gen_struct *lrugen;
+	unsigned long min_seq;
+
+	unpack_shadow(shadow, memcgid, pgdat, token, workingset);
+	eviction_memcg = mem_cgroup_from_id(*memcgid);
+
+	lruvec = mem_cgroup_lruvec(eviction_memcg, *pgdat);
+	lrugen = &lruvec->lrugen;
+
+	min_seq = READ_ONCE(lrugen->min_seq[file]);
+	return (*token >> LRU_REFS_WIDTH) == (min_seq & (EVICTION_MASK >> LRU_REFS_WIDTH));
+}
+
 static void lru_gen_refault(struct page *page, void *shadow)
 {
 	int hist, tier, refs;
@@ -256,15 +279,17 @@ static void lru_gen_refault(struct page *page, void *shadow)
 	int type = page_is_file_lru(page);
 	int delta = thp_nr_pages(page);
 
-	unpack_shadow(shadow, &memcg_id, &pgdat, &token, &workingset);
-
-	if (pgdat != page_pgdat(page))
-		return;
-
 	rcu_read_lock();
+
+	if (!lru_gen_test_recent(shadow, type, &memcg_id, &pgdat, &token,
+			&workingset))
+		goto unlock;
 
 	memcg = page_memcg_rcu(page);
 	if (memcg_id != mem_cgroup_id(memcg))
+		goto unlock;
+
+	if (pgdat != page_pgdat(page))
 		goto unlock;
 
 	lruvec = mem_cgroup_lruvec(memcg, pgdat);
@@ -273,8 +298,6 @@ static void lru_gen_refault(struct page *page, void *shadow)
 	mod_lruvec_state(lruvec, WORKINGSET_REFAULT_BASE + type, delta);
 
 	min_seq = READ_ONCE(lrugen->min_seq[type]);
-	if ((token >> LRU_REFS_WIDTH) != (min_seq & (EVICTION_MASK >> LRU_REFS_WIDTH)))
-		goto unlock;
 
 	hist = lru_hist_from_seq(min_seq);
 	/* see the comment in page_lru_refs() */
@@ -304,6 +327,12 @@ unlock:
 static void *lru_gen_eviction(struct page *page)
 {
 	return NULL;
+}
+
+static bool lru_gen_test_recent(void *shadow, bool file, int *memcgid,
+		struct pglist_data **pgdat, unsigned long *token, bool *workingset)
+{
+	return false;
 }
 
 static void lru_gen_refault(struct page *page, void *shadow)
@@ -373,38 +402,34 @@ void *workingset_eviction(struct page *page, struct mem_cgroup *target_memcg)
 }
 
 /**
- * workingset_refault - evaluate the refault of a previously evicted page
- * @page: the freshly allocated replacement page
- * @shadow: shadow entry of the evicted page
+ * workingset_test_recent - tests if the shadow entry is for a page that was
+ * recently evicted. Also fills in @workingset with the value unpacked from
+ * shadow.
+ * @shadow: the shadow entry to be tested.
+ * @file: whether the corresponding page is from the file lru.
+ * @workingset: where the workingset value unpacked from shadow should
+ * be stored.
  *
- * Calculates and evaluates the refault distance of the previously
- * evicted page in the context of the node and the memcg whose memory
- * pressure caused the eviction.
+ * Return: true if the shadow is for a recently evicted page; false otherwise.
  */
-void workingset_refault(struct page *page, void *shadow)
+bool workingset_test_recent(void *shadow, bool file, bool *workingset)
 {
-	bool file = page_is_file_lru(page);
 	struct mem_cgroup *eviction_memcg;
 	struct lruvec *eviction_lruvec;
 	unsigned long refault_distance;
 	unsigned long workingset_size;
-	struct pglist_data *pgdat;
-	struct mem_cgroup *memcg;
-	unsigned long eviction;
-	struct lruvec *lruvec;
 	unsigned long refault;
-	bool workingset;
 	int memcgid;
+	struct pglist_data *pgdat;
+	unsigned long eviction;
 
-	if (lru_gen_enabled()) {
-		lru_gen_refault(page, shadow);
-		return;
-	}
+	if (lru_gen_enabled())
+		return lru_gen_test_recent(shadow, file, &memcgid, &pgdat, &eviction,
+			workingset);
 
-	unpack_shadow(shadow, &memcgid, &pgdat, &eviction, &workingset);
+	unpack_shadow(shadow, &memcgid, &pgdat, &eviction, workingset);
 	eviction <<= bucket_order;
 
-	rcu_read_lock();
 	/*
 	 * Look up the memcg associated with the stored ID. It might
 	 * have been deleted since the page's eviction.
@@ -423,7 +448,8 @@ void workingset_refault(struct page *page, void *shadow)
 	 */
 	eviction_memcg = mem_cgroup_from_id(memcgid);
 	if (!mem_cgroup_disabled() && !eviction_memcg)
-		goto out;
+		return false;
+
 	eviction_lruvec = mem_cgroup_lruvec(eviction_memcg, pgdat);
 	refault = atomic_long_read(&eviction_lruvec->nonresident_age);
 
@@ -446,19 +472,6 @@ void workingset_refault(struct page *page, void *shadow)
 	refault_distance = (refault - eviction) & EVICTION_MASK;
 
 	/*
-	 * The activation decision for this page is made at the level
-	 * where the eviction occurred, as that is where the LRU order
-	 * during page reclaim is being determined.
-	 *
-	 * However, the cgroup that will own the page is the one that
-	 * is actually experiencing the refault event.
-	 */
-	memcg = page_memcg(page);
-	lruvec = mem_cgroup_lruvec(memcg, pgdat);
-
-	inc_lruvec_state(lruvec, WORKINGSET_REFAULT_BASE + file);
-
-	/*
 	 * Compare the distance to the existing workingset size. We
 	 * don't activate pages that couldn't stay resident even if
 	 * all the memory was available to the workingset. Whether
@@ -470,7 +483,7 @@ void workingset_refault(struct page *page, void *shadow)
 		workingset_size += lruvec_page_state(eviction_lruvec,
 						     NR_INACTIVE_FILE);
 	}
-	if (mem_cgroup_get_nr_swap_pages(memcg) > 0) {
+	if (mem_cgroup_get_nr_swap_pages(eviction_memcg) > 0) {
 		workingset_size += lruvec_page_state(eviction_lruvec,
 						     NR_ACTIVE_ANON);
 		if (file) {
@@ -478,7 +491,49 @@ void workingset_refault(struct page *page, void *shadow)
 						     NR_INACTIVE_ANON);
 		}
 	}
-	if (refault_distance > workingset_size)
+
+	return refault_distance <= workingset_size;
+}
+
+/**
+ * workingset_refault - Evaluate the refault of a previously evicted page.
+ * @page: The freshly allocated replacement page.
+ * @shadow: Shadow entry of the evicted page.
+ *
+ * Calculates and evaluates the refault distance of the previously
+ * evicted page in the context of the node and the memcg whose memory
+ * pressure caused the eviction.
+ */
+void workingset_refault(struct page *page, void *shadow)
+{
+	bool file = page_is_file_lru(page);
+	struct pglist_data *pgdat;
+	struct mem_cgroup *memcg;
+	struct lruvec *lruvec;
+	bool workingset;
+
+	if (lru_gen_enabled()) {
+		lru_gen_refault(page, shadow);
+		return;
+	}
+
+	rcu_read_lock();
+
+	/*
+	 * The activation decision for this page is made at the level
+	 * where the eviction occurred, as that is where the LRU order
+	 * during page reclaim is being determined.
+	 *
+	 * However, the cgroup that will own the page is the one that
+	 * is actually experiencing the refault event.
+	 */
+	memcg = page_memcg(page);
+	pgdat = page_pgdat(page);
+	lruvec = mem_cgroup_lruvec(memcg, pgdat);
+
+	inc_lruvec_state(lruvec, WORKINGSET_REFAULT_BASE + file);
+
+	if (!workingset_test_recent(shadow, file, &workingset))
 		goto out;
 
 	SetPageActive(page);

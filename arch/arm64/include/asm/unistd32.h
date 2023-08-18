@@ -889,6 +889,26 @@ __SYSCALL(__NR_pidfd_getfd, sys_pidfd_getfd)
 __SYSCALL(__NR_faccessat2, sys_faccessat2)
 #define __NR_process_madvise 440
 __SYSCALL(__NR_process_madvise, sys_process_madvise)
+#define __NR_epoll_pwait2 441
+__SYSCALL(__NR_epoll_pwait2, sys_ni_syscall)
+#define __NR_mount_setattr 442
+__SYSCALL(__NR_mount_setattr, sys_ni_syscall)
+#define __NR_quotactl_fd 443
+__SYSCALL(__NR_quotactl_fd, sys_ni_syscall)
+#define __NR_landlock_create_ruleset 444
+__SYSCALL(__NR_landlock_create_ruleset, sys_ni_syscall)
+#define __NR_landlock_add_rule 445
+__SYSCALL(__NR_landlock_add_rule, sys_ni_syscall)
+#define __NR_landlock_restrict_self 446
+__SYSCALL(__NR_landlock_restrict_self, sys_ni_syscall)
+#define __NR_process_mrelease 448
+__SYSCALL(__NR_process_mrelease, sys_ni_syscall)
+#define __NR_futex_waitv 449
+__SYSCALL(__NR_futex_waitv, sys_ni_syscall)
+#define __NR_set_mempolicy_home_node 450
+__SYSCALL(__NR_set_mempolicy_home_node, sys_ni_syscall)
+#define __NR_cachestat 451
+__SYSCALL(__NR_cachestat, sys_cachestat)
 
 /*
  * Please add new compat syscalls above this comment and update

@@ -68,6 +68,8 @@ union bpf_attr;
 struct io_uring_params;
 struct clone_args;
 struct open_how;
+struct cachestat_range;
+struct cachestat;
 
 #include <linux/types.h>
 #include <linux/aio_abi.h>
@@ -1033,6 +1035,9 @@ asmlinkage long sys_pidfd_send_signal(int pidfd, int sig,
 				       unsigned int flags);
 asmlinkage long sys_pidfd_getfd(int pidfd, int fd, unsigned int flags);
 asmlinkage long sys_memfd_secret(unsigned int flags);
+asmlinkage long sys_cachestat(unsigned int fd,
+		struct cachestat_range __user *cstat_range,
+		struct cachestat __user *cstat, unsigned int flags);
 
 /*
  * Architecture-specific system calls
