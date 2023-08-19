@@ -2,6 +2,9 @@ include Makefile.variables
 
 all: help
 
+dist-genlog:
+	sh genlog.sh
+
 clean:
 	rm -rf $(DIST_OUTPUT)
 
