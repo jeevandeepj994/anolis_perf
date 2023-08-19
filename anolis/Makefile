@@ -5,6 +5,9 @@ all: help
 dist-genlog:
 	sh genlog.sh
 
+dist-genspec:
+	sh genspec.sh
+
 clean:
 	rm -rf $(DIST_OUTPUT)
 
