@@ -11,6 +11,9 @@ dist-genspec:
 dist-genrpmtree:
 	sh genrpmtree.sh
 
+dist-rpms: dist-genrpmtree
+	sh buildpkg.sh
+
 clean:
 	rm -rf $(DIST_OUTPUT)
 
