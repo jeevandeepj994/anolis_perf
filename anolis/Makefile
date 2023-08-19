@@ -8,6 +8,9 @@ dist-genlog:
 dist-genspec:
 	sh genspec.sh
 
+dist-genrpmtree:
+	sh genrpmtree.sh
+
 clean:
 	rm -rf $(DIST_OUTPUT)
 
