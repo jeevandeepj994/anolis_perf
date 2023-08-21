@@ -22,6 +22,7 @@
 #include <linux/sched/isolation.h>
 #include <linux/cpuset.h>
 #include <linux/pid_namespace.h>
+#include <linux/cgroup.h>
 
 #include "base.h"
 
@@ -213,6 +214,7 @@ static ssize_t show_cpus_attr(struct device *dev,
 	struct cpumask cpuset_allowed;
 	struct task_struct __maybe_unused *scenario;
 	bool rich_container;
+	struct bpf_rich_container_info info = {0};
 
 	rcu_read_lock();
 	rich_container = in_rich_container(current);
@@ -234,6 +236,9 @@ static ssize_t show_cpus_attr(struct device *dev,
 	}
 	else
 		cpumask_copy(&cpuset_allowed, ca->map);
+	
+	if (!BPF_CGROUP_RUN_PROG_RICH_CONTAINER_CPU(&info, 1))
+		cpumask_copy(&cpuset_allowed, &info.cpus_mask);
 
 	return cpumap_print_to_pagebuf(true, buf, &cpuset_allowed);
 }
