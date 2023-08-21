@@ -4,6 +4,7 @@
 #include <linux/string.h>
 #include <linux/seq_file.h>
 #include <linux/cpufreq.h>
+#include <linux/cgroup.h>
 
 #include "cpu.h"
 
@@ -72,8 +73,15 @@ static int show_cpuinfo(struct seq_file *m, void *v)
 	unsigned int cpu, index, total;
 	int i;
 	bool rich_container = false;
+	struct bpf_rich_container_info info = {0};
 
 	index = cpu = c->cpu_index;
+
+	/* Get cpu mask and check it */
+	if (!BPF_CGROUP_RUN_PROG_RICH_CONTAINER_CPU(&info, 1) &&
+				!cpumask_test_cpu(cpu, &info.cpus_mask))
+		return 0;
+
 	if (check_rich_container(cpu, &index, &rich_container, &total))
 		return 0;
 
