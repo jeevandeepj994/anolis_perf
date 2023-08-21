@@ -201,6 +201,8 @@ enum bpf_prog_type {
 	BPF_PROG_TYPE_EXT,
 	BPF_PROG_TYPE_LSM,
 	BPF_PROG_TYPE_SK_LOOKUP,
+	/* ======== anolis own features ======== */
+	BPF_PROG_TYPE_CGROUP_RICH_CONTAINER = 0x1000,
 };
 
 enum bpf_attach_type {
@@ -242,6 +244,9 @@ enum bpf_attach_type {
 	BPF_XDP_CPUMAP,
 	BPF_SK_LOOKUP,
 	BPF_XDP,
+	/* ======== anolis own features ======== */
+	BPF_CGROUP_RICH_CONTAINER_CPU = 0x1000,
+	BPF_CGROUP_RICH_CONTAINER_MEM,
 	__MAX_BPF_ATTACH_TYPE
 };
 

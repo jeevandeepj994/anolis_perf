@@ -22,6 +22,7 @@ struct bpf_cgroup_storage;
 struct ctl_table;
 struct ctl_table_header;
 struct task_struct;
+struct bpf_rich_container_info;
 
 #ifdef CONFIG_CGROUP_BPF
 enum cgroup_bpf_attach_type {
@@ -49,6 +50,8 @@ enum cgroup_bpf_attach_type {
 	CGROUP_INET4_GETSOCKNAME,
 	CGROUP_INET6_GETSOCKNAME,
 	CGROUP_INET_SOCK_RELEASE,
+	CGROUP_RICH_CONTAINER_CPU,
+	CGROUP_RICH_CONTAINER_MEM,
 	MAX_CGROUP_BPF_ATTACH_TYPE,
 	ANOLIS_KABI_MAX_CG_BPF_ATTACH = 38
 };
@@ -89,6 +92,8 @@ to_cgroup_bpf_attach_type(enum bpf_attach_type attach_type)
 	CGROUP_ATYPE(CGROUP_INET4_GETSOCKNAME);
 	CGROUP_ATYPE(CGROUP_INET6_GETSOCKNAME);
 	CGROUP_ATYPE(CGROUP_INET_SOCK_RELEASE);
+	CGROUP_ATYPE(CGROUP_RICH_CONTAINER_CPU);
+	CGROUP_ATYPE(CGROUP_RICH_CONTAINER_MEM);
 	default:
 		return CGROUP_BPF_ATTACH_TYPE_INVALID;
 	}
@@ -224,6 +229,10 @@ int __cgroup_bpf_run_filter_sysctl(struct ctl_table_header *head,
 				   struct ctl_table *table, int write,
 				   char **buf, size_t *pcount, loff_t *ppos,
 				   enum cgroup_bpf_attach_type atype);
+
+int __cgroup_bpf_run_filter_rich_container(
+				struct bpf_rich_container_info *info,
+				enum cgroup_bpf_attach_type atype);
 
 int __cgroup_bpf_run_filter_setsockopt(struct sock *sock, int *level,
 				       int *optname, char __user *optval,
@@ -483,6 +492,22 @@ int bpf_percpu_cgroup_storage_update(struct bpf_map *map, void *key,
 							   optname, optval,    \
 							   optlen, max_optlen, \
 							   retval);	       \
+	__ret;								       \
+})
+
+#define BPF_CGROUP_RUN_PROG_RICH_CONTAINER_CPU(info, retval)		       \
+({									       \
+	int __ret = retval;						       \
+	if (cgroup_bpf_enabled)						       \
+		__ret = __cgroup_bpf_run_filter_rich_container(info, CGROUP_RICH_CONTAINER_CPU);	\
+	__ret;								       \
+})
+
+#define BPF_CGROUP_RUN_PROG_RICH_CONTAINER_MEM(info, retval)		       \
+({									       \
+	int __ret = retval;						       \
+	if (cgroup_bpf_enabled)						       \
+		__ret = __cgroup_bpf_run_filter_rich_container(info, CGROUP_RICH_CONTAINER_MEM);	\
 	__ret;								       \
 })
 

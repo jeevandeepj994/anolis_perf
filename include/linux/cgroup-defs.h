@@ -671,6 +671,12 @@ struct cftype {
 	CK_KABI_RESERVE(1)
 };
 
+struct bpf_rich_container_info {
+	cpumask_t cpus_mask;
+	struct sysinfo sysinfo;
+	struct sysinfo_ext sysinfo_ext;
+};
+
 /*
  * Control Group subsystem type.
  * See Documentation/admin-guide/cgroup-v1/cgroups.rst for details
