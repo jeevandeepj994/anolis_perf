@@ -305,14 +305,14 @@ int setup_legacy_IRQ(void)
  * Manage initrd
  */
 #ifdef CONFIG_BLK_DEV_INITRD
-static int rd_start_early(char *p)
+static int __init rd_start_early(char *p)
 {
 	phys_initrd_start = __pa(memparse(p, &p));
 	return 0;
 }
 early_param("rd_start", rd_start_early);
 
-static int rd_size_early(char *p)
+static int __init rd_size_early(char *p)
 {
 	phys_initrd_size = memparse(p, &p);
 
@@ -345,7 +345,6 @@ void __init fw_init_cmdline(unsigned long argc, unsigned long cmdp)
 	}
 	strlcat(boot_command_line, arcs_cmdline, COMMAND_LINE_SIZE);
 }
-EXPORT_SYMBOL_GPL(fw_init_cmdline);
 
 static u8 ext_listhdr_checksum(u8 *buffer, u32 length)
 {
