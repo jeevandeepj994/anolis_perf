@@ -15,4 +15,6 @@ source "drivers/platform/mellanox/Kconfig"
 source "drivers/platform/mpam/Kconfig"
 
 source "drivers/platform/olpc/Kconfig"
+if LOONGARCH
 source "drivers/platform/loongarch/Kconfig"
+endif
