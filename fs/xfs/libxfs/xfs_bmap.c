@@ -37,8 +37,7 @@
 #include "xfs_icache.h"
 #include "xfs_iomap.h"
 
-
-kmem_zone_t		*xfs_bmap_free_item_zone;
+struct kmem_cache		*xfs_bmap_intent_cache;
 
 /*
  * Miscellaneous helper functions
@@ -520,56 +519,6 @@ xfs_bmap_validate_ret(
 #endif /* DEBUG */
 
 /*
- * bmap free list manipulation functions
- */
-
-/*
- * Add the extent to the list of extents to be free at transaction end.
- * The list is maintained sorted (by block number).
- */
-void
-__xfs_bmap_add_free(
-	struct xfs_trans		*tp,
-	xfs_fsblock_t			bno,
-	xfs_filblks_t			len,
-	const struct xfs_owner_info	*oinfo,
-	bool				skip_discard)
-{
-	struct xfs_extent_free_item	*new;		/* new element */
-#ifdef DEBUG
-	struct xfs_mount		*mp = tp->t_mountp;
-	xfs_agnumber_t			agno;
-	xfs_agblock_t			agbno;
-
-	ASSERT(bno != NULLFSBLOCK);
-	ASSERT(len > 0);
-	ASSERT(len <= MAXEXTLEN);
-	ASSERT(!isnullstartblock(bno));
-	agno = XFS_FSB_TO_AGNO(mp, bno);
-	agbno = XFS_FSB_TO_AGBNO(mp, bno);
-	ASSERT(agno < mp->m_sb.sb_agcount);
-	ASSERT(agbno < mp->m_sb.sb_agblocks);
-	ASSERT(len < mp->m_sb.sb_agblocks);
-	ASSERT(agbno + len <= mp->m_sb.sb_agblocks);
-#endif
-	ASSERT(xfs_bmap_free_item_zone != NULL);
-
-	new = kmem_cache_alloc(xfs_bmap_free_item_zone,
-			       GFP_KERNEL | __GFP_NOFAIL);
-	new->xefi_startblock = bno;
-	new->xefi_blockcount = (xfs_extlen_t)len;
-	if (oinfo)
-		new->xefi_oinfo = *oinfo;
-	else
-		new->xefi_oinfo = XFS_RMAP_OINFO_SKIP_UPDATE;
-	new->xefi_skip_discard = skip_discard;
-	trace_xfs_bmap_free_defer(tp->t_mountp,
-			XFS_FSB_TO_AGNO(tp->t_mountp, bno), 0,
-			XFS_FSB_TO_AGBNO(tp->t_mountp, bno), len);
-	xfs_defer_add(tp, XFS_DEFER_OPS_TYPE_FREE, &new->xefi_list);
-}
-
-/*
  * Inode fork format manipulation functions
  */
 
@@ -624,7 +573,11 @@ xfs_bmap_btree_to_extents(
 	if ((error = xfs_btree_check_block(cur, cblock, 0, cbp)))
 		return error;
 	xfs_rmap_ino_bmbt_owner(&oinfo, ip->i_ino, whichfork);
-	xfs_bmap_add_free(cur->bc_tp, cbno, 1, &oinfo);
+	error = xfs_free_extent_later(cur->bc_tp, cbno, 1, &oinfo,
+			XFS_AG_RESV_NONE);
+	if (error)
+		return error;
+
 	ip->i_d.di_nblocks--;
 	xfs_trans_mod_dquot_byino(tp, ip, XFS_TRANS_DQ_BCOUNT, -1L);
 	xfs_trans_binval(tp, cbp);
@@ -1101,7 +1054,7 @@ xfs_bmap_add_attrfork(
 		goto trans_cancel;
 	ASSERT(ip->i_afp == NULL);
 
-	ip->i_afp = kmem_cache_zalloc(xfs_ifork_zone,
+	ip->i_afp = kmem_cache_zalloc(xfs_ifork_cache,
 				      GFP_KERNEL | __GFP_NOFAIL);
 
 	ip->i_afp->if_format = XFS_DINODE_FMT_EXTENTS;
@@ -5420,10 +5373,13 @@ xfs_bmap_del_extent_real(
 		if (xfs_is_reflink_inode(ip) && whichfork == XFS_DATA_FORK) {
 			xfs_refcount_decrease_extent(tp, del);
 		} else {
-			__xfs_bmap_add_free(tp, del->br_startblock,
+			error = __xfs_free_extent_later(tp, del->br_startblock,
 					del->br_blockcount, NULL,
-					(bflags & XFS_BMAPI_NODISCARD) ||
-					del->br_state == XFS_EXT_UNWRITTEN);
+					XFS_AG_RESV_NONE,
+					((bflags & XFS_BMAPI_NODISCARD) ||
+					del->br_state == XFS_EXT_UNWRITTEN));
+			if (error)
+				goto done;
 		}
 	}
 
@@ -6330,7 +6286,7 @@ __xfs_bmap_add(
 			bmap->br_blockcount,
 			bmap->br_state);
 
-	bi = kmem_alloc(sizeof(struct xfs_bmap_intent), KM_NOFS);
+	bi = kmem_cache_alloc(xfs_bmap_intent_cache, GFP_NOFS | __GFP_NOFAIL);
 	INIT_LIST_HEAD(&bi->bi_list);
 	bi->bi_type = type;
 	bi->bi_owner = ip;
@@ -6440,15 +6396,28 @@ xfs_bmap_validate_extent(
 		if (!xfs_verify_rtbno(mp, endfsb))
 			return __this_address;
 	} else {
-		if (!xfs_verify_fsbno(mp, irec->br_startblock))
-			return __this_address;
-		if (!xfs_verify_fsbno(mp, endfsb))
-			return __this_address;
-		if (XFS_FSB_TO_AGNO(mp, irec->br_startblock) !=
-		    XFS_FSB_TO_AGNO(mp, endfsb))
+		if (!xfs_verify_fsbext(mp, irec->br_startblock,
+					   irec->br_blockcount))
 			return __this_address;
 	}
 	if (irec->br_state != XFS_EXT_NORM && whichfork != XFS_DATA_FORK)
 		return __this_address;
 	return NULL;
+}
+
+int __init
+xfs_bmap_intent_init_cache(void)
+{
+	xfs_bmap_intent_cache = kmem_cache_create("xfs_bmap_intent",
+			sizeof(struct xfs_bmap_intent),
+			0, 0, NULL);
+
+	return xfs_bmap_intent_cache != NULL ? 0 : -ENOMEM;
+}
+
+void
+xfs_bmap_intent_destroy_cache(void)
+{
+	kmem_cache_destroy(xfs_bmap_intent_cache);
+	xfs_bmap_intent_cache = NULL;
 }

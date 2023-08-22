@@ -245,4 +245,42 @@ xfs_buf_to_agfl_bno(
 	return bp->b_addr;
 }
 
+int __xfs_free_extent_later(struct xfs_trans *tp, xfs_fsblock_t bno,
+		xfs_filblks_t len, const struct xfs_owner_info *oinfo,
+		enum xfs_ag_resv_type type, bool skip_discard);
+
+/*
+ * List of extents to be free "later".
+ * The list is kept sorted on xbf_startblock.
+ */
+struct xfs_extent_free_item {
+	struct list_head	xefi_list;
+	uint64_t		xefi_owner;
+	xfs_fsblock_t		xefi_startblock;/* starting fs block number */
+	xfs_extlen_t		xefi_blockcount;/* number of blocks in extent */
+	unsigned int		xefi_flags;
+	enum xfs_ag_resv_type	xefi_agresv;
+};
+
+#define XFS_EFI_SKIP_DISCARD	(1U << 0) /* don't issue discard */
+#define XFS_EFI_ATTR_FORK	(1U << 1) /* freeing attr fork block */
+#define XFS_EFI_BMBT_BLOCK	(1U << 2) /* freeing bmap btree block */
+
+static inline int
+xfs_free_extent_later(
+	struct xfs_trans		*tp,
+	xfs_fsblock_t			bno,
+	xfs_filblks_t			len,
+	const struct xfs_owner_info	*oinfo,
+	enum xfs_ag_resv_type		type)
+{
+	return __xfs_free_extent_later(tp, bno, len, oinfo, type, false);
+}
+
+
+extern struct kmem_cache	*xfs_extfree_item_cache;
+
+int __init xfs_extfree_intent_init_cache(void);
+void xfs_extfree_intent_destroy_cache(void);
+
 #endif	/* __XFS_ALLOC_H__ */

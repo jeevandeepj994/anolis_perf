@@ -22,8 +22,8 @@
 #include "xfs_log_recover.h"
 #include "xfs_bmap.h"
 
-kmem_zone_t	*xfs_cui_zone;
-kmem_zone_t	*xfs_cud_zone;
+struct kmem_cache	*xfs_cui_cache;
+struct kmem_cache	*xfs_cud_cache;
 
 static const struct xfs_item_ops xfs_cui_item_ops;
 
@@ -39,7 +39,7 @@ xfs_cui_item_free(
 	if (cuip->cui_format.cui_nextents > XFS_CUI_MAX_FAST_EXTENTS)
 		kmem_free(cuip);
 	else
-		kmem_cache_free(xfs_cui_zone, cuip);
+		kmem_cache_free(xfs_cui_cache, cuip);
 }
 
 /*
@@ -144,7 +144,7 @@ xfs_cui_init(
 		cuip = kmem_zalloc(xfs_cui_log_item_sizeof(nextents),
 				0);
 	else
-		cuip = kmem_cache_zalloc(xfs_cui_zone,
+		cuip = kmem_cache_zalloc(xfs_cui_cache,
 					 GFP_KERNEL | __GFP_NOFAIL);
 
 	xfs_log_item_init(mp, &cuip->cui_item, XFS_LI_CUI, &xfs_cui_item_ops);
@@ -205,7 +205,7 @@ xfs_cud_item_release(
 	struct xfs_cud_log_item	*cudp = CUD_ITEM(lip);
 
 	xfs_cui_release(cudp->cud_cuip);
-	kmem_cache_free(xfs_cud_zone, cudp);
+	kmem_cache_free(xfs_cud_cache, cudp);
 }
 
 static const struct xfs_item_ops xfs_cud_item_ops = {
@@ -222,7 +222,7 @@ xfs_trans_get_cud(
 {
 	struct xfs_cud_log_item		*cudp;
 
-	cudp = kmem_cache_zalloc(xfs_cud_zone, GFP_KERNEL | __GFP_NOFAIL);
+	cudp = kmem_cache_zalloc(xfs_cud_cache, GFP_KERNEL | __GFP_NOFAIL);
 	xfs_log_item_init(tp->t_mountp, &cudp->cud_item, XFS_LI_CUD,
 			  &xfs_cud_item_ops);
 	cudp->cud_cuip = cuip;
@@ -389,7 +389,7 @@ xfs_refcount_update_finish_item(
 		xfs_atomic_staging_add_post(tp,
 				XFS_FSB_TO_AGNO(tp->t_mountp, refc->ri_startblock),
 				refc->ri_as);
-	kmem_free(refc);
+	kmem_cache_free(xfs_refcount_intent_cache, refc);
 	return error;
 }
 
@@ -409,7 +409,7 @@ xfs_refcount_update_cancel_item(
 	struct xfs_refcount_intent	*refc;
 
 	refc = container_of(item, struct xfs_refcount_intent, ri_list);
-	kmem_free(refc);
+	kmem_cache_free(xfs_refcount_intent_cache, refc);
 }
 
 const struct xfs_defer_op_type xfs_refcount_update_defer_type = {
