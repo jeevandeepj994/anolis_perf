@@ -11,6 +11,7 @@
 #include <asm/cacheflush.h>
 #include <asm/set_memory.h>
 #include <asm/tlbflush.h>
+#include <asm/mmu_context.h>
 
 struct page_change_data {
 	pgprot_t set_mask;
@@ -22,6 +23,15 @@ bool rodata_full __ro_after_init = IS_ENABLED(CONFIG_RODATA_FULL_DEFAULT_ENABLED
 bool can_set_direct_map(void)
 {
 	return rodata_full || debug_pagealloc_enabled();
+}
+
+/*
+ * If rodata_full is enabled, the mapping of linear mapping range can also be
+ * block & cont mapping, here decouples the rodata_full and debug_pagealloc.
+ */
+bool can_set_block_and_cont_map(void)
+{
+	return !debug_pagealloc_enabled();
 }
 
 static int change_page_range(pte_t *ptep, unsigned long addr, void *data)
@@ -99,6 +109,17 @@ static int change_memory_common(unsigned long addr, int numpages,
 	if (rodata_full && (pgprot_val(set_mask) == PTE_RDONLY ||
 			    pgprot_val(clear_mask) == PTE_RDONLY)) {
 		for (i = 0; i < area->nr_pages; i++) {
+			unsigned long virt = (unsigned long)page_address(area->pages[i]);
+
+			/*
+			 * Only split the linear mapping when the attribute is
+			 * changed to read only. Other situations do not suffer
+			 * the mapping type.
+			 */
+			if (pgprot_val(set_mask) == PTE_RDONLY && !split_disabled &&
+			    can_set_block_and_cont_map())
+				split_linear_mapping_after_init(virt, PAGE_SIZE, PAGE_KERNEL);
+
 			__change_memory_common((u64)page_address(area->pages[i]),
 					       PAGE_SIZE, set_mask, clear_mask);
 		}
@@ -151,6 +172,18 @@ int set_memory_valid(unsigned long addr, int numpages, int enable)
 		return __change_memory_common(addr, PAGE_SIZE * numpages,
 					__pgprot(0),
 					__pgprot(PTE_VALID));
+}
+
+int set_memory_np(unsigned long addr, int numpages)
+{
+	/*
+	 * If the addr belongs to linear mapping range, split it to pte level
+	 * before changing the attribute of the page table.
+	 */
+	if (can_set_block_and_cont_map() && __is_lm_address(addr))
+		split_linear_mapping_after_init(addr, PAGE_SIZE * numpages, PAGE_KERNEL);
+
+	return set_memory_valid(addr, numpages, 0);
 }
 
 int set_direct_map_invalid_noflush(struct page *page)
@@ -209,7 +242,7 @@ bool kernel_page_present(struct page *page)
 	pte_t *ptep;
 	unsigned long addr = (unsigned long)page_address(page);
 
-	if (!can_set_direct_map())
+	if (split_disabled && !can_set_direct_map())
 		return true;
 
 	pgdp = pgd_offset_k(addr);

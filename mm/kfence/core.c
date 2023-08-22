@@ -141,13 +141,6 @@ static int param_set_num_objects(const char *val, const struct kernel_param *kp)
 	if (READ_ONCE(kfence_enabled) || !num)
 		return -EINVAL; /* can not change num_objects when enabled */
 
-	/*
-	 * If the kfence pool has been initialized eariler, do not change the
-	 * value of kfence_num_objects.
-	 */
-	if (__kfence_pool_early_init)
-		return (system_state == SYSTEM_BOOTING) ? 0 : -EINVAL;
-
 	*((unsigned long *)kp->arg) = num;
 	return 0;
 }
@@ -955,7 +948,7 @@ static bool __kfence_init_pool_area(struct kfence_pool_area *kpa)
 	struct page *pages;
 	int i;
 
-	if (!arch_kfence_init_pool(kpa))
+	if (!__kfence_pool_early_init && !arch_kfence_init_pool(kpa))
 		goto err;
 
 	pages = virt_to_page(addr);
@@ -1827,8 +1820,12 @@ void kfence_init_late(void)
 	if (!READ_ONCE(kfence_sample_interval))
 		return;
 
-	if (__kfence_pool_early_init)
-		return;
+	/*
+	 * If kfence pool is initialized later, the early init kfence pool has
+	 * been released, reset the pointer here to avoid re-initialization if
+	 * split_linear_mapping disabled.
+	 */
+	__kfence_pool_early_init = NULL;
 
 	mutex_lock(&kfence_mutex);
 

@@ -15,6 +15,9 @@
 #define BP_HARDEN_EL2_SLOTS 4
 #define __BP_HARDEN_HYP_VECS_SZ (BP_HARDEN_EL2_SLOTS * SZ_2K)
 
+#define NO_BLOCK_MAPPINGS	BIT(0)
+#define NO_CONT_MAPPINGS	BIT(1)
+
 #ifndef __ASSEMBLY__
 
 #include <linux/refcount.h>
@@ -105,6 +108,9 @@ extern void create_pgd_mapping(struct mm_struct *mm, phys_addr_t phys,
 extern void *fixmap_remap_fdt(phys_addr_t dt_phys, int *size, pgprot_t prot);
 extern void mark_linear_text_alias_ro(void);
 extern bool kaslr_requires_kpti(void);
+extern void split_linear_mapping(unsigned long virt, phys_addr_t size, pgprot_t prot);
+extern void split_linear_mapping_after_init(unsigned long virt, phys_addr_t size,
+					    pgprot_t prot);
 
 #define INIT_MM_CONTEXT(name)	\
 	.pgd = init_pg_dir,
