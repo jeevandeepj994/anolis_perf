@@ -4,9 +4,11 @@
 # the dist suffix, eg: an7, an8, an23
 DIST ?= .an8
 
-# if offical build, the kernel version looks like: 5.10.134-15.1_rc1
-# else it looks like: 5.10.134-1.git.6235a991a61d
-DIST_OFFICIAL_BUILD ?= 
+# build mode:
+# - official build, the kernel version looks like: 5.10.134-15.1_rc1, and also generate source rpm
+# - nightly build, the kernel version looks like: 5.10.134-1.git.6235a991a61d, and also generate source rpm
+# - devel build, same as nightly build, without source rpm
+DIST_BUILD_MODE ?= devel
 
 # the package release version.
 # eg: for ANCK 5.10-015.1, the major version is 15, the minor version is 1
@@ -62,7 +64,11 @@ DIST_GIT_HEAD_FULL_COMMIT_ID = $(shell git rev-parse HEAD)
 DIST_UNOFFICIAL_PKGRELEASEVERION = ${DIST_BUILD_NUMBER}.git.$(DIST_GIT_HEAD_SHORT_COMMIT_ID)
 
 # final kernel version
-DIST_PKGRELEASEVERION = $(if $(DIST_OFFICIAL_BUILD),$(DIST_OFFICIAL_PKGRELEASEVERION),$(DIST_UNOFFICIAL_PKGRELEASEVERION))
+ifeq ("${DIST_BUILD_MODE}", "official")
+DIST_PKGRELEASEVERION = $(DIST_OFFICIAL_PKGRELEASEVERION)
+else
+DIST_PKGRELEASEVERION = $(DIST_UNOFFICIAL_PKGRELEASEVERION)
+endif
 DIST_ANOLIS_VERSION = $(DIST_KERNELVERSION)-$(DIST_PKGRELEASEVERION)
 
 # the package id used for compress kernel tarball:
