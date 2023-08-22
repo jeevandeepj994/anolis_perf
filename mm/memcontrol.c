@@ -6427,6 +6427,57 @@ static int mem_cgroup_allow_duptext_write(struct cgroup_subsys_state *css,
 
 	return 0;
 }
+
+static u64 mem_cgroup_allow_duptext_refresh_read(struct cgroup_subsys_state *css,
+						 struct cftype *cft)
+{
+	struct mem_cgroup *memcg = mem_cgroup_from_css(css);
+
+	return memcg->allow_duptext_refresh;
+}
+
+static int mem_cgroup_allow_duptext_refresh_write(struct cgroup_subsys_state *css,
+						  struct cftype *cft, u64 val)
+{
+	struct mem_cgroup *memcg = mem_cgroup_from_css(css);
+
+	if (val > 1)
+		return -EINVAL;
+	memcg->allow_duptext_refresh = val;
+
+	return 0;
+}
+
+static int mem_cgroup_duptext_nodes_show(struct seq_file *m, void *v)
+{
+	struct mem_cgroup *memcg = mem_cgroup_from_css(seq_css(m));
+
+	seq_printf(m, "%*pbl\n", nodemask_pr_args(&memcg->duptext_nodes));
+	return 0;
+}
+
+static ssize_t mem_cgroup_duptext_nodes_write(struct kernfs_open_file *of,
+					char *buf, size_t nbytes, loff_t off)
+{
+	struct mem_cgroup *memcg = mem_cgroup_from_css(of_css(of));
+	nodemask_t nodes;
+	int retval;
+
+	buf = strstrip(buf);
+	if (!*buf)
+		return -EINVAL;
+
+	retval = nodelist_parse(buf, nodes);
+	if (retval < 0)
+		return retval;
+
+	if (!nodes_subset(nodes, node_states[N_MEMORY]))
+		return -EINVAL;
+
+	memcg->duptext_nodes = nodes;
+	return nbytes;
+}
+
 #endif
 
 #ifdef CONFIG_TEXT_UNEVICTABLE
@@ -7038,6 +7089,17 @@ static struct cftype mem_cgroup_legacy_files[] = {
 		.read_u64 = mem_cgroup_allow_duptext_read,
 		.write_u64 = mem_cgroup_allow_duptext_write,
 	},
+	{
+		.name = "allow_duptext_refresh",
+		.read_u64 = mem_cgroup_allow_duptext_refresh_read,
+		.write_u64 = mem_cgroup_allow_duptext_refresh_write,
+	},
+	{
+		.name = "duptext_nodes",
+		.seq_show = mem_cgroup_duptext_nodes_show,
+		.write = mem_cgroup_duptext_nodes_write,
+		.max_write_len = (100U + 6 * MAX_NUMNODES),
+	},
 #endif
 #ifdef CONFIG_ASYNC_FORK
 	{
@@ -7336,6 +7398,9 @@ static struct mem_cgroup *mem_cgroup_alloc(void)
 	memcg->tr_ctrl.proactive = thp_reclaim_proactive_memcg_init;
 #endif
 	kidled_memcg_init(memcg);
+#ifdef CONFIG_DUPTEXT
+	memcg->duptext_nodes = node_states[N_MEMORY];
+#endif
 	idr_replace(&mem_cgroup_idr, memcg, memcg->id.id);
 	lru_gen_init_memcg(memcg);
 	return memcg;
@@ -7381,6 +7446,7 @@ mem_cgroup_css_alloc(struct cgroup_subsys_state *parent_css)
 		memcg->reap_background = parent->reap_background;
 #ifdef CONFIG_DUPTEXT
 		memcg->allow_duptext = parent->allow_duptext;
+		memcg->duptext_nodes = parent->duptext_nodes;
 #endif
 #ifdef CONFIG_ASYNC_FORK
 		memcg->async_fork = parent->async_fork;
