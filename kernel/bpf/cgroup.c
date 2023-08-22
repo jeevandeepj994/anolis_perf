@@ -1313,6 +1313,19 @@ int __cgroup_bpf_run_filter_sysctl(struct ctl_table_header *head,
 	return ret == 1 ? 0 : -EPERM;
 }
 
+int __cgroup_bpf_run_filter_rich_container(struct bpf_rich_container_info *info,
+					       enum cgroup_bpf_attach_type atype)
+{
+	struct cgroup *cgrp;
+	int ret;
+
+	rcu_read_lock();
+	cgrp = task_dfl_cgroup(current);
+	ret = BPF_PROG_RUN_ARRAY(cgrp->bpf.effective[atype], info, BPF_PROG_RUN);
+	rcu_read_unlock();
+	return ret;
+}
+
 #ifdef CONFIG_NET
 static bool __cgroup_bpf_prog_array_is_empty(struct cgroup *cgrp,
 					     enum cgroup_bpf_attach_type attach_type)
@@ -1940,4 +1953,47 @@ const struct bpf_verifier_ops cg_sockopt_verifier_ops = {
 };
 
 const struct bpf_prog_ops cg_sockopt_prog_ops = {
+};
+
+static const struct bpf_func_proto *
+rich_container_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
+{
+	return cgroup_base_func_proto(func_id, prog) ? : bpf_tracing_func_proto(func_id, prog);
+}
+
+static bool rich_container_is_valid_access(int off, int size,
+				       enum bpf_access_type type,
+				       const struct bpf_prog *prog,
+				       struct bpf_insn_access_aux *info)
+{
+	int start_off, end_off;
+
+	switch (prog->expected_attach_type) {
+		case BPF_CGROUP_RICH_CONTAINER_CPU:
+			start_off = offsetof(struct bpf_rich_container_info, cpus_mask);
+			end_off = offsetofend(struct bpf_rich_container_info, cpus_mask);
+			break;
+		case BPF_CGROUP_RICH_CONTAINER_MEM:
+			start_off = offsetof(struct bpf_rich_container_info, sysinfo);
+			end_off = offsetofend(struct bpf_rich_container_info, sysinfo_ext);
+			break;
+		default:
+			return false;
+	}
+
+	if (off < start_off || off >= end_off)
+		return false;
+
+	if (off % size != 0)
+		return false;
+
+	return true;
+}
+
+const struct bpf_verifier_ops cg_rich_container_verifier_ops = {
+	.get_func_proto		= rich_container_func_proto,
+	.is_valid_access	= rich_container_is_valid_access,
+};
+
+const struct bpf_prog_ops cg_rich_container_prog_ops = {
 };

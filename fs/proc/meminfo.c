@@ -19,6 +19,7 @@
 #include <asm/page.h>
 #include "internal.h"
 #include <linux/pid_namespace.h>
+#include <linux/cgroup.h>
 
 void __attribute__((weak)) arch_report_meminfo(struct seq_file *m)
 {
@@ -39,6 +40,7 @@ static int meminfo_proc_show(struct seq_file *m, void *v)
 
 	struct mem_cgroup *memcg = NULL;
 	struct sysinfo_ext ext;
+	struct bpf_rich_container_info info = {0};
 
 #ifdef CONFIG_MEMCG
 	rcu_read_lock();
@@ -79,6 +81,11 @@ static int meminfo_proc_show(struct seq_file *m, void *v)
 			global_node_page_state(NR_SHMEM_PMDMAPPED);
 	} else {
 		memcg_meminfo(memcg, &i, &ext);
+	}
+
+	if (!BPF_CGROUP_RUN_PROG_RICH_CONTAINER_MEM(&info, 1)) {
+		memcpy(&i, &info.sysinfo, sizeof(i));
+		memcpy(&ext, &info.sysinfo_ext, sizeof(ext));
 	}
 
 	committed = percpu_counter_read_positive(&vm_committed_as);
