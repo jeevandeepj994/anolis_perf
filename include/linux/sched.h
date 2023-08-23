@@ -573,6 +573,11 @@ struct sched_entity {
 	struct sched_avg		avg;
 #endif
 
+#ifdef CONFIG_SCHED_CORE
+	u64				core_vruntime;
+	unsigned int			ht_aware_quota_coefficient;
+#endif
+
 	CK_KABI_RESERVE(1)
 	CK_KABI_RESERVE(2)
 	CK_KABI_RESERVE(3)
@@ -812,6 +817,7 @@ struct task_struct {
 	struct rb_node			core_node;
 	unsigned long			core_cookie;
 	unsigned int			core_occupation;
+	struct list_head		cookie_list;
 #endif
 
 #ifdef CONFIG_CGROUP_SCHED

@@ -615,6 +615,8 @@ struct cfs_rq {
 #ifdef CONFIG_SCHED_CORE
 	unsigned int		forceidle_seq;
 	u64			min_vruntime_fi;
+	struct cfs_rq		*core;
+	u64			core_min_vruntime;
 #endif
 
 #ifndef CONFIG_64BIT
@@ -1249,6 +1251,14 @@ struct rq {
 	unsigned int		core_forceidle_seq;
 	unsigned int		core_forceidle_occupation;
 	u64			core_forceidle_start;
+	unsigned int		core_id;
+	unsigned int		core_realidle_count;
+	unsigned int		core_realidle_occupation;
+	u64			core_realidle_start;
+	u64			rq_realidle_time;
+	bool			in_forceidle;
+	bool			in_realidle;
+	struct task_struct	*force_idled_core_pick;
 #endif
 
 	CK_KABI_RESERVE(1)
