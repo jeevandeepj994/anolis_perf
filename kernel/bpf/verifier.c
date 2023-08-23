@@ -1591,6 +1591,17 @@ static int check_packet_access(struct bpf_verifier_env *env, u32 regno, int off,
 		verbose(env, "R%d offset is outside of the packet\n", regno);
 		return err;
 	}
+
+	/* __check_packet_access has made sure "off + size - 1" is within u16.
+	 * reg->umax_value can't be bigger than MAX_PACKET_OFF which is 0xffff,
+	 * otherwise find_good_pkt_pointers would have refused to set range info
+	 * that __check_packet_access would have rejected this pkt access.
+	 * Therefore, "off + reg->umax_value + size - 1" won't overflow u32.
+	 */
+	env->prog->aux->max_pkt_offset =
+		max_t(u32, env->prog->aux->max_pkt_offset,
+		      off + reg->umax_value + size - 1);
+
 	return err;
 }
 
@@ -2997,10 +3008,6 @@ static int check_helper_call(struct bpf_verifier_env *env, int func_id, int insn
 		regs[BPF_REG_0].type = NOT_INIT;
 	} else if (fn->ret_type == RET_PTR_TO_MAP_VALUE_OR_NULL ||
 		   fn->ret_type == RET_PTR_TO_MAP_VALUE) {
-		if (fn->ret_type == RET_PTR_TO_MAP_VALUE)
-			regs[BPF_REG_0].type = PTR_TO_MAP_VALUE;
-		else
-			regs[BPF_REG_0].type = PTR_TO_MAP_VALUE_OR_NULL;
 		/* There is no offset yet applied, variable or fixed */
 		mark_reg_known_zero(env, regs, BPF_REG_0);
 		/* remember map_ptr, so that check_map_access()
@@ -3013,7 +3020,12 @@ static int check_helper_call(struct bpf_verifier_env *env, int func_id, int insn
 			return -EINVAL;
 		}
 		regs[BPF_REG_0].map_ptr = meta.map_ptr;
-		regs[BPF_REG_0].id = ++env->id_gen;
+		if (fn->ret_type == RET_PTR_TO_MAP_VALUE) {
+			regs[BPF_REG_0].type = PTR_TO_MAP_VALUE;
+		} else {
+			regs[BPF_REG_0].type = PTR_TO_MAP_VALUE_OR_NULL;
+			regs[BPF_REG_0].id = ++env->id_gen;
+		}
 	} else if (fn->ret_type == RET_PTR_TO_SOCKET_OR_NULL) {
 		int id = acquire_reference_state(env, insn_idx);
 		if (id < 0)
@@ -6282,7 +6294,11 @@ static int convert_ctx_accesses(struct bpf_verifier_env *env)
 	enum bpf_access_type type;
 	bool is_narrower_load;
 
-	if (ops->gen_prologue) {
+	if (ops->gen_prologue || env->seen_direct_write) {
+		if (!ops->gen_prologue) {
+			verbose(env, "bpf verifier is misconfigured\n");
+			return -EINVAL;
+		}
 		cnt = ops->gen_prologue(insn_buf, env->seen_direct_write,
 					env->prog);
 		if (cnt >= ARRAY_SIZE(insn_buf)) {
@@ -6769,6 +6785,7 @@ static int fixup_bpf_calls(struct bpf_verifier_env *env)
 			 */
 			prog->cb_access = 1;
 			env->prog->aux->stack_depth = MAX_BPF_STACK;
+			env->prog->aux->max_pkt_offset = MAX_PACKET_OFF;
 
 			/* mark bpf_tail_call as different opcode to avoid
 			 * conditional branch in the interpeter for every normal
