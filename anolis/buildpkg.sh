@@ -1,19 +1,25 @@
 set -xe
 
 function do_rpmbuild() {
-	if [ -z "$DIST_OFFICIAL_BUILD" ]; then
-		CMD="-bb"
-	else
+	if [ "$DIST_BUILD_MODE" == "official" ] || [ "$DIST_BUILD_MODE" == "nightly" ]; then
 		CMD="-ba"
+	else
+		CMD="-bb"
 	fi
 
 	# Now we have:
 	#  + variants: default, only-debug, with-debug
 	#  + extras: base, with-debuginfo, full
-	#  + modes: nightly, dev, pre-release
+	#  + modes: official, nightly, dev
 	#TODO: add with-gcov
 	#
 	# Matrix
+	#
+	# | BuildMode | KernelName      | GenerateSrpm |
+	# |-----------|-----------------|--------------|
+	# | official  | without sha id  | Yes          |
+	# | nightly   | with git sha id | Yes          |
+	# | devel     | with git sha id | No           |
 	#
 	# | Extra\Var | Default  | Only-debug | With-debug |
 	# |-----------|----------|------------|------------|
