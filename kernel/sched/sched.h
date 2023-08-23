@@ -1250,7 +1250,7 @@ struct rq {
 	u64			max_idle_balance_cost;
 #endif /* CONFIG_SMP */
 
-#ifdef CONFIG_IRQ_TIME_ACCOUNTING
+#if defined(CONFIG_IRQ_TIME_ACCOUNTING) && defined(CONFIG_X86)
 	u64			prev_irq_time;
 #endif
 #ifdef CONFIG_PARAVIRT
@@ -1337,7 +1337,12 @@ struct rq {
 	CK_KABI_RESERVE(1)
 	CK_KABI_RESERVE(2)
 #endif
+
+#if defined(CONFIG_IRQ_TIME_ACCOUNTING) && defined(CONFIG_ARM64)
+	CK_KABI_USE(3, u64 prev_irq_time);
+#else
 	CK_KABI_RESERVE(3)
+#endif
 	CK_KABI_RESERVE(4)
 	CK_KABI_RESERVE(5)
 	CK_KABI_RESERVE(6)
