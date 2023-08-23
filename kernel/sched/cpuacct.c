@@ -101,6 +101,16 @@ static inline enum sched_lat_count_t get_sched_lat_count_idx(u64 msecs)
 	return SCHED_LAT_10000_INF;
 }
 
+enum cpuacct_stat_sibidle_index {
+	CPUACCT_STAT_FORCEIDLE,
+	CPUACCT_STAT_SIB_REALIDLE,
+	CPUACCT_STAT_SIB_IDLE,
+};
+
+struct sib_idle_cpustat {
+	u64 sib_idle_stat[CPUACCT_STAT_SIB_IDLE];
+};
+
 /* track CPU usage of a group of tasks and its child groups */
 struct cpuacct {
 	struct cgroup_subsys_state	css;
@@ -118,6 +128,10 @@ struct cpuacct {
 	unsigned long avenrun[3];
 #ifdef CONFIG_SCHED_SLI
 	unsigned long avenrun_r[3];
+#endif
+
+#ifdef CONFIG_SCHED_CORE
+	struct sib_idle_cpustat __percpu *sib_idle;
 #endif
 
 	CK_KABI_RESERVE(1)
