@@ -1095,6 +1095,8 @@ struct kvm_ppc_resize_hpt {
 #define KVM_CAP_X86_TRIPLE_FAULT_EVENT 218
 #define KVM_CAP_X86_NOTIFY_VMEXIT 219
 
+#define KVM_CAP_SEV_ES_GHCB 500
+
 #define KVM_CAP_LOONGARCH_FPU 800
 #define KVM_CAP_LOONGARCH_LSX 801
 #define KVM_CAP_LOONGARCH_VZ 802
@@ -1733,6 +1735,14 @@ struct kvm_sev_send_update_data {
 	__u32 trans_len;
 };
 
+struct kvm_sev_send_update_vmsa {
+	__u32 vcpu_id;
+	__u64 hdr_uaddr;
+	__u32 hdr_len;
+	__u64 trans_uaddr;
+	__u32 trans_len;
+};
+
 struct kvm_sev_receive_start {
 	__u32 handle;
 	__u32 policy;
@@ -1747,6 +1757,14 @@ struct kvm_sev_receive_update_data {
 	__u32 hdr_len;
 	__u64 guest_uaddr;
 	__u32 guest_len;
+	__u64 trans_uaddr;
+	__u32 trans_len;
+};
+
+struct kvm_sev_receive_update_vmsa {
+	__u32 vcpu_id;
+	__u64 hdr_uaddr;
+	__u32 hdr_len;
 	__u64 trans_uaddr;
 	__u32 trans_len;
 };
