@@ -236,15 +236,15 @@ int pgtable_share_insert_vma(struct mm_struct *host_mm, struct vm_area_struct *v
 	if (!new_vma)
 		return -ENOMEM;
 
-	new_vma->vm_file = NULL;
 	/*
 	 * This new vma belongs to host mm, so clear the VM_SHARED_PT
 	 * flag on this so we know this is the host vma when we clean
 	 * up page tables. Do not use THP for page table shared regions
 	 */
-	new_vma->vm_flags &= ~(VM_SHARED | VM_SHARED_PT);
+	new_vma->vm_flags &= ~VM_SHARED_PT;
 	new_vma->vm_flags |= VM_NOHUGEPAGE;
 	new_vma->vm_mm = host_mm;
+	new_vma->vm_page_prot = vm_get_page_prot(new_vma->vm_flags);
 
 	err = insert_vm_struct(host_mm, new_vma);
 	if (err) {
