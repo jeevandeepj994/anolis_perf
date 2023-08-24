@@ -86,6 +86,14 @@ struct erofs_fs_context {
 	char *blob_dir_path;
 };
 
+/* all filesystem-wide lz4 configurations */
+struct erofs_sb_lz4_info {
+	/* # of pages needed for EROFS lz4 rolling decompression */
+	u16 max_distance_pages;
+	/* maximum possible blocks for pclusters in the filesystem */
+	u16 max_pclusterblks;
+};
+
 struct erofs_domain {
 	refcount_t ref;
 	struct list_head list;
@@ -112,9 +120,12 @@ struct erofs_sb_info {
 	struct xarray managed_pslots;
 
 	unsigned int shrinker_run_no;
+	u16 available_compr_algs;
 
 	/* pseudo inode to manage cached pages */
 	struct inode *managed_cache;
+
+	struct erofs_sb_lz4_info lz4;
 #endif	/* CONFIG_EROFS_FS_ZIP */
 	struct path blob_dir;
 	struct file *bootstrap;
@@ -133,6 +144,7 @@ struct erofs_sb_info {
 	unsigned char islotbits;	/* inode slot unit size in bit shift */
 	unsigned char blkszbits;	/* filesystem block size in bit shift */
 
+	u32 sb_size;			/* total superblock size */
 	u32 build_time_nsec;
 	u64 build_time;
 
@@ -245,12 +257,6 @@ static inline int erofs_wait_on_workgroup_freezed(struct erofs_workgroup *grp)
 	return v;
 }
 #endif	/* !CONFIG_SMP */
-
-/* hard limit of pages per compressed cluster */
-#define Z_EROFS_CLUSTER_MAX_PAGES       (CONFIG_EROFS_FS_CLUSTER_PAGE_LIMIT)
-#define EROFS_PCPUBUF_NR_PAGES          Z_EROFS_CLUSTER_MAX_PAGES
-#else
-#define EROFS_PCPUBUF_NR_PAGES          0
 #endif	/* !CONFIG_EROFS_FS_ZIP */
 
 enum erofs_kmap_type {
@@ -282,6 +288,8 @@ static inline bool erofs_sb_has_##name(struct erofs_sb_info *sbi) \
 }
 
 EROFS_FEATURE_FUNCS(lz4_0padding, incompat, INCOMPAT_LZ4_0PADDING)
+EROFS_FEATURE_FUNCS(compr_cfgs, incompat, INCOMPAT_COMPR_CFGS)
+EROFS_FEATURE_FUNCS(big_pcluster, incompat, INCOMPAT_BIG_PCLUSTER)
 EROFS_FEATURE_FUNCS(device_table, incompat, INCOMPAT_DEVICE_TABLE)
 EROFS_FEATURE_FUNCS(sb_chksum, compat, COMPAT_SB_CHKSUM)
 
@@ -318,7 +326,6 @@ struct erofs_inode {
 			unsigned short z_advise;
 			unsigned char  z_algorithmtype[2];
 			unsigned char  z_logical_clusterbits;
-			unsigned char  z_physical_clusterbits[2];
 		};
 #endif	/* CONFIG_EROFS_FS_ZIP */
 	};
@@ -474,23 +481,30 @@ int erofs_namei(struct inode *dir, const struct qstr *name,
 /* dir.c */
 extern const struct file_operations erofs_dir_fops;
 
-/* utils.c / zdata.c */
-struct page *erofs_allocpage(struct list_head *pool, gfp_t gfp);
-
-#if (EROFS_PCPUBUF_NR_PAGES > 0)
-void *erofs_get_pcpubuf(unsigned int pagenr);
-#define erofs_put_pcpubuf(buf) do { \
-	(void)&(buf);	\
-	preempt_enable();	\
-} while (0)
-#else
-static inline void *erofs_get_pcpubuf(unsigned int pagenr)
+static inline void *erofs_vm_map_ram(struct page **pages, unsigned int count)
 {
-	return ERR_PTR(-EOPNOTSUPP);
+	int retried = 0;
+
+	while (1) {
+		void *p = vm_map_ram(pages, count, -1);
+
+		/* retry two more times (totally 3 times) */
+		if (p || ++retried >= 3)
+			return p;
+		vm_unmap_aliases();
+	}
+	return NULL;
 }
 
-#define erofs_put_pcpubuf(buf) do {} while (0)
-#endif
+/* pcpubuf.c */
+void *erofs_get_pcpubuf(unsigned int requiredpages);
+void erofs_put_pcpubuf(void *ptr);
+int erofs_pcpubuf_growsize(unsigned int nrpages);
+void erofs_pcpubuf_init(void);
+void erofs_pcpubuf_exit(void);
+
+/* utils.c / zdata.c */
+struct page *erofs_allocpage(struct list_head *pool, gfp_t gfp);
 
 #ifdef CONFIG_EROFS_FS_ZIP
 int erofs_workgroup_put(struct erofs_workgroup *grp);
@@ -509,6 +523,9 @@ int erofs_try_to_free_all_cached_pages(struct erofs_sb_info *sbi,
 				       struct erofs_workgroup *egrp);
 int erofs_try_to_free_cached_page(struct address_space *mapping,
 				  struct page *page);
+int z_erofs_load_lz4_config(struct super_block *sb,
+			    struct erofs_super_block *dsb,
+			    struct z_erofs_lz4_cfgs *lz4, int len);
 #else
 static inline void erofs_shrinker_register(struct super_block *sb) {}
 static inline void erofs_shrinker_unregister(struct super_block *sb) {}
@@ -516,6 +533,16 @@ static inline int erofs_init_shrinker(void) { return 0; }
 static inline void erofs_exit_shrinker(void) {}
 static inline int z_erofs_init_zip_subsystem(void) { return 0; }
 static inline void z_erofs_exit_zip_subsystem(void) {}
+static inline int z_erofs_load_lz4_config(struct super_block *sb,
+				  struct erofs_super_block *dsb,
+				  struct z_erofs_lz4_cfgs *lz4, int len)
+{
+	if (lz4 || dsb->u1.lz4_max_distance) {
+		erofs_err(sb, "lz4 algorithm isn't enabled");
+		return -EINVAL;
+	}
+	return 0;
+}
 #endif	/* !CONFIG_EROFS_FS_ZIP */
 
 /* fscache.c */
