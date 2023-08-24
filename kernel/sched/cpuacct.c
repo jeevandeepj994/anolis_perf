@@ -101,6 +101,16 @@ static inline enum sched_lat_count_t get_sched_lat_count_idx(u64 msecs)
 	return SCHED_LAT_10000_INF;
 }
 
+enum cpuacct_stat_sibidle_index {
+	CPUACCT_STAT_FORCEIDLE,
+	CPUACCT_STAT_SIB_REALIDLE,
+	CPUACCT_STAT_SIB_IDLE,
+};
+
+struct sib_idle_cpustat {
+	u64 sib_idle_stat[CPUACCT_STAT_SIB_IDLE];
+};
+
 /* track CPU usage of a group of tasks and its child groups */
 struct cpuacct {
 	struct cgroup_subsys_state	css;
@@ -118,6 +128,10 @@ struct cpuacct {
 	unsigned long avenrun[3];
 #ifdef CONFIG_SCHED_SLI
 	unsigned long avenrun_r[3];
+#endif
+
+#ifdef CONFIG_SCHED_CORE
+	struct sib_idle_cpustat __percpu *sib_idle;
 #endif
 
 	CK_KABI_RESERVE(1)
@@ -457,7 +471,7 @@ static u64 cpuacct_cpuusage_read(struct cpuacct *ca, int cpu,
 	/*
 	 * Take rq->lock to make 64-bit read safe on 32-bit platforms.
 	 */
-	raw_spin_lock_irq(&cpu_rq(cpu)->lock);
+	raw_spin_rq_lock_irq(cpu_rq(cpu));
 #endif
 
 	if (index == CPUACCT_STAT_NSTATS) {
@@ -471,7 +485,7 @@ static u64 cpuacct_cpuusage_read(struct cpuacct *ca, int cpu,
 	}
 
 #ifndef CONFIG_64BIT
-	raw_spin_unlock_irq(&cpu_rq(cpu)->lock);
+	raw_spin_rq_unlock_irq(cpu_rq(cpu));
 #endif
 
 	return data;
@@ -486,14 +500,14 @@ static void cpuacct_cpuusage_write(struct cpuacct *ca, int cpu, u64 val)
 	/*
 	 * Take rq->lock to make 64-bit write safe on 32-bit platforms.
 	 */
-	raw_spin_lock_irq(&cpu_rq(cpu)->lock);
+	raw_spin_rq_lock_irq(cpu_rq(cpu));
 #endif
 
 	for (i = 0; i < CPUACCT_STAT_NSTATS; i++)
 		cpuusage->usages[i] = val;
 
 #ifndef CONFIG_64BIT
-	raw_spin_unlock_irq(&cpu_rq(cpu)->lock);
+	raw_spin_rq_unlock_irq(cpu_rq(cpu));
 #endif
 }
 
@@ -598,13 +612,13 @@ static int cpuacct_all_seq_show(struct seq_file *m, void *V)
 			 * Take rq->lock to make 64-bit read safe on 32-bit
 			 * platforms.
 			 */
-			raw_spin_lock_irq(&cpu_rq(cpu)->lock);
+			raw_spin_rq_lock_irq(cpu_rq(cpu));
 #endif
 
 			seq_printf(m, " %llu", cpuusage->usages[index]);
 
 #ifndef CONFIG_64BIT
-			raw_spin_unlock_irq(&cpu_rq(cpu)->lock);
+			raw_spin_rq_unlock_irq(cpu_rq(cpu));
 #endif
 		}
 		seq_puts(m, "\n");
