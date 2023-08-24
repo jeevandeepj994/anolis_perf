@@ -316,6 +316,9 @@ static int erofs_load_compr_cfgs(struct super_block *sb,
 		case Z_EROFS_COMPRESSION_LZ4:
 			ret = z_erofs_load_lz4_config(sb, dsb, data, size);
 			break;
+		case Z_EROFS_COMPRESSION_LZMA:
+			ret = z_erofs_load_lzma_config(sb, dsb, data, size);
+			break;
 		default:
 			DBG_BUGON(1);
 			ret = -EFAULT;
@@ -595,7 +598,7 @@ static int erofs_managed_cache_releasepage(struct page *page, gfp_t gfp_mask)
 	DBG_BUGON(mapping->a_ops != &managed_cache_aops);
 
 	if (PagePrivate(page))
-		ret = erofs_try_to_free_cached_page(mapping, page);
+		ret = erofs_try_to_free_cached_page(page);
 
 	return ret;
 }
@@ -1022,6 +1025,10 @@ static int __init erofs_module_init(void)
 	if (err)
 		goto shrinker_err;
 
+	err = z_erofs_lzma_init();
+	if (err)
+		goto lzma_err;
+
 	erofs_pcpubuf_init();
 	err = z_erofs_init_zip_subsystem();
 	if (err)
@@ -1042,6 +1049,8 @@ fs_err:
 fscache_err:
 	z_erofs_exit_zip_subsystem();
 zip_err:
+	z_erofs_lzma_exit();
+lzma_err:
 	erofs_exit_shrinker();
 shrinker_err:
 	kmem_cache_destroy(erofs_inode_cachep);
@@ -1053,11 +1062,13 @@ static void __exit erofs_module_exit(void)
 {
 	unregister_filesystem(&erofs_fs_type);
 	erofs_fscache_unregister();
-	z_erofs_exit_zip_subsystem();
-	erofs_exit_shrinker();
 
-	/* Ensure all RCU free inodes are safe before cache is destroyed. */
+	/* Ensure all RCU free inodes / pclusters are safe to be destroyed. */
 	rcu_barrier();
+
+	z_erofs_exit_zip_subsystem();
+	z_erofs_lzma_exit();
+	erofs_exit_shrinker();
 	kmem_cache_destroy(erofs_inode_cachep);
 	erofs_pcpubuf_exit();
 }

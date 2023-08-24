@@ -22,12 +22,14 @@
 #define EROFS_FEATURE_INCOMPAT_BIG_PCLUSTER	0x00000002
 #define EROFS_FEATURE_INCOMPAT_CHUNKED_FILE	0x00000004
 #define EROFS_FEATURE_INCOMPAT_DEVICE_TABLE	0x00000008
+#define EROFS_FEATURE_INCOMPAT_COMPR_HEAD2	0x00000008
 #define EROFS_ALL_FEATURE_INCOMPAT		\
 	(EROFS_FEATURE_INCOMPAT_LZ4_0PADDING | \
 	 EROFS_FEATURE_INCOMPAT_COMPR_CFGS | \
 	 EROFS_FEATURE_INCOMPAT_BIG_PCLUSTER | \
 	 EROFS_FEATURE_INCOMPAT_CHUNKED_FILE | \
-	 EROFS_FEATURE_INCOMPAT_DEVICE_TABLE)
+	 EROFS_FEATURE_INCOMPAT_DEVICE_TABLE | \
+	 EROFS_FEATURE_INCOMPAT_COMPR_HEAD2)
 
 #define EROFS_SB_EXTSLOT_SIZE	16
 
@@ -262,10 +264,11 @@ struct erofs_inode_chunk_index {
 
 /* available compression algorithm types (for h_algorithmtype) */
 enum {
-	Z_EROFS_COMPRESSION_LZ4	= 0,
+	Z_EROFS_COMPRESSION_LZ4		= 0,
+	Z_EROFS_COMPRESSION_LZMA	= 1,
 	Z_EROFS_COMPRESSION_MAX
 };
-#define Z_EROFS_ALL_COMPR_ALGS		(1 << (Z_EROFS_COMPRESSION_MAX - 1))
+#define Z_EROFS_ALL_COMPR_ALGS		((1 << Z_EROFS_COMPRESSION_MAX) - 1)
 
 /* 14 bytes (+ length field = 16 bytes) */
 struct z_erofs_lz4_cfgs {
@@ -273,6 +276,15 @@ struct z_erofs_lz4_cfgs {
 	__le16 max_pclusterblks;
 	u8 reserved[10];
 } __packed;
+
+/* 14 bytes (+ length field = 16 bytes) */
+struct z_erofs_lzma_cfgs {
+	__le32 dict_size;
+	__le16 format;
+	u8 reserved[8];
+} __packed;
+
+#define Z_EROFS_LZMA_MAX_DICT_SIZE	(8 * Z_EROFS_PCLUSTER_MAX_SIZE)
 
 /*
  * bit 0 : COMPACTED_2B indexes (0 - off; 1 - on)
@@ -303,35 +315,34 @@ struct z_erofs_map_header {
 #define Z_EROFS_VLE_LEGACY_HEADER_PADDING       8
 
 /*
- * Fixed-sized output compression ondisk Logical Extent cluster type:
- *    0 - literal (uncompressed) cluster
- *    1 - compressed cluster (for the head logical cluster)
- *    2 - compressed cluster (for the other logical clusters)
+ * Fixed-sized output compression on-disk logical cluster type:
+ *    0   - literal (uncompressed) lcluster
+ *    1,3 - compressed lcluster (for HEAD lclusters)
+ *    2   - compressed lcluster (for NONHEAD lclusters)
  *
  * In detail,
- *    0 - literal (uncompressed) cluster,
+ *    0 - literal (uncompressed) lcluster,
  *        di_advise = 0
- *        di_clusterofs = the literal data offset of the cluster
- *        di_blkaddr = the blkaddr of the literal cluster
+ *        di_clusterofs = the literal data offset of the lcluster
+ *        di_blkaddr = the blkaddr of the literal pcluster
  *
- *    1 - compressed cluster (for the head logical cluster)
- *        di_advise = 1
- *        di_clusterofs = the decompressed data offset of the cluster
- *        di_blkaddr = the blkaddr of the compressed cluster
+ *    1,3 - compressed lcluster (for HEAD lclusters)
+ *        di_advise = 1 or 3
+ *        di_clusterofs = the decompressed data offset of the lcluster
+ *        di_blkaddr = the blkaddr of the compressed pcluster
  *
- *    2 - compressed cluster (for the other logical clusters)
+ *    2 - compressed lcluster (for NONHEAD lclusters)
  *        di_advise = 2
  *        di_clusterofs =
- *           the decompressed data offset in its own head cluster
- *        di_u.delta[0] = distance to its corresponding head cluster
- *        di_u.delta[1] = distance to its corresponding tail cluster
- *                (di_advise could be 0, 1 or 2)
+ *           the decompressed data offset in its own HEAD lcluster
+ *        di_u.delta[0] = distance to this HEAD lcluster
+ *        di_u.delta[1] = distance to the next HEAD lcluster
  */
 enum {
 	Z_EROFS_VLE_CLUSTER_TYPE_PLAIN		= 0,
-	Z_EROFS_VLE_CLUSTER_TYPE_HEAD		= 1,
+	Z_EROFS_VLE_CLUSTER_TYPE_HEAD1		= 1,
 	Z_EROFS_VLE_CLUSTER_TYPE_NONHEAD	= 2,
-	Z_EROFS_VLE_CLUSTER_TYPE_RESERVED	= 3,
+	Z_EROFS_VLE_CLUSTER_TYPE_HEAD2		= 3,
 	Z_EROFS_VLE_CLUSTER_TYPE_MAX
 };
 
