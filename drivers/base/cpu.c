@@ -214,7 +214,9 @@ static ssize_t show_cpus_attr(struct device *dev,
 	struct cpumask cpuset_allowed;
 	struct task_struct __maybe_unused *scenario;
 	bool rich_container;
+#ifdef CONFIG_CGROUP_BPF
 	struct bpf_rich_container_info info = {0};
+#endif
 
 	rcu_read_lock();
 	rich_container = in_rich_container(current);
@@ -236,9 +238,11 @@ static ssize_t show_cpus_attr(struct device *dev,
 	}
 	else
 		cpumask_copy(&cpuset_allowed, ca->map);
-	
+
+#ifdef CONFIG_CGROUP_BPF	
 	if (!BPF_CGROUP_RUN_PROG_RICH_CONTAINER_CPU(&info, 1))
 		cpumask_copy(&cpuset_allowed, &info.cpus_mask);
+#endif
 
 	return cpumap_print_to_pagebuf(true, buf, &cpuset_allowed);
 }
