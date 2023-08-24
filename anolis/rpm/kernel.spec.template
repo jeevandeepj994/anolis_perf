@@ -1217,8 +1217,18 @@ BuildKernel %make_target %kernel_image
 %define perf_coresight CORESIGHT=0
 %endif
 
+
+# with flags -flto -ffat-lto-objects in anolis 23, the perf compiling will report following errors due to some unkonwn issuses:
+# > /usr/bin/ld: /tmp/cc1dUOt3.ltrans14.ltrans.o: in function
+# > `test_dwarf_unwind__thread': /builddir/build/BUILD/kernel....
+%if "%{dist}" == ".an23"
+%define TOOLS_LTO_FLAGS -fno-lto -fno-fat-lto-objects
+%else
+%define TOOLS_LTO_FLAGS %{nil}
+%endif
+
 %global perf_make \
-  make EXTRA_CFLAGS="${RPM_OPT_FLAGS}" LDFLAGS="%{__global_ldflags}" -C tools/perf V=1 NO_PERF_READ_VDSO32=1 NO_PERF_READ_VDSOX32=1 WERROR=0 NO_LIBUNWIND=1 HAVE_CPLUS_DEMANGLE=1 NO_GTK2=1 NO_STRLCPY=1 NO_BIONIC=1 %{perf_coresight} prefix=%{_prefix} PYTHON=%{__python3}
+  make EXTRA_CFLAGS="${RPM_OPT_FLAGS} %{TOOLS_LTO_FLAGS}" LDFLAGS="%{__global_ldflags}" -C tools/perf V=1 NO_PERF_READ_VDSO32=1 NO_PERF_READ_VDSOX32=1 WERROR=0 NO_LIBUNWIND=1 HAVE_CPLUS_DEMANGLE=1 NO_GTK2=1 NO_STRLCPY=1 NO_BIONIC=1 %{perf_coresight} prefix=%{_prefix} PYTHON=%{__python3}
 %if %{with_perf}
 # perf
 # make sure check-headers.sh is executable
@@ -1266,7 +1276,7 @@ popd
 %endif
 
 %global bpftool_make \
-  make EXTRA_CFLAGS="${RPM_OPT_FLAGS}" EXTRA_LDFLAGS="%{__global_ldflags}" DESTDIR=$RPM_BUILD_ROOT V=1
+  make EXTRA_CFLAGS="${RPM_OPT_FLAGS} %{TOOLS_LTO_FLAGS}" EXTRA_LDFLAGS="%{__global_ldflags}" DESTDIR=$RPM_BUILD_ROOT V=1
 %if %{with_bpftool}
 pushd tools/bpf/bpftool
 %{bpftool_make}
