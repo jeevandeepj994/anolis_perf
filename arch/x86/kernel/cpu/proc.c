@@ -73,14 +73,18 @@ static int show_cpuinfo(struct seq_file *m, void *v)
 	unsigned int cpu, index, total;
 	int i;
 	bool rich_container = false;
+#ifdef CONFIG_CGROUP_BPF
 	struct bpf_rich_container_info info = {0};
+#endif
 
 	index = cpu = c->cpu_index;
 
+#ifdef CONFIG_CGROUP_BPF
 	/* Get cpu mask and check it */
 	if (!BPF_CGROUP_RUN_PROG_RICH_CONTAINER_CPU(&info, 1) &&
 				!cpumask_test_cpu(cpu, &info.cpus_mask))
 		return 0;
+#endif
 
 	if (check_rich_container(cpu, &index, &rich_container, &total))
 		return 0;
