@@ -4871,6 +4871,16 @@ static vm_fault_t handle_pte_fault(struct vm_fault *vmf)
 			return do_wp_page(vmf);
 		entry = pte_mkdirty(entry);
 	}
+#ifdef CONFIG_PAGETABLE_SHARE
+	/*
+	 * Switch to original vma to flush tlb, and no need to
+	 * restore because of vmf->vma will not be used later.
+	 */
+	if (vma_is_shadow(vmf->vma)) {
+		VM_BUG_ON_VMA(!vmf->orig_vma, vmf->vma);
+		vmf->vma = vmf->orig_vma;
+	}
+#endif
 	entry = pte_mkyoung(entry);
 	if (ptep_set_access_flags(vmf->vma, vmf->address, vmf->pte, entry,
 				vmf->flags & FAULT_FLAG_WRITE)) {
