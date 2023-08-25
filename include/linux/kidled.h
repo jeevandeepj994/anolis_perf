@@ -198,8 +198,6 @@ static inline void kidled_reset_scan_control(struct kidled_scan_control *p)
 	p->scan_target = KIDLED_SCAN_PAGE;
 }
 
-#define is_kidled_enabled() kidled_get_current_scan_duration()
-
 /*
  * Compare with global kidled_scan_control, return true if equals.
  */
@@ -419,6 +417,14 @@ static inline bool page_has_slab_age(struct page *page)
 {
 	return false;
 }
+
+static inline unsigned int kidled_get_current_scan_duration(void)
+{
+	return 0;
+}
+
 #endif /* CONFIG_KIDLED */
+
+#define is_kidled_enabled() kidled_get_current_scan_duration()
 
 #endif /* _LINUX_MM_KIDLED_H */
