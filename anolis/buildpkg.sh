@@ -77,13 +77,10 @@ function output() {
 		cp ${DIST_RPMBUILDDIR_OUTPUT}/SRPMS/*.rpm ${DIST_OUTPUT}/${targetdir}
 	fi
 
-	i=0
-	for p in ${DIST_OUTPUT}/${targetdir}/*.rpm; do
-		echo $p
-		((i++))
-	done
+	ls ${DIST_OUTPUT}/${targetdir}/*.rpm
 
-	echo "$i rpm(s) copied."
+	rpm_num=$(ls ${DIST_OUTPUT}/${targetdir}/*.rpm | wc -l)
+	echo "${rpm_num} rpm(s) copied."
 }
 
 do_rpmbuild
