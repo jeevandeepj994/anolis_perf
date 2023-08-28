@@ -175,6 +175,8 @@ ExclusiveOS: Linux
 %ifnarch %{nobuildarches}
 Requires: %{name}-core-uname-r = %{KVERREL}%{?variant}
 Requires: %{name}-modules-uname-r = %{KVERREL}%{?variant}
+Requires: %{name}-modules-extra-uname-r = %{KVERREL}%{?variant}
+Requires: %{name}-modules-internal-uname-r = %{KVERREL}%{?variant}
 %endif
 
 
