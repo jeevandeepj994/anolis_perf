@@ -122,6 +122,40 @@ extern struct kobj_attribute shmem_enabled_attr;
 
 extern unsigned long transparent_hugepage_flags;
 
+enum memcg_thp_flag {
+	MEMCG_DISABLE_ANON_THP,
+	MEMCG_DISABLE_SHMEM_THP,
+	MEMCG_DISABLE_FILE_THP,
+	NR_MEMCG_THP_FLAG,
+};
+
+#ifdef CONFIG_MEMCG
+extern bool memcg_thp_control_test(struct mm_struct *mm,
+				   enum memcg_thp_flag flag);
+#else
+static inline bool memcg_thp_control_test(struct mm_struct *mm,
+					  enum memcg_thp_flag flag)
+{
+	return false;
+}
+#endif
+
+static inline bool memcg_transhuge_vma_enabled(struct vm_area_struct *vma)
+{
+	struct mm_struct *mm = vma->vm_mm;
+
+	if (vma_is_anonymous(vma))
+		return !memcg_thp_control_test(mm, MEMCG_DISABLE_ANON_THP);
+
+	if (vma_is_shmem(vma))
+		return !memcg_thp_control_test(mm, MEMCG_DISABLE_SHMEM_THP);
+
+	if (vma->vm_file)
+		return !memcg_thp_control_test(mm, MEMCG_DISABLE_FILE_THP);
+
+	return true;
+}
+
 static inline bool transhuge_vma_suitable(struct vm_area_struct *vma,
 		unsigned long haddr)
 {
@@ -143,6 +177,8 @@ static inline bool transhuge_vma_enabled(struct vm_area_struct *vma,
 	/* Explicitly disabled through madvise. */
 	if ((vm_flags & VM_NOHUGEPAGE) ||
 	    test_bit(MMF_DISABLE_THP, &vma->vm_mm->flags))
+		return false;
+	if (!memcg_transhuge_vma_enabled(vma))
 		return false;
 	return true;
 }
@@ -219,10 +255,12 @@ static inline bool hugetext_vma_enabled(struct vm_area_struct *vma,
 	if (!(vm_flags & VM_EXEC))
 		return false;
 
-	if (hugetext_file_enabled() && vma_is_hugetext_file(vma, vm_flags))
+	if (hugetext_file_enabled() && vma_is_hugetext_file(vma, vm_flags)
+	    && !memcg_thp_control_test(vma->vm_mm, MEMCG_DISABLE_FILE_THP))
 		return true;
 
-	if (hugetext_anon_enabled() && vma_is_hugetext_anon(vma, vm_flags))
+	if (hugetext_anon_enabled() && vma_is_hugetext_anon(vma, vm_flags)
+	    && !memcg_thp_control_test(vma->vm_mm, MEMCG_DISABLE_ANON_THP))
 		return true;
 
 	return false;

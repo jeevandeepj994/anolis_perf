@@ -100,6 +100,9 @@ static inline void khugepaged_exit(struct mm_struct *mm)
 static inline int khugepaged_enter(struct vm_area_struct *vma,
 				   unsigned long vm_flags)
 {
+	if (unlikely(!memcg_transhuge_vma_enabled(vma)))
+		return 0;
+
 	if (!test_bit(MMF_VM_HUGEPAGE, &vma->vm_mm->flags))
 		if ((khugepaged_always() ||
 		     (shmem_file(vma->vm_file) && shmem_huge_enabled(vma)) ||

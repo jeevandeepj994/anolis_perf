@@ -2129,7 +2129,8 @@ static vm_fault_t shmem_fault(struct vm_fault *vmf)
 	sgp = SGP_CACHE;
 
 	if ((vma->vm_flags & VM_NOHUGEPAGE) ||
-	    test_bit(MMF_DISABLE_THP, &vma->vm_mm->flags))
+	    test_bit(MMF_DISABLE_THP, &vma->vm_mm->flags) ||
+	    memcg_thp_control_test(vma->vm_mm, MEMCG_DISABLE_SHMEM_THP))
 		sgp = SGP_NOHUGE;
 	else if (vma->vm_flags & VM_HUGEPAGE)
 		sgp = SGP_HUGE;
