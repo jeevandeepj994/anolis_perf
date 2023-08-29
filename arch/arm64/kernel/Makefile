@@ -66,6 +66,7 @@ obj-$(CONFIG_ARM64_MTE)			+= mte.o
 
 obj-y					+= vdso/ probes/
 obj-$(CONFIG_COMPAT_VDSO)		+= vdso32/
+obj-$(CONFIG_ARM64_CPU_EXTENDED_CTRL)	+= cpu_extended_ctrl.o
 head-y					:= head.o
 extra-y					+= $(head-y) vmlinux.lds
 
