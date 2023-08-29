@@ -6032,6 +6032,7 @@ void zdm_delete(unsigned long start, unsigned long size)
 			break;
 		}
 	}
+	spin_unlock(&zdm_lock);
 }
 
 /*
