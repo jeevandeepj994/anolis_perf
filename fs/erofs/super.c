@@ -747,10 +747,18 @@ static int erofs_fc_fill_super(struct super_block *sb, struct fs_context *fc)
 	ctx->blob_dir_path = NULL;
 
 	sbi->blkszbits = PAGE_SHIFT;
-	if (erofs_is_fscache_mode(sb)) {
+	if (!sb->s_bdev) {
+		/* fscache or rafsv6 mode */
 		sb->s_blocksize = PAGE_SIZE;
 		sb->s_blocksize_bits = PAGE_SHIFT;
+	} else {
+		if (!sb_set_blocksize(sb, PAGE_SIZE)) {
+			errorfc(fc, "failed to set initial blksize");
+			return -EINVAL;
+		}
+	}
 
+	if (erofs_is_fscache_mode(sb)) {
 		err = erofs_fscache_register_fs(sb);
 		if (err)
 			return err;
@@ -758,11 +766,6 @@ static int erofs_fc_fill_super(struct super_block *sb, struct fs_context *fc)
 		err = super_setup_bdi(sb);
 		if (err)
 			return err;
-	} else {
-		if (!sb_set_blocksize(sb, PAGE_SIZE)) {
-			errorfc(fc, "failed to set initial blksize");
-			return -EINVAL;
-		}
 	}
 
 	err = erofs_read_superblock(sb);
