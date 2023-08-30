@@ -574,16 +574,6 @@ static int erofs_fc_parse_param(struct fs_context *fc,
 		return -ENOPARAM;
 	}
 
-	if (ctx->blob_dir_path && !ctx->bootstrap_path) {
-		errorfc(fc, "bootstrap_path required in RAFS mode");
-		return -EINVAL;
-	}
-
-	if (ctx->bootstrap_path && ctx->fsid) {
-		errorfc(fc, "fscache/RAFS modes are mutually exclusive");
-		return -EINVAL;
-	}
-
 	return 0;
 }
 
@@ -854,6 +844,16 @@ static int erofs_fc_anon_get_tree(struct fs_context *fc)
 static int erofs_fc_get_tree(struct fs_context *fc)
 {
 	struct erofs_fs_context *ctx = fc->fs_private;
+
+	if (ctx->blob_dir_path && !ctx->bootstrap_path) {
+		errorfc(fc, "bootstrap_path required in RAFS mode");
+		return -EINVAL;
+	}
+
+	if (ctx->bootstrap_path && ctx->fsid) {
+		errorfc(fc, "fscache/RAFS modes are mutually exclusive");
+		return -EINVAL;
+	}
 
 	if (IS_ENABLED(CONFIG_EROFS_FS_ONDEMAND) && ctx->fsid)
 		return get_tree_nodev(fc, erofs_fc_fill_super);
