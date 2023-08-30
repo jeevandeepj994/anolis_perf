@@ -2229,6 +2229,24 @@ static void txgbe_diag_test(struct net_device *netdev,
 
 	set_bit(__TXGBE_TESTING, &adapter->state);
 	if (eth_test->flags == ETH_TEST_FL_OFFLINE) {
+		if (adapter->flags & TXGBE_FLAG_SRIOV_ENABLED) {
+			int i;
+
+			for (i = 0; i < adapter->num_vfs; i++) {
+				if (adapter->vfinfo[i].clear_to_send) {
+					e_warn(drv, "Please take VFS offline\n");
+					data[0] = 1;
+					data[1] = 1;
+					data[2] = 1;
+					data[3] = 1;
+					data[4] = 1;
+					eth_test->flags |= ETH_TEST_FL_FAILED;
+					clear_bit(__TXGBE_TESTING,
+						  &adapter->state);
+					goto skip_ol_tests;
+				}
+			}
+		}
 		/* Offline tests */
 		netif_info(adapter, hw, netdev, "offline testing starting\n");
 
@@ -2260,15 +2278,27 @@ static void txgbe_diag_test(struct net_device *netdev,
 
 		if (!(((hw->subsystem_device_id & TXGBE_NCSI_MASK) == TXGBE_NCSI_SUP) ||
 		      ((hw->subsystem_device_id & TXGBE_WOL_MASK) == TXGBE_WOL_SUP))) {
-			txgbe_reset(adapter);
-			netif_info(adapter, hw, netdev,
-				   "loopback testing starting\n");
-			if (txgbe_loopback_test(adapter, &data[3]))
-				eth_test->flags |= ETH_TEST_FL_FAILED;
+			e_info(hw, "skip MAC loopback diagnostic when veto set\n");
+			data[3] = 0;
+			goto skip_loopback;
 		}
 
-		data[3] = 0;
+		/* If SRIOV or VMDq is enabled then skip MAC
+		 * loopback diagnostic.
+		 */
+		if (adapter->flags & (TXGBE_FLAG_SRIOV_ENABLED |
+				      TXGBE_FLAG_VMDQ_ENABLED)) {
+			e_info(hw, "skip MAC loopback diagnostic in VT mode\n");
+			data[3] = 0;
+			goto skip_loopback;
+		}
 
+		txgbe_reset(adapter);
+		netif_info(adapter, hw, netdev, "loopback testing starting\n");
+		if (txgbe_loopback_test(adapter, &data[3]))
+			eth_test->flags |= ETH_TEST_FL_FAILED;
+
+skip_loopback:
 		txgbe_reset(adapter);
 
 		/* clear testing bit and return adapter to previous state */
@@ -2293,6 +2323,7 @@ static void txgbe_diag_test(struct net_device *netdev,
 		clear_bit(__TXGBE_TESTING, &adapter->state);
 	}
 
+skip_ol_tests:
 	msleep_interruptible(4 * 1000);
 }
 
