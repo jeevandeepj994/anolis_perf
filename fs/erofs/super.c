@@ -649,6 +649,10 @@ static int erofs_fc_fill_super(struct super_block *sb, struct fs_context *fc)
 			return err;
 	}
 
+	err = rafs_v6_fill_super(sb);
+	if (err)
+		return err;
+
 	err = erofs_read_superblock(sb);
 	if (err)
 		return err;
@@ -666,10 +670,6 @@ static int erofs_fc_fill_super(struct super_block *sb, struct fs_context *fc)
 			sb->s_blocksize_bits = sbi->blkszbits;
 		}
 	}
-
-	err = rafs_v6_fill_super(sb);
-	if (err)
-		return err;
 
 	sb->s_time_gran = 1;
 	sb->s_xattr = erofs_xattr_handlers;
