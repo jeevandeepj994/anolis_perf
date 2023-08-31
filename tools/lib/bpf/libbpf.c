@@ -158,6 +158,10 @@ struct bpf_program {
 	bpf_program_clear_priv_t clear_priv;
 
 	enum bpf_attach_type expected_attach_type;
+	int btf_fd;
+	void *func_info;
+	__u32 func_info_rec_size;
+	__u32 func_info_len;
 };
 
 struct bpf_map {
@@ -214,6 +218,7 @@ struct bpf_object {
 	struct list_head list;
 
 	struct btf *btf;
+	struct btf_ext *btf_ext;
 
 	void *priv;
 	bpf_object_clear_priv_t clear_priv;
@@ -243,6 +248,9 @@ void bpf_program__unload(struct bpf_program *prog)
 
 	prog->instances.nr = -1;
 	zfree(&prog->instances.fds);
+
+	zclose(prog->btf_fd);
+	zfree(&prog->func_info);
 }
 
 static void bpf_program__exit(struct bpf_program *prog)
@@ -317,6 +325,7 @@ bpf_program__init(void *data, size_t size, char *section_name, int idx,
 	prog->instances.fds = NULL;
 	prog->instances.nr = -1;
 	prog->type = BPF_PROG_TYPE_KPROBE;
+	prog->btf_fd = -1;
 
 	return 0;
 errout:
@@ -809,6 +818,15 @@ static int bpf_object__elf_collect(struct bpf_object *obj, int flags)
 					   BTF_ELF_SEC, PTR_ERR(obj->btf));
 				obj->btf = NULL;
 			}
+		} else if (strcmp(name, BTF_EXT_ELF_SEC) == 0) {
+			obj->btf_ext = btf_ext__new(data->d_buf, data->d_size,
+						    __pr_debug);
+			if (IS_ERR(obj->btf_ext)) {
+				pr_warning("Error loading ELF section %s: %ld. Ignored and continue.\n",
+					   BTF_EXT_ELF_SEC,
+					   PTR_ERR(obj->btf_ext));
+				obj->btf_ext = NULL;
+			}
 		} else if (sh.sh_type == SHT_SYMTAB) {
 			if (obj->efile.symbols) {
 				pr_warning("bpf: multiple SYMTAB in %s\n",
@@ -1192,6 +1210,7 @@ bpf_program__reloc_text(struct bpf_program *prog, struct bpf_object *obj,
 	struct bpf_insn *insn, *new_insn;
 	struct bpf_program *text;
 	size_t new_cnt;
+	int err;
 
 	if (relo->type != RELO_CALL)
 		return -LIBBPF_ERRNO__RELOC;
@@ -1214,9 +1233,23 @@ bpf_program__reloc_text(struct bpf_program *prog, struct bpf_object *obj,
 			pr_warning("oom in prog realloc\n");
 			return -ENOMEM;
 		}
+		prog->insns = new_insn;
+
+		if (obj->btf && obj->btf_ext) {
+			err = btf_ext__reloc(obj->btf, obj->btf_ext,
+					     text->section_name,
+					     prog->insns_cnt,
+					     &prog->func_info,
+					     &prog->func_info_len);
+			if (err) {
+				pr_warning("error in btf_ext__reloc for sec %s\n",
+					   text->section_name);
+				return err;
+			}
+		}
+
 		memcpy(new_insn + prog->insns_cnt, text->insns,
 		       text->insns_cnt * sizeof(*insn));
-		prog->insns = new_insn;
 		prog->main_prog_cnt = prog->insns_cnt;
 		prog->insns_cnt = new_cnt;
 		pr_debug("added %zd insn from %s to prog %s\n",
@@ -1233,7 +1266,24 @@ bpf_program__relocate(struct bpf_program *prog, struct bpf_object *obj)
 {
 	int i, err;
 
-	if (!prog || !prog->reloc_desc)
+	if (!prog)
+		return 0;
+
+	if (obj->btf && obj->btf_ext) {
+		err = btf_ext__reloc_init(obj->btf, obj->btf_ext,
+					  prog->section_name,
+					  &prog->func_info,
+					  &prog->func_info_rec_size,
+					  &prog->func_info_len);
+		if (err) {
+			pr_warning("err in btf_ext__reloc_init for sec %s\n",
+				   prog->section_name);
+			return err;
+		}
+		prog->btf_fd = btf__fd(obj->btf);
+	}
+
+	if (!prog->reloc_desc)
 		return 0;
 
 	for (i = 0; i < prog->nr_reloc; i++) {
@@ -1321,9 +1371,9 @@ static int bpf_object__collect_reloc(struct bpf_object *obj)
 }
 
 static int
-load_program(enum bpf_prog_type type, enum bpf_attach_type expected_attach_type,
-	     const char *name, struct bpf_insn *insns, int insns_cnt,
-	     char *license, __u32 kern_version, int *pfd, int prog_ifindex)
+load_program(struct bpf_program *prog, struct bpf_insn *insns, int insns_cnt,
+	     char *license, __u32 kern_version, int *pfd,
+	     __u32 func_info_cnt)
 {
 	struct bpf_load_program_attr load_attr;
 	char *cp, errmsg[STRERR_BUFSIZE];
@@ -1331,14 +1381,18 @@ load_program(enum bpf_prog_type type, enum bpf_attach_type expected_attach_type,
 	int ret;
 
 	memset(&load_attr, 0, sizeof(struct bpf_load_program_attr));
-	load_attr.prog_type = type;
-	load_attr.expected_attach_type = expected_attach_type;
-	load_attr.name = name;
+	load_attr.prog_type = prog->type;
+	load_attr.expected_attach_type = prog->expected_attach_type;
+	load_attr.name = prog->name;
 	load_attr.insns = insns;
 	load_attr.insns_cnt = insns_cnt;
 	load_attr.license = license;
 	load_attr.kern_version = kern_version;
-	load_attr.prog_ifindex = prog_ifindex;
+	load_attr.prog_ifindex = prog->prog_ifindex;
+	load_attr.prog_btf_fd = prog->btf_fd >= 0 ? prog->btf_fd : 0;
+	load_attr.func_info = prog->func_info;
+	load_attr.func_info_rec_size = prog->func_info_rec_size;
+	load_attr.func_info_cnt = func_info_cnt;
 
 	if (!load_attr.insns || !load_attr.insns_cnt)
 		return -EINVAL;
@@ -1396,7 +1450,13 @@ int
 bpf_program__load(struct bpf_program *prog,
 		  char *license, __u32 kern_version)
 {
+	__u32 func_info_cnt;
 	int err = 0, fd, i;
+
+	if (prog->func_info_len == 0)
+		func_info_cnt = 0;
+	else
+		func_info_cnt = prog->func_info_len / prog->func_info_rec_size;
 
 	if (prog->instances.nr < 0 || !prog->instances.fds) {
 		if (prog->preprocessor) {
@@ -1419,10 +1479,9 @@ bpf_program__load(struct bpf_program *prog,
 			pr_warning("Program '%s' is inconsistent: nr(%d) != 1\n",
 				   prog->section_name, prog->instances.nr);
 		}
-		err = load_program(prog->type, prog->expected_attach_type,
-				   prog->name, prog->insns, prog->insns_cnt,
+		err = load_program(prog, prog->insns, prog->insns_cnt,
 				   license, kern_version, &fd,
-				   prog->prog_ifindex);
+				   func_info_cnt);
 		if (!err)
 			prog->instances.fds[0] = fd;
 		goto out;
@@ -1450,11 +1509,10 @@ bpf_program__load(struct bpf_program *prog,
 			continue;
 		}
 
-		err = load_program(prog->type, prog->expected_attach_type,
-				   prog->name, result.new_insn_ptr,
+		err = load_program(prog, result.new_insn_ptr,
 				   result.new_insn_cnt,
 				   license, kern_version, &fd,
-				   prog->prog_ifindex);
+				   func_info_cnt);
 
 		if (err) {
 			pr_warning("Loading the %dth instance of program '%s' failed\n",
@@ -2122,6 +2180,7 @@ void bpf_object__close(struct bpf_object *obj)
 	bpf_object__elf_finish(obj);
 	bpf_object__unload(obj);
 	btf__free(obj->btf);
+	btf_ext__free(obj->btf_ext);
 
 	for (i = 0; i < obj->nr_maps; i++) {
 		zfree(&obj->maps[i].name);

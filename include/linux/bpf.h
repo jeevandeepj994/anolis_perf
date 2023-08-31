@@ -305,7 +305,8 @@ struct bpf_prog_aux {
 	u32 max_pkt_offset;
 	u32 stack_depth;
 	u32 id;
-	u32 func_cnt;
+	u32 func_cnt; /* used by non-func prog as the number of func progs */
+	u32 func_idx; /* 0 for non-func prog, the index in func array for func prog */
 	bool offload_requested;
 	struct bpf_prog **func;
 	void *jit_data; /* JIT specific data. arch dependent */
@@ -322,6 +323,9 @@ struct bpf_prog_aux {
 	void *security;
 #endif
 	struct bpf_prog_offload *offload;
+	struct btf *btf;
+	struct bpf_func_info *func_info;
+	u32 func_info_cnt;
 	union {
 		struct work_struct work;
 		struct rcu_head	rcu;
@@ -539,7 +543,8 @@ static inline void bpf_long_memcpy(void *dst, const void *src, u32 size)
 }
 
 /* verify correctness of eBPF program */
-int bpf_check(struct bpf_prog **fp, union bpf_attr *attr);
+int bpf_check(struct bpf_prog **fp, union bpf_attr *attr,
+	      union bpf_attr __user *uattr);
 void bpf_patch_call_args(struct bpf_insn *insn, u32 stack_depth);
 
 /* Map specifics */
