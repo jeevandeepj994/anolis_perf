@@ -207,7 +207,7 @@ static int erofs_scan_devices(struct super_block *sb,
 	if (!ondisk_extradevs)
 		return 0;
 
-	if (!sbi->devs->extra_devices && !erofs_is_fscache_mode(sb))
+	if (!sbi->devs->extra_devices && sb->s_bdev)
 		sbi->devs->flatdev = true;
 
 	sbi->device_id_mask = roundup_pow_of_two(ondisk_extradevs + 1) - 1;
@@ -574,16 +574,6 @@ static int erofs_fc_parse_param(struct fs_context *fc,
 		return -ENOPARAM;
 	}
 
-	if (ctx->blob_dir_path && !ctx->bootstrap_path) {
-		errorfc(fc, "bootstrap_path required in RAFS mode");
-		return -EINVAL;
-	}
-
-	if (ctx->bootstrap_path && ctx->fsid) {
-		errorfc(fc, "fscache/RAFS modes are mutually exclusive");
-		return -EINVAL;
-	}
-
 	return 0;
 }
 
@@ -757,10 +747,18 @@ static int erofs_fc_fill_super(struct super_block *sb, struct fs_context *fc)
 	ctx->blob_dir_path = NULL;
 
 	sbi->blkszbits = PAGE_SHIFT;
-	if (erofs_is_fscache_mode(sb)) {
+	if (!sb->s_bdev) {
+		/* fscache or rafsv6 mode */
 		sb->s_blocksize = PAGE_SIZE;
 		sb->s_blocksize_bits = PAGE_SHIFT;
+	} else {
+		if (!sb_set_blocksize(sb, PAGE_SIZE)) {
+			errorfc(fc, "failed to set initial blksize");
+			return -EINVAL;
+		}
+	}
 
+	if (erofs_is_fscache_mode(sb)) {
 		err = erofs_fscache_register_fs(sb);
 		if (err)
 			return err;
@@ -768,12 +766,11 @@ static int erofs_fc_fill_super(struct super_block *sb, struct fs_context *fc)
 		err = super_setup_bdi(sb);
 		if (err)
 			return err;
-	} else {
-		if (!sb_set_blocksize(sb, PAGE_SIZE)) {
-			errorfc(fc, "failed to set initial blksize");
-			return -EINVAL;
-		}
 	}
+
+	err = rafs_v6_fill_super(sb);
+	if (err)
+		return err;
 
 	err = erofs_read_superblock(sb);
 	if (err)
@@ -792,10 +789,6 @@ static int erofs_fc_fill_super(struct super_block *sb, struct fs_context *fc)
 			sb->s_blocksize_bits = sbi->blkszbits;
 		}
 	}
-
-	err = rafs_v6_fill_super(sb);
-	if (err)
-		return err;
 
 	sb->s_time_gran = 1;
 	sb->s_xattr = erofs_xattr_handlers;
@@ -854,6 +847,16 @@ static int erofs_fc_anon_get_tree(struct fs_context *fc)
 static int erofs_fc_get_tree(struct fs_context *fc)
 {
 	struct erofs_fs_context *ctx = fc->fs_private;
+
+	if (ctx->blob_dir_path && !ctx->bootstrap_path) {
+		errorfc(fc, "bootstrap_path required in RAFS mode");
+		return -EINVAL;
+	}
+
+	if (ctx->bootstrap_path && ctx->fsid) {
+		errorfc(fc, "fscache/RAFS modes are mutually exclusive");
+		return -EINVAL;
+	}
 
 	if (IS_ENABLED(CONFIG_EROFS_FS_ONDEMAND) && ctx->fsid)
 		return get_tree_nodev(fc, erofs_fc_fill_super);
