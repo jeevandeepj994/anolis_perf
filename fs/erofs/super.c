@@ -207,7 +207,7 @@ static int erofs_scan_devices(struct super_block *sb,
 	if (!ondisk_extradevs)
 		return 0;
 
-	if (!sbi->devs->extra_devices && !erofs_is_fscache_mode(sb))
+	if (!sbi->devs->extra_devices && sb->s_bdev)
 		sbi->devs->flatdev = true;
 
 	sbi->device_id_mask = roundup_pow_of_two(ondisk_extradevs + 1) - 1;
