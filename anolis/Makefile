@@ -34,7 +34,6 @@ help:
 	@echo '-------------------------------'
 	@echo 'the environment variables that could override:'
 	@echo '    DIST                 - the distribution suffix, eg: .an7, .an8, .an23'
-	@echo '    DIST_DO_SIGNMODULES  - should sign kernel modules. optional: 0/1, default: 0'
 	@echo '    DIST_OUTPUT          - the output directory, default: $(DIST_SHORT_OUTPUT)'
 	@echo '    DIST_BUILD_MODE      - the build mode. optional: official/nightly/devel'
 	@echo '                           !!! NOTE: BE CAUTIOUS ABOUT USING official BUILD !!!'
