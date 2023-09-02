@@ -29,9 +29,6 @@ DIST_SPECIAL_VERSION_MINOR =
 # build number
 DIST_BUILD_NUMBER ?= 1
 
-# need to sign modules?
-DIST_DO_SIGNMODULES ?= 0
-
 # the kernel root
 DIST_SRCROOT = $(shell realpath ..)/
 DIST_SOURCES = $(DIST_SRCROOT)anolis/
