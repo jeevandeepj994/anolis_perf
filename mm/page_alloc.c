@@ -6449,6 +6449,138 @@ void __meminit memmap_init_zone(unsigned long size, int nid, unsigned long zone,
 }
 
 #ifdef CONFIG_ZONE_DEVICE
+DEFINE_SPINLOCK(zdm_lock);
+LIST_HEAD(zdm_list);
+
+int zdm_insert(struct dev_pagemap *pgmap, struct zone *zone,
+		      unsigned long start_pfn, unsigned long nr_pages)
+{
+	struct zdm_context *zdm;
+
+	zdm = kzalloc(sizeof(struct zdm_context), GFP_KERNEL);
+	if (!zdm)
+		return -ENOMEM;
+
+	INIT_LIST_HEAD(&zdm->list);
+	spin_lock_init(&zdm->lock);
+	zdm->pgmap = pgmap;
+	zdm->zone = zone;
+	zdm->start_pfn = start_pfn;
+	zdm->nr_pages = nr_pages;
+
+	spin_lock(&zdm_lock);
+	list_add_rcu(&zdm->list, &zdm_list);
+	spin_unlock(&zdm_lock);
+	return 0;
+}
+
+void zdm_delete(unsigned long start_pfn, unsigned long nr_pages)
+{
+	struct zdm_context *zdm;
+	struct zdm_context *tmp;
+
+	spin_lock(&zdm_lock);
+	list_for_each_entry_safe(zdm, tmp, &zdm_list, list) {
+		if (start_pfn == zdm->start_pfn) {
+			WARN_ONCE(zdm->nr_pages != nr_pages,
+			"range [0x%lx-0x%lx] not match [0x%lx-0x%lx] in zdm list\n",
+			start_pfn, start_pfn + nr_pages - 1, zdm->start_pfn,
+			zdm->start_pfn + zdm->nr_pages - 1);
+
+			list_del_rcu(&zdm->list);
+			kfree_rcu(zdm, rcu);
+			break;
+		}
+	}
+	spin_unlock(&zdm_lock);
+}
+
+struct zdm_context *zdm_lookup(unsigned long addr)
+{
+	struct zdm_context *zdm;
+
+	list_for_each_entry_rcu(zdm, &zdm_list, list) {
+		if (addr >= (unsigned long)pfn_to_page(zdm->start_pfn) &&
+		    addr < (unsigned long)pfn_to_page(zdm->start_pfn +
+						      zdm->nr_pages))
+			return zdm;
+	}
+
+	return NULL;
+}
+
+void __ref zdm_reinit_struct_pages(struct zdm_context *zdm,
+				   unsigned long page_pfn,
+				   unsigned long start_pfn,
+				   unsigned long end_pfn)
+{
+	unsigned long count, pfn, zone_idx;
+	struct page *page;
+	int nid;
+
+	nid = zdm->zone->zone_pgdat->node_id;
+	zone_idx = zone_idx(zdm->zone);
+	for (pfn = start_pfn; pfn < end_pfn; pfn++) {
+		count = pfn - start_pfn;
+		if (count % (PAGE_SIZE/sizeof(struct page)) == 0) {
+			if (count != 0) {
+				page_pfn++;
+				clear_fixmap(FIX_ZDM);
+			}
+			set_fixmap(FIX_ZDM, page_pfn << PAGE_SHIFT);
+			page = (struct page *)fix_to_virt(FIX_ZDM);
+		}
+
+		__init_single_page(page, pfn, zone_idx, nid);
+
+		/*
+		 * Init lru list again, since the lru list was initialized
+		 * to be fix addr by __init_single_page above.
+		 */
+		page->lru.next = page->lru.prev = &pfn_to_page(pfn)->lru;
+		__SetPageReserved(page);
+		page->pgmap = zdm->pgmap;
+		page->zone_device_data = NULL;
+		page++;
+	}
+	clear_fixmap(FIX_ZDM);
+}
+
+void __ref zdm_init_struct_pages(struct zone *zone,
+				 struct dev_pagemap *pgmap,
+				 unsigned long start_pfn,
+				 unsigned long end_pfn)
+{
+	unsigned long zone_idx = zone_idx(zone);
+	int nid = zone->zone_pgdat->node_id;
+	unsigned long pfn;
+	struct page *page;
+
+	for (pfn = start_pfn; pfn < end_pfn; pfn++) {
+		page = pfn_to_page(pfn);
+		__init_single_page(page, pfn, zone_idx, nid);
+		__SetPageReserved(page);
+		page->pgmap = pgmap;
+		page->zone_device_data = NULL;
+
+		if (IS_ALIGNED(pfn, pageblock_nr_pages)) {
+			set_pageblock_migratetype(page, MIGRATE_MOVABLE);
+			cond_resched();
+		}
+	}
+}
+
+/*
+ * zdm_ondemand_enable should clear pte of page struct page.
+ */
+int __weak zdm_ondemand_enable(struct zone *zone,
+			       unsigned long start_pfn,
+			       unsigned long size,
+			       struct dev_pagemap *pgmap)
+{
+	return -EINVAL;
+}
+
 void __ref memmap_init_zone_device(struct zone *zone,
 				   unsigned long start_pfn,
 				   unsigned long nr_pages,
@@ -6473,6 +6605,9 @@ void __ref memmap_init_zone_device(struct zone *zone,
 		start_pfn = altmap->base_pfn + vmem_altmap_offset(altmap);
 		nr_pages = end_pfn - start_pfn;
 	}
+
+	if (!zdm_ondemand_enable(zone, start_pfn, nr_pages, pgmap))
+		goto out;
 
 	for (pfn = start_pfn; pfn < end_pfn; pfn++) {
 		struct page *page = pfn_to_page(pfn);
@@ -6512,6 +6647,7 @@ void __ref memmap_init_zone_device(struct zone *zone,
 		}
 	}
 
+out:
 	pr_info("%s initialised %lu pages in %ums\n", __func__,
 		nr_pages, jiffies_to_msecs(jiffies - start));
 }

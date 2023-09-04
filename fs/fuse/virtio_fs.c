@@ -856,6 +856,7 @@ static int virtio_fs_setup_dax(struct virtio_device *vdev, struct virtio_fs *fs)
 		.end = (phys_addr_t) cache_reg.addr + cache_reg.len - 1,
 	};
 	pgmap->nr_range = 1;
+	pgmap->flags |= PGMAP_ON_DEMAND;
 
 	fs->window_kaddr = devm_memremap_pages(&vdev->dev, pgmap);
 	if (IS_ERR(fs->window_kaddr))
