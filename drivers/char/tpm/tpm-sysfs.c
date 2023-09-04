@@ -109,7 +109,7 @@ static ssize_t pcrs_show(struct device *dev, struct device_attribute *attr,
 	if (tpm_try_get_ops(chip))
 		return 0;
 
-	if (tpm_getcap(chip, TPM_CAP_PROP_PCR, &cap,
+	if (tpm1_getcap(chip, TPM_CAP_PROP_PCR, &cap,
 		       "attempting to determine the number of PCRS",
 		       sizeof(cap.num_pcrs))) {
 		tpm_put_ops(chip);
@@ -118,7 +118,7 @@ static ssize_t pcrs_show(struct device *dev, struct device_attribute *attr,
 
 	num_pcrs = be32_to_cpu(cap.num_pcrs);
 	for (i = 0; i < num_pcrs; i++) {
-		rc = tpm_pcr_read_dev(chip, i, digest);
+		rc = tpm1_pcr_read(chip, i, digest);
 		if (rc)
 			break;
 		str += sprintf(str, "PCR-%02d: ", i);
@@ -141,7 +141,7 @@ static ssize_t enabled_show(struct device *dev, struct device_attribute *attr,
 	if (tpm_try_get_ops(chip))
 		return 0;
 
-	if (tpm_getcap(chip, TPM_CAP_FLAG_PERM, &cap,
+	if (tpm1_getcap(chip, TPM_CAP_FLAG_PERM, &cap,
 		       "attempting to determine the permanent enabled state",
 		       sizeof(cap.perm_flags)))
 		goto out_ops;
@@ -163,7 +163,7 @@ static ssize_t active_show(struct device *dev, struct device_attribute *attr,
 	if (tpm_try_get_ops(chip))
 		return 0;
 
-	if (tpm_getcap(chip, TPM_CAP_FLAG_PERM, &cap,
+	if (tpm1_getcap(chip, TPM_CAP_FLAG_PERM, &cap,
 		       "attempting to determine the permanent active state",
 		       sizeof(cap.perm_flags)))
 		goto out_ops;
@@ -185,7 +185,7 @@ static ssize_t owned_show(struct device *dev, struct device_attribute *attr,
 	if (tpm_try_get_ops(chip))
 		return 0;
 
-	if (tpm_getcap(to_tpm_chip(dev), TPM_CAP_PROP_OWNER, &cap,
+	if (tpm1_getcap(to_tpm_chip(dev), TPM_CAP_PROP_OWNER, &cap,
 		       "attempting to determine the owner state",
 		       sizeof(cap.owned)))
 		goto out_ops;
@@ -207,7 +207,7 @@ static ssize_t temp_deactivated_show(struct device *dev,
 	if (tpm_try_get_ops(chip))
 		return 0;
 
-	if (tpm_getcap(to_tpm_chip(dev), TPM_CAP_FLAG_VOL, &cap,
+	if (tpm1_getcap(to_tpm_chip(dev), TPM_CAP_FLAG_VOL, &cap,
 		       "attempting to determine the temporary state",
 		       sizeof(cap.stclear_flags)))
 		goto out_ops;
@@ -230,7 +230,7 @@ static ssize_t caps_show(struct device *dev, struct device_attribute *attr,
 	if (tpm_try_get_ops(chip))
 		return 0;
 
-	if (tpm_getcap(chip, TPM_CAP_PROP_MANUFACTURER, &cap,
+	if (tpm1_getcap(chip, TPM_CAP_PROP_MANUFACTURER, &cap,
 		       "attempting to determine the manufacturer",
 		       sizeof(cap.manufacturer_id)))
 		goto out_ops;
@@ -239,7 +239,7 @@ static ssize_t caps_show(struct device *dev, struct device_attribute *attr,
 		       be32_to_cpu(cap.manufacturer_id));
 
 	/* Try to get a TPM version 1.2 TPM_CAP_VERSION_INFO */
-	rc = tpm_getcap(chip, TPM_CAP_VERSION_1_2, &cap,
+	rc = tpm1_getcap(chip, TPM_CAP_VERSION_1_2, &cap,
 			"attempting to determine the 1.2 version",
 			sizeof(cap.tpm_version_1_2));
 	if (!rc) {
@@ -251,7 +251,7 @@ static ssize_t caps_show(struct device *dev, struct device_attribute *attr,
 			       cap.tpm_version_1_2.revMinor);
 	} else {
 		/* Otherwise just use TPM_STRUCT_VER */
-		if (tpm_getcap(chip, TPM_CAP_VERSION_1_1, &cap,
+		if (tpm1_getcap(chip, TPM_CAP_VERSION_1_1, &cap,
 			       "attempting to determine the 1.1 version",
 			       sizeof(cap.tpm_version)))
 			goto out_ops;
