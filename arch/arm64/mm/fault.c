@@ -40,6 +40,8 @@
 #include <asm/tlbflush.h>
 #include <asm/traps.h>
 
+#include <linux/page-isolation.h>
+
 struct fault_info {
 	int	(*fn)(unsigned long addr, unsigned int esr,
 		      struct pt_regs *regs);
@@ -452,6 +454,119 @@ static bool is_write_abort(unsigned int esr)
 	return (esr & ESR_ELx_WNR) && !(esr & ESR_ELx_CM);
 }
 
+#if defined(CONFIG_ZONE_DEVICE) && ARM64_SWAPPER_USES_SECTION_MAPS
+/*
+ * TODO: support ARM64_SWAPPER_USES_SECTION_MAPS == 0.
+ * Since we don't enable 16K/64K page size, we can't verify the code
+ * when ARM64_SWAPPER_USES_SECTION_MAPS == 0 for the moment.
+ */
+static inline pmd_t *lookup_pmd(unsigned long addr)
+{
+	pgd_t *pgd;
+	p4d_t *p4d;
+	pud_t *pud;
+	pmd_t *pmd;
+
+	pgd = pgd_offset_k(addr);
+	if (pgd_none(READ_ONCE(*pgd)))
+		return NULL;
+
+	p4d = p4d_offset(pgd, addr);
+	if (p4d_none(READ_ONCE(*p4d)))
+		return NULL;
+
+	pud = pud_offset(p4d, addr);
+	if (pud_none(READ_ONCE(*pud)))
+		return NULL;
+
+	pmd = pmd_offset(pud, addr);
+	if (pmd_none(READ_ONCE(*pmd)))
+		return NULL;
+
+	return pmd;
+}
+
+int zdm_ondemand_enable(struct zone *zone,
+			unsigned long start_pfn,
+			unsigned long size,
+			struct dev_pagemap *pgmap)
+{
+	unsigned long pfn, end_pfn = start_pfn + size;
+	unsigned long start_align = ALIGN(start_pfn, PAGES_PER_SECTION);
+	unsigned long end_align = ALIGN_DOWN(end_pfn, PAGES_PER_SECTION);
+
+	if (!(pgmap->flags & PGMAP_ON_DEMAND) || (start_align == end_align) ||
+	    zdm_insert(pgmap, zone, start_align, end_align - start_align))
+		return -EINVAL;
+
+	if (start_pfn != start_align)
+		zdm_init_struct_pages(zone, pgmap, start_pfn, start_align);
+
+	if (end_pfn != end_align)
+		zdm_init_struct_pages(zone, pgmap, end_align, end_pfn);
+
+	pfn = start_align;
+	while (pfn < end_align) {
+		set_pageblock_migratetype(pfn_to_page(pfn), MIGRATE_MOVABLE);
+		pfn += pageblock_nr_pages;
+
+		if (IS_ALIGNED(pfn, PAGES_PER_SECTION))
+			cond_resched();
+	}
+
+	pfn = start_align;
+	while (pfn < end_align) {
+		pmd_t *pmd;
+
+		pmd = lookup_pmd((unsigned long)pfn_to_page(pfn));
+		BUG_ON(!pmd);
+		set_pmd(pmd, __pmd(pmd_val(*pmd) & ~PMD_SECT_VALID));
+		pfn += PMD_SIZE/sizeof(struct page);
+	}
+	flush_tlb_kernel_range((unsigned long)pfn_to_page(start_pfn),
+				(unsigned long)pfn_to_page(end_pfn));
+
+	pr_info("zdm pagemap on demand enabled at [0x%lx-0x%lx]\n",
+		start_align, end_align - 1);
+	return 0;
+}
+
+int __ref memmap_page_fault(unsigned long address)
+{
+	struct zdm_context *zdm;
+	unsigned long start_pfn = 0, end_pfn, page_pfn, flags;
+	pmd_t *pmd;
+
+	rcu_read_lock();
+	zdm = zdm_lookup(address);
+	if (!zdm) {
+		rcu_read_unlock();
+		return 0;
+	}
+
+	spin_lock_irqsave(&zdm->lock, flags);
+	pmd = lookup_pmd(address);
+	BUG_ON(!pmd);
+	if (pmd_val(*pmd) & PMD_SECT_VALID)
+		goto out;
+
+	address &= PMD_MASK;
+	page_pfn = pmd_pfn(__pmd(pmd_val(*pmd) | PMD_SECT_VALID));
+	start_pfn = page_to_pfn((struct page *)address);
+	end_pfn = start_pfn + PMD_SIZE/sizeof(struct page);
+	zdm_reinit_struct_pages(zdm, page_pfn, start_pfn, end_pfn);
+
+	/* All job is done, recover the page table */
+	set_pmd(pmd, __pmd(pmd_val(*pmd) | PMD_SECT_VALID));
+out:
+	spin_unlock_irqrestore(&zdm->lock, flags);
+	rcu_read_unlock();
+
+	return 1;
+}
+#endif
+
+
 static int __kprobes do_page_fault(unsigned long addr, unsigned int esr,
 				   struct pt_regs *regs)
 {
@@ -601,6 +716,10 @@ static int __kprobes do_translation_fault(unsigned long addr,
 {
 	if (is_ttbr0_addr(addr))
 		return do_page_fault(addr, esr, regs);
+#if defined(CONFIG_ZONE_DEVICE) && ARM64_SWAPPER_USES_SECTION_MAPS
+	else if (memmap_page_fault(addr))
+		return 0;
+#endif
 
 	do_bad_area(addr, esr, regs);
 	return 0;
