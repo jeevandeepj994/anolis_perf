@@ -379,12 +379,12 @@ int __init arch_init_kprobes(void)
 }
 
 /* ASM function that handles the kretprobes must not be probed */
-NOKPROBE_SYMBOL(__kretprobe_trampoline);
+NOKPROBE_SYMBOL(kretprobe_trampoline);
 
-/* Called from __kretprobe_trampoline */
+/* Called from kretprobe_trampoline */
 void __used *trampoline_probe_handler(struct pt_regs *regs)
 {
-	return (void *)kretprobe_trampoline_handler(regs, NULL);
+	return (void *)kretprobe_trampoline_handler(regs, &kretprobe_trampoline, NULL);
 }
 NOKPROBE_SYMBOL(trampoline_probe_handler);
 
@@ -395,7 +395,7 @@ void arch_prepare_kretprobe(struct kretprobe_instance *ri,
 	ri->fp = NULL;
 
 	/* Replace the return addr with trampoline addr */
-	regs->regs[1] = (unsigned long)&__kretprobe_trampoline;
+	regs->regs[1] = (unsigned long)&kretprobe_trampoline;
 }
 NOKPROBE_SYMBOL(arch_prepare_kretprobe);
 

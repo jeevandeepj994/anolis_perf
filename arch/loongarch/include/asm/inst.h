@@ -154,7 +154,7 @@ struct reg2i14_format {
 };
 
 struct reg0i15_format {
-	unsigned int simmediate	: 15;
+	unsigned int immediate	: 15;
 	unsigned int opcode	: 17;
 };
 
