@@ -7,6 +7,7 @@
 
 #include <linux/types.h>
 #include <asm/asm.h>
+#include <asm/ptrace.h>
 
 #define INSN_NOP		0x03400000
 
@@ -275,4 +276,6 @@ u32 larch_insn_gen_lu32id(enum loongarch_gpr rd, int imm);
 u32 larch_insn_gen_lu52id(enum loongarch_gpr rd, enum loongarch_gpr rj, int imm);
 u32 larch_insn_gen_jirl(enum loongarch_gpr rd, enum loongarch_gpr rj, unsigned long pc, unsigned long dest);
 
+void simu_pc(struct pt_regs *regs, union loongarch_instruction insn);
+void simu_branch(struct pt_regs *regs, union loongarch_instruction insn);
 #endif /* _ASM_INST_H */
