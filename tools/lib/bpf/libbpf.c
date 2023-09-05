@@ -26,6 +26,7 @@
 #include <linux/kernel.h>
 #include <linux/bpf.h>
 #include <linux/btf.h>
+#include <linux/filter.h>
 #include <linux/list.h>
 #include <linux/limits.h>
 #include <linux/perf_event.h>
@@ -116,6 +117,11 @@ void libbpf_set_print(libbpf_print_fn_t warn,
 # define LIBBPF_ELF_C_READ_MMAP ELF_C_READ
 #endif
 
+struct bpf_capabilities {
+	/* v4.14: kernel support for program & map names. */
+	__u32 name:1;
+};
+
 /*
  * bpf_prog should be a better name but it has been used in
  * linux/filter.h.
@@ -162,6 +168,8 @@ struct bpf_program {
 	void *func_info;
 	__u32 func_info_rec_size;
 	__u32 func_info_len;
+
+	struct bpf_capabilities *caps;
 };
 
 struct bpf_map {
@@ -169,6 +177,7 @@ struct bpf_map {
 	char *name;
 	size_t offset;
 	int map_ifindex;
+	int inner_map_fd;
 	struct bpf_map_def def;
 	__u32 btf_key_type_id;
 	__u32 btf_value_type_id;
@@ -222,6 +231,8 @@ struct bpf_object {
 
 	void *priv;
 	bpf_object_clear_priv_t clear_priv;
+
+	struct bpf_capabilities caps;
 
 	char path[];
 };
@@ -324,7 +335,7 @@ bpf_program__init(void *data, size_t size, char *section_name, int idx,
 	prog->idx = idx;
 	prog->instances.fds = NULL;
 	prog->instances.nr = -1;
-	prog->type = BPF_PROG_TYPE_KPROBE;
+	prog->type = BPF_PROG_TYPE_UNSPEC;
 	prog->btf_fd = -1;
 
 	return 0;
@@ -344,6 +355,7 @@ bpf_object__add_program(struct bpf_object *obj, void *data, size_t size,
 	if (err)
 		return err;
 
+	prog.caps = &obj->caps;
 	progs = obj->programs;
 	nr_progs = obj->nr_programs;
 
@@ -596,6 +608,14 @@ static int compare_bpf_map(const void *_a, const void *_b)
 	return a->offset - b->offset;
 }
 
+static bool bpf_map_type__is_map_in_map(enum bpf_map_type type)
+{
+	if (type == BPF_MAP_TYPE_ARRAY_OF_MAPS ||
+	    type == BPF_MAP_TYPE_HASH_OF_MAPS)
+		return true;
+	return false;
+}
+
 static int
 bpf_object__init_maps(struct bpf_object *obj, int flags)
 {
@@ -659,13 +679,15 @@ bpf_object__init_maps(struct bpf_object *obj, int flags)
 	}
 	obj->nr_maps = nr_maps;
 
-	/*
-	 * fill all fd with -1 so won't close incorrect
-	 * fd (fd=0 is stdin) when failure (zclose won't close
-	 * negative fd)).
-	 */
-	for (i = 0; i < nr_maps; i++)
+	for (i = 0; i < nr_maps; i++) {
+		/*
+		 * fill all fd with -1 so won't close incorrect
+		 * fd (fd=0 is stdin) when failure (zclose won't close
+		 * negative fd)).
+		 */
 		obj->maps[i].fd = -1;
+		obj->maps[i].inner_map_fd = -1;
+	}
 
 	/*
 	 * Fill obj->maps using data in "maps" section.
@@ -1138,6 +1160,52 @@ err_free_new_name:
 }
 
 static int
+bpf_object__probe_name(struct bpf_object *obj)
+{
+	struct bpf_load_program_attr attr;
+	char *cp, errmsg[STRERR_BUFSIZE];
+	struct bpf_insn insns[] = {
+		BPF_MOV64_IMM(BPF_REG_0, 0),
+		BPF_EXIT_INSN(),
+	};
+	int ret;
+
+	/* make sure basic loading works */
+
+	memset(&attr, 0, sizeof(attr));
+	attr.prog_type = BPF_PROG_TYPE_SOCKET_FILTER;
+	attr.insns = insns;
+	attr.insns_cnt = ARRAY_SIZE(insns);
+	attr.license = "GPL";
+
+	ret = bpf_load_program_xattr(&attr, NULL, 0);
+	if (ret < 0) {
+		cp = libbpf_strerror_r(errno, errmsg, sizeof(errmsg));
+		pr_warning("Error in %s():%s(%d). Couldn't load basic 'r0 = 0' BPF program.\n",
+			   __func__, cp, errno);
+		return -errno;
+	}
+	close(ret);
+
+	/* now try the same program, but with the name */
+
+	attr.name = "test";
+	ret = bpf_load_program_xattr(&attr, NULL, 0);
+	if (ret >= 0) {
+		obj->caps.name = 1;
+		close(ret);
+	}
+
+	return 0;
+}
+
+static int
+bpf_object__probe_caps(struct bpf_object *obj)
+{
+	return bpf_object__probe_name(obj);
+}
+
+static int
 bpf_object__create_maps(struct bpf_object *obj)
 {
 	struct bpf_create_map_attr create_attr = {};
@@ -1156,7 +1224,8 @@ bpf_object__create_maps(struct bpf_object *obj)
 			continue;
 		}
 
-		create_attr.name = map->name;
+		if (obj->caps.name)
+			create_attr.name = map->name;
 		create_attr.map_ifindex = map->map_ifindex;
 		create_attr.map_type = def->type;
 		create_attr.map_flags = def->map_flags;
@@ -1166,6 +1235,9 @@ bpf_object__create_maps(struct bpf_object *obj)
 		create_attr.btf_fd = 0;
 		create_attr.btf_key_type_id = 0;
 		create_attr.btf_value_type_id = 0;
+		if (bpf_map_type__is_map_in_map(def->type) &&
+		    map->inner_map_fd >= 0)
+			create_attr.inner_map_fd = map->inner_map_fd;
 
 		if (obj->btf && !bpf_map_find_btf_info(map, obj->btf)) {
 			create_attr.btf_fd = btf__fd(obj->btf);
@@ -1383,7 +1455,8 @@ load_program(struct bpf_program *prog, struct bpf_insn *insns, int insns_cnt,
 	memset(&load_attr, 0, sizeof(struct bpf_load_program_attr));
 	load_attr.prog_type = prog->type;
 	load_attr.expected_attach_type = prog->expected_attach_type;
-	load_attr.name = prog->name;
+	if (prog->caps->name)
+		load_attr.name = prog->name;
 	load_attr.insns = insns;
 	load_attr.insns_cnt = insns_cnt;
 	load_attr.license = license;
@@ -1578,12 +1651,12 @@ static bool bpf_prog_type__needs_kver(enum bpf_prog_type type)
 	case BPF_PROG_TYPE_LIRC_MODE2:
 	case BPF_PROG_TYPE_SK_REUSEPORT:
 	case BPF_PROG_TYPE_FLOW_DISSECTOR:
-		return false;
 	case BPF_PROG_TYPE_UNSPEC:
-	case BPF_PROG_TYPE_KPROBE:
 	case BPF_PROG_TYPE_TRACEPOINT:
-	case BPF_PROG_TYPE_PERF_EVENT:
 	case BPF_PROG_TYPE_RAW_TRACEPOINT:
+	case BPF_PROG_TYPE_PERF_EVENT:
+		return false;
+	case BPF_PROG_TYPE_KPROBE:
 	default:
 		return true;
 	}
@@ -1710,6 +1783,7 @@ int bpf_object__load(struct bpf_object *obj)
 
 	obj->loaded = true;
 
+	CHECK_ERR(bpf_object__probe_caps(obj), err, out);
 	CHECK_ERR(bpf_object__create_maps(obj), err, out);
 	CHECK_ERR(bpf_object__relocate(obj), err, out);
 	CHECK_ERR(bpf_object__load_progs(obj), err, out);
@@ -2621,6 +2695,20 @@ bool bpf_map__is_offload_neutral(struct bpf_map *map)
 void bpf_map__set_ifindex(struct bpf_map *map, __u32 ifindex)
 {
 	map->map_ifindex = ifindex;
+}
+
+int bpf_map__set_inner_map_fd(struct bpf_map *map, int fd)
+{
+	if (!bpf_map_type__is_map_in_map(map->def.type)) {
+		pr_warning("error: unsupported map type\n");
+		return -EINVAL;
+	}
+	if (map->inner_map_fd != -1) {
+		pr_warning("error: inner_map_fd already specified\n");
+		return -EINVAL;
+	}
+	map->inner_map_fd = fd;
+	return 0;
 }
 
 static struct bpf_map *

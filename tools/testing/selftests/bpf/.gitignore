@@ -25,3 +25,4 @@ flow_dissector_load
 test_netcnt
 test_section_names
 test_tcpnotify_user
+test_libbpf
