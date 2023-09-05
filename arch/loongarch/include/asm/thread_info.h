@@ -92,7 +92,7 @@ static inline unsigned long current_stack_pointer(void)
 #define TIF_SECCOMP		19
 #define TIF_SYSCALL_TRACE	20
 #define TIF_SYSCALL_AUDIT	21
-
+#define TIF_SYSCALL_TRACEPOINT	22
 
 #define _TIF_SIGPENDING		(1<<TIF_SIGPENDING)
 #define _TIF_NEED_RESCHED	(1<<TIF_NEED_RESCHED)
