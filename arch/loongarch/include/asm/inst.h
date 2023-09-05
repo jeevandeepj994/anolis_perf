@@ -21,6 +21,10 @@
 
 #define ADDR_IMM(addr, INSN)	((addr & ADDR_IMMMASK_##INSN) >> ADDR_IMMSHIFT_##INSN)
 
+enum reg0i15_op {
+	break_op	= 0x54,
+};
+
 enum reg0i26_op {
 	b_op		= 0x14,
 	bl_op		= 0x15,
@@ -232,6 +236,11 @@ enum loongarch_gpr {
 static inline bool is_imm_negative(unsigned long val, unsigned int bit)
 {
 	return val & (1UL << (bit - 1));
+}
+
+static inline bool is_break_ins(union loongarch_instruction *ip)
+{
+	return ip->reg0i15_format.opcode == break_op;
 }
 
 static inline unsigned long sign_extend(unsigned long val, unsigned int idx)
