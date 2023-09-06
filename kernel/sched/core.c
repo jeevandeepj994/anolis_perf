@@ -9604,6 +9604,40 @@ static ssize_t cpu_max_write(struct kernfs_open_file *of,
 }
 #endif
 
+#ifdef CONFIG_SCHED_SLI
+static int cpu_sched_cfs_show(struct seq_file *sf, void *v)
+{
+	struct task_group *tg = css_tg(seq_css(sf));
+	struct sched_entity *se;
+	int cpu;
+	u64 wait_max = 0, wait_sum = 0, wait_sum_other = 0, exec_sum = 0;
+
+	if (!schedstat_enabled())
+		goto out_show;
+
+	rcu_read_lock();
+	for_each_online_cpu(cpu) {
+		se = tg->se[cpu];
+		if (!se)
+			continue;
+		exec_sum += schedstat_val(se->sum_exec_runtime);
+		wait_sum_other +=
+			schedstat_val(se->statistics.parent_wait_contrib);
+		wait_sum += schedstat_val(se->statistics.wait_sum);
+		wait_max =
+			max(wait_max, schedstat_val(se->statistics.wait_max));
+	}
+	rcu_read_unlock();
+out_show:
+	/* [Serve time] [On CPU time] [Queue other time] [Queue sibling time] [Queue max time] */
+	seq_printf(sf, "%lld %lld %lld %lld %lld\n",
+			exec_sum + wait_sum, exec_sum, wait_sum_other,
+			wait_sum - wait_sum_other, wait_max);
+
+	return 0;
+}
+#endif
+
 static struct cftype cpu_files[] = {
 #ifdef CONFIG_FAIR_GROUP_SCHED
 	{
@@ -9687,6 +9721,12 @@ static struct cftype cpu_files[] = {
 		.name = "identity",
 		.read_s64 = cpu_identity_read_s64,
 		.write_s64 = cpu_identity_write_s64,
+	},
+#endif
+#ifdef CONFIG_SCHED_SLI
+	{
+		.name = "sched_cfs_statistics",
+		.seq_show = cpu_sched_cfs_show,
 	},
 #endif
 	{ }	/* terminate */
