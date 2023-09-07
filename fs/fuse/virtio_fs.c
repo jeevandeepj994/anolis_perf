@@ -813,6 +813,37 @@ static void virtio_fs_cleanup_dax(void *data)
 	put_dax(dax_dev);
 }
 
+static int dax_ondemand;
+static char *dax_ondemand_tag;
+
+static bool dax_ondemand_find_tag(char *str)
+{
+	char *cp, *ptr;
+	size_t len = strlen(str);
+
+	if (dax_ondemand)
+		return true;
+
+	if (!dax_ondemand_tag)
+		return false;
+
+	cp = dax_ondemand_tag;
+
+	while ((ptr = strchr(cp, ',')) != NULL) {
+		if (len == (size_t)(ptr - cp) && !strncmp(cp, str, len))
+			return true;
+
+		cp = ++ptr;
+	}
+
+	if (!strcmp(cp, str))
+		return true;
+
+	return false;
+}
+module_param(dax_ondemand, int, 0444);
+module_param(dax_ondemand_tag, charp, 0444);
+
 static int virtio_fs_setup_dax(struct virtio_device *vdev, struct virtio_fs *fs)
 {
 	struct virtio_shm_region cache_reg;
@@ -856,7 +887,9 @@ static int virtio_fs_setup_dax(struct virtio_device *vdev, struct virtio_fs *fs)
 		.end = (phys_addr_t) cache_reg.addr + cache_reg.len - 1,
 	};
 	pgmap->nr_range = 1;
-	pgmap->flags |= PGMAP_ON_DEMAND;
+
+	if (dax_ondemand_find_tag(fs->tag))
+		pgmap->flags |= PGMAP_ON_DEMAND;
 
 	fs->window_kaddr = devm_memremap_pages(&vdev->dev, pgmap);
 	if (IS_ERR(fs->window_kaddr))
