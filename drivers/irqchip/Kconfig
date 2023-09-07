@@ -346,6 +346,14 @@ config IRQ_UNIPHIER_AIDET
 	help
 	  Support for the UniPhier AIDET (ARM Interrupt Detector).
 
+config PHYTIUM_IXIC
+	bool "Phytium pd2008 SoC PCI Legacy Interrupt Controller"
+	depends on ARCH_PHYTIUM
+	select IRQ_DOMAIN
+	select IRQ_DOMAIN_HIERARCHY
+	help
+	  This enables support PCI Legacy Interrupt on Phytium pd2008 SoC.
+
 config MESON_IRQ_GPIO
        bool "Meson GPIO Interrupt Multiplexer"
        depends on ARCH_MESON
