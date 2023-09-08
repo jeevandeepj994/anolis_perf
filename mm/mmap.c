@@ -2937,7 +2937,7 @@ int __do_munmap(struct mm_struct *mm, unsigned long start, size_t len,
 	 * Check if this vma uses shared page tables
 	 */
 	vma = find_vma_intersection(mm, start, end);
-	if (vma && unlikely(vma_is_shared(vma))) {
+	if (vma && unlikely(vma_is_pgtable_shared(vma))) {
 		struct pgtable_share_struct *info = NULL;
 
 		if (vma->vm_file && vma->vm_file->f_mapping)

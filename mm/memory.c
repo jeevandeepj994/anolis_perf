@@ -438,7 +438,7 @@ void free_pgtables(struct mmu_gather *tlb, struct vm_area_struct *vma,
 			 */
 			while (next && next->vm_start <= vma->vm_end + PMD_SIZE
 			       && !is_vm_hugetlb_page(next)
-			       && (vma_is_shared(next) == vma_is_shared(vma))) {
+			       && (vma_is_pgtable_shared(next) == vma_is_pgtable_shared(vma))) {
 				vma = next;
 				next = vma->vm_next;
 				unlink_anon_vmas(vma);
@@ -446,7 +446,7 @@ void free_pgtables(struct mmu_gather *tlb, struct vm_area_struct *vma,
 			}
 			_free_pgd_range(tlb, addr, vma->vm_end,
 				floor, next ? next->vm_start : ceiling,
-				vma_is_shared(vma));
+				vma_is_pgtable_shared(vma));
 		}
 		vma = next;
 	}
@@ -5085,7 +5085,7 @@ vm_fault_t handle_mm_fault(struct vm_area_struct *vma, unsigned long address,
 
 #ifdef CONFIG_PAGETABLE_SHARE
 	orig_mm = vma->vm_mm;
-	if (unlikely(vma_is_shared(vma))) {
+	if (unlikely(vma_is_pgtable_shared(vma))) {
 		ret = find_shared_vma(&vma, &address, flags);
 		if (ret)
 			return ret;

@@ -19,12 +19,12 @@ extern int pgtable_share_insert_vma(struct mm_struct *mm, struct vm_area_struct 
 extern vm_fault_t find_shared_vma(struct vm_area_struct **vmap,
 				  unsigned long *addrp, unsigned int flags);
 
-static inline bool vma_is_shared(const struct vm_area_struct *vma)
+static inline bool vma_is_pgtable_shared(const struct vm_area_struct *vma)
 {
 	return vma->vm_flags & VM_SHARED_PT;
 }
 #else
-static inline bool vma_is_shared(const struct vm_area_struct *vma)
+static inline bool vma_is_pgtable_shared(const struct vm_area_struct *vma)
 {
 	return false;
 }
