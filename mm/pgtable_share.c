@@ -297,6 +297,14 @@ void pgtable_share_del_mm(struct vm_area_struct *vma)
 		free_pgtable_share_mm(info);
 }
 
+void __pgtable_share_clear_pmd(struct mm_struct *mm, pmd_t *pmdp,
+			       unsigned long addr)
+{
+	put_page(pmd_pgtable(*pmdp));
+	pmd_clear(pmdp);
+	add_mm_counter(mm, MM_SHMEMPAGES, -HPAGE_PMD_NR);
+}
+
 void pgtable_share_clear_pmd(struct mmu_gather *tlb, struct vm_area_struct *vma,
 			     pmd_t *pmdp, unsigned long addr, unsigned long end)
 {
@@ -308,9 +316,8 @@ void pgtable_share_clear_pmd(struct mmu_gather *tlb, struct vm_area_struct *vma,
 	 * Make sure page fault will happen when accessing
 	 * this area.
 	 */
-	put_page(pmd_pgtable(*pmdp));
-	pmd_clear(pmdp);
-	add_mm_counter(vma->vm_mm, MM_SHMEMPAGES, -HPAGE_PMD_NR);
+	__pgtable_share_clear_pmd(vma->vm_mm, pmdp, addr);
+
 	spin_unlock(ptl);
 
 	tlb_change_page_size(tlb, PAGE_SIZE);

@@ -18,6 +18,9 @@ extern void vma_set_pgtable_share_mm(struct vm_area_struct *vma,
 				     struct pgtable_share_struct *info);
 extern vm_fault_t pgtable_share_page_fault(struct vm_fault *vmf,
 					   unsigned long addr);
+
+extern void __pgtable_share_clear_pmd(struct mm_struct *mm, pmd_t *pmdp,
+				      unsigned long addr);
 extern void pgtable_share_clear_pmd(struct mmu_gather *tlb, struct vm_area_struct *vma,
 				    pmd_t *pmdp, unsigned long addr, unsigned long end);
 extern long pgtable_share_dontneed_single_vma(struct vm_area_struct *vma,
@@ -68,6 +71,11 @@ static inline void pgtable_share_create(struct vm_area_struct *vma)
 static inline vm_fault_t pgtable_share_page_fault(struct vm_fault *vmf, unsigned long addr)
 {
 	return 0;
+}
+
+static inline void __pgtable_share_clear_pmd(struct mm_struct *mm, pmd_t *pmdp,
+					     unsigned long addr)
+{
 }
 
 static inline void pgtable_share_clear_pmd(struct mmu_gather *tlb,
