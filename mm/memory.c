@@ -209,17 +209,28 @@ static void check_sync_rss_stat(struct task_struct *task)
  * has been handled earlier when unmapping all the memory regions.
  */
 static void free_pte_range(struct mmu_gather *tlb, pmd_t *pmd,
-			   unsigned long addr)
+			   unsigned long addr, bool shared_pte)
 {
 	pgtable_t token = pmd_pgtable(*pmd);
 	pmd_clear(pmd);
+	/*
+	 * if this address range shares page tables with other processes,
+	 * do not release pte pages. Those pages will be released when
+	 * host mm that hosts these pte pages is released
+	 */
+	if (shared_pte) {
+		tlb_flush_pmd_range(tlb, addr, PAGE_SIZE);
+		tlb->freed_tables = 1;
+		return;
+	}
 	pte_free_tlb(tlb, token, addr);
 	mm_dec_nr_ptes(tlb->mm);
 }
 
 static inline void free_pmd_range(struct mmu_gather *tlb, pud_t *pud,
 				unsigned long addr, unsigned long end,
-				unsigned long floor, unsigned long ceiling)
+				unsigned long floor, unsigned long ceiling,
+				bool shared_pte)
 {
 	pmd_t *pmd;
 	unsigned long next;
@@ -231,7 +242,7 @@ static inline void free_pmd_range(struct mmu_gather *tlb, pud_t *pud,
 		next = pmd_addr_end(addr, end);
 		if (pmd_none_or_clear_bad(pmd))
 			continue;
-		free_pte_range(tlb, pmd, addr);
+		free_pte_range(tlb, pmd, addr, shared_pte);
 	} while (pmd++, addr = next, addr != end);
 
 	start &= PUD_MASK;
@@ -247,13 +258,19 @@ static inline void free_pmd_range(struct mmu_gather *tlb, pud_t *pud,
 
 	pmd = pmd_offset(pud, start);
 	pud_clear(pud);
-	pmd_free_tlb(tlb, pmd, start);
-	mm_dec_nr_pmds(tlb->mm);
+	if (shared_pte) {
+		tlb_flush_pud_range(tlb, start, PAGE_SIZE);
+		tlb->freed_tables = 1;
+	} else {
+		pmd_free_tlb(tlb, pmd, start);
+		mm_dec_nr_pmds(tlb->mm);
+	}
 }
 
 static inline void free_pud_range(struct mmu_gather *tlb, p4d_t *p4d,
 				unsigned long addr, unsigned long end,
-				unsigned long floor, unsigned long ceiling)
+				unsigned long floor, unsigned long ceiling,
+				bool shared_pte)
 {
 	pud_t *pud;
 	unsigned long next;
@@ -265,7 +282,8 @@ static inline void free_pud_range(struct mmu_gather *tlb, p4d_t *p4d,
 		next = pud_addr_end(addr, end);
 		if (pud_none_or_clear_bad(pud))
 			continue;
-		free_pmd_range(tlb, pud, addr, next, floor, ceiling);
+		free_pmd_range(tlb, pud, addr, next, floor, ceiling,
+				shared_pte);
 	} while (pud++, addr = next, addr != end);
 
 	start &= P4D_MASK;
@@ -287,7 +305,8 @@ static inline void free_pud_range(struct mmu_gather *tlb, p4d_t *p4d,
 
 static inline void free_p4d_range(struct mmu_gather *tlb, pgd_t *pgd,
 				unsigned long addr, unsigned long end,
-				unsigned long floor, unsigned long ceiling)
+				unsigned long floor, unsigned long ceiling,
+				bool shared_pte)
 {
 	p4d_t *p4d;
 	unsigned long next;
@@ -299,7 +318,8 @@ static inline void free_p4d_range(struct mmu_gather *tlb, pgd_t *pgd,
 		next = p4d_addr_end(addr, end);
 		if (p4d_none_or_clear_bad(p4d))
 			continue;
-		free_pud_range(tlb, p4d, addr, next, floor, ceiling);
+		free_pud_range(tlb, p4d, addr, next, floor, ceiling,
+				shared_pte);
 	} while (p4d++, addr = next, addr != end);
 
 	start &= PGDIR_MASK;
@@ -321,9 +341,10 @@ static inline void free_p4d_range(struct mmu_gather *tlb, pgd_t *pgd,
 /*
  * This function frees user-level page tables of a process.
  */
-void free_pgd_range(struct mmu_gather *tlb,
+static void _free_pgd_range(struct mmu_gather *tlb,
 			unsigned long addr, unsigned long end,
-			unsigned long floor, unsigned long ceiling)
+			unsigned long floor, unsigned long ceiling,
+			bool shared_pte)
 {
 	pgd_t *pgd;
 	unsigned long next;
@@ -379,8 +400,16 @@ void free_pgd_range(struct mmu_gather *tlb,
 		next = pgd_addr_end(addr, end);
 		if (pgd_none_or_clear_bad(pgd))
 			continue;
-		free_p4d_range(tlb, pgd, addr, next, floor, ceiling);
+		free_p4d_range(tlb, pgd, addr, next, floor, ceiling,
+			       shared_pte);
 	} while (pgd++, addr = next, addr != end);
+}
+
+void free_pgd_range(struct mmu_gather *tlb,
+			unsigned long addr, unsigned long end,
+			unsigned long floor, unsigned long ceiling)
+{
+	_free_pgd_range(tlb, addr, end, floor, ceiling, false);
 }
 
 void free_pgtables(struct mmu_gather *tlb, struct vm_area_struct *vma,
@@ -403,16 +432,20 @@ void free_pgtables(struct mmu_gather *tlb, struct vm_area_struct *vma,
 		} else {
 			/*
 			 * Optimization: gather nearby vmas into one call down
+			 * but make sure vmas not sharing page tables do
+			 * not get combined with vmas sharing page tables
 			 */
 			while (next && next->vm_start <= vma->vm_end + PMD_SIZE
-			       && !is_vm_hugetlb_page(next)) {
+			       && !is_vm_hugetlb_page(next)
+			       && (vma_is_shared(next) == vma_is_shared(vma))) {
 				vma = next;
 				next = vma->vm_next;
 				unlink_anon_vmas(vma);
 				unlink_file_vma(vma);
 			}
-			free_pgd_range(tlb, addr, vma->vm_end,
-				floor, next ? next->vm_start : ceiling);
+			_free_pgd_range(tlb, addr, vma->vm_end,
+				floor, next ? next->vm_start : ceiling,
+				vma_is_shared(vma));
 		}
 		vma = next;
 	}
@@ -5036,6 +5069,8 @@ vm_fault_t handle_mm_fault(struct vm_area_struct *vma, unsigned long address,
 			   unsigned int flags, struct pt_regs *regs)
 {
 	vm_fault_t ret;
+	bool shared = false;
+	struct mm_struct *orig_mm;
 
 	__set_current_state(TASK_RUNNING);
 
@@ -5044,6 +5079,16 @@ vm_fault_t handle_mm_fault(struct vm_area_struct *vma, unsigned long address,
 
 	/* do counter updates before entering really critical section. */
 	check_sync_rss_stat(current);
+
+	orig_mm = vma->vm_mm;
+	if (unlikely(vma_is_shared(vma))) {
+		ret = find_shared_vma(&vma, &address, flags);
+		if (ret)
+			return ret;
+		if (!vma)
+			return VM_FAULT_SIGSEGV;
+		shared = true;
+	}
 
 	if (!arch_vma_access_permitted(vma, flags & FAULT_FLAG_WRITE,
 					    flags & FAULT_FLAG_INSTRUCTION,
@@ -5065,6 +5110,36 @@ vm_fault_t handle_mm_fault(struct vm_area_struct *vma, unsigned long address,
 		ret = __handle_mm_fault(vma, address, flags);
 
 	lru_gen_exit_fault();
+
+	/*
+	 * Release the read lock on shared VMA's parent mm unless
+	 * __handle_mm_fault released the lock already.
+	 * __handle_mm_fault sets VM_FAULT_RETRY in return value if
+	 * it released mmap lock. If lock was released, that implies
+	 * the lock would have been released on task's original mm if
+	 * this were not a shared PTE vma. To keep lock state consistent,
+	 * make sure to release the lock on task's original mm
+	 */
+	if (shared) {
+		int release_mmlock = 1;
+
+		if (!(ret & VM_FAULT_RETRY)) {
+			mmap_read_unlock(vma->vm_mm);
+			release_mmlock = 0;
+		} else if ((flags & FAULT_FLAG_ALLOW_RETRY) &&
+			(flags & FAULT_FLAG_RETRY_NOWAIT)) {
+			mmap_read_unlock(vma->vm_mm);
+			release_mmlock = 0;
+		}
+
+		/*
+		 * Reset guest vma pointers that were set up in
+		 * find_shared_vma() to process this fault.
+		 */
+		vma->vm_mm = orig_mm;
+		if (release_mmlock)
+			mmap_read_unlock(orig_mm);
+	}
 
 	if (flags & FAULT_FLAG_USER) {
 		mem_cgroup_exit_user_fault();
