@@ -13,7 +13,7 @@ struct pgtable_share_struct {
 	unsigned long mode;
 };
 
-extern int pgtable_share_new_mm(struct file *file, struct vm_area_struct *vma);
+extern int pgtable_share_new_mm(struct vm_area_struct *vma);
 extern void pgtable_share_del_mm(struct vm_area_struct *vm);
 extern int pgtable_share_insert_vma(struct mm_struct *mm, struct vm_area_struct *vma);
 extern vm_fault_t find_shared_vma(struct vm_area_struct **vmap,
@@ -29,7 +29,7 @@ static inline bool vma_is_pgtable_shared(const struct vm_area_struct *vma)
 	return false;
 }
 
-static inline int pgtable_share_new_mm(struct file *file, struct vm_area_struct *vma)
+static inline int pgtable_share_new_mm(struct vm_area_struct *vma)
 {
 	return 0;
 }

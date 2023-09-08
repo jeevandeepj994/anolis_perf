@@ -1626,7 +1626,7 @@ unsigned long do_mmap(struct file *file, unsigned long addr,
 
 		vma = find_vma(mm, addr);
 		if (!((vma->vm_start | vma->vm_end) & (PMD_SIZE - 1))) {
-			struct pgtable_share_struct *info = file->f_mapping->ptshare_data;
+			struct pgtable_share_struct *info = vma->pgtable_share_data;
 			/*
 			 * If this mapping has not been set up for page table
 			 * sharing yet, do so by creating a new mm to hold the
@@ -1635,11 +1635,11 @@ unsigned long do_mmap(struct file *file, unsigned long addr,
 			if (info == NULL) {
 				int ret;
 
-				ret = pgtable_share_new_mm(file, vma);
+				ret = pgtable_share_new_mm(vma);
 				if (ret < 0)
 					return ret;
 
-				info = file->f_mapping->ptshare_data;
+				info = vma->pgtable_share_data;
 				ret = pgtable_share_insert_vma(info->mm, vma);
 				if (ret < 0)
 					addr = ret;
@@ -2938,13 +2938,12 @@ int __do_munmap(struct mm_struct *mm, unsigned long start, size_t len,
 	 */
 	vma = find_vma_intersection(mm, start, end);
 	if (vma && unlikely(vma_is_pgtable_shared(vma))) {
-		struct pgtable_share_struct *info = NULL;
-
-		if (vma->vm_file && vma->vm_file->f_mapping)
-			info = vma->vm_file->f_mapping->ptshare_data;
 		/* Don't allow partial munmaps */
-		if (info && ((start != info->start) || (len != info->size)))
+		if (vma->vm_start != start || vma->vm_end != end) {
+			pr_warn("pgtable share vma: vma->vm_start != %lx or vma->vm_end != %lx)",
+				start, end);
 			return -EINVAL;
+		}
 		pgtable_share_del_mm(vma);
 	}
 #endif

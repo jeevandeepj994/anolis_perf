@@ -111,7 +111,7 @@ find_shared_vma(struct vm_area_struct **vmap, unsigned long *addrp,
 
 	if ((!guest_vma->vm_file) || (!guest_vma->vm_file->f_mapping))
 		return 0;
-	info = guest_vma->vm_file->f_mapping->ptshare_data;
+	info = guest_vma->pgtable_share_data;
 	if (!info) {
 		pr_warn("VM_SHARED_PT vma with NULL ptshare_data");
 		dump_stack_print_info(KERN_WARNING);
@@ -120,6 +120,7 @@ find_shared_vma(struct vm_area_struct **vmap, unsigned long *addrp,
 	host_mm = info->mm;
 
 	mmap_read_lock(host_mm);
+
 	host_addr = *addrp - guest_vma->vm_start + host_mm->mmap_base;
 	host_pmd = get_pmd(host_mm, host_addr);
 	guest_pmd = get_pmd(guest_vma->vm_mm, *addrp);
@@ -151,7 +152,7 @@ find_shared_vma(struct vm_area_struct **vmap, unsigned long *addrp,
  * mm. This refcount is used to determine when the mm struct for shared
  * PTEs can be deleted.
  */
-int pgtable_share_new_mm(struct file *file, struct vm_area_struct *vma)
+int pgtable_share_new_mm(struct vm_area_struct *vma)
 {
 	struct mm_struct *new_mm;
 	struct pgtable_share_struct *info = NULL;
@@ -179,7 +180,7 @@ int pgtable_share_new_mm(struct file *file, struct vm_area_struct *vma)
 	info->start = start;
 	info->size = len;
 	refcount_set(&info->refcnt, 1);
-	file->f_mapping->ptshare_data = info;
+	vma->pgtable_share_data = info;
 
 	return retval;
 
@@ -248,13 +249,13 @@ void pgtable_share_del_mm(struct vm_area_struct *vma)
 
 	if (!file || (!file->f_mapping))
 		return;
-	info = file->f_mapping->ptshare_data;
+	info = vma->pgtable_share_data;
 	WARN_ON(!info);
 	if (!info)
 		return;
 
 	if (refcount_dec_and_test(&info->refcnt)) {
 		free_pgtable_share_mm(info);
-		file->f_mapping->ptshare_data = NULL;
+		vma->pgtable_share_data = NULL;
 	}
 }

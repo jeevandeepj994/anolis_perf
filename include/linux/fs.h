@@ -461,7 +461,6 @@ int pagecache_write_end(struct file *, struct address_space *mapping,
  * @private_lock: For use by the owner of the address_space.
  * @private_list: For use by the owner of the address_space.
  * @private_data: For use by the owner of the address_space.
- * @ptshare_data: For shared page table use
  */
 struct address_space {
 	struct inode		*host;
@@ -487,9 +486,6 @@ struct address_space {
 	spinlock_t		private_lock;
 	struct list_head	private_list;
 	void			*private_data;
-#ifdef CONFIG_PAGETABLE_SHARE
-	void			*ptshare_data;
-#endif
 
 	CK_KABI_RESERVE(1)
 	CK_KABI_RESERVE(2)
