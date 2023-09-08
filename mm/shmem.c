@@ -39,6 +39,7 @@
 #include <linux/frontswap.h>
 #include <linux/fs_parser.h>
 #include <linux/file_zeropage.h>
+#include <linux/pgtable_share.h>
 
 #include <asm/tlbflush.h> /* for arch/microblaze update_mmu_cache() */
 
@@ -1827,6 +1828,13 @@ repeat:
 
 	sbinfo = SHMEM_SB(inode->i_sb);
 	charge_mm = vma ? vma->vm_mm : current->mm;
+#ifdef CONFIG_PAGETABLE_SHARE
+	/* Switch to original mm for charging memcg */
+	if (vma_is_shadow(vma)) {
+		VM_BUG_ON_VMA(!vmf->orig_vma, vma);
+		charge_mm = vmf->orig_vma->vm_mm;
+	}
+#endif
 
 	page = find_lock_entry(mapping, index);
 	if (xa_is_value(page)) {

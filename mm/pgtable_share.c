@@ -230,6 +230,7 @@ vm_fault_t pgtable_share_page_fault(struct vm_fault *vmf, unsigned long addr)
 	 * switch to shadow vma and shadow mm
 	 */
 	vmf->vma = shadow_vma;
+	vmf->orig_vma = orig_vma;
 
 	return 0;
 out:

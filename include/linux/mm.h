@@ -533,6 +533,9 @@ struct vm_fault {
 #ifdef CONFIG_DUPTEXT
 	struct page *dup_page;		/* Duplicated page for remote node */
 #endif
+#ifdef CONFIG_PAGETABLE_SHARE
+	struct vm_area_struct *orig_vma;/* Original VMA */
+#endif
 	struct page *page;		/* ->fault handlers should return a
 					 * page here, unless VM_FAULT_NOPAGE
 					 * is set (which is also implied by

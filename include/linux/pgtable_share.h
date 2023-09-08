@@ -23,6 +23,12 @@ static inline bool vma_is_pgtable_shared(const struct vm_area_struct *vma)
 {
 	return vma->vm_flags & VM_SHARED_PT;
 }
+
+static inline bool vma_is_shadow(const struct vm_area_struct *vma)
+{
+	return vma && vma->pgtable_share_data &&
+		vma->vm_mm == vma->pgtable_share_data->mm;
+}
 #else
 static inline bool vma_is_pgtable_shared(const struct vm_area_struct *vma)
 {
