@@ -2902,21 +2902,6 @@ int __do_munmap(struct mm_struct *mm, unsigned long start, size_t len,
 	if (len == 0)
 		return -EINVAL;
 
-#ifdef CONFIG_PAGETABLE_SHARE
-	/*
-	 * Check if this vma uses shared page tables
-	 */
-	vma = find_vma_intersection(mm, start, end);
-	if (vma && unlikely(vma_is_pgtable_shared(vma))) {
-		/* Don't allow partial munmaps */
-		if (vma->vm_start != start || vma->vm_end != end) {
-			pr_warn("pgtable share vma: vma->vm_start != %lx or vma->vm_end != %lx)",
-				start, end);
-			return -EINVAL;
-		}
-	}
-#endif
-
 	/*
 	 * arch_unmap() might do unmaps itself.  It must be called
 	 * and finish any rbtree manipulation before this code
@@ -2952,7 +2937,14 @@ int __do_munmap(struct mm_struct *mm, unsigned long start, size_t len,
 		 */
 		if (end < vma->vm_end && mm->map_count >= sysctl_max_map_count)
 			return -ENOMEM;
-
+#ifdef CONFIG_PAGETABLE_SHARE
+		if (vma_is_pgtable_shared(vma)) {
+			/* Don't munmap partial pgtable shared vma */
+			pr_warn("unmap partial pgtable shared vma: %lx > %lx)",
+				vma->vm_end, end);
+			return -EINVAL;
+		}
+#endif
 		error = __split_vma(mm, vma, start, 0);
 		if (error)
 			return error;
@@ -2962,7 +2954,16 @@ int __do_munmap(struct mm_struct *mm, unsigned long start, size_t len,
 	/* Does it split the last one? */
 	last = find_vma(mm, end);
 	if (last && end > last->vm_start) {
-		int error = __split_vma(mm, last, end, 1);
+		int error;
+
+#ifdef CONFIG_PAGETABLE_SHARE
+		if (vma_is_pgtable_shared(last)) {
+			pr_warn("unmap partial pgtable shared vma: %lx > %lx)",
+				last->vm_end, end);
+			return -EINVAL;
+		}
+#endif
+		error = __split_vma(mm, last, end, 1);
 		if (error)
 			return error;
 	}
