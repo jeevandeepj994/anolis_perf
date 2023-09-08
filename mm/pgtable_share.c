@@ -14,6 +14,26 @@
 #include <linux/sched/mm.h>
 #include <linux/slab.h>
 #include <linux/pgtable_share.h>
+#include <linux/hugetlb.h>
+
+static bool vma_is_suitable_pgtable_share(struct vm_area_struct *vma)
+{
+	if (!vma)
+		return false;
+
+	if (!vma->vm_file || !vma->vm_file->f_mapping)
+		return false;
+
+	/* hugetlb is not supported temporarily */
+	if (is_vm_hugetlb_page(vma))
+		return false;
+
+	/* keep in PMD size alignment */
+	if (((vma->vm_start | vma->vm_end) & (PMD_SIZE - 1)))
+		return false;
+
+	return true;
+}
 
 /*
  */
@@ -152,7 +172,7 @@ find_shared_vma(struct vm_area_struct **vmap, unsigned long *addrp,
  * mm. This refcount is used to determine when the mm struct for shared
  * PTEs can be deleted.
  */
-int pgtable_share_new_mm(struct vm_area_struct *vma)
+static int pgtable_share_new_mm(struct vm_area_struct *vma)
 {
 	struct mm_struct *new_mm;
 	struct pgtable_share_struct *info = NULL;
@@ -234,6 +254,31 @@ static inline void free_pgtable_share_mm(struct pgtable_share_struct *info)
 {
 	mmput(info->mm);
 	kfree(info);
+}
+
+/* mm_lock (write lock) of vma->vm_mm must be hold in caller */
+void pgtable_share_create(struct vm_area_struct *vma)
+{
+	struct pgtable_share_struct *info;
+	int ret;
+
+	if (!vma_is_suitable_pgtable_share(vma))
+		return;
+
+	info = vma->pgtable_share_data;
+	VM_BUG_ON_VMA(info, vma);
+
+	ret = pgtable_share_new_mm(vma);
+	if (ret < 0)
+		return;
+
+	info = vma->pgtable_share_data;
+	/* Duplicate and insert shadow vma into shadow mm */
+	ret = pgtable_share_insert_vma(info->mm, vma);
+	if (ret < 0)
+		return;
+
+	vma->vm_flags |= VM_SHARED_PT;
 }
 
 /*

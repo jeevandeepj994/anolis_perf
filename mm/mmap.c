@@ -1417,10 +1417,6 @@ unsigned long do_mmap(struct file *file, unsigned long addr,
 	struct mm_struct *mm = current->mm;
 	vm_flags_t vm_flags;
 	int pkey = 0;
-#ifdef CONFIG_PAGETABLE_SHARE
-	int ptshare = 0;
-#endif
-
 	*populate = 0;
 
 	if (!len)
@@ -1462,9 +1458,7 @@ unsigned long do_mmap(struct file *file, unsigned long addr,
 	 * be set as well
 	 */
 	if (flags & MAP_SHARED_PT) {
-		if (flags & (MAP_SHARED | MAP_SHARED_VALIDATE))
-			ptshare = 1;
-		else
+		if (!(flags & (MAP_SHARED | MAP_SHARED_VALIDATE)))
 			return -EINVAL;
 	}
 #endif
@@ -1620,46 +1614,14 @@ unsigned long do_mmap(struct file *file, unsigned long addr,
 	 *	  MAP_SHARED_PT
 	 *	- Start address is aligned to PMD size
 	 *	- Mapping size is a multiple of PMD size
+	 * Here this new vma must can be found when mmap_write_lock
+	 * always be held.
 	 */
-	if (ptshare && file && !is_file_hugepages(file)) {
-		struct vm_area_struct *vma;
+	if (!IS_ERR_VALUE(addr) && (flags & MAP_SHARED_PT)) {
+		struct vm_area_struct *vma = find_vma(mm, addr);
 
-		vma = find_vma(mm, addr);
-		if (!((vma->vm_start | vma->vm_end) & (PMD_SIZE - 1))) {
-			struct pgtable_share_struct *info = vma->pgtable_share_data;
-			/*
-			 * If this mapping has not been set up for page table
-			 * sharing yet, do so by creating a new mm to hold the
-			 * shared page tables for this mapping
-			 */
-			if (info == NULL) {
-				int ret;
-
-				ret = pgtable_share_new_mm(vma);
-				if (ret < 0)
-					return ret;
-
-				info = vma->pgtable_share_data;
-				ret = pgtable_share_insert_vma(info->mm, vma);
-				if (ret < 0)
-					addr = ret;
-				else
-					vma->vm_flags |= VM_SHARED_PT;
-			} else {
-				/*
-				 * Page tables will be shared only if the
-				 * file is mapped in with the same permissions
-				 * across all mappers with same starting
-				 * address and size
-				 */
-				if (((prot & info->mode) == info->mode) &&
-					(addr == info->start) &&
-					(len == info->size)) {
-					vma->vm_flags |= VM_SHARED_PT;
-					refcount_inc(&info->refcnt);
-				}
-			}
-		}
+		BUG_ON(!vma || addr < vma->vm_start);
+		pgtable_share_create(vma);
 	}
 #endif
 
