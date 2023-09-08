@@ -15,6 +15,7 @@
 #include <linux/slab.h>
 #include <linux/pgtable_share.h>
 #include <linux/hugetlb.h>
+#include <linux/mmdebug.h>
 
 static bool vma_is_suitable_pgtable_share(struct vm_area_struct *vma)
 {
@@ -124,6 +125,115 @@ int pgtable_share_insert_vma(struct mm_struct *host_mm, struct vm_area_struct *v
 	get_file(vma->vm_file);
 
 	return err;
+}
+
+static pmd_t *pgtable_share_create_pmd(struct mm_struct *mm, unsigned long addr,
+				       bool alloc_pte)
+{
+	pgd_t *pgd;
+	p4d_t *p4d;
+	pud_t *pud;
+	pmd_t *pmd;
+
+	pgd = pgd_offset(mm, addr);
+	p4d = p4d_alloc(mm, pgd, addr);
+	if (!p4d)
+		goto out;
+
+	pud = pud_alloc(mm, p4d, addr);
+	if (!pud)
+		goto out;
+
+	pmd = pmd_alloc(mm, pud, addr);
+	if (!pmd)
+		goto out;
+
+	if (!alloc_pte)
+		return pmd;
+
+	if (!pmd_none(*pmd) && !pmd_bad(*pmd))
+		return pmd;
+
+	if (!pte_alloc(mm, pmd))
+		return pmd;
+out:
+	return NULL;
+}
+
+/* mmlock held when exit */
+vm_fault_t pgtable_share_page_fault(struct vm_fault *vmf, unsigned long addr)
+{
+	struct pgtable_share_struct *info;
+	struct mm_struct *orig_mm, *shadow_mm;
+	struct vm_area_struct *shadow_vma, *orig_vma = vmf->vma;
+	unsigned long shadow_addr = addr;
+	pmd_t *pmd, *shadow_pmd;
+	spinlock_t *ptl;
+
+	if ((!orig_vma->vm_file) || (!orig_vma->vm_file->f_mapping))
+		return VM_FAULT_ERROR;
+
+	info = vma_get_pgtable_share_data(orig_vma);
+	if (!info) {
+		pr_warn("VM_SHARED_PT vma with NULL pgtable_share_data");
+		dump_stack_print_info(KERN_WARNING);
+		return VM_FAULT_ERROR;
+	}
+	orig_mm = orig_vma->vm_mm;
+	shadow_mm = info->mm;
+
+	/*
+	 * mm_lock of aboriginal mm has been hold in previous
+	 * caller. Here calling trylock to avoid possible
+	 * warning of recursive locking.
+	 */
+	if (!mmap_read_trylock(shadow_mm))
+		mmap_read_lock(shadow_mm);
+
+	pmd = pgtable_share_create_pmd(orig_mm, shadow_addr, false);
+	if (!pmd)
+		goto out;
+
+	shadow_pmd = pgtable_share_create_pmd(shadow_mm, shadow_addr, true);
+	if (!shadow_pmd)
+		goto out;
+
+	ptl = pmd_lock(orig_mm, pmd);
+	if (!pmd_none(*pmd)) {
+		if (!pmd_same(*pmd, *shadow_pmd)) {
+			unsigned long pmd_aligned = (shadow_addr & PMD_MASK) >> PAGE_SHIFT;
+
+			/*
+			 * It's almost impossible to run here, but for
+			 * security, print some warning messages and
+			 * set original pmd.
+			 */
+			pr_warn("the original pmd has different value with shadow pmd");
+
+			set_pmd_at(orig_mm, shadow_addr, pmd, *shadow_pmd);
+			flush_tlb_range(orig_vma, pmd_aligned, pmd_aligned + PMD_SIZE);
+			spin_unlock(ptl);
+			return VM_FAULT_NOPAGE;
+		}
+	} else {
+		pmd_populate(orig_mm, pmd, pmd_pgtable(*shadow_pmd));
+		get_page(pmd_page(*shadow_pmd));
+		add_mm_counter(orig_vma->vm_mm, MM_SHMEMPAGES, HPAGE_PMD_NR);
+	}
+	spin_unlock(ptl);
+
+	shadow_vma = find_vma(shadow_mm, shadow_addr);
+	if (!shadow_vma)
+		return VM_FAULT_SIGSEGV;
+
+	/*
+	 * switch to shadow vma and shadow mm
+	 */
+	vmf->vma = shadow_vma;
+
+	return 0;
+out:
+	return VM_FAULT_OOM;
 }
 
 /*

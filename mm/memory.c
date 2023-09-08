@@ -222,6 +222,7 @@ static void free_pte_range(struct mmu_gather *tlb, pmd_t *pmd,
 	if (shared_pte) {
 		tlb_flush_pmd_range(tlb, addr, PAGE_SIZE);
 		tlb->freed_tables = 1;
+		put_page(token);
 		return;
 	}
 	pte_free_tlb(tlb, token, addr);
@@ -262,6 +263,7 @@ static inline void free_pmd_range(struct mmu_gather *tlb, pud_t *pud,
 	if (shared_pte) {
 		tlb_flush_pud_range(tlb, start, PAGE_SIZE);
 		tlb->freed_tables = 1;
+		mm_dec_nr_pmds(tlb->mm);
 	} else {
 		pmd_free_tlb(tlb, pmd, start);
 		mm_dec_nr_pmds(tlb->mm);
@@ -4913,6 +4915,19 @@ static vm_fault_t __handle_mm_fault(struct vm_area_struct *vma,
 	p4d_t *p4d;
 	vm_fault_t ret;
 
+#ifdef CONFIG_PAGETABLE_SHARE
+	/*
+	 * For pgtable share candidates, we will create share
+	 * pmd, and switch vma -> shadow_vma, mm -> shadow_mm.
+	 */
+	if (unlikely(vma_is_pgtable_shared(vma))) {
+		ret = pgtable_share_page_fault(&vmf, address);
+		if (ret)
+			return ret;
+		mm = vmf.vma->vm_mm;
+	}
+#endif
+
 	pgd = pgd_offset(mm, address);
 	p4d = p4d_alloc(mm, pgd, address);
 	if (!p4d)
@@ -5107,6 +5122,33 @@ vm_fault_t handle_mm_fault(struct vm_area_struct *vma, unsigned long address,
 		ret = hugetlb_fault(vma->vm_mm, vma, address, flags);
 	else
 		ret = __handle_mm_fault(vma, address, flags);
+#ifdef CONFIG_PAGETABLE_SHARE
+	if (vma_is_pgtable_shared(vma)) {
+		struct pgtable_share_struct *info;
+		struct mm_struct *orig_mm, *shadow_mm;
+
+		if ((!vma->vm_file) || (!vma->vm_file->f_mapping))
+			return VM_FAULT_ERROR;
+
+		info = vma_get_pgtable_share_data(vma);
+		if (!info)
+			return VM_FAULT_ERROR;
+		orig_mm = vma->vm_mm;
+		shadow_mm = info->mm;
+		/*
+		 * Release the read lock on shared VMA's parent mm unless
+		 * __handle_mm_fault released the lock already.
+		 * __handle_mm_fault sets VM_FAULT_RETRY in return value if
+		 * it released mmap lock. Here, that means shadow mmap lock
+		 * has been released, meantime, we need to unlock original
+		 * mmap lock.
+		 */
+		if ((ret & VM_FAULT_RETRY) && (flags & FAULT_FLAG_ALLOW_RETRY))
+			mmap_read_unlock(orig_mm);
+		else
+			mmap_read_unlock(shadow_mm);
+	}
+#endif
 
 	lru_gen_exit_fault();
 
