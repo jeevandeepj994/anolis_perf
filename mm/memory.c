@@ -5070,8 +5070,10 @@ vm_fault_t handle_mm_fault(struct vm_area_struct *vma, unsigned long address,
 			   unsigned int flags, struct pt_regs *regs)
 {
 	vm_fault_t ret;
+#ifdef CONFIG_PAGETABLE_SHARE
 	bool shared = false;
 	struct mm_struct *orig_mm;
+#endif
 
 	__set_current_state(TASK_RUNNING);
 
@@ -5081,6 +5083,7 @@ vm_fault_t handle_mm_fault(struct vm_area_struct *vma, unsigned long address,
 	/* do counter updates before entering really critical section. */
 	check_sync_rss_stat(current);
 
+#ifdef CONFIG_PAGETABLE_SHARE
 	orig_mm = vma->vm_mm;
 	if (unlikely(vma_is_shared(vma))) {
 		ret = find_shared_vma(&vma, &address, flags);
@@ -5090,6 +5093,7 @@ vm_fault_t handle_mm_fault(struct vm_area_struct *vma, unsigned long address,
 			return VM_FAULT_SIGSEGV;
 		shared = true;
 	}
+#endif
 
 	if (!arch_vma_access_permitted(vma, flags & FAULT_FLAG_WRITE,
 					    flags & FAULT_FLAG_INSTRUCTION,
@@ -5112,6 +5116,7 @@ vm_fault_t handle_mm_fault(struct vm_area_struct *vma, unsigned long address,
 
 	lru_gen_exit_fault();
 
+#ifdef CONFIG_PAGETABLE_SHARE
 	/*
 	 * Release the read lock on shared VMA's parent mm unless
 	 * __handle_mm_fault released the lock already.
@@ -5141,6 +5146,7 @@ vm_fault_t handle_mm_fault(struct vm_area_struct *vma, unsigned long address,
 		if (release_mmlock)
 			mmap_read_unlock(orig_mm);
 	}
+#endif
 
 	if (flags & FAULT_FLAG_USER) {
 		mem_cgroup_exit_user_fault();
