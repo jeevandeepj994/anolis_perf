@@ -8,9 +8,6 @@ struct mm_struct;
 struct pgtable_share_struct {
 	struct mm_struct *mm;
 	refcount_t refcnt;
-	unsigned long start;
-	unsigned long size;
-	unsigned long mode;
 };
 
 extern void pgtable_share_del_mm(struct vm_area_struct *vm);

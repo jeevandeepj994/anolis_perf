@@ -197,8 +197,6 @@ static int pgtable_share_new_mm(struct vm_area_struct *vma)
 		goto err_free;
 	}
 	info->mm = new_mm;
-	info->start = start;
-	info->size = len;
 	refcount_set(&info->refcnt, 1);
 	vma->pgtable_share_data = info;
 
