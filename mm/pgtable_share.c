@@ -35,6 +35,21 @@ static bool vma_is_suitable_pgtable_share(struct vm_area_struct *vma)
 	return true;
 }
 
+inline struct pgtable_share_struct *vma_get_pgtable_share_data(struct vm_area_struct *vma)
+{
+	struct pgtable_share_struct *info;
+
+	info = vma->pgtable_share_data;
+
+	return info;
+}
+
+inline void vma_set_pgtable_share_data(struct vm_area_struct *vma,
+				struct pgtable_share_struct *info)
+{
+	WRITE_ONCE(vma->pgtable_share_data, info);
+}
+
 /*
  */
 static pmd_t
@@ -131,7 +146,7 @@ find_shared_vma(struct vm_area_struct **vmap, unsigned long *addrp,
 
 	if ((!guest_vma->vm_file) || (!guest_vma->vm_file->f_mapping))
 		return 0;
-	info = guest_vma->pgtable_share_data;
+	info = vma_get_pgtable_share_data(guest_vma);
 	if (!info) {
 		pr_warn("VM_SHARED_PT vma with NULL ptshare_data");
 		dump_stack_print_info(KERN_WARNING);
@@ -198,7 +213,7 @@ static int pgtable_share_new_mm(struct vm_area_struct *vma)
 	}
 	info->mm = new_mm;
 	refcount_set(&info->refcnt, 1);
-	vma->pgtable_share_data = info;
+	vma_set_pgtable_share_data(vma, info);
 
 	return retval;
 
@@ -266,7 +281,7 @@ void pgtable_share_create(struct vm_area_struct *vma)
 	if (!vma_is_suitable_pgtable_share(vma))
 		return;
 
-	info = vma->pgtable_share_data;
+	info = vma_get_pgtable_share_data(vma);
 	VM_BUG_ON_VMA(info, vma);
 
 	ret = pgtable_share_new_mm(vma);
@@ -295,13 +310,13 @@ void pgtable_share_del_mm(struct vm_area_struct *vma)
 
 	if (!file || (!file->f_mapping))
 		return;
-	info = vma->pgtable_share_data;
+	info = vma_get_pgtable_share_data(vma);
 	WARN_ON(!info);
 	if (!info)
 		return;
 
 	if (refcount_dec_and_test(&info->refcnt)) {
 		free_pgtable_share_mm(info);
-		vma->pgtable_share_data = NULL;
+		vma_set_pgtable_share_data(vma, NULL);
 	}
 }

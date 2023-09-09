@@ -15,6 +15,9 @@ extern int pgtable_share_insert_vma(struct mm_struct *mm, struct vm_area_struct 
 extern vm_fault_t find_shared_vma(struct vm_area_struct **vmap,
 				  unsigned long *addrp, unsigned int flags);
 extern void pgtable_share_create(struct vm_area_struct *vma);
+extern struct pgtable_share_struct *vma_get_pgtable_share_data(struct vm_area_struct *vma);
+extern void vma_set_pgtable_share_mm(struct vm_area_struct *vma,
+				     struct pgtable_share_struct *info);
 
 static inline bool vma_is_pgtable_shared(const struct vm_area_struct *vma)
 {
@@ -24,6 +27,16 @@ static inline bool vma_is_pgtable_shared(const struct vm_area_struct *vma)
 static inline bool vma_is_pgtable_shared(const struct vm_area_struct *vma)
 {
 	return false;
+}
+
+static inline struct pgtable_share_struct *vma_get_pgtable_share_data(struct vm_area_struct *vma)
+{
+	return NULL;
+}
+
+static inline void vma_set_pgtable_share_data(struct vm_area_struct *vma,
+					      struct pgtable_share_struct *info)
+{
 }
 
 static inline void pgtable_share_del_mm(struct vm_area_struct *vma)
