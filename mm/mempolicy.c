@@ -827,6 +827,9 @@ static int mbind_range(struct mm_struct *mm, unsigned long start,
 		if (mpol_equal(vma_policy(vma), new_pol))
 			continue;
 
+		if (unlikely(vma_is_pgtable_shared(vma)))
+			return -EINVAL;
+
 		pgoff = vma->vm_pgoff +
 			((vmstart - vma->vm_start) >> PAGE_SHIFT);
 		prev = vma_merge(mm, prev, vmstart, vmend, vma->vm_flags,

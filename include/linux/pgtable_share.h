@@ -23,6 +23,8 @@ extern void pgtable_share_clear_pmd(struct mmu_gather *tlb, struct vm_area_struc
 extern long pgtable_share_dontneed_single_vma(struct vm_area_struct *vma,
 					      unsigned long start, unsigned long end);
 extern bool page_is_pgtable_shared(struct page *page);
+extern bool pgtable_share_find_intersection(struct mm_struct *mm, unsigned long start,
+					    unsigned long end);
 
 static inline bool vma_is_pgtable_shared(const struct vm_area_struct *vma)
 {
@@ -82,6 +84,12 @@ static inline long pgtable_share_dontneed_single_vma(struct vm_area_struct *vma,
 }
 
 static inline bool page_is_pgtable_shared(struct page *page)
+{
+	return false;
+}
+
+static inline bool pgtable_share_find_intersection(struct mm_struct *mm, unsigned long start,
+						    unsigned long end)
 {
 	return false;
 }

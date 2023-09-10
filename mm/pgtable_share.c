@@ -401,3 +401,31 @@ bool page_is_pgtable_shared(struct page *page)
 
 	return false;
 }
+
+/**
+ * pgtable_share_find_intersection - check whether a range area overlap
+ * pgtable shared vmas exists.
+ */
+bool pgtable_share_find_intersection(struct mm_struct *mm, unsigned long start,
+				     unsigned long end)
+{
+	struct vm_area_struct *vma;
+	bool ret = false;
+
+	vma = find_vma(mm, start);
+	if (!vma)
+		return false;
+
+	/* if it doesn't overlap, we have nothing.. */
+	if (vma->vm_start >= end)
+		return false;
+
+	for ( ; vma && vma->vm_start < end; vma = vma->vm_next) {
+		if (vma_is_pgtable_shared(vma)) {
+			ret = true;
+			break;
+		}
+	}
+
+	return ret;
+}

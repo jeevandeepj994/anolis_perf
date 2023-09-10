@@ -24,6 +24,7 @@
 #include <linux/memcontrol.h>
 #include <linux/mm_inline.h>
 #include <linux/page_dup.h>
+#include <linux/pgtable_share.h>
 #include <linux/secretmem.h>
 
 #include "internal.h"
@@ -514,6 +515,8 @@ int mlock_fixup(struct vm_area_struct *vma, struct vm_area_struct **prev,
 		goto out;
 
 	async_fork_fixup_vma(vma);
+	if (unlikely(vma_is_pgtable_shared(vma)))
+		goto out;
 
 	pgoff = vma->vm_pgoff + ((start - vma->vm_start) >> PAGE_SHIFT);
 	*prev = vma_merge(mm, *prev, start, end, newflags, vma->anon_vma,
