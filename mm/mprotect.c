@@ -32,6 +32,7 @@
 #include <asm/cacheflush.h>
 #include <asm/mmu_context.h>
 #include <asm/tlbflush.h>
+#include <linux/pgtable_share.h>
 
 #include "internal.h"
 
@@ -581,6 +582,11 @@ static int do_mprotect_pkey(unsigned long start, size_t len,
 
 		async_fork_fixup_vma(vma);
 		/* Here we know that vma->vm_start <= nstart < vma->vm_end. */
+
+		if (unlikely(vma_is_pgtable_shared(vma))) {
+			error = -EINVAL;
+			goto out;
+		}
 
 		/* Does the application expect PROT_READ to imply PROT_EXEC */
 		if (rier && (vma->vm_flags & VM_MAYEXEC))

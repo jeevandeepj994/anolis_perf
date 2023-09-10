@@ -24,6 +24,7 @@
 #include <linux/uaccess.h>
 #include <linux/mm-arch-hooks.h>
 #include <linux/userfaultfd_k.h>
+#include <linux/pgtable_share.h>
 
 #include <asm/cacheflush.h>
 #include <asm/tlbflush.h>
@@ -715,6 +716,11 @@ SYSCALL_DEFINE5(mremap, unsigned long, addr, unsigned long, old_len,
 
 	if (mmap_write_lock_killable(current->mm))
 		return -EINTR;
+
+	if (pgtable_share_find_intersection(mm, addr, addr + old_len)) {
+		mmap_write_unlock(mm);
+		return -EINVAL;
+	}
 
 	if (flags & (MREMAP_FIXED | MREMAP_DONTUNMAP)) {
 		ret = mremap_to(addr, old_len, new_addr, new_len,
