@@ -6781,9 +6781,9 @@ void unthrottle_cfs_rq(struct cfs_rq *cfs_rq)
 	/* At this point se is NULL and we are at root level*/
 	add_nr_running(rq, task_delta);
 
+unthrottle_throttle:
 	id_commit_make_up(rq, !se);
 
-unthrottle_throttle:
 	/*
 	 * The cfs_rq_throttled() breaks in the above iteration can result in
 	 * incomplete leaf list maintenance, resulting in triggering the
