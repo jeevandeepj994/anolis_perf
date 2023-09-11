@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: GPL-2.0
 include ../scripts/Makefile.include
+include ../scripts/Makefile.arch
 
 prefix ?= /usr/local
 
@@ -56,6 +57,7 @@ endif
 ifeq ($(feature-disassembler-four-args), 1)
 CFLAGS += -DDISASM_FOUR_ARGS_SIGNATURE
 endif
+
 ifeq ($(feature-disassembler-init-styled), 1)
 CFLAGS += -DDISASM_INIT_STYLED
 endif

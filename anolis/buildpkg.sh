@@ -70,8 +70,7 @@ function output() {
 
 	mkdir -p ${DIST_OUTPUT}/${targetdir}
 
-	cp ${DIST_RPMBUILDDIR_OUTPUT}/RPMS/$(uname -m)/*.rpm ${DIST_OUTPUT}/${targetdir}/
-
+	cp ${DIST_RPMBUILDDIR_OUTPUT}/RPMS/*.rpm ${DIST_OUTPUT}/${targetdir}/
 	# copy srpm packages if and only if they exist.
 	if [ -f ${DIST_RPMBUILDDIR_OUTPUT}/SRPMS/*.rpm ]; then
 		cp ${DIST_RPMBUILDDIR_OUTPUT}/SRPMS/*.rpm ${DIST_OUTPUT}/${targetdir}

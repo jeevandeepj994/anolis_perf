@@ -220,8 +220,9 @@ ifeq ($(strip $(STATIC)),true)
 else
 	$(QUIET) $(CC) $(CFLAGS) $(LDFLAGS) $(UTIL_OBJS) -lcpupower -lrt -lpci -L$(OUTPUT) -o $@
 endif
+ifneq ($(SRCARCH), sw_64)
 	$(QUIET) $(STRIPCMD) $@
-
+endif
 $(OUTPUT)po/$(PACKAGE).pot: $(UTIL_SRC)
 	$(ECHO) "  GETTEXT " $@
 	$(QUIET) xgettext --default-domain=$(PACKAGE) --add-comments \
