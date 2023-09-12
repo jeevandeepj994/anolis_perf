@@ -2613,7 +2613,7 @@ update_stats_wait_end(struct cfs_rq *cfs_rq, struct sched_entity *se)
 		}
 		trace_sched_stat_wait(p, delta);
 	}
-	cpuacct_update_latency(se, delta);
+	cpu_update_latency(se, delta);
 
 	__schedstat_set(se->statistics.wait_max,
 		      max(schedstat_val(se->statistics.wait_max), delta));
@@ -2680,7 +2680,7 @@ update_stats_enqueue_sleeper(struct cfs_rq *cfs_rq, struct sched_entity *se)
 		__schedstat_add(se->statistics.sum_sleep_runtime, delta);
 
 		if (tsk) {
-			task_ca_update_block(tsk, delta);
+			task_cpu_update_block(tsk, delta);
 			if (tsk->in_iowait) {
 				__schedstat_add(se->statistics.iowait_sum, delta);
 				__schedstat_inc(se->statistics.iowait_count);
