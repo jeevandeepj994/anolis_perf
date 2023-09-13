@@ -109,6 +109,7 @@ enum {
 #define IORING_SETUP_SQE128	(1U << 10)	/* SQEs are 128 byte */
 #define IORING_SETUP_CQE32	(1U << 11)	/* CQEs are 32 byte */
 #define IORING_SETUP_IDLE_US	(1U << 30)	/* unit of thread_idle is macrosecond */
+#define IORING_SETUP_SQPOLL_PERCPU     (1U << 31)      /* use percpu SQ poll thread */
 
 enum {
 	IORING_OP_NOP,
