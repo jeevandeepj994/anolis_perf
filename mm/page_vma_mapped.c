@@ -223,7 +223,20 @@ restart:
 		 * subsequent update.
 		 */
 		pmde = READ_ONCE(*pvmw->pmd);
-
+#ifdef CONFIG_PAGETABLE_SHARE
+		if (vma_is_pgtable_shared(pvmw->vma)) {
+			pvmw->ptl = pmd_lock(mm, pvmw->pmd);
+			if (!pmd_none(pmde)) {
+				pvmw->pte = (pte_t *)pvmw->pmd;
+				pvmw->pmd = NULL;
+				return true;
+			}
+			spin_unlock(pvmw->ptl);
+			pvmw->ptl = NULL;
+			step_forward(pvmw, PMD_SIZE);
+			continue;
+		}
+#endif
 		if (pmd_trans_huge(pmde) || is_pmd_migration_entry(pmde)) {
 			pvmw->ptl = pmd_lock(mm, pvmw->pmd);
 			pmde = *pvmw->pmd;

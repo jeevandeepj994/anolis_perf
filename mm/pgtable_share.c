@@ -436,3 +436,25 @@ bool pgtable_share_find_intersection(struct mm_struct *mm, unsigned long start,
 
 	return ret;
 }
+
+/*
+ * When start,end range within vma which has shared pte. If so, adjust
+ * start and end to cover an entire shared pte mapping.
+ */
+void pgtable_share_adjust_range(struct vm_area_struct *vma, unsigned long *start,
+				unsigned long *end)
+{
+	unsigned long v_start = ALIGN(vma->vm_start, PMD_SIZE),
+		v_end = ALIGN_DOWN(vma->vm_end, PMD_SIZE);
+
+	if (!vma_is_pgtable_shared(vma) || !(v_end > v_start) ||
+	    (*end <= v_start) || (*start >= v_end))
+		return;
+
+	/* Extend the range to be PMD aligned. */
+	if (*start > v_start)
+		*start = ALIGN_DOWN(*start, PMD_SIZE);
+
+	if (*end < v_end)
+		*end = ALIGN(*end, PMD_SIZE);
+}
