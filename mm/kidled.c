@@ -131,6 +131,7 @@ int kidled_inc_page_age(pg_data_t *pgdat, unsigned long pfn)
 	unsigned long old, new;
 	int age;
 
+	page = compound_head(page);
 	do  {
 		age = ((page->flags >> KIDLED_AGE_PGSHIFT) & KIDLED_AGE_MASK);
 		if (age >= KIDLED_AGE_MASK)
@@ -151,6 +152,7 @@ void kidled_set_page_age(pg_data_t *pgdat, unsigned long pfn, int val)
 	struct page *page = pfn_to_page(pfn);
 	unsigned long old, new;
 
+	page = compound_head(page);
 	do  {
 		new = old = page->flags;
 		new &= ~(KIDLED_AGE_MASK << KIDLED_AGE_PGSHIFT);
@@ -496,9 +498,6 @@ static inline int kidled_scan_page(pg_data_t *pgdat, unsigned long pfn)
 			put_page(page);
 		}
 	}
-
-	for (idx = 1; idx < nr_pages; idx++)
-		kidled_set_page_age(pgdat, pfn + idx, age);
 
 out:
 	return nr_pages;
