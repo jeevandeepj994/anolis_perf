@@ -109,6 +109,7 @@
 #define KIDLED_AGE_WIDTH 0
 #endif
 
+#define KIDLED_AGE_OFFSET_MASK ((BIT(KIDLED_AGE_WIDTH) - 1) << KIDLED_AGE_PGOFF)
 /*
  * We are going to use the flags for the page to node mapping if its in
  * there.  This includes the case where there is no node, so it is implicit.
