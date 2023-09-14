@@ -1534,6 +1534,7 @@ static inline int kidled_get_page_age(pg_data_t *pgdat, unsigned long pfn)
 {
 	struct page *page = pfn_to_page(pfn);
 
+	page = compound_head(page);
 	return (page->flags >> KIDLED_AGE_PGSHIFT) & KIDLED_AGE_MASK;
 }
 
