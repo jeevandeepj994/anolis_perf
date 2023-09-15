@@ -255,9 +255,9 @@ static inline unsigned long p4d_page_vaddr(p4d_t p4d)
 	return (unsigned long)pfn_to_virt(p4d_val(p4d) >> _PFN_SHIFT);
 }
 
-static inline unsigned long pud_page_vaddr(pud_t pud)
+static inline pmd_t *pud_pgtable(pud_t pud)
 {
-	return (unsigned long)pfn_to_virt(pud_val(pud) >> _PFN_SHIFT);
+	return (pmd_t *)pfn_to_virt(pud_val(pud) >> _PFN_SHIFT);
 }
 
 static inline int pte_none(pte_t pte)
