@@ -16632,6 +16632,12 @@ M:	Jan-Benedict Glaw <jbglaw@lug-owl.de>
 S:	Maintained
 F:	arch/alpha/kernel/srm_env.c
 
+SSSNIC Ethernet Controller DRIVERS
+M:	Steven Song <steven.song@3snic.com>
+S:	Maintained
+F:	Documentation/networking/device_drivers/ethernet/3snic/sssnic/sssnic.rst
+F:	drivers/net/ethernet/3snic/sssnic
+
 SSSRAID SCSI/Raid DRIVERS
 M:	Steven Song <steven.song@3snic.com>
 L:	linux-scsi@vger.kernel.org
