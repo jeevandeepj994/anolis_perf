@@ -933,11 +933,26 @@ madvise_vma(struct vm_area_struct *vma, struct vm_area_struct **prev,
 	async_fork_fixup_vma(vma);
 #ifdef CONFIG_PAGETABLE_SHARE
 	if (unlikely(vma_is_pgtable_shared(vma))) {
-		if (behavior != MADV_DONTNEED)
-			return -EINVAL;
-		if ((start | end) & (PMD_SIZE - 1)) {
-			pr_warn("pgtable share vma: %lx - %lx not aligned with PMD SIZE",
-				start, end);
+		/*
+		 * Only support MADV_DODUMP, MADV_DONTDUMP and
+		 * MADV_DONTNEED for pgtable shared vma.
+		 */
+		switch (behavior) {
+		case MADV_DODUMP:
+		case MADV_DONTDUMP:
+			if (vma->vm_start != start || vma->vm_end != end) {
+				pr_warn("pgtable share vma: cann't operate a part");
+				return -EINVAL;
+			}
+			break;
+		case MADV_DONTNEED:
+			if ((start | end) & (PMD_SIZE - 1)) {
+				pr_warn("pgtable share vma: %lx - %lx not aligned with PMD SIZE",
+					start, end);
+				return -EINVAL;
+			}
+			break;
+		default:
 			return -EINVAL;
 		}
 	}
