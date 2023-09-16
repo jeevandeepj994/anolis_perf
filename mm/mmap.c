@@ -1051,6 +1051,10 @@ static inline int is_mergeable_vma(struct vm_area_struct *vma,
 		return 0;
 	if (!is_mergeable_vm_userfaultfd_ctx(vma, vm_userfaultfd_ctx))
 		return 0;
+#ifdef CONFIG_PAGETABLE_SHARE
+	if (vma_is_pgtable_shared(vma))
+		return 0;
+#endif
 	return 1;
 }
 
@@ -1878,10 +1882,6 @@ unsigned long mmap_region(struct file *file, unsigned long addr,
 				goto unmap_writable;
 			}
 		}
-#ifdef CONFIG_PAGETABLE_SHARE
-		if (vm_flags & VM_SHARED_PT)
-			vma->vm_flags |= VM_SHARED_PT;
-#endif
 		vm_flags = vma->vm_flags;
 	} else if (vm_flags & VM_SHARED) {
 		error = shmem_zero_setup(vma);
