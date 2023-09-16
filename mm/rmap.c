@@ -74,6 +74,7 @@
 #include <linux/userfaultfd_k.h>
 #include <linux/page_dup.h>
 #include <linux/mm_inline.h>
+#include <linux/pgtable_share.h>
 
 #include <asm/tlbflush.h>
 
@@ -1428,6 +1429,12 @@ static bool try_to_unmap_one(struct page *page, struct vm_area_struct *vma,
 	if (IS_ENABLED(CONFIG_MIGRATION) && (flags & TTU_MIGRATION) &&
 	    is_zone_device_page(page) && !is_device_private_page(page))
 		return true;
+
+#ifdef CONFIG_PAGETABLE_SHARE
+	if (IS_ENABLED(CONFIG_MIGRATION) && (flags & TTU_MIGRATION) &&
+	    vma_is_pgtable_shared(vma))
+		return true;
+#endif
 
 	if (flags & TTU_SPLIT_HUGE_PMD) {
 		split_huge_pmd_address(vma, address,

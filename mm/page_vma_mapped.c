@@ -4,6 +4,7 @@
 #include <linux/hugetlb.h>
 #include <linux/swap.h>
 #include <linux/swapops.h>
+#include <linux/pgtable_share.h>
 
 #include "internal.h"
 
@@ -162,6 +163,12 @@ bool page_vma_mapped_walk(struct page_vma_mapped_walk *pvmw)
 	/* The only possible pmd mapping has been handled on last iteration */
 	if (pvmw->pmd && !pvmw->pte)
 		return not_found(pvmw);
+#ifdef CONFIG_PAGETABLE_SHARE
+	if (vma_is_pgtable_shared(pvmw->vma) &&
+	    (pvmw->flags & PVMW_MIGRATION)) {
+		return not_found(pvmw);
+	}
+#endif
 
 	if (unlikely(PageHuge(page))) {
 		/* The only possible mapping was handled on last iteration */

@@ -371,3 +371,33 @@ long pgtable_share_dontneed_single_vma(struct vm_area_struct *vma,
 
 	return 0;
 }
+
+bool page_is_pgtable_shared(struct page *page)
+{
+	struct vm_area_struct *vma;
+	struct address_space *mapping;
+	pgoff_t pgoff;
+
+	if (!page_mapped(page))
+		return false;
+
+	mapping = page_mapping(page);
+	if (!mapping)
+		return false;
+
+	pgoff = page_to_index(page);
+
+	i_mmap_lock_read(mapping);
+	vma = vma_interval_tree_iter_first(&mapping->i_mmap, pgoff, pgoff);
+	while (vma) {
+		if (vma_is_pgtable_shared(vma)) {
+			i_mmap_unlock_read(mapping);
+			return true;
+		}
+
+		vma = vma_interval_tree_iter_next(vma, pgoff, pgoff);
+	}
+	i_mmap_unlock_read(mapping);
+
+	return false;
+}

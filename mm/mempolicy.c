@@ -100,6 +100,7 @@
 #include <linux/printk.h>
 #include <linux/swapops.h>
 #include <linux/page_dup.h>
+#include <linux/pgtable_share.h>
 
 #include <asm/tlbflush.h>
 #include <linux/uaccess.h>
@@ -1772,6 +1773,9 @@ bool vma_migratable(struct vm_area_struct *vma)
 		return false;
 
 	if (dup_page_suitable(vma, vma->vm_mm))
+		return false;
+
+	if (vma_is_pgtable_shared(vma))
 		return false;
 
 	return true;
