@@ -458,3 +458,88 @@ void pgtable_share_adjust_range(struct vm_area_struct *vma, unsigned long *start
 	if (*end < v_end)
 		*end = ALIGN(*end, PMD_SIZE);
 }
+
+DEFINE_STATIC_KEY_TRUE(pgtable_share_enabled_key);
+static int __init setup_pgtable_share(char *s)
+{
+	if (!strcmp(s, "1"))
+		static_branch_enable(&pgtable_share_enabled_key);
+	else if (!strcmp(s, "0"))
+		static_branch_disable(&pgtable_share_enabled_key);
+	return 1;
+}
+__setup("pgtable_share=", setup_pgtable_share);
+
+#ifdef CONFIG_SYSFS
+static ssize_t pgtable_share_enabled_show(struct kobject *kobj,
+				    struct kobj_attribute *attr, char *buf)
+{
+	return sprintf(buf, "%d\n", !!static_branch_unlikely(&pgtable_share_enabled_key));
+}
+static ssize_t pgtable_share_enabled_store(struct kobject *kobj,
+					   struct kobj_attribute *attr,
+					   const char *buf, size_t count)
+{
+	static DEFINE_MUTEX(mutex);
+	ssize_t ret = count;
+
+	mutex_lock(&mutex);
+
+	if (!strncmp(buf, "1", 1))
+		static_branch_enable(&pgtable_share_enabled_key);
+	else if (!strncmp(buf, "0", 1))
+		static_branch_disable(&pgtable_share_enabled_key);
+	else
+		ret = -EINVAL;
+
+	mutex_unlock(&mutex);
+	return ret;
+}
+static struct kobj_attribute pgtable_share_enabled_attr =
+	__ATTR(enabled, 0644, pgtable_share_enabled_show,
+	       pgtable_share_enabled_store);
+
+static struct attribute *pgtable_share_attrs[] = {
+	&pgtable_share_enabled_attr.attr,
+	NULL,
+};
+
+static struct attribute_group pgtable_share_attr_group = {
+	.attrs = pgtable_share_attrs,
+};
+
+static int __init pgtable_share_init_sysfs(void)
+{
+	int err;
+	struct kobject *pgtable_share_kobj;
+
+	pgtable_share_kobj = kobject_create_and_add("pgtable_share", mm_kobj);
+	if (!pgtable_share_kobj) {
+		pr_err("failed to create pgtable_share kobject\n");
+		return -ENOMEM;
+	}
+	err = sysfs_create_group(pgtable_share_kobj, &pgtable_share_attr_group);
+	if (err) {
+		pr_err("failed to register pgtable_share group\n");
+		goto delete_obj;
+	}
+
+	return 0;
+
+delete_obj:
+	kobject_put(pgtable_share_kobj);
+	return err;
+}
+#endif /* CONFIG_SYSFS */
+
+static int __init pgtable_share_init(void)
+{
+	int ret = -EINVAL;
+
+#ifdef CONFIG_SYSFS
+	ret = pgtable_share_init_sysfs();
+#endif
+
+	return ret;
+}
+module_init(pgtable_share_init);

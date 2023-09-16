@@ -1621,7 +1621,8 @@ unsigned long do_mmap(struct file *file, unsigned long addr,
 	 * Here this new vma must can be found when mmap_write_lock
 	 * always be held.
 	 */
-	if (!IS_ERR_VALUE(addr) && (flags & MAP_SHARED_PT)) {
+	if (!IS_ERR_VALUE(addr) && (flags & MAP_SHARED_PT) &&
+	   pgtable_share_enable()) {
 		struct vm_area_struct *vma = find_vma(mm, addr);
 
 		BUG_ON(!vma || addr < vma->vm_start);
