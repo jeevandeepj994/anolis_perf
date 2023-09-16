@@ -1629,7 +1629,15 @@ static bool try_to_unmap_one(struct page *page, struct vm_area_struct *vma,
 
 				set_tlb_ubc_flush_pending(mm, pteval);
 			} else {
+#ifdef CONFIG_PAGETABLE_SHARE
+				if (likely(!vma_is_shadow(vma)))
+					pteval = ptep_clear_flush(vma, address, pvmw.pte);
+				else
+					pteval = ptep_get_and_clear(vma->vm_mm,
+								    address, pvmw.pte);
+#else
 				pteval = ptep_clear_flush(vma, address, pvmw.pte);
+#endif
 			}
 		}
 
