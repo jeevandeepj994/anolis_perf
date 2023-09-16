@@ -47,6 +47,12 @@ static inline bool vma_is_pgtable_shadow(const struct vm_area_struct *vma)
 	return vma && vma->pgtable_share_data &&
 		vma->vm_mm == vma->pgtable_share_data->mm;
 }
+
+DECLARE_STATIC_KEY_TRUE(pgtable_share_enabled_key);
+static inline bool pgtable_share_enable(void)
+{
+	return static_branch_unlikely(&pgtable_share_enabled_key);
+}
 #else
 static inline bool vma_is_pgtable_shared(const struct vm_area_struct *vma)
 {
@@ -125,6 +131,11 @@ static inline bool pgtable_share_find_intersection(struct mm_struct *mm, unsigne
 static inline void pgtable_share_adjust_range(struct vm_area_struct *vma,
 					      unsigned long *start, unsigned long *end)
 {
+}
+
+static inline bool pgtable_share_enable(void)
+{
+	return false;
 }
 #endif
 #endif
