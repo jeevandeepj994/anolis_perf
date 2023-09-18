@@ -427,7 +427,7 @@ static inline bool kidled_need_check_idle(pg_data_t *pgdat, unsigned long pfn)
 static inline int kidled_scan_page(pg_data_t *pgdat, unsigned long pfn)
 {
 	struct page *page;
-	int age, nr_pages = 1, idx;
+	int age, nr_pages = 1;
 	bool idle = false;
 
 	if (!pfn_valid(pfn))
