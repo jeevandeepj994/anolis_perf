@@ -12,16 +12,23 @@
 #include <linux/blkdev.h>
 #include <trace/events/erofs.h>
 
-static struct page *rafsv6_dax_readpage(struct address_space *mapping,
+static struct page *rafsv6_readpage(struct inode *inode,
+		struct address_space *mapping,
 		pgoff_t index, struct erofs_buf *buf)
 {
 	struct page *page;
 	unsigned int nofs_flag;
 
 	nofs_flag = memalloc_nofs_save();
-	page = mapping->a_ops->startpfn(mapping, index, &buf->iomap);
-	if (!IS_ERR(page))
-		buf->mapping = mapping;
+	if (IS_DAX(inode)) {
+		page = mapping->a_ops->startpfn(mapping, index, &buf->iomap);
+		if (!IS_ERR(page))
+			buf->mapping = mapping;
+	} else {
+		page = read_cache_page(mapping, index,
+				(filler_t *)mapping->a_ops->readpage,
+				EROFS_SB(buf->sb)->bootstrap);
+	}
 	memalloc_nofs_restore(nofs_flag);
 	return page;
 }
@@ -71,8 +78,8 @@ void *erofs_bread(struct erofs_buf *buf, struct inode *inode,
 
 	if (!page || page->index != index) {
 		erofs_put_metabuf(buf);
-		if (buf->dax)
-			page = rafsv6_dax_readpage(mapping, index, buf);
+		if (buf->sb && erofs_is_rafsv6_mode(buf->sb))
+			page = rafsv6_readpage(inode, mapping, index, buf);
 		else
 			page = read_cache_page_gfp(mapping, index,
 				   mapping_gfp_constraint(mapping, ~__GFP_FS));
@@ -101,8 +108,7 @@ void *erofs_read_metabuf(struct erofs_buf *buf, struct super_block *sb,
 {
 	if (erofs_is_rafsv6_mode(sb)) {
 		buf->blkbits = sb->s_blocksize_bits;
-		if (IS_DAX(EROFS_SB(sb)->bootstrap->f_inode))
-			buf->dax = true;
+		buf->sb = sb;
 		return erofs_bread(buf, EROFS_SB(sb)->bootstrap->f_inode,
 				   blkaddr, type);
 	}
