@@ -2338,11 +2338,9 @@ static int __mark_chain_precision(struct bpf_verifier_env *env, int frame, int r
 				bitmap_from_u64(mask, reg_mask);
 				for_each_set_bit(i, mask, 32) {
 					reg = &st->frame[0]->regs[i];
-					if (reg->type != SCALAR_VALUE) {
-						reg_mask &= ~(1u << i);
-						continue;
-					}
-					reg->precise = true;
+					reg_mask &= ~(1u << i);
+					if (reg->type == SCALAR_VALUE)
+						reg->precise = true;
 				}
 				return 0;
 			}
