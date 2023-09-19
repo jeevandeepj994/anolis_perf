@@ -2351,10 +2351,4 @@ static inline void sched_core_fork(struct task_struct *p) { }
 static inline int sched_core_idle_cpu(int cpu) { return idle_cpu(cpu); }
 #endif
 
-#ifdef CONFIG_SCHED_ACPU
-extern void acpu_enable(void);
-#else
-static inline void acpu_enable(void) { }
-#endif
-
 #endif

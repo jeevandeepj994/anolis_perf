@@ -119,4 +119,10 @@ int sched_energy_aware_handler(struct ctl_table *table, int write,
 		void *buffer, size_t *lenp, loff_t *ppos);
 #endif
 
+#ifdef CONFIG_SCHED_ACPU
+extern unsigned int sysctl_sched_acpu_enabled;
+extern int sched_acpu_enable_handler(struct ctl_table *table, int write,
+				     void __user *buffer, size_t *lenp,
+				     loff_t *ppos);
+#endif
 #endif /* _LINUX_SCHED_SYSCTL_H */
