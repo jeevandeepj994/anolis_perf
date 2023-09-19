@@ -54,7 +54,7 @@ static ssize_t pubek_show(struct device *dev, struct device_attribute *attr,
 
 	tpm_buf_append(&tpm_buf, anti_replay, sizeof(anti_replay));
 
-	if (tpm_transmit_cmd(chip, NULL, tpm_buf.data, PAGE_SIZE,
+	if (tpm_transmit_cmd(chip, NULL, &tpm_buf,
 			      READ_PUBEK_RESULT_MIN_BODY_SIZE, 0,
 			      "attempting to read the PUBEK"))
 		goto out_buf;
@@ -101,7 +101,6 @@ static ssize_t pcrs_show(struct device *dev, struct device_attribute *attr,
 {
 	cap_t cap;
 	u8 digest[TPM_DIGEST_SIZE];
-	ssize_t rc;
 	u32 i, j, num_pcrs;
 	char *str = buf;
 	struct tpm_chip *chip = to_tpm_chip(dev);
@@ -118,9 +117,10 @@ static ssize_t pcrs_show(struct device *dev, struct device_attribute *attr,
 
 	num_pcrs = be32_to_cpu(cap.num_pcrs);
 	for (i = 0; i < num_pcrs; i++) {
-		rc = tpm1_pcr_read(chip, i, digest);
-		if (rc)
+		if (tpm1_pcr_read(chip, i, digest)) {
+			str = buf;
 			break;
+		}
 		str += sprintf(str, "PCR-%02d: ", i);
 		for (j = 0; j < TPM_DIGEST_SIZE; j++)
 			str += sprintf(str, "%02X ", digest[j]);
