@@ -1520,7 +1520,15 @@ unsigned long do_mmap(struct file *file, unsigned long addr,
 			 * you will get. We silently ignore unsupported flags
 			 * with MAP_SHARED to preserve backward compatibility.
 			 */
+#ifdef CONFIG_PAGETABLE_SHARE
+			/* tmpfs's identified files support MAP_SHARED_PT. */
+			if ((flags & MAP_SHARED_PT) && (flags_mask & MAP_SHARED_PT))
+				flags &= flags_mask;
+			else
+				flags &= LEGACY_MAP_MASK;
+#else
 			flags &= LEGACY_MAP_MASK;
+#endif
 			fallthrough;
 		case MAP_SHARED_VALIDATE:
 			if (flags & ~flags_mask)
