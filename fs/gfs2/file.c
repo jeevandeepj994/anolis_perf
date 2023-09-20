@@ -707,7 +707,7 @@ static ssize_t gfs2_file_direct_read(struct kiocb *iocb, struct iov_iter *to)
 		goto out_uninit;
 
 	ret = iomap_dio_rw(iocb, to, &gfs2_iomap_ops, NULL,
-			   is_sync_kiocb(iocb));
+			   is_sync_kiocb(iocb), true);
 
 	gfs2_glock_dq(&gh);
 out_uninit:
@@ -743,7 +743,7 @@ static ssize_t gfs2_file_direct_write(struct kiocb *iocb, struct iov_iter *from)
 		goto out;
 
 	ret = iomap_dio_rw(iocb, from, &gfs2_iomap_ops, NULL,
-			   is_sync_kiocb(iocb));
+			   is_sync_kiocb(iocb), true);
 
 out:
 	gfs2_glock_dq(&gh);

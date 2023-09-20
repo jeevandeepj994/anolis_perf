@@ -73,7 +73,7 @@ static ssize_t ext4_dio_read_iter(struct kiocb *iocb, struct iov_iter *to)
 	}
 
 	ret = iomap_dio_rw(iocb, to, &ext4_iomap_ops, NULL,
-			   is_sync_kiocb(iocb));
+			   is_sync_kiocb(iocb), true);
 	inode_unlock_shared(inode);
 
 	file_accessed(iocb->ki_filp);
@@ -539,11 +539,18 @@ static ssize_t ext4_dio_write_iter(struct kiocb *iocb, struct iov_iter *from)
 		ext4_journal_stop(handle);
 	}
 
+	/*
+	 * Set 'do_sync' to false here to leave calling generic_write_sync()
+	 * after ext4_handle_inode_extension(), for performance consideration
+	 */
 	ret = iomap_dio_rw(iocb, from, &ext4_iomap_ops, &ext4_dio_write_ops,
-			   is_sync_kiocb(iocb) || unaligned_io || extend);
+			   is_sync_kiocb(iocb) || unaligned_io || extend, !extend);
 
-	if (extend)
+	if (extend) {
 		ret = ext4_handle_inode_extension(inode, offset, ret, count);
+		if (ret > 0 && (iocb->ki_flags & (IOCB_SYNC | IOCB_DSYNC)))
+			ret = generic_write_sync(iocb, ret);
+	}
 
 out:
 	if (ilock_shared)
