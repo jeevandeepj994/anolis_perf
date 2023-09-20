@@ -16,6 +16,7 @@
 #include <linux/pgtable_share.h>
 #include <linux/hugetlb.h>
 #include <linux/mmdebug.h>
+#include <uapi/linux/falloc.h>
 #include <asm/tlb.h>
 
 static bool vma_is_suitable_pgtable_share(struct vm_area_struct *vma)
@@ -318,4 +319,55 @@ void pgtable_share_clear_pmd(struct mmu_gather *tlb, struct vm_area_struct *vma,
 	tlb->end = end - PAGE_SIZE;
 
 	tlb_flush_mmu_tlbonly(tlb);
+}
+
+/**
+ * pgtable_share_dontneed_single_vma - free page cache and flush
+ * TLB for all corresponding tasks.
+ * @vma: aboriginal vma which pgtable is sharable.
+ */
+long pgtable_share_dontneed_single_vma(struct vm_area_struct *vma,
+				       unsigned long start, unsigned long end)
+{
+	struct pgtable_share_struct *info;
+	struct address_space *mapping;
+	struct file *file;
+	int error;
+	loff_t offset;
+
+	file = vma->vm_file;
+	if ((!file) || (!file->f_mapping))
+		return 0;
+
+	/* Check pgtable share data */
+	info = vma_get_pgtable_share_data(vma);
+	if (!info) {
+		pr_warn("the pgtable share data has been released!");
+		return -EINVAL;
+	}
+
+	/*
+	 * Each shared vma has private file mapping, nice
+	 * to back early if no pages attached.
+	 */
+	mapping = file->f_mapping;
+	if (unlikely(!mapping->nrpages))
+		return 0;
+
+	offset = (loff_t)(start - vma->vm_start)
+			+ ((loff_t)vma->vm_pgoff << PAGE_SHIFT);
+
+	/*
+	 * zap_page_range_single() will be called during
+	 * vfs_fallocate(). It will flush each related tlb.
+	 * This refers to MADV_REMOVE.
+	 */
+	get_file(file);
+	mmap_read_unlock(vma->vm_mm);
+	error = vfs_fallocate(file, FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE,
+			      offset, end - start);
+	fput(file);
+	mmap_read_lock(vma->vm_mm);
+
+	return 0;
 }
