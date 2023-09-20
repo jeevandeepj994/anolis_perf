@@ -1144,8 +1144,8 @@ static void process_init_reply(struct fuse_conn *fc, struct fuse_req *req)
 				fc->handle_killpriv_v2 = 1;
 				fc->sb->s_flags |= SB_NOSEC;
 			}
-			if (flags & FUSE_DIRECT_IO_RELAX)
-				fc->direct_io_relax = 1;
+			if (flags & FUSE_DIRECT_IO_ALLOW_MMAP)
+				fc->direct_io_allow_mmap = 1;
 			if (flags & FUSE_INVAL_CACHE_INFAIL)
 				fc->inval_cache_in_failover = 1;
 			if (flags & FUSE_CLOSE_TO_OPEN)
@@ -1193,7 +1193,7 @@ static void fuse_prepare_init_req(struct fuse_conn *fc, struct fuse_req *req)
 		FUSE_ABORT_ERROR | FUSE_MAX_PAGES | FUSE_CACHE_SYMLINKS |
 		FUSE_HANDLE_KILLPRIV_V2 | FUSE_INIT_EXT |
 		FUSE_INVAL_CACHE_INFAIL | FUSE_CLOSE_TO_OPEN |
-		FUSE_INVALDIR_ALLENTRY | FUSE_DIRECT_IO_RELAX;
+		FUSE_INVALDIR_ALLENTRY | FUSE_DIRECT_IO_ALLOW_MMAP;
 #ifdef CONFIG_FUSE_DAX
 	if (fc->dax)
 		flags |= FUSE_MAP_ALIGNMENT;
