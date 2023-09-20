@@ -9,6 +9,10 @@ dist-check:
 			exit 1; \
 		fi \
 	fi
+	@if [ "${DIST_BUILD_MODE}" == "diy" ] && [ -z "${DIST_DIY}" ]; then \
+		echo "Error: For diy build, the variable DIST_DIY should not be empty"; \
+		exit 1; \
+	fi
 
 dist-genlog:
 	sh genlog.sh
@@ -43,12 +47,14 @@ help:
 	@echo 'the environment variables that could override:'
 	@echo '    DIST                 - the distribution suffix, eg: .an7, .an8, .an23'
 	@echo '    DIST_OUTPUT          - the output directory, default: $(DIST_SHORT_OUTPUT)'
-	@echo '    DIST_BUILD_MODE      - the build mode. optional: official/nightly/devel'
+	@echo '    DIST_BUILD_MODE      - the build mode. optional: official/nightly/devel/diy'
 	@echo '                           !!! NOTE: BE CAUTIOUS ABOUT USING official BUILD !!!'
 	@echo '                             - official build. kernel version: $(DIST_KERNELVERSION)-$(DIST_OFFICIAL_PKGRELEASEVERION), with srpm'
 	@echo '                             - nightly build. kernel version: $(DIST_KERNELVERSION)-$(DIST_UNOFFICIAL_PKGRELEASEVERION), with srpm'
 	@echo '                             - devel build. kernel version: $(DIST_KERNELVERSION)-$(DIST_UNOFFICIAL_PKGRELEASEVERION), without srpm'
+	@echo '                             - diy build. kernel version: $(DIST_KERNELVERSION)-$(DIST_DIY_PKGRELEASEVERION), with srpm'
 	@echo '    DIST_BUILD_NUMBER    - the build number for unofficial build, eg: 1/2'
+	@echo '    DIST_DIY             - the kernel version for diy build'
 	@echo '    DIST_BUILD_VARIANT & DIST_BUILD_EXTRA  - see comments in buildpkg.sh'
 
 export
