@@ -1525,7 +1525,7 @@ static void iomap_dio_submit_bio(struct iomap_dio *dio, struct iomap *iomap,
 	dio->submit.cookie = submit_bio(bio);
 }
 
-static ssize_t iomap_dio_complete(struct iomap_dio *dio)
+static ssize_t iomap_dio_complete(struct iomap_dio *dio, bool do_sync)
 {
 	const struct iomap_dio_ops *dops = dio->dops;
 	struct kiocb *iocb = dio->iocb;
@@ -1576,7 +1576,7 @@ static ssize_t iomap_dio_complete(struct iomap_dio *dio)
 	 * If this is a DSYNC write, make sure we push it to stable storage now
 	 * that we've written data.
 	 */
-	if (ret > 0 && (dio->flags & IOMAP_DIO_NEED_SYNC))
+	if (ret > 0 && (dio->flags & IOMAP_DIO_NEED_SYNC) && do_sync)
 		ret = generic_write_sync(iocb, ret);
 
 	inode_dio_end(file_inode(iocb->ki_filp));
@@ -1590,7 +1590,7 @@ static void iomap_dio_complete_work(struct work_struct *work)
 	struct iomap_dio *dio = container_of(work, struct iomap_dio, aio.work);
 	struct kiocb *iocb = dio->iocb;
 
-	iocb->ki_complete(iocb, iomap_dio_complete(dio), 0);
+	iocb->ki_complete(iocb, iomap_dio_complete(dio, true), 0);
 }
 
 /*
@@ -1861,7 +1861,7 @@ iomap_dio_actor(struct inode *inode, loff_t pos, loff_t length,
 ssize_t
 iomap_dio_rw(struct kiocb *iocb, struct iov_iter *iter,
 		const struct iomap_ops *ops, const struct iomap_dio_ops *dops,
-		bool wait_for_completion)
+		bool wait_for_completion, bool do_sync)
 {
 	struct address_space *mapping = iocb->ki_filp->f_mapping;
 	struct inode *inode = file_inode(iocb->ki_filp);
@@ -2027,7 +2027,7 @@ iomap_dio_rw(struct kiocb *iocb, struct iov_iter *iter,
 		__set_current_state(TASK_RUNNING);
 	}
 
-	return iomap_dio_complete(dio);
+	return iomap_dio_complete(dio, do_sync);
 
 out_free_dio:
 	kfree(dio);
