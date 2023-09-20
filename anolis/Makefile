@@ -2,16 +2,24 @@ include Makefile.variables
 
 all: help
 
+dist-check:
+	@if [ "${DIST_BUILD_MODE}" == "official" ]; then \
+		if [ "$(shell git describe --tags --exact-match HEAD 2>/dev/null)" != "${DIST_ANOLIS_VERSION}" ]; then \
+			echo "Error: For official build, the tag ${DIST_ANOLIS_VERSION} should point to HEAD"; \
+			exit 1; \
+		fi \
+	fi
+
 dist-genlog:
 	sh genlog.sh
 
-dist-genspec:
+dist-genspec: dist-check
 	sh genspec.sh
 
-dist-genrpmtree:
+dist-genrpmtree: dist-check
 	sh genrpmtree.sh
 
-dist-rpms: dist-genrpmtree
+dist-rpms: dist-genrpmtree dist-check
 	sh buildpkg.sh
 
 clean:
