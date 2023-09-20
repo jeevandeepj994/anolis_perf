@@ -3955,6 +3955,9 @@ static const struct file_operations shmem_file_operations = {
 	.splice_write	= iter_file_splice_write,
 	.fallocate	= shmem_fallocate,
 #endif
+#ifdef CONFIG_PAGETABLE_SHARE
+	.mmap_supported_flags = MAP_SHARED_PT,
+#endif
 };
 
 static const struct inode_operations shmem_inode_operations = {
