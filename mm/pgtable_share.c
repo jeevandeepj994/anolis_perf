@@ -16,6 +16,7 @@
 #include <linux/pgtable_share.h>
 #include <linux/hugetlb.h>
 #include <linux/mmdebug.h>
+#include <asm/tlb.h>
 
 static bool vma_is_suitable_pgtable_share(struct vm_area_struct *vma)
 {
@@ -293,4 +294,28 @@ void pgtable_share_del_mm(struct vm_area_struct *vma)
 	vma_set_pgtable_share_data(vma, NULL);
 	if (refcount_dec_and_test(&info->refcnt))
 		free_pgtable_share_mm(info);
+}
+
+void pgtable_share_clear_pmd(struct mmu_gather *tlb, struct vm_area_struct *vma,
+			     pmd_t *pmdp, unsigned long addr, unsigned long end)
+{
+	/* pgtable share vmas always align with PMD size */
+	spinlock_t *ptl;
+
+	ptl = pmd_lock(vma->vm_mm, pmdp);
+	/*
+	 * Make sure page fault will happen when accessing
+	 * this area.
+	 */
+	put_page(pmd_pgtable(*pmdp));
+	pmd_clear(pmdp);
+	add_mm_counter(vma->vm_mm, MM_SHMEMPAGES, -HPAGE_PMD_NR);
+	spin_unlock(ptl);
+
+	tlb_change_page_size(tlb, PAGE_SIZE);
+	tlb->cleared_ptes = 1;
+	tlb->start = addr;
+	tlb->end = end - PAGE_SIZE;
+
+	tlb_flush_mmu_tlbonly(tlb);
 }

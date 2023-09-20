@@ -1435,6 +1435,13 @@ static inline unsigned long zap_pmd_range(struct mmu_gather *tlb,
 
 		if (pmd_none_or_trans_huge_or_clear_bad(pmd))
 			goto next;
+#ifdef CONFIG_PAGETABLE_SHARE
+		/* The pgtable of pmd level is unshared, needs to clear. */
+		if (unlikely(vma_is_pgtable_shared(vma))) {
+			pgtable_share_clear_pmd(tlb, vma, pmd, addr, next);
+			goto next;
+		}
+#endif
 		next = zap_pte_range(tlb, vma, pmd, addr, next, details);
 next:
 		cond_resched();
