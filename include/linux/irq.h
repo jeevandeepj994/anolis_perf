@@ -187,6 +187,11 @@ struct irq_data {
 	struct irq_data		*parent_data;
 #endif
 	void			*chip_data;
+
+	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
+	CK_KABI_RESERVE(3)
+	CK_KABI_RESERVE(4)
 };
 
 /*
