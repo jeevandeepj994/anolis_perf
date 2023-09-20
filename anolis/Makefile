@@ -1,6 +1,6 @@
 include Makefile.variables
 
-all: help
+all: help examples
 
 dist-check:
 	@if [ "${DIST_BUILD_MODE}" == "official" ]; then \
@@ -32,9 +32,35 @@ clean:
 dist-version:
 	@echo $(DIST_ANOLIS_VERSION)
 
+examples:
+	@echo ''
+	@echo 'Build Examples:'
+	@echo '- *RECOMMEND* devel build with basic rpm packages'
+	@echo '    DIST_BUILD_MODE=devel DIST_BUILD_EXTRA=base make dist-rpms'
+	@echo '- *RECOMMEND* devel build with full rpm packages'
+	@echo '    DIST_BUILD_MODE=devel make dist-rpms'
+	@echo '- *RECOMMEND* nightly build with full rpm packages'
+	@echo '    DIST_BUILD_MODE=nightly make dist-rpms'
+	@echo '- diy build with basic rpm packages'
+	@echo '    DIST_BUILD_MODE=diy BUILD_DIY="your_diy_name" DIST_BUILD_EXTRA=base make dist-rpms'
+	@echo ''
+	@echo 'Kernel Version Examples:'
+	@echo '- show the kernel version of devel mode'
+	@echo '    DIST_BUILD_MODE=devel make dist-version'
+	@echo '- show the kernel version of diy mode'
+	@echo '    DIST_BUILD_MODE=diy BUILD_DIY="your_diy_name" make dist-version'
+	@echo ''
+	@echo 'Other Examples:'
+	@echo '- only generate rpm tree in devel mode, but do not build rpm packages'
+	@echo '    DIST_BUILD_MODE=devel make dist-genrpmtree'
+	@echo '- cleanup'
+	@echo '    make clean'
+
 help:
 	@echo 'For anolis release'
 	@echo ''
+	@echo 'RUN `make examples` for some examples'
+	@echo '--------------------------------'
 	@echo 'generic commands:'
 	@echo '    dist-genspec     - generate kernel spec file through kernel.spec.template and changelog files'
 	@echo '    dist-genlog      - generate changelogs'
@@ -42,6 +68,7 @@ help:
 	@echo '    dist-rpms        - build kernel rpm package, it will auto generated in $(DIST_SHORT_OUTPUT)'
 	@echo '    dist-version     - show dist version'
 	@echo '    clean            - cleanup output dir'
+	@echo '    examples          - show some examples'
 	@echo ''
 	@echo '-------------------------------'
 	@echo 'the environment variables that could override:'
