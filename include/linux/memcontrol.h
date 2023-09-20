@@ -449,6 +449,7 @@ struct mem_cgroup {
 	struct deferred_split deferred_split_queue;
 	int thp_reclaim;
 	struct thp_reclaim_ctrl tr_ctrl;
+	unsigned long thp_control;
 #endif
 
 #ifdef CONFIG_MEMSLI

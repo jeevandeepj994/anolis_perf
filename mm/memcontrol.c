@@ -6828,6 +6828,47 @@ out:
 }
 __setup("tr.proactive=", setup_thp_reclaim_proactive_init);
 
+#ifdef CONFIG_TRANSPARENT_HUGEPAGE
+static int memcg_thp_control_show(struct seq_file *m, void *v)
+{
+	struct mem_cgroup *memcg = mem_cgroup_from_css(seq_css(m));
+	unsigned long thp_control = memcg->thp_control;
+
+	seq_printf(m, "0x%lx\n", thp_control);
+	return 0;
+}
+
+static ssize_t memcg_thp_control_write(struct kernfs_open_file *of,
+				       char *buf, size_t count, loff_t off)
+{
+	struct mem_cgroup *memcg = mem_cgroup_from_css(of_css(of));
+	unsigned long thp_control;
+	int ret;
+
+	buf = strstrip(buf);
+	ret = kstrtoul(buf, 0, &thp_control);
+	if (ret || thp_control >= (1 << NR_MEMCG_THP_FLAG))
+		return -EINVAL;
+
+	memcg->thp_control = thp_control;
+	return count;
+}
+
+bool memcg_thp_control_test(struct mm_struct *mm, enum memcg_thp_flag flag)
+{
+	struct mem_cgroup *memcg;
+	unsigned long thp_control = 0;
+
+	memcg = get_mem_cgroup_from_mm(mm);
+	if (memcg) {
+		thp_control = memcg->thp_control;
+		css_put(&memcg->css);
+	}
+
+	return test_bit(flag, &thp_control);
+}
+#endif
+
 static struct cftype mem_cgroup_legacy_files[] = {
 	{
 		.name = "usage_in_bytes",
@@ -7152,6 +7193,12 @@ static struct cftype mem_cgroup_legacy_files[] = {
 		.seq_show = memcg_thp_reclaim_ctrl_show,
 		.write = memcg_thp_reclaim_ctrl_write,
 	},
+	{
+		.name = "thp_control",
+		.flags = CFTYPE_NOT_ON_ROOT,
+		.seq_show = memcg_thp_control_show,
+		.write = memcg_thp_control_write,
+	},
 #endif
 
 	{ },	/* terminate */
@@ -7441,6 +7488,7 @@ mem_cgroup_css_alloc(struct cgroup_subsys_state *parent_css)
 		memcg->thp_reclaim = parent->thp_reclaim;
 		memcg->tr_ctrl.threshold = parent->tr_ctrl.threshold;
 		memcg->tr_ctrl.proactive = parent->tr_ctrl.proactive;
+		memcg->thp_control = parent->thp_control;
 #endif
 		kidled_memcg_inherit_parent_buckets(parent, memcg);
 		memcg->reap_background = parent->reap_background;
