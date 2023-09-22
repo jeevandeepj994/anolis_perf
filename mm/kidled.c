@@ -68,6 +68,8 @@
 #define __kidled_ref __ref
 #endif
 
+DEFINE_STATIC_KEY_FALSE(kidled_enabled_key);
+
 unsigned int kidled_scan_target __read_mostly = KIDLED_SCAN_PAGE;
 struct kidled_scan_control kidled_scan_control;
 /*
@@ -785,6 +787,10 @@ static inline bool kidled_should_run(struct kidled_scan_control *p,
 			kidled_reset();
 #endif
 		}
+
+		if (!scan_control.duration)
+			static_branch_disable(&kidled_enabled_key);
+
 		*p = scan_control;
 		*new = true;
 	} else if (unlikely(!kidled_is_scan_target_equal(p))) {
@@ -1077,6 +1083,13 @@ static ssize_t kidled_scan_period_store(struct kobject *kobj,
 		pr_warn("%s: Failed to enable kidled due to mglru enabled\n", __func__);
 		return -EINVAL;
 	}
+
+	/*
+	 * To avoid situation like lru_gen >= 0 && kidled disabled, disable
+	 * enabled_key after reset.
+	 */
+	if (secs)
+		static_branch_enable(&kidled_enabled_key);
 
 	kidled_set_scan_duration(secs);
 	wake_up_interruptible(&kidled_wait);
