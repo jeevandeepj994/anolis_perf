@@ -1429,6 +1429,12 @@ static bool try_to_unmap_one(struct page *page, struct vm_area_struct *vma,
 	    is_zone_device_page(page) && !is_device_private_page(page))
 		return true;
 
+#ifdef CONFIG_PAGETABLE_SHARE
+	if (IS_ENABLED(CONFIG_MIGRATION) && (flags & TTU_MIGRATION) &&
+	    vma_is_pgtable_shared(vma))
+		return true;
+#endif
+
 	if (flags & TTU_SPLIT_HUGE_PMD) {
 		split_huge_pmd_address(vma, address,
 				flags & TTU_SPLIT_FREEZE, page);
@@ -1454,6 +1460,12 @@ static bool try_to_unmap_one(struct page *page, struct vm_area_struct *vma,
 		adjust_range_if_pmd_sharing_possible(vma, &range.start,
 						     &range.end);
 	}
+#ifdef CONFIG_PAGETABLE_SHARE
+	else if (vma_is_pgtable_shared(vma)) {
+		/* ditto */
+		pgtable_share_adjust_range(vma, &range.start, &range.end);
+	}
+#endif
 	mmu_notifier_invalidate_range_start(&range);
 
 	while (page_vma_mapped_walk(&pvmw)) {
@@ -1502,6 +1514,18 @@ static bool try_to_unmap_one(struct page *page, struct vm_area_struct *vma,
 				continue;
 		}
 
+#ifdef CONFIG_PAGETABLE_SHARE
+		if (vma_is_pgtable_shared(vma)) {
+			pmd_t *pmd = (pmd_t *)pvmw.pte;
+
+			flush_cache_range(vma, range.start, range.end);
+			__pgtable_share_clear_pmd(mm, pmd, address);
+			flush_tlb_range(vma, range.start, range.end);
+			mmu_notifier_invalidate_range(mm, range.start, range.end);
+			page_vma_mapped_walk_done(&pvmw);
+			break;
+		}
+#endif
 		/* Unexpected PMD-mapped THP? */
 		VM_BUG_ON_PAGE(!pvmw.pte, page);
 
@@ -1605,7 +1629,15 @@ static bool try_to_unmap_one(struct page *page, struct vm_area_struct *vma,
 
 				set_tlb_ubc_flush_pending(mm, pteval);
 			} else {
+#ifdef CONFIG_PAGETABLE_SHARE
+				if (likely(!vma_is_shadow(vma)))
+					pteval = ptep_clear_flush(vma, address, pvmw.pte);
+				else
+					pteval = ptep_get_and_clear(vma->vm_mm,
+								    address, pvmw.pte);
+#else
 				pteval = ptep_clear_flush(vma, address, pvmw.pte);
+#endif
 			}
 		}
 
@@ -2031,6 +2063,18 @@ static void rmap_walk_file(struct page *page, struct rmap_walk_control *rwc,
 
 		VM_BUG_ON_VMA(address == -EFAULT, vma);
 		cond_resched();
+
+#ifdef CONFIG_PAGETABLE_SHARE
+		/*
+		 * The scenarios that mapping->i_mmap_rwsem has already
+		 * been held have no need to care pgtable shared pages.
+		 * It's sufficient to reclaim these pages by coldpgs or
+		 * shrink_page_list.
+		 * (coldpgs, shrink_page_list come here with 'locked=0')
+		 */
+		if (vma_is_pgtable_shared(vma) && locked)
+			return;
+#endif
 
 		if (rwc->invalid_vma && rwc->invalid_vma(vma, rwc->arg))
 			continue;

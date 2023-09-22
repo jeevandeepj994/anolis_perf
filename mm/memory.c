@@ -77,6 +77,7 @@
 #include <linux/page_dup.h>
 #include <linux/damon.h>
 #include <linux/mm_inline.h>
+#include <linux/pgtable_share.h>
 
 #include <trace/events/kmem.h>
 
@@ -209,17 +210,29 @@ static void check_sync_rss_stat(struct task_struct *task)
  * has been handled earlier when unmapping all the memory regions.
  */
 static void free_pte_range(struct mmu_gather *tlb, pmd_t *pmd,
-			   unsigned long addr)
+			   unsigned long addr, bool shared_pte)
 {
 	pgtable_t token = pmd_pgtable(*pmd);
 	pmd_clear(pmd);
+	/*
+	 * if this address range shares page tables with other processes,
+	 * do not release pte pages. Those pages will be released when
+	 * host mm that hosts these pte pages is released
+	 */
+	if (shared_pte) {
+		tlb_flush_pmd_range(tlb, addr, PAGE_SIZE);
+		tlb->freed_tables = 1;
+		put_page(token);
+		return;
+	}
 	pte_free_tlb(tlb, token, addr);
 	mm_dec_nr_ptes(tlb->mm);
 }
 
 static inline void free_pmd_range(struct mmu_gather *tlb, pud_t *pud,
 				unsigned long addr, unsigned long end,
-				unsigned long floor, unsigned long ceiling)
+				unsigned long floor, unsigned long ceiling,
+				bool shared_pte)
 {
 	pmd_t *pmd;
 	unsigned long next;
@@ -231,7 +244,7 @@ static inline void free_pmd_range(struct mmu_gather *tlb, pud_t *pud,
 		next = pmd_addr_end(addr, end);
 		if (pmd_none_or_clear_bad(pmd))
 			continue;
-		free_pte_range(tlb, pmd, addr);
+		free_pte_range(tlb, pmd, addr, shared_pte);
 	} while (pmd++, addr = next, addr != end);
 
 	start &= PUD_MASK;
@@ -247,13 +260,20 @@ static inline void free_pmd_range(struct mmu_gather *tlb, pud_t *pud,
 
 	pmd = pmd_offset(pud, start);
 	pud_clear(pud);
-	pmd_free_tlb(tlb, pmd, start);
-	mm_dec_nr_pmds(tlb->mm);
+	if (shared_pte) {
+		tlb_flush_pud_range(tlb, start, PAGE_SIZE);
+		tlb->freed_tables = 1;
+		mm_dec_nr_pmds(tlb->mm);
+	} else {
+		pmd_free_tlb(tlb, pmd, start);
+		mm_dec_nr_pmds(tlb->mm);
+	}
 }
 
 static inline void free_pud_range(struct mmu_gather *tlb, p4d_t *p4d,
 				unsigned long addr, unsigned long end,
-				unsigned long floor, unsigned long ceiling)
+				unsigned long floor, unsigned long ceiling,
+				bool shared_pte)
 {
 	pud_t *pud;
 	unsigned long next;
@@ -265,7 +285,8 @@ static inline void free_pud_range(struct mmu_gather *tlb, p4d_t *p4d,
 		next = pud_addr_end(addr, end);
 		if (pud_none_or_clear_bad(pud))
 			continue;
-		free_pmd_range(tlb, pud, addr, next, floor, ceiling);
+		free_pmd_range(tlb, pud, addr, next, floor, ceiling,
+				shared_pte);
 	} while (pud++, addr = next, addr != end);
 
 	start &= P4D_MASK;
@@ -287,7 +308,8 @@ static inline void free_pud_range(struct mmu_gather *tlb, p4d_t *p4d,
 
 static inline void free_p4d_range(struct mmu_gather *tlb, pgd_t *pgd,
 				unsigned long addr, unsigned long end,
-				unsigned long floor, unsigned long ceiling)
+				unsigned long floor, unsigned long ceiling,
+				bool shared_pte)
 {
 	p4d_t *p4d;
 	unsigned long next;
@@ -299,7 +321,8 @@ static inline void free_p4d_range(struct mmu_gather *tlb, pgd_t *pgd,
 		next = p4d_addr_end(addr, end);
 		if (p4d_none_or_clear_bad(p4d))
 			continue;
-		free_pud_range(tlb, p4d, addr, next, floor, ceiling);
+		free_pud_range(tlb, p4d, addr, next, floor, ceiling,
+				shared_pte);
 	} while (p4d++, addr = next, addr != end);
 
 	start &= PGDIR_MASK;
@@ -321,9 +344,10 @@ static inline void free_p4d_range(struct mmu_gather *tlb, pgd_t *pgd,
 /*
  * This function frees user-level page tables of a process.
  */
-void free_pgd_range(struct mmu_gather *tlb,
+static void _free_pgd_range(struct mmu_gather *tlb,
 			unsigned long addr, unsigned long end,
-			unsigned long floor, unsigned long ceiling)
+			unsigned long floor, unsigned long ceiling,
+			bool shared_pte)
 {
 	pgd_t *pgd;
 	unsigned long next;
@@ -379,8 +403,16 @@ void free_pgd_range(struct mmu_gather *tlb,
 		next = pgd_addr_end(addr, end);
 		if (pgd_none_or_clear_bad(pgd))
 			continue;
-		free_p4d_range(tlb, pgd, addr, next, floor, ceiling);
+		free_p4d_range(tlb, pgd, addr, next, floor, ceiling,
+			       shared_pte);
 	} while (pgd++, addr = next, addr != end);
+}
+
+void free_pgd_range(struct mmu_gather *tlb,
+			unsigned long addr, unsigned long end,
+			unsigned long floor, unsigned long ceiling)
+{
+	_free_pgd_range(tlb, addr, end, floor, ceiling, false);
 }
 
 void free_pgtables(struct mmu_gather *tlb, struct vm_area_struct *vma,
@@ -403,16 +435,20 @@ void free_pgtables(struct mmu_gather *tlb, struct vm_area_struct *vma,
 		} else {
 			/*
 			 * Optimization: gather nearby vmas into one call down
+			 * but make sure vmas not sharing page tables do
+			 * not get combined with vmas sharing page tables
 			 */
 			while (next && next->vm_start <= vma->vm_end + PMD_SIZE
-			       && !is_vm_hugetlb_page(next)) {
+			       && !is_vm_hugetlb_page(next)
+			       && (vma_is_pgtable_shared(next) == vma_is_pgtable_shared(vma))) {
 				vma = next;
 				next = vma->vm_next;
 				unlink_anon_vmas(vma);
 				unlink_file_vma(vma);
 			}
-			free_pgd_range(tlb, addr, vma->vm_end,
-				floor, next ? next->vm_start : ceiling);
+			_free_pgd_range(tlb, addr, vma->vm_end,
+				floor, next ? next->vm_start : ceiling,
+				vma_is_pgtable_shared(vma));
 		}
 		vma = next;
 	}
@@ -1399,6 +1435,13 @@ static inline unsigned long zap_pmd_range(struct mmu_gather *tlb,
 
 		if (pmd_none_or_trans_huge_or_clear_bad(pmd))
 			goto next;
+#ifdef CONFIG_PAGETABLE_SHARE
+		/* The pgtable of pmd level is unshared, needs to clear. */
+		if (unlikely(vma_is_pgtable_shared(vma))) {
+			pgtable_share_clear_pmd(tlb, vma, pmd, addr, next);
+			goto next;
+		}
+#endif
 		next = zap_pte_range(tlb, vma, pmd, addr, next, details);
 next:
 		cond_resched();
@@ -1546,8 +1589,18 @@ void unmap_vmas(struct mmu_gather *tlb,
 	mmu_notifier_range_init(&range, MMU_NOTIFY_UNMAP, 0, vma, vma->vm_mm,
 				start_addr, end_addr);
 	mmu_notifier_invalidate_range_start(&range);
-	for ( ; vma && vma->vm_start < end_addr; vma = vma->vm_next)
+	for ( ; vma && vma->vm_start < end_addr; vma = vma->vm_next) {
 		unmap_single_vma(tlb, vma, start_addr, end_addr, NULL);
+#ifdef CONFIG_PAGETABLE_SHARE
+		if (vma_is_pgtable_shared(vma)) {
+			struct pgtable_share_struct *info;
+
+			info = vma_get_pgtable_share_data(vma);
+			VM_BUG_ON_VMA(!info, vma);
+			pgtable_share_del_mm(vma);
+		}
+#endif
+	}
 	mmu_notifier_invalidate_range_end(&range);
 }
 
@@ -4825,6 +4878,16 @@ static vm_fault_t handle_pte_fault(struct vm_fault *vmf)
 			return do_wp_page(vmf);
 		entry = pte_mkdirty(entry);
 	}
+#ifdef CONFIG_PAGETABLE_SHARE
+	/*
+	 * Switch to original vma to flush tlb, and no need to
+	 * restore because of vmf->vma will not be used later.
+	 */
+	if (vma_is_shadow(vmf->vma)) {
+		VM_BUG_ON_VMA(!vmf->orig_vma, vmf->vma);
+		vmf->vma = vmf->orig_vma;
+	}
+#endif
 	entry = pte_mkyoung(entry);
 	if (ptep_set_access_flags(vmf->vma, vmf->address, vmf->pte, entry,
 				vmf->flags & FAULT_FLAG_WRITE)) {
@@ -4868,6 +4931,19 @@ static vm_fault_t __handle_mm_fault(struct vm_area_struct *vma,
 	pgd_t *pgd;
 	p4d_t *p4d;
 	vm_fault_t ret;
+
+#ifdef CONFIG_PAGETABLE_SHARE
+	/*
+	 * For pgtable share candidates, we will create share
+	 * pmd, and switch vma -> shadow_vma, mm -> shadow_mm.
+	 */
+	if (unlikely(vma_is_pgtable_shared(vma))) {
+		ret = pgtable_share_page_fault(&vmf, address);
+		if (ret)
+			return ret;
+		mm = vmf.vma->vm_mm;
+	}
+#endif
 
 	pgd = pgd_offset(mm, address);
 	p4d = p4d_alloc(mm, pgd, address);
@@ -5063,6 +5139,33 @@ vm_fault_t handle_mm_fault(struct vm_area_struct *vma, unsigned long address,
 		ret = hugetlb_fault(vma->vm_mm, vma, address, flags);
 	else
 		ret = __handle_mm_fault(vma, address, flags);
+#ifdef CONFIG_PAGETABLE_SHARE
+	if (vma_is_pgtable_shared(vma)) {
+		struct pgtable_share_struct *info;
+		struct mm_struct *orig_mm, *shadow_mm;
+
+		if ((!vma->vm_file) || (!vma->vm_file->f_mapping))
+			return VM_FAULT_ERROR;
+
+		info = vma_get_pgtable_share_data(vma);
+		if (!info)
+			return VM_FAULT_ERROR;
+		orig_mm = vma->vm_mm;
+		shadow_mm = info->mm;
+		/*
+		 * Release the read lock on shared VMA's parent mm unless
+		 * __handle_mm_fault released the lock already.
+		 * __handle_mm_fault sets VM_FAULT_RETRY in return value if
+		 * it released mmap lock. Here, that means shadow mmap lock
+		 * has been released, meantime, we need to unlock original
+		 * mmap lock.
+		 */
+		if ((ret & VM_FAULT_RETRY) && (flags & FAULT_FLAG_ALLOW_RETRY))
+			mmap_read_unlock(orig_mm);
+		else
+			mmap_read_unlock(shadow_mm);
+	}
+#endif
 
 	lru_gen_exit_fault();
 

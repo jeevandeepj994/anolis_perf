@@ -1009,4 +1009,16 @@ config LRU_GEN_STATS
 # }
 
 
+config PAGETABLE_SHARE
+	bool "Enable page table sharing"
+	depends on MMU && MEMCG
+	select ARCH_USES_HIGH_VMA_FLAGS
+	default n
+	help
+	  This feature mainly to solve the scenario that a large number of processes
+	  share the same memory, resulting in high page table consumption. The last
+	  pte pages can be shared to avoid creating private ptes in each process.
+
+	  If unsure, say N.
+
 endmenu

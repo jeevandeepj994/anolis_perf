@@ -24,6 +24,7 @@
 #include <linux/page_owner.h>
 #include <linux/psi.h>
 #include <linux/page_dup.h>
+#include <linux/pgtable_share.h>
 #include "internal.h"
 
 #ifdef CONFIG_COMPACTION
@@ -1234,6 +1235,9 @@ static bool suitable_migration_source(struct compact_control *cc,
 		return false;
 
 	if (page_dup_any(page))
+		return false;
+
+	if (page_is_pgtable_shared(page))
 		return false;
 
 	if ((cc->mode != MIGRATE_ASYNC) || !cc->direct_compaction)
