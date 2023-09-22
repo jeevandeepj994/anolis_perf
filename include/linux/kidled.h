@@ -96,6 +96,8 @@ enum kidled_scan_type {
 #define KIDLED_IS_BUCKET_INVALID(buckets)	\
 	(buckets[0] == KIDLED_INVALID_BUCKET)
 
+DECLARE_STATIC_KEY_FALSE(kidled_enabled_key);
+
 static inline bool kidled_is_slab_scanned(unsigned short slab_age,
 					  unsigned long scan_rounds)
 {
@@ -304,6 +306,11 @@ static inline void kidled_set_scan_duration(u16 duration)
 			       duration, NULL);
 }
 
+static inline bool is_kidled_enabled(void)
+{
+	return static_branch_unlikely(&kidled_enabled_key);
+}
+
 /*
  * Caller must specify the original scan period, avoid the race between
  * the double operation and user's updates through sysfs interface.
@@ -423,8 +430,11 @@ static inline unsigned int kidled_get_current_scan_duration(void)
 	return 0;
 }
 
-#endif /* CONFIG_KIDLED */
+static inline bool is_kidled_enabled(void)
+{
+	return false;
+}
 
-#define is_kidled_enabled() kidled_get_current_scan_duration()
+#endif /* CONFIG_KIDLED */
 
 #endif /* _LINUX_MM_KIDLED_H */
