@@ -62,45 +62,6 @@ unsigned long tpm_calc_ordinal_duration(struct tpm_chip *chip, u32 ordinal)
 }
 EXPORT_SYMBOL_GPL(tpm_calc_ordinal_duration);
 
-static int tpm_validate_command(struct tpm_chip *chip, struct tpm_space *space,
-				const void *cmd, size_t len)
-{
-	const struct tpm_header *header = cmd;
-	int i;
-	u32 cc;
-	u32 attrs;
-	unsigned int nr_handles;
-
-	if (len < TPM_HEADER_SIZE)
-		return -EINVAL;
-
-	if (!space)
-		return 0;
-
-	if (chip->flags & TPM_CHIP_FLAG_TPM2 && chip->nr_commands) {
-		cc = be32_to_cpu(header->ordinal);
-
-		i = tpm2_find_cc(chip, cc);
-		if (i < 0) {
-			dev_dbg(&chip->dev, "0x%04X is an invalid command\n",
-				cc);
-			return -EOPNOTSUPP;
-		}
-
-		attrs = chip->cc_attrs_tbl[i];
-		nr_handles =
-			4 * ((attrs >> TPM2_CC_ATTR_CHANDLES) & GENMASK(2, 0));
-		if (len < TPM_HEADER_SIZE + 4 * nr_handles)
-			goto err_len;
-	}
-
-	return 0;
-err_len:
-	dev_dbg(&chip->dev,
-		"%s: insufficient command length %zu", __func__, len);
-	return -EINVAL;
-}
-
 static int tpm_request_locality(struct tpm_chip *chip, unsigned int flags)
 {
 	int rc;
@@ -159,30 +120,17 @@ static int tpm_go_idle(struct tpm_chip *chip, unsigned int flags)
 	return chip->ops->go_idle(chip);
 }
 
-static ssize_t tpm_try_transmit(struct tpm_chip *chip, struct tpm_space *space,
-				void *buf, size_t bufsiz, unsigned int flags)
+static ssize_t tpm_try_transmit(struct tpm_chip *chip, void *buf, size_t bufsiz,
+				unsigned int flags)
 {
 	struct tpm_header *header = buf;
 	int rc;
 	ssize_t len = 0;
 	u32 count, ordinal;
 	unsigned long stop;
-	bool need_locality;
 
-	rc = tpm_validate_command(chip, space, buf, bufsiz);
-	if (rc == -EINVAL)
-		return rc;
-	/*
-	 * If the command is not implemented by the TPM, synthesize a
-	 * response with a TPM2_RC_COMMAND_CODE return for user-space.
-	 */
-	if (rc == -EOPNOTSUPP) {
-		header->length = cpu_to_be32(sizeof(*header));
-		header->tag = cpu_to_be16(TPM2_ST_NO_SESSIONS);
-		header->return_code = cpu_to_be32(TPM2_RC_COMMAND_CODE |
-						  TSS2_RESMGR_TPM_RC_LAYER);
-		return sizeof(*header);
-	}
+	if (bufsiz < TPM_HEADER_SIZE)
+		return -EINVAL;
 
 	if (bufsiz > TPM_BUFSIZE)
 		bufsiz = TPM_BUFSIZE;
@@ -197,37 +145,12 @@ static ssize_t tpm_try_transmit(struct tpm_chip *chip, struct tpm_space *space,
 		return -E2BIG;
 	}
 
-	if (!(flags & TPM_TRANSMIT_UNLOCKED) && !(flags & TPM_TRANSMIT_NESTED))
-		mutex_lock(&chip->tpm_mutex);
-
-	if (chip->ops->clk_enable != NULL)
-		chip->ops->clk_enable(chip, true);
-
-	/* Store the decision as chip->locality will be changed. */
-	need_locality = chip->locality == -1;
-
-	if (need_locality) {
-		rc = tpm_request_locality(chip, flags);
-		if (rc < 0) {
-			need_locality = false;
-			goto out_locality;
-		}
-	}
-
-	rc = tpm_cmd_ready(chip, flags);
-	if (rc)
-		goto out_locality;
-
-	rc = tpm2_prepare_space(chip, space, ordinal, buf);
-	if (rc)
-		goto out;
-
 	rc = chip->ops->send(chip, buf, count);
 	if (rc < 0) {
 		if (rc != -EPIPE)
 			dev_err(&chip->dev,
 				"%s: send(): error %d\n", __func__, rc);
-		goto out;
+		return rc;
 	}
 
 	/* A sanity check. send() should just return zero on success e.g.
@@ -251,8 +174,7 @@ static ssize_t tpm_try_transmit(struct tpm_chip *chip, struct tpm_space *space,
 
 		if (chip->ops->req_canceled(chip, status)) {
 			dev_err(&chip->dev, "Operation Canceled\n");
-			rc = -ECANCELED;
-			goto out;
+			return -ECANCELED;
 		}
 
 		tpm_msleep(TPM_TIMEOUT_POLL);
@@ -261,50 +183,22 @@ static ssize_t tpm_try_transmit(struct tpm_chip *chip, struct tpm_space *space,
 
 	chip->ops->cancel(chip);
 	dev_err(&chip->dev, "Operation Timed out\n");
-	rc = -ETIME;
-	goto out;
+	return -ETIME;
 
 out_recv:
 	len = chip->ops->recv(chip, buf, bufsiz);
 	if (len < 0) {
 		rc = len;
-		dev_err(&chip->dev,
-			"tpm_transmit: tpm_recv: error %d\n", rc);
-		goto out;
-	} else if (len < TPM_HEADER_SIZE) {
+		dev_err(&chip->dev, "tpm_transmit: tpm_recv: error %d\n", rc);
+	} else if (len < TPM_HEADER_SIZE || len != be32_to_cpu(header->length))
 		rc = -EFAULT;
-		goto out;
-	}
 
-	if (len != be32_to_cpu(header->length)) {
-		rc = -EFAULT;
-		goto out;
-	}
-
-	rc = tpm2_commit_space(chip, space, ordinal, buf, &len);
-	if (rc)
-		dev_err(&chip->dev, "tpm2_commit_space: error %d\n", rc);
-
-out:
-	/* may fail but do not override previous error value in rc */
-	tpm_go_idle(chip, flags);
-
-out_locality:
-	if (need_locality)
-		tpm_relinquish_locality(chip, flags);
-
-	if (chip->ops->clk_enable != NULL)
-		chip->ops->clk_enable(chip, false);
-
-	if (!(flags & TPM_TRANSMIT_UNLOCKED) && !(flags & TPM_TRANSMIT_NESTED))
-		mutex_unlock(&chip->tpm_mutex);
 	return rc ? rc : len;
 }
 
 /**
  * tpm_transmit - Internal kernel interface to transmit TPM commands.
  * @chip:	a TPM chip to use
- * @space:	a TPM space
  * @buf:	a TPM command buffer
  * @bufsiz:	length of the TPM command buffer
  * @flags:	TPM transmit flags
@@ -320,17 +214,17 @@ out_locality:
  * * The response length	- OK
  * * -errno			- A system error
  */
-ssize_t tpm_transmit(struct tpm_chip *chip, struct tpm_space *space,
-		     u8 *buf, size_t bufsiz, unsigned int flags)
+ssize_t tpm_transmit(struct tpm_chip *chip, u8 *buf, size_t bufsiz,
+		     unsigned int flags)
 {
 	struct tpm_header *header = (struct tpm_header *)buf;
 	/* space for header and handles */
 	u8 save[TPM_HEADER_SIZE + 3*sizeof(u32)];
 	unsigned int delay_msec = TPM2_DURATION_SHORT;
+	bool has_locality = false;
 	u32 rc = 0;
 	ssize_t ret;
-	const size_t save_size = min(space ? sizeof(save) : TPM_HEADER_SIZE,
-				     bufsiz);
+	const size_t save_size = min(sizeof(save), bufsiz);
 	/* the command code is where the return code will be */
 	u32 cc = be32_to_cpu(header->return_code);
 
@@ -342,7 +236,32 @@ ssize_t tpm_transmit(struct tpm_chip *chip, struct tpm_space *space,
 	memcpy(save, buf, save_size);
 
 	for (;;) {
-		ret = tpm_try_transmit(chip, space, buf, bufsiz, flags);
+		if (chip->ops->clk_enable != NULL)
+			chip->ops->clk_enable(chip, true);
+
+		if (chip->locality == -1) {
+			ret = tpm_request_locality(chip, flags);
+			if (ret)
+				goto out_locality;
+			has_locality = true;
+		}
+
+		ret = tpm_cmd_ready(chip, flags);
+		if (ret)
+			goto out_locality;
+
+		ret = tpm_try_transmit(chip, buf, bufsiz, flags);
+
+		/* This may fail but do not override ret. */
+		tpm_go_idle(chip, flags);
+
+out_locality:
+		if (has_locality)
+			tpm_relinquish_locality(chip, flags);
+
+		if (chip->ops->clk_enable != NULL)
+			chip->ops->clk_enable(chip, false);
+
 		if (ret < 0)
 			break;
 		rc = be32_to_cpu(header->return_code);
@@ -373,7 +292,6 @@ ssize_t tpm_transmit(struct tpm_chip *chip, struct tpm_space *space,
 /**
  * tpm_transmit_cmd - send a tpm command to the device
  * @chip:			a TPM chip to use
- * @space:			a TPM space
  * @buf:			a TPM command buffer
  * @min_rsp_body_length:	minimum expected length of response body
  * @flags:			TPM transmit flags
@@ -384,15 +302,15 @@ ssize_t tpm_transmit(struct tpm_chip *chip, struct tpm_space *space,
  * * -errno	- A system error
  * * TPM_RC	- A TPM error
  */
-ssize_t tpm_transmit_cmd(struct tpm_chip *chip, struct tpm_space *space,
-			 struct tpm_buf *buf, size_t min_rsp_body_length,
-			 unsigned int flags, const char *desc)
+ssize_t tpm_transmit_cmd(struct tpm_chip *chip, struct tpm_buf *buf,
+			 size_t min_rsp_body_length, unsigned int flags,
+			 const char *desc)
 {
 	const struct tpm_header *header = (struct tpm_header *)buf->data;
 	int err;
 	ssize_t len;
 
-	len = tpm_transmit(chip, space, buf->data, PAGE_SIZE, flags);
+	len = tpm_transmit(chip, buf->data, PAGE_SIZE, flags);
 	if (len <  0)
 		return len;
 
@@ -541,7 +459,7 @@ int tpm_send(struct tpm_chip *chip, void *cmd, size_t buflen)
 		goto out;
 
 	memcpy(buf.data, cmd, buflen);
-	rc = tpm_transmit_cmd(chip, NULL, &buf, 0, 0,
+	rc = tpm_transmit_cmd(chip, &buf, 0, 0,
 			      "attempting to a send a command");
 	tpm_buf_destroy(&buf);
 out:

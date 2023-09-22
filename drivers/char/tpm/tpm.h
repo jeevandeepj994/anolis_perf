@@ -265,6 +265,7 @@ struct tpm_chip {
 #endif /* CONFIG_ACPI */
 
 	struct tpm_space work_space;
+	u32 last_cc;
 	u32 nr_commands;
 	u32 *cc_attrs_tbl;
 
@@ -491,21 +492,17 @@ extern struct idr dev_nums_idr;
 /**
  * enum tpm_transmit_flags - flags for tpm_transmit()
  *
- * @TPM_TRANSMIT_UNLOCKED:	do not lock the chip
- * @TPM_TRANSMIT_NESTED:	discard setup steps (power management,
- *				locality) including locking (i.e. implicit
- *				UNLOCKED)
+ * %TPM_TRANSMIT_NESTED:	discard setup steps (power management, locality)
  */
 enum tpm_transmit_flags {
-	TPM_TRANSMIT_UNLOCKED	= BIT(0),
-	TPM_TRANSMIT_NESTED      = BIT(1),
+	TPM_TRANSMIT_NESTED      = BIT(0),
 };
 
-ssize_t tpm_transmit(struct tpm_chip *chip, struct tpm_space *space,
-		     u8 *buf, size_t bufsiz, unsigned int flags);
-ssize_t tpm_transmit_cmd(struct tpm_chip *chip, struct tpm_space *space,
-			 struct tpm_buf *buf, size_t min_rsp_body_length,
-			 unsigned int flags, const char *desc);
+ssize_t tpm_transmit(struct tpm_chip *chip, u8 *buf, size_t bufsiz,
+		     unsigned int flags);
+ssize_t tpm_transmit_cmd(struct tpm_chip *chip, struct tpm_buf *buf,
+			 size_t min_rsp_body_length, unsigned int flags,
+			 const char *desc);
 int tpm_get_timeouts(struct tpm_chip *);
 int tpm_auto_startup(struct tpm_chip *chip);
 
@@ -580,10 +577,11 @@ int tpm2_probe(struct tpm_chip *chip);
 int tpm2_find_cc(struct tpm_chip *chip, u32 cc);
 int tpm2_init_space(struct tpm_space *space, unsigned int buf_size);
 void tpm2_del_space(struct tpm_chip *chip, struct tpm_space *space);
-int tpm2_prepare_space(struct tpm_chip *chip, struct tpm_space *space, u32 cc,
-		       u8 *cmd);
-int tpm2_commit_space(struct tpm_chip *chip, struct tpm_space *space,
-		      u32 cc, void *buf, size_t *bufsiz);
+void tpm2_flush_space(struct tpm_chip *chip);
+int tpm2_prepare_space(struct tpm_chip *chip, struct tpm_space *space, u8 *cmd,
+		       size_t cmdsiz);
+int tpm2_commit_space(struct tpm_chip *chip, struct tpm_space *space, void *buf,
+		      size_t *bufsiz);
 
 int tpm_bios_log_setup(struct tpm_chip *chip);
 void tpm_bios_log_teardown(struct tpm_chip *chip);
