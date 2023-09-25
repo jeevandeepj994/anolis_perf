@@ -55,7 +55,13 @@ static inline bool aead_sufficient_data(struct sock *sk)
 	 * The minimum amount of memory needed for an AEAD cipher is
 	 * the AAD and in case of decryption the tag.
 	 */
-	return ctx->used >= ctx->aead_assoclen + (ctx->op ? 0 : as);
+	if (ctx->op == ALG_OP_ENCRYPT)
+		return ctx->used >= ctx->aead_assoclen;
+	else if (ctx->op == ALG_OP_DECRYPT)
+		return ctx->used >= ctx->aead_assoclen + as;
+
+	/* ctx->op is ALG_OP_SIGN or ALG_OP_VERIFY, invalid for AEAD */
+	return false;
 }
 
 static int aead_sendmsg(struct socket *sock, struct msghdr *msg, size_t size)
@@ -151,9 +157,10 @@ static int _aead_recvmsg(struct socket *sock, struct msghdr *msg,
 	 * buffer provides the tag which is consumed resulting in only the
 	 * plaintext without a buffer for the tag returned to the caller.
 	 */
-	if (ctx->op)
+	if (ctx->op == ALG_OP_ENCRYPT)
 		outlen = used + as;
 	else
+		/* ALG_OP_DECRYPT */
 		outlen = used - as;
 
 	/*
