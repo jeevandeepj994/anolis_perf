@@ -26,6 +26,7 @@
 #include <linux/f2fs_fs.h>
 #include <linux/sysfs.h>
 #include <linux/quota.h>
+#include <uapi/linux/mount.h>
 
 #include "f2fs.h"
 #include "node.h"
