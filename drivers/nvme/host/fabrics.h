@@ -58,6 +58,8 @@ enum {
 	NVMF_OPT_CTRL_LOSS_TMO	= 1 << 11,
 	NVMF_OPT_HOST_ID	= 1 << 12,
 	NVMF_OPT_DUP_CONNECT	= 1 << 13,
+	NVMF_OPT_HDR_DIGEST     = 1 << 14,
+	NVMF_OPT_DATA_DIGEST    = 1 << 15,
 };
 
 /**
@@ -101,6 +103,8 @@ struct nvmf_ctrl_options {
 	unsigned int		kato;
 	struct nvmf_host	*host;
 	int			max_reconnects;
+	bool                    hdr_digest;
+	bool                    data_digest;
 };
 
 /*
@@ -166,6 +170,8 @@ blk_status_t nvmf_fail_nonready_command(struct nvme_ctrl *ctrl,
 		struct request *rq);
 bool __nvmf_check_ready(struct nvme_ctrl *ctrl, struct request *rq,
 		bool queue_live);
+bool nvmf_ip_options_match(struct nvme_ctrl *ctrl,
+		struct nvmf_ctrl_options *opts);
 
 static inline bool nvmf_check_ready(struct nvme_ctrl *ctrl, struct request *rq,
 		bool queue_live)
