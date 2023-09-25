@@ -968,6 +968,7 @@ static struct task_struct *dup_task_struct(struct task_struct *orig, int node)
 	tsk->splice_pipe = NULL;
 	tsk->task_frag.page = NULL;
 	tsk->wake_q.next = NULL;
+	tsk->pf_io_worker = NULL;
 
 	account_kernel_stack(tsk, 1);
 
@@ -2500,13 +2501,22 @@ struct mm_struct *copy_init_mm(void)
  * The returned task is inactive, and the caller must fire it up through
  * wake_up_new_task(p). All signals are blocked in the created task.
  */
-struct task_struct *create_io_thread(int (*fn)(void *), void *arg, int node)
+struct task_struct *create_io_thread(int (*fn)(void *), void *arg, int node,
+					bool unshare)
 {
-	unsigned long flags = CLONE_FS|CLONE_FILES|CLONE_SIGHAND|CLONE_THREAD|
-				CLONE_IO;
+	unsigned long flags = unshare ? 0 : (CLONE_FS|CLONE_FILES|
+					     CLONE_SIGHAND|CLONE_THREAD|
+					     CLONE_IO|CLONE_VM);
+	/* we use 'unshare' flag to try to create an independent io_thread,
+	 * 'unshare' describes whether child share parent's mm directly (with
+	 * refcount add one), or it should copy mm/files when copy_process().
+	 * By setting this flag, the io_thread won't share parent's mm
+	 * directly, but can be shared among different tasks, and looks more
+	 * reasonably.
+	 */
 	struct kernel_clone_args args = {
-		.flags		= ((lower_32_bits(flags) | CLONE_VM |
-				    CLONE_UNTRACED) & ~CSIGNAL),
+		.flags		= ((lower_32_bits(flags) | CLONE_UNTRACED)
+					& ~CSIGNAL),
 		.exit_signal	= (lower_32_bits(flags) & CSIGNAL),
 		.stack		= (unsigned long)fn,
 		.stack_size	= (unsigned long)arg,
