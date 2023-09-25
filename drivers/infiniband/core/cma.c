@@ -75,6 +75,32 @@ MODULE_LICENSE("Dual BSD/GPL");
 #define CMA_IBOE_PACKET_LIFETIME 18
 #define CMA_PREFERRED_ROCE_GID_TYPE IB_GID_TYPE_ROCE_UDP_ENCAP
 
+#define CMA_DYNAMIC_PORT_MIN 0x7fff
+#define CMA_DYNAMIC_PORT_MAX 0xffff
+
+static bool indep_port_range __read_mostly;
+module_param(indep_port_range, bool, 0644);
+MODULE_PARM_DESC(indep_port_range, "use independent cma port range");
+
+static int cma_local_port_range_min[] = { 1, 1 };
+static int cma_local_port_range_max[] = { 65535, 65535 };
+static DEFINE_SEQLOCK(cma_local_port_range_lock);
+static int cma_local_port_range[2] = {CMA_DYNAMIC_PORT_MIN, CMA_DYNAMIC_PORT_MAX};
+
+static int rdma_local_port_range(struct ctl_table *table, int write,
+				 void *buffer, size_t *lenp, loff_t *ppos);
+static struct ctl_table_header *cma_ctl_table_hdr;
+static struct ctl_table cma_ctl_table[] = {
+	{
+		.procname	= "local_port_range",
+		.data		= &cma_local_port_range,
+		.maxlen		= sizeof(cma_local_port_range),
+		.mode		= 0644,
+		.proc_handler	= rdma_local_port_range,
+	},
+	{ }
+};
+
 static const char * const cma_events[] = {
 	[RDMA_CM_EVENT_ADDR_RESOLVED]	 = "address resolved",
 	[RDMA_CM_EVENT_ADDR_ERROR]	 = "address error",
@@ -93,6 +119,53 @@ static const char * const cma_events[] = {
 	[RDMA_CM_EVENT_ADDR_CHANGE]	 = "address change",
 	[RDMA_CM_EVENT_TIMEWAIT_EXIT]	 = "timewait exit",
 };
+
+static void cma_set_local_port_range(int range[2])
+{
+	write_seqlock(&cma_local_port_range_lock);
+	cma_local_port_range[0] = range[0];
+	cma_local_port_range[1] = range[1];
+	write_sequnlock(&cma_local_port_range_lock);
+}
+
+static void cma_get_local_port_range(int *low, int *high)
+{
+	unsigned int seq;
+
+	do {
+		seq = read_seqbegin(&cma_local_port_range_lock);
+		if (low)
+			*low = cma_local_port_range[0];
+		if (high)
+			*high = cma_local_port_range[1];
+	} while (read_seqretry(&cma_local_port_range_lock, seq));
+}
+
+static int rdma_local_port_range(struct ctl_table *table, int write,
+				 void *buffer, size_t *lenp, loff_t *ppos)
+{
+	int ret;
+	int range[2];
+	struct ctl_table tmp = {
+		.data = &range,
+		.maxlen = sizeof(range),
+		.mode = table->mode,
+		.extra1 = &cma_local_port_range_min,
+		.extra2 = &cma_local_port_range_max,
+	};
+
+	cma_get_local_port_range(&range[0], &range[1]);
+
+	ret = proc_dointvec_minmax(&tmp, write, buffer, lenp, ppos);
+	if (write && ret == 0) {
+		if (range[1] < range[0])
+			ret = -EINVAL;
+		else
+			cma_set_local_port_range(range);
+	}
+
+	return ret;
+}
 
 const char *__attribute_const__ rdma_event_msg(enum rdma_cm_event_type event)
 {
@@ -3170,7 +3243,10 @@ static int cma_alloc_any_port(enum rdma_ucm_port_space ps,
 	unsigned int rover;
 	struct net *net = id_priv->id.route.addr.dev_addr.net;
 
-	inet_get_local_port_range(net, &low, &high);
+	if (indep_port_range)
+		cma_get_local_port_range(&low, &high);
+	else
+		inet_get_local_port_range(net, &low, &high);
 	remaining = (high - low) + 1;
 	rover = prandom_u32() % remaining + low;
 retry:
@@ -4650,8 +4726,17 @@ static int __init cma_init(void)
 	rdma_nl_register(RDMA_NL_RDMA_CM, cma_cb_table);
 	cma_configfs_init();
 
+	cma_ctl_table_hdr = register_net_sysctl(&init_net, "net/rdma_cm", cma_ctl_table);
+	if (!cma_ctl_table_hdr) {
+		pr_err("rdma_cm: couldn't register sysctl paths\n");
+		ret = -ENOMEM;
+		goto err_configfs;
+	}
+
 	return 0;
 
+err_configfs:
+	cma_configfs_exit();
 err:
 	unregister_netdevice_notifier(&cma_nb);
 	ib_sa_unregister_client(&sa_client);
@@ -4662,6 +4747,7 @@ err_wq:
 
 static void __exit cma_cleanup(void)
 {
+	unregister_net_sysctl_table(cma_ctl_table_hdr);
 	cma_configfs_exit();
 	rdma_nl_unregister(RDMA_NL_RDMA_CM);
 	ib_unregister_client(&cma_client);
