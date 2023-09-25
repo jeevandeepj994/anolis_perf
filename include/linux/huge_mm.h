@@ -111,6 +111,24 @@ extern struct kobj_attribute shmem_enabled_attr;
 #define HPAGE_PMD_ORDER (HPAGE_PMD_SHIFT-PAGE_SHIFT)
 #define HPAGE_PMD_NR (1<<HPAGE_PMD_ORDER)
 
+enum memcg_thp_flag {
+	MEMCG_DISABLE_ANON_THP,
+	MEMCG_DISABLE_SHMEM_THP,
+	MEMCG_DISABLE_FILE_THP,
+	NR_MEMCG_THP_FLAG,
+};
+
+#if defined(CONFIG_TRANSPARENT_HUGEPAGE) && defined(CONFIG_MEMCG)
+extern bool memcg_thp_control_test(struct mm_struct *mm,
+				   enum memcg_thp_flag flag);
+#else
+static inline bool memcg_thp_control_test(struct mm_struct *mm,
+					  enum memcg_thp_flag flag)
+{
+	return false;
+}
+#endif
+
 #ifdef CONFIG_TRANSPARENT_HUGEPAGE
 #define HPAGE_PMD_SHIFT PMD_SHIFT
 #define HPAGE_PMD_SIZE	((1UL) << HPAGE_PMD_SHIFT)
@@ -121,24 +139,6 @@ extern struct kobj_attribute shmem_enabled_attr;
 #define HPAGE_PUD_MASK	(~(HPAGE_PUD_SIZE - 1))
 
 extern unsigned long transparent_hugepage_flags;
-
-enum memcg_thp_flag {
-	MEMCG_DISABLE_ANON_THP,
-	MEMCG_DISABLE_SHMEM_THP,
-	MEMCG_DISABLE_FILE_THP,
-	NR_MEMCG_THP_FLAG,
-};
-
-#ifdef CONFIG_MEMCG
-extern bool memcg_thp_control_test(struct mm_struct *mm,
-				   enum memcg_thp_flag flag);
-#else
-static inline bool memcg_thp_control_test(struct mm_struct *mm,
-					  enum memcg_thp_flag flag)
-{
-	return false;
-}
-#endif
 
 static inline bool memcg_transhuge_vma_enabled(struct vm_area_struct *vma)
 {
