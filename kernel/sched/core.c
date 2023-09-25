@@ -8424,8 +8424,10 @@ static void sched_free_group(struct task_group *tg)
 	free_rt_sched_group(tg);
 	autogroup_free(tg);
 
+#ifdef CONFIG_SCHED_SLI
 	if (tg->lat_stat_cpu)
 		free_percpu(tg->lat_stat_cpu);
+#endif
 
 	kmem_cache_free(task_group_cache, tg);
 }
@@ -8445,9 +8447,11 @@ struct task_group *sched_create_group(struct task_group *parent)
 	if (!alloc_rt_sched_group(tg, parent))
 		goto err;
 
+#ifdef CONFIG_SCHED_SLI
 	tg->lat_stat_cpu = alloc_percpu(struct sched_cgroup_lat_stat_cpu);
 	if (!tg->lat_stat_cpu)
 		goto err;
+#endif
 
 	alloc_uclamp_sched_group(tg, parent);
 
