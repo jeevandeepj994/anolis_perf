@@ -18,8 +18,10 @@
 
 #include <crypto/aead.h>
 #include <crypto/skcipher.h>
+#include <crypto/akcipher.h>
 
 #define ALG_MAX_PAGES			16
+#define ALG_MAX_PAGE_SIZE    (PAGE_SIZE * ALG_MAX_PAGES)
 
 struct crypto_async_request;
 
@@ -46,6 +48,7 @@ struct af_alg_type {
 	void *(*bind)(const char *name, u32 type, u32 mask);
 	void (*release)(void *private);
 	int (*setkey)(void *private, const u8 *key, unsigned int keylen);
+	int (*setpubkey)(void *private, const u8 *key, unsigned int keylen);
 	int (*setentropy)(void *private, sockptr_t entropy, unsigned int len);
 	int (*accept)(void *private, struct sock *sk);
 	int (*accept_nokey)(void *private, struct sock *sk);
@@ -110,6 +113,7 @@ struct af_alg_async_req {
 	union {
 		struct aead_request aead_req;
 		struct skcipher_request skcipher_req;
+		struct akcipher_request akcipher_req;
 	} cra_u;
 
 	/* req ctx trails this struct */
@@ -134,7 +138,7 @@ struct af_alg_async_req {
  * @more:		More data to be expected from user space?
  * @merge:		Shall new data from user space be merged into existing
  *			SG?
- * @enc:		Cryptographic operation to be performed when
+ * @op:			Cryptographic operation to be performed when
  *			recvmsg is invoked.
  * @init:		True if metadata has been sent.
  * @len:		Length of memory allocated for this data structure.
@@ -152,7 +156,7 @@ struct af_alg_ctx {
 
 	bool more;
 	bool merge;
-	bool enc;
+	int op;
 	bool init;
 
 	unsigned int len;
@@ -167,6 +171,9 @@ int af_alg_accept(struct sock *sk, struct socket *newsock, bool kern);
 
 int af_alg_make_sg(struct af_alg_sgl *sgl, struct iov_iter *iter, int len);
 void af_alg_free_sg(struct af_alg_sgl *sgl);
+
+int af_alg_ctrl_cmsg_send(struct msghdr *msg, struct af_alg_control *con);
+void af_alg_sgl_link(struct af_alg_sgl *sgl_prev, struct af_alg_sgl *sgl_new);
 
 static inline struct alg_sock *alg_sk(struct sock *sk)
 {
@@ -234,6 +241,8 @@ int af_alg_sendmsg(struct socket *sock, struct msghdr *msg, size_t size,
 		   unsigned int ivsize);
 ssize_t af_alg_sendpage(struct socket *sock, struct page *page,
 			int offset, size_t size, int flags);
+int af_alg_tsgl_sendmsg(struct socket *sock, struct msghdr *msg,
+			size_t size, unsigned int ivsize);
 void af_alg_free_resources(struct af_alg_async_req *areq);
 void af_alg_async_cb(struct crypto_async_request *_req, int err);
 __poll_t af_alg_poll(struct file *file, struct socket *sock,

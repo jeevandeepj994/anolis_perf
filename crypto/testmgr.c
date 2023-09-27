@@ -4134,6 +4134,13 @@ static int alg_test_akcipher(const struct alg_test_desc *desc,
 {
 	struct crypto_akcipher *tfm;
 	int err = 0;
+	bool non_coding = false;
+
+#ifdef CONFIG_X86
+	/* The crypto in this platform requires non-coding test data*/
+	if (boot_cpu_data.x86_vendor == X86_VENDOR_HYGON)
+		non_coding = true;
+#endif
 
 	tfm = crypto_alloc_akcipher(driver, type, mask);
 	if (IS_ERR(tfm)) {
@@ -4142,9 +4149,13 @@ static int alg_test_akcipher(const struct alg_test_desc *desc,
 		return PTR_ERR(tfm);
 	}
 	if (desc->suite.akcipher.vecs)
-		err = test_akcipher(tfm, desc->alg, desc->suite.akcipher.vecs,
+		if (non_coding) {
+			err = test_akcipher(tfm, desc->alg, sm2_noncoding_tv_template,
+				    ARRAY_SIZE(sm2_noncoding_tv_template));
+		} else {
+			err = test_akcipher(tfm, desc->alg, desc->suite.akcipher.vecs,
 				    desc->suite.akcipher.count);
-
+		}
 	crypto_free_akcipher(tfm);
 	return err;
 }
