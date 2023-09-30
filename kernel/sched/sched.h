@@ -1308,15 +1308,11 @@ struct rq {
 	unsigned long		core_cookie;
 	unsigned int		core_forceidle_count;
 	unsigned int		core_forceidle_seq;
-	unsigned int		core_forceidle_occupation;
-	u64			core_forceidle_start;
+	unsigned int		core_sibidle_occupation;
+	u64			core_sibidle_start;
 	unsigned int		core_id;
-	unsigned int		core_realidle_count;
-	unsigned int		core_realidle_occupation;
-	u64			core_realidle_start;
-	u64			rq_realidle_time;
+	unsigned int		core_sibidle_count;
 	bool			in_forceidle;
-	bool			in_realidle;
 	struct task_struct	*force_idled_core_pick;
 #endif
 
@@ -2103,12 +2099,12 @@ static inline void flush_smp_call_function_from_idle(void) { }
 
 #if defined(CONFIG_SCHED_CORE) && defined(CONFIG_SCHEDSTATS)
 
-extern void __sched_core_account_forceidle(struct rq *rq);
+extern void __sched_core_account_sibidle(struct rq *rq);
 
-static inline void sched_core_account_forceidle(struct rq *rq)
+static inline void sched_core_account_sibidle(struct rq *rq)
 {
 	if (schedstat_enabled())
-		__sched_core_account_forceidle(rq);
+		__sched_core_account_sibidle(rq);
 }
 
 extern void __sched_core_tick(struct rq *rq);
@@ -2121,7 +2117,7 @@ static inline void sched_core_tick(struct rq *rq)
 
 #else
 
-static inline void sched_core_account_forceidle(struct rq *rq) {}
+static inline void sched_core_account_sibidle(struct rq *rq) {}
 
 static inline void sched_core_tick(struct rq *rq) {}
 

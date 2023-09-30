@@ -500,7 +500,7 @@ struct sched_statistics {
 	u64				core_forceidle_sum;
 #endif
 
-#ifdef CONFIG_SCHED_ACPU
+#if defined(CONFIG_SCHED_ACPU) || defined(CONFIG_SCHED_ACPU)
 	u64				core_sibidle_sum;
 #endif
 
