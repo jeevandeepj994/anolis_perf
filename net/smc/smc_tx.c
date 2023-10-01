@@ -509,6 +509,13 @@ static inline int __smc_get_free_slot_rwwi(struct smc_link *link)
 	return -EBUSY;
 }
 
+void smc_tx_put_free_slot_rwwi(struct smc_link *link, bool complete)
+{
+	atomic_inc(&link->tx_inflight_credit);
+	if (!complete)
+		smc_wr_tx_put_credits(link, 1, true);
+}
+
 static int smc_tx_get_free_slot_rwwi(struct smc_link *link,
 				     struct smc_connection *conn)
 {
@@ -534,18 +541,10 @@ static int smc_tx_get_free_slot_rwwi(struct smc_link *link,
 			return -EPIPE;
 	}
 	if (conn->killed) {
-		atomic_inc(&link->tx_inflight_credit);
+		smc_tx_put_free_slot_rwwi(link, false);
 		return -EPIPE;
 	}
 	return 0;
-}
-
-void smc_tx_put_free_slot_rwwi(struct smc_link *link, bool complete)
-{
-	if (!complete)
-		smc_wr_tx_put_credits(link, 1, true);
-
-	atomic_inc(&link->tx_inflight_credit);
 }
 
 static int smc_tx_fill_wr(struct smc_connection *conn, int *src_off,
