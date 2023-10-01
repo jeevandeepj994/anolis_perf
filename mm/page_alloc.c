@@ -3087,7 +3087,21 @@ static int rmqueue_bulk(struct zone *zone, unsigned int order,
 
 	spin_lock(&zone->lock);
 #ifdef CONFIG_PAGE_PREZERO
-	zone->alloc_zero = prezero_pcp_enabled() && (gfp_flags & __GFP_ZERO);
+	/*
+	 * Since patch "mm/page_alloc: allow high-order pages to be stored on
+	 * the per-cpu lists", the PCP allocator nows stores THP and "cheap"
+	 * high-order pages.
+	 *
+	 * In prezero scenario, prezero_pcp_enabled() controls allocation
+	 * with order == 0, while prezero_buddy_enabled() controls allocation
+	 * with order > 0.
+	 *
+	 * A more straightforward function naming may be provided later.
+	 */
+	if (order == 0)
+		zone->alloc_zero = prezero_pcp_enabled() && (gfp_flags & __GFP_ZERO);
+	else
+		zone->alloc_zero = prezero_buddy_enabled() && (gfp_flags & __GFP_ZERO);
 #endif
 	for (i = 0; i < count; ++i) {
 		struct page *page = __rmqueue(zone, order, migratetype,
