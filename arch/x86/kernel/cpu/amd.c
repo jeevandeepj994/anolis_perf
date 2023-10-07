@@ -34,6 +34,7 @@ static const int amd_erratum_1054[];
 
 static const int amd_zenbleed[];
 static const int amd_div0[];
+static const int amd_erratum_1485[];
 static bool cpu_has_amd_erratum(struct cpuinfo_x86 *cpu, const int *erratum);
 
 /*
@@ -1110,6 +1111,10 @@ static void init_amd(struct cpuinfo_x86 *c)
 		setup_force_cpu_bug(X86_BUG_DIV0);
 	}
 
+	if (!cpu_has(c, X86_FEATURE_HYPERVISOR) &&
+	     cpu_has_amd_erratum(c, amd_erratum_1485))
+		msr_set_bit(MSR_ZEN4_BP_CFG, MSR_ZEN4_BP_CFG_SHARED_BTB_FIX_BIT);
+
 	/*
 	 * Make sure EFER[AIBRSE - Automatic IBRS Enable] is set. The APs are brought up
 	 * using the trampoline code and as part of it, MSR_EFER gets prepared there in
@@ -1261,6 +1266,10 @@ static const int amd_zenbleed[] =
 static const int amd_div0[] =
 	AMD_LEGACY_ERRATUM(AMD_MODEL_RANGE(0x17, 0x00, 0x0, 0x2f, 0xf),
 			   AMD_MODEL_RANGE(0x17, 0x50, 0x0, 0x5f, 0xf));
+
+static const int amd_erratum_1485[] =
+	AMD_LEGACY_ERRATUM(AMD_MODEL_RANGE(0x19, 0x10, 0x0, 0x1f, 0xf),
+			   AMD_MODEL_RANGE(0x19, 0x60, 0x0, 0xaf, 0xf));
 
 static bool cpu_has_amd_erratum(struct cpuinfo_x86 *cpu, const int *erratum)
 {
