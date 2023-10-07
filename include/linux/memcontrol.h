@@ -510,6 +510,11 @@ struct mem_cgroup {
 	struct lru_gen_mm_list mm_list;
 #endif
 
+#ifdef CONFIG_PGTABLE_BIND
+	unsigned long pgtable_misplaced;
+	bool allow_pgtable_bind;
+#endif
+
 	CK_KABI_RESERVE(1)
 	CK_KABI_RESERVE(2)
 	CK_KABI_RESERVE(3)
