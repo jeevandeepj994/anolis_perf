@@ -195,13 +195,13 @@ static inline void smc_sock_set_flag(struct sock *sk, enum sock_flags flag)
 		switch (flag) {
 		case SOCK_DEAD:
 		case SOCK_DONE:
-			__set_bit(flag, &smc_sk(sk)->smc_sk_flags);
+			set_bit(flag, &smc_sk(sk)->smc_sk_flags);
 			return;
 		default:
 			break;
 		}
 	}
-	sock_set_flag(sk, flag);
+	set_bit(flag, &sk->sk_flags);
 }
 
 #endif	/* __SMC_H */
