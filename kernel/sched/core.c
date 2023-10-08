@@ -77,6 +77,11 @@ unsigned int sysctl_sched_cfs_bw_burst_onset_percent;
 unsigned int sysctl_sched_cfs_bw_burst_enabled = 1;
 #endif
 
+#ifdef CONFIG_SCHED_ACPU
+DEFINE_STATIC_KEY_FALSE(acpu_enabled);
+unsigned int sysctl_sched_acpu_enabled;
+#endif
+
 /*
  * period over which we measure -rt task CPU usage in us.
  * default: 1s
@@ -300,7 +305,7 @@ static void __sched_core_flip(bool enabled)
 		for_each_cpu(t, smt_mask)
 			cpu_rq(t)->core_enabled = enabled;
 
-		cpu_rq(cpu)->core->core_forceidle_start = 0;
+		cpu_rq(cpu)->core->core_sibidle_start = 0;
 
 		sched_core_unlock(cpu, &flags);
 
@@ -3913,6 +3918,122 @@ fire_sched_out_preempt_notifiers(struct task_struct *curr,
 
 #endif /* CONFIG_PREEMPT_NOTIFIERS */
 
+#ifdef CONFIG_SCHED_ACPU
+static void acpu_enable(void)
+{
+	int i;
+
+	for_each_possible_cpu(i) {
+		struct rq *rq = cpu_rq(i);
+
+		/* It may be not that accurate, but useful enough. */
+		rq->last_acpu_update_time = rq->clock;
+	}
+	static_branch_enable(&acpu_enabled);
+}
+
+static void acpu_disable(void)
+{
+	static_branch_disable(&acpu_enabled);
+}
+
+int sched_acpu_enable_handler(struct ctl_table *table, int write, void __user *buffer,
+			      size_t *lenp, loff_t *ppos)
+{
+	int ret;
+	unsigned int old, new;
+
+	if (!write) {
+		ret = proc_dointvec_minmax(table, write, buffer, lenp, ppos);
+		return ret;
+	}
+
+	old = sysctl_sched_acpu_enabled;
+	ret = proc_dointvec_minmax(table, write, buffer, lenp, ppos);
+	new = sysctl_sched_acpu_enabled;
+	if (!ret && write && (old != new)) {
+		if (new)
+			acpu_enable();
+		else
+			acpu_disable();
+	}
+
+	return ret;
+}
+
+static void update_acpu(struct rq *rq, struct task_struct *prev, struct task_struct *next)
+{
+	const int cpu = cpu_of(rq);
+	const struct cpumask *smt_mask = cpu_smt_mask(cpu);
+	u64 now = rq_clock(rq);
+	u64 sibidle_sum, last_update_time;
+	s64 delta, last;
+	int i;
+
+	if (!static_branch_likely(&acpu_enabled) || !schedstat_enabled())
+		return;
+
+	/*
+	 * If core sched is enabled and core_sibidle_count is not zero, we update sibidle
+	 * time in function __sched_core_account_sibidle().
+	 */
+#ifdef CONFIG_SCHED_CORE
+	if (rq->core->core_sibidle_count)
+		goto out;
+#endif
+
+	/* Update idle sum and busy sum for current rq. */
+	delta = now - rq->last_acpu_update_time;
+	if (prev == rq->idle)
+		rq->acpu_idle_sum += delta;
+
+	/*
+	 * Be carefule, smt_mask maybe NULL.
+	 * We only consider the case where there are two SMT at this stage.
+	 */
+	if (unlikely(!smt_mask) || unlikely(cpumask_weight(smt_mask) != 2))
+		goto out;
+
+	for_each_cpu(i, smt_mask) {
+		if (i != cpu) {
+			struct rq *rq_i = cpu_rq(i);
+			struct task_struct *curr_i = rq_i->curr;
+
+			last = (s64)(rq->last_acpu_update_time -
+				     rq_i->last_acpu_update_time);
+			last_update_time = last >= 0 ? rq->last_acpu_update_time :
+						       rq_i->last_acpu_update_time;
+			/*
+			 * Sibling may update acpu at the same time, and it's
+			 * timestamp may be newer than this rq.
+			 */
+			delta = now - last_update_time;
+			delta = delta > 0 ? delta : 0;
+
+			/* Add the delta to improve accuracy. */
+			sibidle_sum = last >= 0 ? rq->sibidle_sum : rq_i->acpu_idle_sum;
+			if (curr_i == rq_i->idle)
+				sibidle_sum += delta;
+		}
+	}
+
+	if (prev != rq->idle) {
+		delta = sibidle_sum - rq->sibidle_sum;
+		delta = delta > 0 ? delta : 0;
+		__account_sibidle_time(prev, delta, false);
+	}
+
+	if (next != rq->idle)
+		rq->sibidle_sum = sibidle_sum;
+out:
+	rq->last_acpu_update_time = now;
+}
+#else
+static inline void update_acpu(struct rq *rq, struct task_struct *prev, struct task_struct *next)
+{
+}
+#endif /* CONFIG_SCHED_ACPU */
+
 static inline void prepare_task(struct task_struct *next)
 {
 #ifdef CONFIG_SMP
@@ -4004,6 +4125,7 @@ prepare_task_switch(struct rq *rq, struct task_struct *prev,
 {
 	kcov_prepare_switch(prev);
 	sched_info_switch(rq, prev, next);
+	update_acpu(rq, prev, next);
 	perf_event_task_sched_out(prev, next);
 	rseq_preempt(prev);
 	fire_sched_out_preempt_notifiers(prev, next);
@@ -4456,6 +4578,7 @@ void scheduler_tick(void)
 	thermal_pressure = arch_scale_thermal_pressure(cpu_of(rq));
 	update_thermal_load_avg(rq_clock_thermal(rq), rq, thermal_pressure);
 	curr->sched_class->task_tick(rq, curr, 0);
+	update_acpu(rq, curr, curr);
 	calc_global_load_tick(rq);
 	psi_task_tick(rq);
 	sched_core_tick(rq);
@@ -4922,18 +5045,21 @@ pick_next_task(struct rq *rq, struct task_struct *prev, struct rq_flags *rf)
 
 	/* reset state */
 	rq->core->core_cookie = 0UL;
-	if (rq->core->core_forceidle_count) {
+	if (rq->core->core_sibidle_count) {
 		if (!core_clock_updated) {
 			update_rq_clock(rq->core);
 			core_clock_updated = true;
 		}
-		sched_core_account_forceidle(rq);
+		sched_core_account_sibidle(rq);
 		/* reset after accounting force idle */
-		rq->core->core_forceidle_start = 0;
-		rq->core->core_forceidle_count = 0;
-		rq->core->core_forceidle_occupation = 0;
-		need_sync = true;
-		fi_before = true;
+		rq->core->core_sibidle_start = 0;
+		rq->core->core_sibidle_count = 0;
+		rq->core->core_sibidle_occupation = 0;
+		if (rq->core->core_forceidle_count) {
+			rq->core->core_forceidle_count = 0;
+			need_sync = true;
+			fi_before = true;
+		}
 	}
 
 	/*
@@ -5009,6 +5135,7 @@ pick_next_task(struct rq *rq, struct task_struct *prev, struct rq_flags *rf)
 		rq_i->core_pick = p;
 
 		if (p == rq_i->idle) {
+			rq->core->core_sibidle_count++;
 			if (rq_i->nr_running) {
 				rq->core->core_forceidle_count++;
 				if (!fi_before)
@@ -5019,9 +5146,9 @@ pick_next_task(struct rq *rq, struct task_struct *prev, struct rq_flags *rf)
 		}
 	}
 
-	if (schedstat_enabled() && rq->core->core_forceidle_count) {
-		rq->core->core_forceidle_start = rq_clock(rq->core);
-		rq->core->core_forceidle_occupation = occ;
+	if (schedstat_enabled() && rq->core->core_sibidle_count) {
+		rq->core->core_sibidle_start = rq_clock(rq->core);
+		rq->core->core_sibidle_occupation = occ;
 	}
 
 	rq->core->core_pick_seq = rq->core->core_task_seq;
@@ -5063,7 +5190,8 @@ pick_next_task(struct rq *rq, struct task_struct *prev, struct rq_flags *rf)
 		if (!(fi_before && rq->core->core_forceidle_count))
 			task_vruntime_update(rq_i, rq_i->core_pick, !!rq->core->core_forceidle_count);
 
-		rq_i->core_pick->core_occupation = occ;
+		if (rq->core->core_forceidle_count)
+			rq_i->core_pick->core_occupation = occ;
 
 		if (i == cpu) {
 			rq_i->core_pick = NULL;
@@ -5283,14 +5411,15 @@ static void sched_core_cpu_deactivate(unsigned int cpu)
 	core_rq->core_cookie               = rq->core_cookie;
 	core_rq->core_forceidle_count      = rq->core_forceidle_count;
 	core_rq->core_forceidle_seq        = rq->core_forceidle_seq;
-	core_rq->core_forceidle_occupation = rq->core_forceidle_occupation;
+	core_rq->core_sibidle_occupation   = rq->core_sibidle_occupation;
+	core_rq->core_sibidle_count        = rq->core_sibidle_count;
 
 	/*
 	 * Accounting edge for forced idle is handled in pick_next_task().
 	 * Don't need another one here, since the hotplug thread shouldn't
 	 * have a cookie.
 	 */
-	core_rq->core_forceidle_start = 0;
+	core_rq->core_sibidle_start = 0;
 
 	/* install new leader */
 	for_each_cpu(t, smt_mask) {
@@ -8171,6 +8300,12 @@ void __init sched_init(void)
 		rq_csd_init(rq, &rq->nohz_csd, nohz_csd_func);
 #endif
 #endif /* CONFIG_SMP */
+
+#ifdef CONFIG_SCHED_ACPU
+		rq->acpu_idle_sum = 0;
+		rq->sibidle_sum = 0;
+		rq->last_acpu_update_time = rq->clock;
+#endif
 		hrtick_rq_init(rq);
 		atomic_set(&rq->nr_iowait, 0);
 #if defined(CONFIG_GROUP_IDENTITY) && defined(CONFIG_SCHED_SMT)
@@ -8185,8 +8320,9 @@ void __init sched_init(void)
 		rq->core_enabled = 0;
 		rq->core_tree = RB_ROOT;
 		rq->core_forceidle_count = 0;
-		rq->core_forceidle_occupation = 0;
-		rq->core_forceidle_start = 0;
+		rq->core_sibidle_count = 0;
+		rq->core_sibidle_occupation = 0;
+		rq->core_sibidle_start = 0;
 
 		rq->core_cookie = 0UL;
 #endif
@@ -8468,6 +8604,9 @@ struct task_group *sched_create_group(struct task_group *parent)
 
 	alloc_uclamp_sched_group(tg, parent);
 
+#ifdef CONFIG_SCHED_CORE
+	tg->ht_ratio = 100;
+#endif
 	return tg;
 
 err:
@@ -9398,6 +9537,38 @@ static s64 cpu_identity_read_s64(struct cgroup_subsys_state *css,
 }
 #endif
 
+#ifdef CONFIG_SCHED_CORE
+static int cpu_ht_ratio_write(struct cgroup_subsys_state *css,
+			      struct cftype *cftype, u64 ht_ratio)
+{
+	struct task_group *tg = css_tg(css);
+	int cpu;
+
+	if (ht_ratio < 100 || ht_ratio > 200)
+		return -1;
+
+	if (tg == &root_task_group)
+		return -1;
+
+	tg->ht_ratio = ht_ratio;
+	for_each_online_cpu(cpu) {
+		struct sched_entity *se = tg->se[cpu];
+
+		se->ht_ratio = ht_ratio;
+	}
+
+	return 0;
+}
+
+static u64 cpu_ht_ratio_read(struct cgroup_subsys_state *css,
+					       struct cftype *cft)
+{
+	struct task_group *tg = css_tg(css);
+
+	return tg->ht_ratio;
+}
+#endif
+
 static struct cftype cpu_legacy_files[] = {
 #ifdef CONFIG_FAIR_GROUP_SCHED
 	{
@@ -9504,6 +9675,13 @@ static struct cftype cpu_legacy_files[] = {
 		.name = "ht_stable",
 		.read_u64 = cpu_ht_stable_read_u64,
 		.write_u64 = cpu_ht_stable_write_u64,
+	},
+#endif
+#ifdef CONFIG_SCHED_CORE
+	{
+		.name = "ht_ratio",
+		.read_u64 = cpu_ht_ratio_read,
+		.write_u64 = cpu_ht_ratio_write,
 	},
 #endif
 	{ }	/* Terminate */
@@ -10067,6 +10245,13 @@ static struct cftype cpu_files[] = {
 		.private = SCHED_LAT_IOBLOCK,
 		.write_u64 = sched_lat_stat_write,
 		.seq_show = sched_lat_stat_show
+	},
+#endif
+#ifdef CONFIG_SCHED_CORE
+	{
+		.name = "ht_ratio",
+		.read_u64 = cpu_ht_ratio_read,
+		.write_u64 = cpu_ht_ratio_write,
 	},
 #endif
 	{ }	/* terminate */

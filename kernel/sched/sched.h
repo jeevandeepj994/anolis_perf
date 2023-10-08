@@ -545,6 +545,9 @@ struct task_group {
 	struct sched_cgroup_lat_stat_cpu __percpu *lat_stat_cpu;
 #endif
 
+#ifdef CONFIG_SCHED_CORE
+	unsigned int		ht_ratio;
+#endif
 	CK_KABI_RESERVE(1)
 	CK_KABI_RESERVE(2)
 	CK_KABI_RESERVE(3)
@@ -1307,16 +1310,18 @@ struct rq {
 	unsigned long		core_cookie;
 	unsigned int		core_forceidle_count;
 	unsigned int		core_forceidle_seq;
-	unsigned int		core_forceidle_occupation;
-	u64			core_forceidle_start;
+	unsigned int		core_sibidle_occupation;
+	u64			core_sibidle_start;
 	unsigned int		core_id;
-	unsigned int		core_realidle_count;
-	unsigned int		core_realidle_occupation;
-	u64			core_realidle_start;
-	u64			rq_realidle_time;
+	unsigned int		core_sibidle_count;
 	bool			in_forceidle;
-	bool			in_realidle;
 	struct task_struct	*force_idled_core_pick;
+#endif
+
+#ifdef CONFIG_SCHED_ACPU
+	u64 acpu_idle_sum;
+	u64 sibidle_sum;
+	u64 last_acpu_update_time;
 #endif
 
 	CK_KABI_RESERVE(1)
@@ -1483,6 +1488,7 @@ extern void sched_core_dequeue(struct rq *rq, struct task_struct *p, int flags);
 extern void sched_core_get(void);
 extern void sched_core_put(void);
 
+extern void account_ht_aware_quota(struct task_struct *p, u64 delta);
 #else /* !CONFIG_SCHED_CORE */
 
 static inline bool sched_core_enabled(struct rq *rq)
@@ -2096,12 +2102,12 @@ static inline void flush_smp_call_function_from_idle(void) { }
 
 #if defined(CONFIG_SCHED_CORE) && defined(CONFIG_SCHEDSTATS)
 
-extern void __sched_core_account_forceidle(struct rq *rq);
+extern void __sched_core_account_sibidle(struct rq *rq);
 
-static inline void sched_core_account_forceidle(struct rq *rq)
+static inline void sched_core_account_sibidle(struct rq *rq)
 {
 	if (schedstat_enabled())
-		__sched_core_account_forceidle(rq);
+		__sched_core_account_sibidle(rq);
 }
 
 extern void __sched_core_tick(struct rq *rq);
@@ -2114,7 +2120,7 @@ static inline void sched_core_tick(struct rq *rq)
 
 #else
 
-static inline void sched_core_account_forceidle(struct rq *rq) {}
+static inline void sched_core_account_sibidle(struct rq *rq) {}
 
 static inline void sched_core_tick(struct rq *rq) {}
 

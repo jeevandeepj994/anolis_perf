@@ -500,6 +500,10 @@ struct sched_statistics {
 	u64				core_forceidle_sum;
 #endif
 
+#if defined(CONFIG_SCHED_ACPU) || defined(CONFIG_SCHED_ACPU)
+	u64				core_sibidle_sum;
+#endif
+
 	CK_KABI_RESERVE(1)
 	CK_KABI_RESERVE(2)
 	CK_KABI_RESERVE(3)
@@ -575,7 +579,7 @@ struct sched_entity {
 
 #ifdef CONFIG_SCHED_CORE
 	u64				core_vruntime;
-	unsigned int			ht_aware_quota_coefficient;
+	unsigned int			ht_ratio;
 #endif
 
 	CK_KABI_RESERVE(1)

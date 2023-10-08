@@ -225,17 +225,20 @@ void account_idle_time(u64 cputime)
 }
 
 
-#ifdef CONFIG_SCHED_CORE
+#if defined(CONFIG_SCHED_ACPU) || defined(CONFIG_SCHED_ACPU)
 /*
- * Account for forceidle time due to core scheduling.
+ * Account for sibidle, and for forceidle time due to core scheduling.
  *
  * REQUIRES: schedstat is enabled.
  */
-void __account_forceidle_time(struct task_struct *p, u64 delta)
+void __account_sibidle_time(struct task_struct *p, u64 delta, bool fi)
 {
-	__schedstat_add(p->se.statistics.core_forceidle_sum, delta);
-
-	task_group_account_field(p, CPUTIME_FORCEIDLE, delta);
+	__schedstat_add(p->se.statistics.core_sibidle_sum, delta);
+	task_group_account_field(p, CPUTIME_SIBIDLE, delta);
+	if (fi) {
+		__schedstat_add(p->se.statistics.core_forceidle_sum, delta);
+		task_group_account_field(p, CPUTIME_FORCEIDLE, delta);
+	}
 }
 #endif
 
