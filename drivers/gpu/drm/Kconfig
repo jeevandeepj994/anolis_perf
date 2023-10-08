@@ -398,6 +398,8 @@ source "drivers/gpu/drm/verisilicon/Kconfig"
 
 source "drivers/gpu/drm/inspur/Kconfig"
 
+source "drivers/gpu/drm/phytium/Kconfig"
+
 # Keep legacy drivers last
 
 menuconfig DRM_LEGACY
