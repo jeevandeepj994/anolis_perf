@@ -2564,6 +2564,7 @@ static void smc_find_rdma_v2_device_serv(struct smc_sock *new_smc,
 	mutex_lock(&smc_ib_devices.mutex);
 	if (list_empty(&ini->smcrv2.ib_dev_v2->list)) {
 		smc_find_ism_store_rc(SMC_CLC_DECL_NOSMCRDEV, ini);
+		mutex_unlock(&smc_ib_devices.mutex);
 		goto not_found;
 	} else {
 		/* put below or in smc_listen_work */
