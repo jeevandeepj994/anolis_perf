@@ -525,7 +525,8 @@ static void free_kernel_qp(struct erdma_qp *qp)
 			      qp->kern_qp.rq_db_info_dma_addr);
 }
 
-static int update_kernel_qp_oob_attr(struct erdma_qp *qp, struct ib_qp_attr *attr, int attr_mask)
+static int update_kernel_qp_oob_attr(struct erdma_qp *qp,
+				     struct ib_qp_attr *attr, int attr_mask)
 {
 	struct iw_ext_conn_param *param =
 		(struct iw_ext_conn_param *)(qp->ibqp.qp_context);
@@ -545,12 +546,14 @@ static int update_kernel_qp_oob_attr(struct erdma_qp *qp, struct ib_qp_attr *att
 		qp->attrs.raddr.in.sin_addr.s_addr = param->sk_addr.daddr_v4;
 		qp->attrs.laddr.in.sin_addr.s_addr = param->sk_addr.saddr_v4;
 	} else if (param->sk_addr.family == AF_INET6) {
-		((struct sockaddr_in6 *)&qp->attrs.raddr)->sin6_family = AF_INET6;
-		((struct sockaddr_in6 *)&qp->attrs.laddr)->sin6_family = AF_INET6;
+		((struct sockaddr_in6 *)&qp->attrs.raddr)->sin6_family =
+			AF_INET6;
+		((struct sockaddr_in6 *)&qp->attrs.laddr)->sin6_family =
+			AF_INET6;
 		memcpy(&qp->attrs.raddr.in6.sin6_addr, &param->sk_addr.daddr_v6,
-			sizeof(struct in6_addr));
+		       sizeof(struct in6_addr));
 		memcpy(&qp->attrs.laddr.in6.sin6_addr, &param->sk_addr.saddr_v6,
-			sizeof(struct in6_addr));
+		       sizeof(struct in6_addr));
 	} else {
 		return -EINVAL;
 	}
@@ -594,12 +597,12 @@ static int init_kernel_qp(struct erdma_dev *dev, struct erdma_qp *qp,
 	if (!kqp->rq_buf)
 		goto err_out;
 
-	kqp->sq_db_info = dma_pool_alloc(dev->db_pool, GFP_KERNEL,
+	kqp->sq_db_info = dma_pool_alloc(dev->db_pool, GFP_KERNEL | __GFP_ZERO,
 					 &kqp->sq_db_info_dma_addr);
 	if (!kqp->sq_db_info)
 		goto err_out;
 
-	kqp->rq_db_info = dma_pool_alloc(dev->db_pool, GFP_KERNEL,
+	kqp->rq_db_info = dma_pool_alloc(dev->db_pool, GFP_KERNEL | __GFP_ZERO,
 					 &kqp->rq_db_info_dma_addr);
 	if (!kqp->rq_db_info)
 		goto err_out;
@@ -2077,7 +2080,8 @@ int erdma_query_hw_stats(struct erdma_dev *dev)
 	erdma_cmdq_build_reqhdr(&req.hdr, CMDQ_SUBMOD_COMMON,
 				CMDQ_OPCODE_GET_STATS);
 
-	stats = dma_pool_alloc(dev->resp_pool, GFP_KERNEL, &dma_addr);
+	stats = dma_pool_alloc(dev->resp_pool, GFP_KERNEL | __GFP_ZERO,
+			       &dma_addr);
 	if (!stats)
 		return -ENOMEM;
 
@@ -2105,7 +2109,8 @@ out:
 	return err;
 }
 
-const struct cpumask *erdma_get_vector_affinity(struct ib_device *ibdev, int comp_vector)
+const struct cpumask *erdma_get_vector_affinity(struct ib_device *ibdev,
+						int comp_vector)
 {
 	struct erdma_dev *dev = to_edev(ibdev);
 
