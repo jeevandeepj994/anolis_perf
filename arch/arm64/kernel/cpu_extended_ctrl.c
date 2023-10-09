@@ -7,6 +7,7 @@
 #include <asm/sysreg.h>
 #include <asm/cputype.h>
 #include <asm/virt.h>
+#include <asm/barrier.h>
 #include <linux/cpu.h>
 #include <linux/init.h>
 #include <linux/kernel.h>
@@ -71,7 +72,9 @@ static void write_cpuectlr(void *dummy)
 	u64 new_cpuectlr;
 	struct cpuectlr_info *info = &per_cpu(cpuectlr_data, cpu);
 
+	mb(); /* avoid triggering prefetch */
 	write_sysreg_s(info->reg_cpuectlr_el1, SYS_IMP_CPUECTLR_EL1);
+	mb(); /* avoid triggering prefetch */
 
 	/* read again to verify writing is valid */
 	new_cpuectlr = read_sysreg_s(SYS_IMP_CPUECTLR_EL1);
@@ -81,8 +84,11 @@ static void write_cpuectlr(void *dummy)
 			cpu, info->reg_cpuectlr_el1, new_cpuectlr);
 
 		/* recall cpuectlr */
-		if (new_cpuectlr != *orig_cpuectlr)
+		if (new_cpuectlr != *orig_cpuectlr) {
+			mb(); /* Avoid triggering prefetch */
 			write_sysreg_s(*orig_cpuectlr, SYS_IMP_CPUECTLR_EL1);
+			mb(); /* Avoid triggering prefetch */
+		}
 
 		info->reg_cpuectlr_el1 = *orig_cpuectlr;
 
@@ -151,25 +157,11 @@ static void write_cpuectlr(void *dummy)
 		cpuectlr_attr_ro_##_name = __ATTR_RO(_name)
 
 CPUECTLR_ATTR(cmc_min_ways, 63, 61);
-CPUECTLR_ATTR(inst_res_ways_l2, 60, 58);
-CPUECTLR_ATTR(prefetchtgt_ld_st, 39, 38);
-CPUECTLR_ATTR(ws_threshold_l2, 25, 24);
-CPUECTLR_ATTR(ws_threshold_l3, 23, 22);
-CPUECTLR_ATTR(ws_threshold_l4, 21, 20);
-CPUECTLR_ATTR(ws_threshold_dram, 19, 18);
-CPUECTLR_ATTR(prefetch_disable, 15, 15);
 CPUECTLR_ATTR(prefetch_sts_disable, 9, 9);
 CPUECTLR_ATTR(prefetch_sti_disable, 8, 8);
 
 static struct attribute *cpuectlr_rw_attrs[] = {
 	&cpuectlr_attr_rw_cmc_min_ways.attr,
-	&cpuectlr_attr_rw_inst_res_ways_l2.attr,
-	&cpuectlr_attr_rw_prefetchtgt_ld_st.attr,
-	&cpuectlr_attr_rw_ws_threshold_l2.attr,
-	&cpuectlr_attr_rw_ws_threshold_l3.attr,
-	&cpuectlr_attr_rw_ws_threshold_l4.attr,
-	&cpuectlr_attr_rw_ws_threshold_dram.attr,
-	&cpuectlr_attr_rw_prefetch_disable.attr,
 	&cpuectlr_attr_rw_prefetch_sts_disable.attr,
 	&cpuectlr_attr_rw_prefetch_sti_disable.attr,
 	NULL
@@ -177,13 +169,6 @@ static struct attribute *cpuectlr_rw_attrs[] = {
 
 static struct attribute *cpuectlr_ro_attrs[] = {
 	&cpuectlr_attr_ro_cmc_min_ways.attr,
-	&cpuectlr_attr_ro_inst_res_ways_l2.attr,
-	&cpuectlr_attr_ro_prefetchtgt_ld_st.attr,
-	&cpuectlr_attr_ro_ws_threshold_l2.attr,
-	&cpuectlr_attr_ro_ws_threshold_l3.attr,
-	&cpuectlr_attr_ro_ws_threshold_l4.attr,
-	&cpuectlr_attr_ro_ws_threshold_dram.attr,
-	&cpuectlr_attr_ro_prefetch_disable.attr,
 	&cpuectlr_attr_ro_prefetch_sts_disable.attr,
 	&cpuectlr_attr_ro_prefetch_sti_disable.attr,
 	NULL
