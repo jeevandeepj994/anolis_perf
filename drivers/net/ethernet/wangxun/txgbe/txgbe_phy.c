@@ -17,11 +17,8 @@ s32 txgbe_check_reset_blocked(struct txgbe_hw *hw)
 	u32 mmngc;
 
 	mmngc = rd32(hw, TXGBE_MIS_ST);
-	if (mmngc & TXGBE_MIS_ST_MNG_VETO) {
-		ERROR_REPORT1(hw, TXGBE_ERROR_SOFTWARE,
-			      "MNG_VETO bit detected.\n");
+	if (mmngc & TXGBE_MIS_ST_MNG_VETO)
 		return true;
-	}
 
 	return false;
 }

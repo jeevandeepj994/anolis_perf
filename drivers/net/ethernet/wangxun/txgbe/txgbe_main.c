@@ -22,9 +22,10 @@
 #include "txgbe.h"
 #include "txgbe_hw.h"
 #include "txgbe_phy.h"
+#include "txgbe_sriov.h"
 
 char txgbe_driver_name[] = "txgbe";
-#define DRV_VERSION "1.3.2-k"
+#define DRV_VERSION "1.3.4-k"
 const char txgbe_driver_version[] = DRV_VERSION;
 
 static const char txgbe_overheat_msg[] =
@@ -101,6 +102,11 @@ static inline int txgbe_enumerate_functions(struct txgbe_adapter *adapter)
 	int physfns = 0;
 
 	list_for_each_entry(entry, &pdev->bus->devices, bus_list) {
+#ifdef CONFIG_PCI_IOV
+		/* don't count virtual functions */
+		if (entry->is_virtfn)
+			continue;
+#endif
 		/* When the devices on the bus don't all match our device ID,
 		 * we can't reliably determine the correct number of
 		 * functions. This can occur if a function has been direct
@@ -1285,7 +1291,13 @@ static void txgbe_configure_msix(struct txgbe_adapter *adapter)
 	u16 v_idx;
 
 	/* Populate MSIX to EITR Select */
-	wr32(&adapter->hw, TXGBE_PX_ITRSEL, 0);
+	if (adapter->num_vfs >= 32) {
+		u32 eitrsel = (1 << (adapter->num_vfs - 32)) - 1;
+
+		wr32(&adapter->hw, TXGBE_PX_ITRSEL, eitrsel);
+	} else {
+		wr32(&adapter->hw, TXGBE_PX_ITRSEL, 0);
+	}
 
 	/* Populate the IVAR table and set the ITR values to the
 	 * corresponding register.
@@ -1602,6 +1614,9 @@ static irqreturn_t txgbe_msix_other(int __always_unused irq, void *data)
 
 	if (eicr & (TXGBE_PX_MISC_IC_ETH_LK | TXGBE_PX_MISC_IC_ETH_LKDN))
 		txgbe_check_lsc(adapter);
+
+	if (eicr & TXGBE_PX_MISC_IC_VF_MBOX)
+		txgbe_msg_task(adapter);
 
 	if (eicr & TXGBE_PX_MISC_IC_INT_ERR) {
 		netif_info(adapter, link, adapter->netdev,
@@ -2091,8 +2106,8 @@ void txgbe_set_rx_drop_en(struct txgbe_adapter *adapter)
 	 *  This allows us to avoid head of line blocking for security
 	 *  and performance reasons.
 	 */
-	if ((adapter->num_rx_queues > 1 &&
-	     !(adapter->hw.fc.current_mode & txgbe_fc_tx_pause))) {
+	if (adapter->num_vfs || (adapter->num_rx_queues > 1 &&
+				 !(adapter->hw.fc.current_mode & txgbe_fc_tx_pause))) {
 		for (i = 0; i < adapter->num_rx_queues; i++)
 			txgbe_enable_rx_drop(adapter, adapter->rx_ring[i]);
 	} else {
@@ -2177,6 +2192,9 @@ static void txgbe_setup_reta(struct txgbe_adapter *adapter)
 	u32 i, j;
 	u32 reta_entries = 128;
 	u16 rss_i = adapter->ring_feature[RING_F_RSS].indices;
+
+	if (adapter->flags & TXGBE_FLAG_SRIOV_ENABLED && rss_i < 2)
+		rss_i = 2;
 
 	/* Fill out hash function seeds */
 	for (i = 0; i < 10; i++)
@@ -2403,7 +2421,7 @@ static void txgbe_setup_psrtype(struct txgbe_adapter *adapter)
 		psrtype |= 1 << 29;
 
 	for_each_set_bit(pool, &adapter->fwd_bitmask, TXGBE_MAX_MACVLANS)
-		wr32(hw, TXGBE_RDB_PL_CFG(pool), psrtype);
+		wr32(hw, TXGBE_RDB_PL_CFG(VMDQ_P(pool)), psrtype);
 }
 
 static void txgbe_set_rx_buffer_len(struct txgbe_adapter *adapter)
@@ -2488,10 +2506,20 @@ static int txgbe_vlan_rx_add_vid(struct net_device *netdev,
 {
 	struct txgbe_adapter *adapter = netdev_priv(netdev);
 	struct txgbe_hw *hw = &adapter->hw;
+	int pool_ndx = VMDQ_P(0);
 
 	/* add VID to filter table */
 	if (hw->mac.ops.set_vfta)
-		TCALL(hw, mac.ops.set_vfta, vid, 0, true);
+		TCALL(hw, mac.ops.set_vfta, vid, pool_ndx, true);
+
+	if (adapter->flags & TXGBE_FLAG_VMDQ_ENABLED) {
+		int i;
+		/* enable vlan id for all pools */
+		for_each_set_bit(i, &adapter->fwd_bitmask,
+				 TXGBE_MAX_MACVLANS)
+			TCALL(hw, mac.ops.set_vfta, vid,
+			      VMDQ_P(i), true);
+	}
 
 	set_bit(vid, adapter->active_vlans);
 
@@ -2503,10 +2531,20 @@ static int txgbe_vlan_rx_kill_vid(struct net_device *netdev,
 {
 	struct txgbe_adapter *adapter = netdev_priv(netdev);
 	struct txgbe_hw *hw = &adapter->hw;
+	int pool_ndx = VMDQ_P(0);
 
 	/* remove VID from filter table */
-	if (hw->mac.ops.set_vfta)
-		TCALL(hw, mac.ops.set_vfta, vid, 0, false);
+	if (hw->mac.ops.set_vfta) {
+		TCALL(hw, mac.ops.set_vfta, vid, pool_ndx, false);
+		if (adapter->flags & TXGBE_FLAG_VMDQ_ENABLED) {
+			int i;
+			/* remove vlan id from all pools */
+			for_each_set_bit(i, &adapter->fwd_bitmask,
+					 TXGBE_MAX_MACVLANS)
+				TCALL(hw, mac.ops.set_vfta, vid,
+				      VMDQ_P(i), false);
+		}
+	}
 
 	clear_bit(vid, adapter->active_vlans);
 
@@ -2573,7 +2611,6 @@ static void txgbe_restore_vlan(struct txgbe_adapter *adapter)
 	struct net_device *netdev = adapter->netdev;
 	u16 vid;
 
-	txgbe_vlan_rx_add_vid(adapter->netdev, htons(ETH_P_8021Q), 0);
 	txgbe_vlan_mode(netdev, netdev->features);
 
 	for_each_set_bit(vid, adapter->active_vlans, VLAN_N_VID)
@@ -2585,8 +2622,9 @@ static u8 *txgbe_addr_list_itr(struct txgbe_hw __maybe_unused *hw,
 {
 	struct netdev_hw_addr *mc_ptr;
 	u8 *addr = *mc_addr_ptr;
+	struct txgbe_adapter *adapter = hw->back;
 
-	*vmdq = 0;
+	*vmdq = VMDQ_P(0);
 
 	mc_ptr = container_of(addr, struct netdev_hw_addr, addr[0]);
 	if (mc_ptr->list.next) {
@@ -2637,6 +2675,10 @@ int txgbe_write_mc_addr_list(struct net_device *netdev)
 		      txgbe_addr_list_itr, true);
 	}
 
+#ifdef CONFIG_PCI_IOV
+	txgbe_restore_vf_multicasts(adapter);
+#endif
+
 	return addr_count;
 }
 
@@ -2681,7 +2723,7 @@ static void txgbe_mac_set_default_filter(struct txgbe_adapter *adapter,
 	struct txgbe_hw *hw = &adapter->hw;
 
 	memcpy(&adapter->mac_table[0].addr, addr, ETH_ALEN);
-	adapter->mac_table[0].pools = 1ULL;
+	adapter->mac_table[0].pools = 1ULL << VMDQ_P(0);
 	adapter->mac_table[0].state = (TXGBE_MAC_STATE_DEFAULT |
 				       TXGBE_MAC_STATE_IN_USE);
 	TCALL(hw, mac.ops.set_rar, 0, adapter->mac_table[0].addr,
@@ -2820,7 +2862,7 @@ void txgbe_set_rx_mode(struct net_device *netdev)
 	/* Check for Promiscuous and All Multicast modes */
 	fctrl = rd32m(hw, TXGBE_PSR_CTL,
 		      ~(TXGBE_PSR_CTL_UPE | TXGBE_PSR_CTL_MPE));
-	vmolr = rd32m(hw, TXGBE_PSR_VM_L2CTL(0),
+	vmolr = rd32m(hw, TXGBE_PSR_VM_L2CTL(VMDQ_P(0)),
 		      ~(TXGBE_PSR_VM_L2CTL_UPE |
 			TXGBE_PSR_VM_L2CTL_MPE |
 			TXGBE_PSR_VM_L2CTL_ROPE |
@@ -2866,7 +2908,7 @@ void txgbe_set_rx_mode(struct net_device *netdev)
 	 * sufficient space to store all the addresses then enable
 	 * unicast promiscuous mode
 	 */
-	count = txgbe_write_uc_addr_list(netdev, 0);
+	count = txgbe_write_uc_addr_list(netdev, VMDQ_P(0));
 	if (count < 0) {
 		vmolr &= ~TXGBE_PSR_VM_L2CTL_ROPE;
 		vmolr |= TXGBE_PSR_VM_L2CTL_UPE;
@@ -2884,7 +2926,7 @@ void txgbe_set_rx_mode(struct net_device *netdev)
 
 	wr32(hw, TXGBE_PSR_VLAN_CTL, vlnctrl);
 	wr32(hw, TXGBE_PSR_CTL, fctrl);
-	wr32(hw, TXGBE_PSR_VM_L2CTL(0), vmolr);
+	wr32(hw, TXGBE_PSR_VM_L2CTL(VMDQ_P(0)), vmolr);
 
 	if (netdev->features & NETIF_F_HW_VLAN_CTAG_RX)
 		txgbe_vlan_strip_enable(adapter);
@@ -2919,7 +2961,6 @@ void txgbe_clear_vxlan_port(struct txgbe_adapter *adapter)
 	adapter->vxlan_port = 0;
 	if (!(adapter->flags & TXGBE_FLAG_VXLAN_OFFLOAD_CAPABLE))
 		return;
-	wr32(&adapter->hw, TXGBE_CFG_VXLAN, 0);
 }
 
 #define TXGBE_GSO_PARTIAL_FEATURES (NETIF_F_GSO_GRE | \
@@ -2952,6 +2993,9 @@ static int txgbe_hpbthresh(struct txgbe_adapter *adapter, int pb)
 	/* Calculate delay value for device */
 	dv_id = TXGBE_DV(link, tc);
 
+	/* Loopback switch introduces additional latency */
+	if (adapter->flags & TXGBE_FLAG_SRIOV_ENABLED)
+		dv_id += TXGBE_B2BT(tc);
 	/* Delay value is calculated in bit times convert to KB */
 	kb = TXGBE_BT2KB(dv_id);
 	rx_pba = rd32(hw, TXGBE_RDB_PB_SZ(pb)) >> TXGBE_RDB_PB_SZ_SHIFT;
@@ -3002,15 +3046,23 @@ static int txgbe_lpbthresh(struct txgbe_adapter *adapter, int __maybe_unused pb)
 static void txgbe_pbthresh_setup(struct txgbe_adapter *adapter)
 {
 	struct txgbe_hw *hw = &adapter->hw;
+	int num_tc = netdev_get_num_tc(adapter->netdev);
+	int i;
 
-	hw->fc.high_water = txgbe_hpbthresh(adapter, 0);
-	hw->fc.low_water = txgbe_lpbthresh(adapter, 0);
+	if (!num_tc)
+		num_tc = 1;
 
-	/* Low water marks must not be larger than high water marks */
-	if (hw->fc.low_water > hw->fc.high_water)
-		hw->fc.low_water = 0;
+	for (i = 0; i < num_tc; i++) {
+		hw->fc.high_water[i] = txgbe_hpbthresh(adapter, i);
+		hw->fc.low_water[i] = txgbe_lpbthresh(adapter, i);
 
-	hw->fc.high_water = 0;
+		/* Low water marks must not be larger than high water marks */
+		if (hw->fc.low_water[i] > hw->fc.high_water[i])
+			hw->fc.low_water[i] = 0;
+	}
+
+	for (; i < TXGBE_DCB_MAX_TRAFFIC_CLASS; i++)
+		hw->fc.high_water[i] = 0;
 }
 
 static void txgbe_configure_pb(struct txgbe_adapter *adapter)
@@ -3039,7 +3091,7 @@ static void txgbe_fdir_filter_restore(struct txgbe_adapter *adapter)
 
 	if (!hlist_empty(&adapter->fdir_filter_list))
 		txgbe_fdir_set_input_mask(hw, &adapter->fdir_mask,
-					  adapter->cloud_mode);
+				adapter->cloud_mode);
 
 	hlist_for_each_entry_safe(filter, node,
 				  &adapter->fdir_filter_list, fdir_node) {
@@ -3047,23 +3099,35 @@ static void txgbe_fdir_filter_restore(struct txgbe_adapter *adapter)
 			queue = TXGBE_RDB_FDIR_DROP_QUEUE;
 		} else {
 			u32 ring = ethtool_get_flow_spec_ring(filter->action);
+			u8 vf = ethtool_get_flow_spec_ring_vf(filter->action);
 
-			if (ring >= adapter->num_rx_queues) {
-				netif_err(adapter, drv, adapter->netdev,
-					  "FDIR restore failed, ring:%u\n",
-					  ring);
+			if (!vf && ring >= adapter->num_rx_queues) {
+				e_err(drv,
+				      "FDIR restore failed w/o vf, ring:%u\n",
+				      ring);
+				continue;
+			} else if (vf &&
+				   ((vf > adapter->num_vfs) ||
+				   ring >= adapter->num_rx_queues_per_pool)) {
+				e_err(drv,
+				      "FDIR restore failed vf:%hhu, ring:%u\n",
+				      vf, ring);
 				continue;
 			}
 
 			/* Map the ring onto the absolute queue index */
-			queue = adapter->rx_ring[ring]->reg_idx;
+			if (!vf)
+				queue = adapter->rx_ring[ring]->reg_idx;
+			else
+				queue = ((vf - 1) *
+					adapter->num_rx_queues_per_pool) + ring;
 		}
 
 		txgbe_fdir_write_perfect_filter(hw,
-						&filter->filter,
-						filter->sw_idx,
-						queue,
-						adapter->cloud_mode);
+				&filter->filter,
+				filter->sw_idx,
+				queue,
+				adapter->cloud_mode);
 	}
 
 	spin_unlock(&adapter->fdir_perfect_lock);
@@ -3079,17 +3143,122 @@ static void txgbe_configure_isb(struct txgbe_adapter *adapter)
 	wr32(hw, TXGBE_PX_ISB_ADDR_H, adapter->isb_dma >> 32);
 }
 
+/**
+ * txgbe_configure_bridge_mode - common settings for configuring bridge mode
+ * @adapter - the private structure
+ *
+ * This function's purpose is to remove code duplication and configure some
+ * settings require to switch bridge modes.
+ **/
+static void txgbe_configure_bridge_mode(struct txgbe_adapter *adapter)
+{
+	struct txgbe_hw *hw = &adapter->hw;
+
+	if (adapter->flags & TXGBE_FLAG_SRIOV_VEPA_BRIDGE_MODE)
+		/* disable Tx loopback, rely on switch hairpin mode */
+		wr32m(hw, TXGBE_PSR_CTL,
+		      TXGBE_PSR_CTL_SW_EN, 0);
+	else
+		/* enable Tx loopback for internal VF/PF communication */
+		wr32m(hw, TXGBE_PSR_CTL,
+		      TXGBE_PSR_CTL_SW_EN, TXGBE_PSR_CTL_SW_EN);
+}
+
+static void txgbe_configure_virtualization(struct txgbe_adapter *adapter)
+{
+	struct txgbe_hw *hw = &adapter->hw;
+	u32 reg_offset, vf_shift;
+	u32 i;
+
+	if (!(adapter->flags & TXGBE_FLAG_VMDQ_ENABLED))
+		return;
+
+	wr32m(hw, TXGBE_PSR_VM_CTL,
+	      TXGBE_PSR_VM_CTL_POOL_MASK |
+		TXGBE_PSR_VM_CTL_REPLEN,
+		VMDQ_P(0) << TXGBE_PSR_VM_CTL_POOL_SHIFT |
+		TXGBE_PSR_VM_CTL_REPLEN);
+
+	/* accept untagged packets until a vlan tag is
+	 * specifically set for the VMDQ queue/pool
+	 */
+	for_each_set_bit(i, &adapter->fwd_bitmask, TXGBE_MAX_MACVLANS)
+		wr32m(hw, TXGBE_PSR_VM_L2CTL(i),
+		      TXGBE_PSR_VM_L2CTL_AUPE, TXGBE_PSR_VM_L2CTL_AUPE);
+
+	vf_shift = VMDQ_P(0) % 32;
+	reg_offset = (VMDQ_P(0) >= 32) ? 1 : 0;
+
+	/* Enable only the PF pools for Tx/Rx */
+	wr32(hw, TXGBE_RDM_VF_RE(reg_offset), (~0) << vf_shift);
+	wr32(hw, TXGBE_RDM_VF_RE(reg_offset ^ 1), reg_offset - 1);
+	wr32(hw, TXGBE_TDM_VF_TE(reg_offset), (~0) << vf_shift);
+	wr32(hw, TXGBE_TDM_VF_TE(reg_offset ^ 1), reg_offset - 1);
+
+	if (!(adapter->flags & TXGBE_FLAG_SRIOV_ENABLED))
+		return;
+
+	/* configure default bridge settings */
+	txgbe_configure_bridge_mode(adapter);
+
+	/* Ensure LLDP and FC is set for Ethertype Antispoofing if we will be
+	 * calling set_ethertype_anti_spoofing for each VF in loop below.
+	 */
+	if (hw->mac.ops.set_ethertype_anti_spoofing) {
+		wr32(hw,
+		     TXGBE_PSR_ETYPE_SWC(TXGBE_PSR_ETYPE_SWC_FILTER_LLDP),
+			(TXGBE_PSR_ETYPE_SWC_FILTER_EN    | /* enable filter */
+			 TXGBE_PSR_ETYPE_SWC_TX_ANTISPOOF |
+			 TXGBE_ETH_P_LLDP));       /* LLDP eth procotol type */
+
+		wr32(hw,
+		     TXGBE_PSR_ETYPE_SWC(TXGBE_PSR_ETYPE_SWC_FILTER_FC),
+			(TXGBE_PSR_ETYPE_SWC_FILTER_EN    |
+			 TXGBE_PSR_ETYPE_SWC_TX_ANTISPOOF |
+			 ETH_P_PAUSE));
+	}
+
+	for (i = 0; i < adapter->num_vfs; i++) {
+		if (!adapter->vfinfo[i].spoofchk_enabled)
+			txgbe_ndo_set_vf_spoofchk(adapter->netdev, i, false);
+
+		/* enable ethertype anti spoofing if hw supports it */
+		TCALL(hw, mac.ops.set_ethertype_anti_spoofing, true, i);
+	}
+}
+
+#ifdef CONFIG_PCI_IOV
+void txgbe_sriov_reinit(struct txgbe_adapter *adapter)
+{
+	struct net_device *netdev = adapter->netdev;
+
+	rtnl_lock();
+	txgbe_setup_tc(netdev, netdev_get_num_tc(netdev));
+	rtnl_unlock();
+}
+#endif
+
 void txgbe_configure_port(struct txgbe_adapter *adapter)
 {
 	struct txgbe_hw *hw = &adapter->hw;
-	u32 value, i;
+	u32 value = 0;
+	u32 i;
 
-	value = TXGBE_CFG_PORT_CTL_D_VLAN | TXGBE_CFG_PORT_CTL_QINQ;
+	if (adapter->flags & TXGBE_FLAG_VMDQ_ENABLED) {
+		if (adapter->ring_feature[RING_F_RSS].indices == 4)
+			value = TXGBE_CFG_PORT_CTL_NUM_VT_32;
+		else /* adapter->ring_feature[RING_F_RSS].indices <= 2 */
+			value = TXGBE_CFG_PORT_CTL_NUM_VT_64;
+	}
+
+	value |= TXGBE_CFG_PORT_CTL_D_VLAN | TXGBE_CFG_PORT_CTL_QINQ;
 	wr32m(hw, TXGBE_CFG_PORT_CTL,
-	      TXGBE_CFG_PORT_CTL_D_VLAN |
-	      TXGBE_CFG_PORT_CTL_QINQ,
-	      value);
-
+	      TXGBE_CFG_PORT_CTL_NUM_TC_MASK |
+		TXGBE_CFG_PORT_CTL_NUM_VT_MASK |
+		TXGBE_CFG_PORT_CTL_DCB_EN |
+		TXGBE_CFG_PORT_CTL_D_VLAN |
+		TXGBE_CFG_PORT_CTL_QINQ,
+		value);
 	wr32(hw, TXGBE_CFG_TAG_TPID(0),
 	     ETH_P_8021Q | ETH_P_8021AD << 16);
 	adapter->hw.tpid[0] = ETH_P_8021Q;
@@ -3107,6 +3276,10 @@ static void txgbe_configure(struct txgbe_adapter *adapter)
 
 	txgbe_configure_pb(adapter);
 
+	/* We must restore virtualization before VLANs or else
+	 * the VLVF registers will not be populated
+	 */
+	txgbe_configure_virtualization(adapter);
 	txgbe_configure_port(adapter);
 
 	txgbe_set_rx_mode(adapter->netdev);
@@ -3178,10 +3351,41 @@ static void txgbe_setup_gpie(struct txgbe_adapter *adapter)
 	wr32(hw, TXGBE_PX_GPIE, gpie);
 }
 
+static void reinit_gpio_int(struct txgbe_adapter *adapter)
+{
+	struct txgbe_hw *hw = &adapter->hw;
+	u32 reg;
+
+	wr32(hw, TXGBE_GPIO_INTMASK, 0xFF);
+	reg = rd32(hw, TXGBE_GPIO_INTSTATUS);
+	if (reg & TXGBE_GPIO_INTSTATUS_2) {
+		adapter->flags2 |= TXGBE_FLAG2_SFP_NEEDS_RESET;
+		wr32(hw, TXGBE_GPIO_EOI, TXGBE_GPIO_EOI_2);
+		adapter->sfp_poll_time = 0;
+		txgbe_service_event_schedule(adapter);
+	}
+	if (reg & TXGBE_GPIO_INTSTATUS_3) {
+		adapter->flags |= TXGBE_FLAG_NEED_LINK_CONFIG;
+		wr32(hw, TXGBE_GPIO_EOI, TXGBE_GPIO_EOI_3);
+		txgbe_service_event_schedule(adapter);
+	}
+
+	if (reg & TXGBE_GPIO_INTSTATUS_6) {
+		wr32(hw, TXGBE_GPIO_EOI, TXGBE_GPIO_EOI_6);
+		adapter->flags |=
+				TXGBE_FLAG_NEED_LINK_CONFIG;
+		txgbe_service_event_schedule(adapter);
+	}
+	wr32(hw, TXGBE_GPIO_INTMASK, 0x0);
+}
+
 static void txgbe_up_complete(struct txgbe_adapter *adapter)
 {
 	struct txgbe_hw *hw = &adapter->hw;
 	u32 links_reg;
+
+	/* workaround gpio int lost in lldp-on condition */
+	reinit_gpio_int(adapter);
 
 	txgbe_get_hw_control(adapter);
 	txgbe_setup_gpie(adapter);
@@ -3255,6 +3459,8 @@ static void txgbe_up_complete(struct txgbe_adapter *adapter)
 	/* Set PF Reset Done bit so PF/VF Mail Ops can work */
 	wr32m(hw, TXGBE_CFG_PORT_CTL,
 	      TXGBE_CFG_PORT_CTL_PFRSTD, TXGBE_CFG_PORT_CTL_PFRSTD);
+	/* update setting rx tx for all active vfs */
+	txgbe_set_all_vfs(adapter);
 }
 
 void txgbe_reinit_locked(struct txgbe_adapter *adapter)
@@ -3265,6 +3471,10 @@ void txgbe_reinit_locked(struct txgbe_adapter *adapter)
 	while (test_and_set_bit(__TXGBE_RESETTING, &adapter->state))
 		usleep_range(1000, 2000);
 	txgbe_down(adapter);
+
+	if (adapter->flags & TXGBE_FLAG_SRIOV_ENABLED)
+		msleep(2000);
+
 	txgbe_up(adapter);
 	clear_bit(__TXGBE_RESETTING, &adapter->state);
 }
@@ -3314,7 +3524,9 @@ void txgbe_reset(struct txgbe_adapter *adapter)
 	txgbe_mac_set_default_filter(adapter, old_addr);
 
 	/* update SAN MAC vmdq pool selection */
-	TCALL(hw, mac.ops.set_vmdq_san_mac, 0);
+	TCALL(hw, mac.ops.set_vmdq_san_mac, VMDQ_P(0));
+	if (txgbe_is_lldp(hw))
+		e_dev_err("Can not get lldp flags from flash\n");
 
 	if (test_bit(__TXGBE_PTP_RUNNING, &adapter->state))
 		txgbe_ptp_reset(adapter);
@@ -3504,9 +3716,24 @@ void txgbe_disable_device(struct txgbe_adapter *adapter)
 		dev_err(&adapter->pdev->dev,
 			"%s: invalid bus lan id %d\n",
 			__func__, hw->bus.lan_id);
+	if (adapter->num_vfs) {
+		/* Clear EITR Select mapping */
+		wr32(&adapter->hw, TXGBE_PX_ITRSEL, 0);
+
+		/* Mark all the VFs as inactive */
+		for (i = 0 ; i < adapter->num_vfs; i++)
+			adapter->vfinfo[i].clear_to_send = 0;
+
+		/* ping all the active vfs to let them know we are going down */
+		txgbe_ping_all_vfs(adapter);
+
+		/* Disable all VFTE/VFRE TX/RX */
+		txgbe_set_all_vfs(adapter);
+	}
 
 	if (!(((hw->subsystem_device_id & TXGBE_NCSI_MASK) == TXGBE_NCSI_SUP) ||
-	      ((hw->subsystem_device_id & TXGBE_WOL_MASK) == TXGBE_WOL_SUP))) {
+	      ((hw->subsystem_device_id & TXGBE_WOL_MASK) == TXGBE_WOL_SUP) ||
+		  adapter->eth_priv_flags & TXGBE_ETH_PRIV_FLAG_LLDP)) {
 		/* disable mac transmiter */
 		wr32m(hw, TXGBE_MAC_TX_CFG, TXGBE_MAC_TX_CFG_TE, 0);
 	}
@@ -3519,6 +3746,9 @@ void txgbe_disable_device(struct txgbe_adapter *adapter)
 
 	/* Disable the Tx DMA engine */
 	wr32m(hw, TXGBE_TDM_CTL, TXGBE_TDM_CTL_TE, 0);
+
+	/* workaround gpio int lost in lldp-on condition */
+	reinit_gpio_int(adapter);
 }
 
 void txgbe_down(struct txgbe_adapter *adapter)
@@ -3528,7 +3758,8 @@ void txgbe_down(struct txgbe_adapter *adapter)
 	txgbe_disable_device(adapter);
 	txgbe_reset(adapter);
 
-	if (!(((hw->subsystem_device_id & TXGBE_NCSI_MASK) == TXGBE_NCSI_SUP)))
+	if (!(((hw->subsystem_device_id & TXGBE_NCSI_MASK) == TXGBE_NCSI_SUP) ||
+	      adapter->eth_priv_flags & TXGBE_ETH_PRIV_FLAG_LLDP))
 		/* power down the optics for SFP+ fiber */
 		TCALL(&adapter->hw, mac.ops.disable_tx_laser);
 
@@ -3573,7 +3804,7 @@ static int txgbe_sw_init(struct txgbe_adapter *adapter)
 		hw->subsystem_vendor_id = pdev->subsystem_vendor;
 		hw->subsystem_device_id = pdev->subsystem_device;
 	} else {
-		ssid = txgbe_flash_read_dword(hw, 0xfffdc);
+		txgbe_flash_read_dword(hw, 0xfffdc, &ssid);
 		if (ssid == 0x1) {
 			netif_err(adapter, probe, adapter->netdev,
 				  "read of internal subsystem device id failed\n");
@@ -3612,17 +3843,27 @@ static int txgbe_sw_init(struct txgbe_adapter *adapter)
 	adapter->tx_itr_setting = 1;
 
 	adapter->atr_sample_rate = 20;
+	adapter->vf_mode = 63;
 
 	adapter->flags |= TXGBE_FLAG_VXLAN_OFFLOAD_CAPABLE;
+	adapter->flags |= TXGBE_FLAG_VXLAN_OFFLOAD_ENABLE;
+	adapter->flags |= TXGBE_FLAG_FDIR_HASH_CAPABLE;
 	adapter->flags2 |= TXGBE_FLAG2_RSC_CAPABLE;
+
+	adapter->flags |= TXGBE_FLAGS_SP_INIT;
 
 	fdir = min_t(int, TXGBE_MAX_FDIR_INDICES, num_online_cpus());
 	adapter->ring_feature[RING_F_FDIR].limit = fdir;
 	adapter->fdir_pballoc = TXGBE_FDIR_PBALLOC_64K;
 	adapter->max_q_vectors = TXGBE_MAX_MSIX_Q_VECTORS_SAPPHIRE;
 
+	adapter->ring_feature[RING_F_VMDQ].limit = 0;
+	adapter->num_vfs = 0;
+
 	/* n-tuple support exists, always init our spinlock */
 	spin_lock_init(&adapter->fdir_perfect_lock);
+
+	TCALL(hw, mbx.ops.init_params);
 
 	/* default flow control settings */
 	hw->fc.requested_mode = txgbe_fc_full;
@@ -3638,6 +3879,13 @@ static int txgbe_sw_init(struct txgbe_adapter *adapter)
 	/* set default work limits */
 	adapter->tx_work_limit = TXGBE_DEFAULT_TX_WORK;
 	adapter->rx_work_limit = TXGBE_DEFAULT_RX_WORK;
+
+	adapter->an37 = 1;
+
+	adapter->num_vmdqs = 1;
+
+	if (txgbe_is_lldp(hw))
+		e_dev_err("Can not get lldp flags from flash\n");
 
 	set_bit(0, &adapter->fwd_bitmask);
 	set_bit(__TXGBE_DOWN, &adapter->state);
@@ -3924,9 +4172,18 @@ static void txgbe_free_all_rx_resources(struct txgbe_adapter *adapter)
 static int txgbe_change_mtu(struct net_device *netdev, int new_mtu)
 {
 	struct txgbe_adapter *adapter = netdev_priv(netdev);
+	int max_frame = new_mtu + ETH_HLEN + ETH_FCS_LEN;
 
 	if (new_mtu < 68 || new_mtu > 9414)
 		return -EINVAL;
+
+	/* we cannot allow legacy VFs to enable their receive
+	 * paths when MTU greater than 1500 is configured.  So display a
+	 * warning that legacy VFs will be disabled.
+	 */
+	if ((adapter->flags & TXGBE_FLAG_SRIOV_ENABLED) &&
+	    (max_frame > (ETH_FRAME_LEN + ETH_FCS_LEN)))
+		e_warn(probe, "Setting MTU > 1500 will disable legacy VFs\n");
 
 	netif_info(adapter, probe, netdev,
 		   "changing MTU from %d to %d\n", netdev->mtu, new_mtu);
@@ -3983,14 +4240,16 @@ int txgbe_open(struct net_device *netdev)
 	if (err)
 		goto err_req_irq;
 
-	/* Notify the stack of the actual queue counts. */
-	err = netif_set_real_num_tx_queues(netdev, adapter->num_tx_queues);
+		/* Notify the stack of the actual queue counts. */
+	err = netif_set_real_num_tx_queues(netdev, adapter->num_vmdqs > 1
+					   ? adapter->queues_per_pool
+					   : adapter->num_tx_queues);
 	if (err)
 		goto err_set_queues;
 
-	err = netif_set_real_num_rx_queues(netdev, adapter->num_rx_queues);
-	if (err)
-		goto err_set_queues;
+	err = netif_set_real_num_rx_queues(netdev, adapter->num_vmdqs > 1
+					   ? adapter->queues_per_pool
+					   : adapter->num_rx_queues);
 
 	txgbe_ptp_init(adapter);
 
@@ -4030,7 +4289,8 @@ static void txgbe_close_suspend(struct txgbe_adapter *adapter)
 	txgbe_ptp_suspend(adapter);
 
 	txgbe_disable_device(adapter);
-	if (!((hw->subsystem_device_id & TXGBE_NCSI_MASK) == TXGBE_NCSI_SUP))
+	if (!((hw->subsystem_device_id & TXGBE_NCSI_MASK) == TXGBE_NCSI_SUP ||
+	      adapter->eth_priv_flags & TXGBE_ETH_PRIV_FLAG_LLDP))
 		TCALL(hw, mac.ops.disable_tx_laser);
 	txgbe_clean_all_tx_rings(adapter);
 	txgbe_clean_all_rx_rings(adapter);
@@ -4132,6 +4392,7 @@ static int txgbe_dev_shutdown(struct pci_dev *pdev, bool *enable_wake)
 #endif
 
 	netif_device_detach(netdev);
+	txgbe_mac_set_default_filter(adapter, hw->mac.perm_addr);
 
 	rtnl_lock();
 	if (netif_running(netdev))
@@ -4266,6 +4527,30 @@ static void txgbe_get_stats64(struct net_device *netdev,
 	stats->rx_missed_errors = netdev->stats.rx_missed_errors;
 }
 
+static void txgbe_update_xoff_rx_lfc(struct txgbe_adapter *adapter)
+{
+	struct txgbe_hw *hw = &adapter->hw;
+	struct txgbe_hw_stats *hwstats = &adapter->stats;
+	int i;
+	u32 data;
+
+	if (hw->fc.current_mode != txgbe_fc_full &&
+	    hw->fc.current_mode != txgbe_fc_rx_pause)
+		return;
+
+	data = rd32(hw, TXGBE_MAC_LXOFFRXC);
+
+	hwstats->lxoffrxc += data;
+
+	/* refill credits (no tx hang) if we received xoff */
+	if (!data)
+		return;
+
+	for (i = 0; i < adapter->num_tx_queues; i++)
+		clear_bit(__TXGBE_HANG_CHECK_ARMED,
+			  &adapter->tx_ring[i]->state);
+}
+
 /**
  * txgbe_update_stats - Update the board statistics counters.
  * @adapter: board private structure
@@ -4349,6 +4634,8 @@ void txgbe_update_stats(struct txgbe_adapter *adapter)
 	}
 
 	hwstats->gprc += rd32(hw, TXGBE_PX_GPRC);
+
+	txgbe_update_xoff_rx_lfc(adapter);
 
 	hwstats->o2bgptc += rd32(hw, TXGBE_TDM_OS2BMC_CNT);
 	if (txgbe_check_mng_access(&adapter->hw)) {
@@ -4564,6 +4851,9 @@ static void txgbe_watchdog_link_is_up(struct txgbe_adapter *adapter)
 
 	netif_carrier_on(netdev);
 	netif_tx_wake_all_queues(netdev);
+
+	/* ping all the active vfs to let them know link has changed */
+	txgbe_ping_all_vfs(adapter);
 }
 
 /**
@@ -4588,6 +4878,8 @@ static void txgbe_watchdog_link_is_down(struct txgbe_adapter *adapter)
 	netif_info(adapter, drv, netdev, "NIC Link is Down\n");
 	netif_carrier_off(netdev);
 	netif_tx_stop_all_queues(netdev);
+	/* ping all the active vfs to let them know link has changed */
+	txgbe_ping_all_vfs(adapter);
 }
 
 static bool txgbe_ring_tx_pending(struct txgbe_adapter *adapter)
@@ -4604,6 +4896,34 @@ static bool txgbe_ring_tx_pending(struct txgbe_adapter *adapter)
 	return false;
 }
 
+static bool txgbe_vf_tx_pending(struct txgbe_adapter *adapter)
+{
+	struct txgbe_hw *hw = &adapter->hw;
+	struct txgbe_ring_feature *vmdq = &adapter->ring_feature[RING_F_VMDQ];
+	u32 q_per_pool = __ALIGN_MASK(1, ~vmdq->mask);
+
+	u32 i, j;
+
+	if (!adapter->num_vfs)
+		return false;
+
+	for (i = 0; i < adapter->num_vfs; i++) {
+		for (j = 0; j < q_per_pool; j++) {
+			u32 h, t;
+
+			h = rd32(hw,
+				 TXGBE_PX_TR_RPN(q_per_pool, i, j));
+			t = rd32(hw,
+				 TXGBE_PX_TR_WPN(q_per_pool, i, j));
+
+			if (h != t)
+				return true;
+		}
+	}
+
+	return false;
+}
+
 /**
  * txgbe_watchdog_flush_tx - flush queues on link down
  * @adapter: pointer to the device adapter structure
@@ -4611,7 +4931,8 @@ static bool txgbe_ring_tx_pending(struct txgbe_adapter *adapter)
 static void txgbe_watchdog_flush_tx(struct txgbe_adapter *adapter)
 {
 	if (!netif_carrier_ok(adapter->netdev)) {
-		if (txgbe_ring_tx_pending(adapter)) {
+		if (txgbe_ring_tx_pending(adapter) ||
+		    txgbe_vf_tx_pending(adapter)) {
 			/* We've lost link, so the controller stops DMA,
 			 * but we've got queued Tx work that's never going
 			 * to get done, so reset controller to flush Tx.
@@ -4622,6 +4943,24 @@ static void txgbe_watchdog_flush_tx(struct txgbe_adapter *adapter)
 			adapter->flags2 |= TXGBE_FLAG2_PF_RESET_REQUESTED;
 		}
 	}
+}
+
+static void txgbe_spoof_check(struct txgbe_adapter *adapter)
+{
+	u32 ssvpc;
+
+	/* Do not perform spoof check if in non-IOV mode */
+	if (adapter->num_vfs == 0)
+		return;
+	ssvpc = rd32(&adapter->hw, TXGBE_TDM_SEC_DRP);
+
+	/* ssvpc register is cleared on read, if zero then no
+	 * spoofed packets in the last interval.
+	 */
+	if (!ssvpc)
+		return;
+
+	e_warn(drv, "%d Spoofed packets detected\n", ssvpc);
 }
 
 /**
@@ -4642,6 +4981,10 @@ static void txgbe_watchdog_subtask(struct txgbe_adapter *adapter)
 		txgbe_watchdog_link_is_up(adapter);
 	else
 		txgbe_watchdog_link_is_down(adapter);
+
+#ifdef CONFIG_PCI_IOV
+	txgbe_spoof_check(adapter);
+#endif /* CONFIG_PCI_IOV */
 
 	txgbe_update_stats(adapter);
 
@@ -5781,7 +6124,11 @@ netdev_tx_t txgbe_xmit_frame_ring(struct sk_buff *skb,
 			adapter->tx_hwtstamp_skipped++;
 		}
 	}
-
+	/* Use the l2switch_enable flag - would be false if the DMA
+	 * Tx switch had been disabled.
+	 */
+	if (adapter->flags & TXGBE_FLAG_SRIOV_L2SWITCH_ENABLE)
+		tx_flags |= TXGBE_TX_FLAGS_CC;
 	/* record initial flags and protocol */
 	first->tx_flags = tx_flags;
 	first->protocol = protocol;
@@ -5859,11 +6206,14 @@ static int txgbe_set_mac(struct net_device *netdev, void *p)
 	if (!is_valid_ether_addr(addr->sa_data))
 		return -EADDRNOTAVAIL;
 
-	txgbe_del_mac_filter(adapter, hw->mac.addr, 0);
+	txgbe_del_mac_filter(adapter, hw->mac.addr, VMDQ_P(0));
 	memcpy(netdev->dev_addr, addr->sa_data, netdev->addr_len);
 	memcpy(hw->mac.addr, addr->sa_data, netdev->addr_len);
 
 	txgbe_mac_set_default_filter(adapter, hw->mac.addr);
+	e_info(drv, "The mac has been set to %02X:%02X:%02X:%02X:%02X:%02X\n",
+	       hw->mac.addr[0], hw->mac.addr[1], hw->mac.addr[2],
+		hw->mac.addr[3], hw->mac.addr[4], hw->mac.addr[5]);
 
 	return 0;
 }
@@ -5888,7 +6238,7 @@ static int txgbe_add_sanmac_netdev(struct net_device *dev)
 		rtnl_unlock();
 
 		/* update SAN MAC vmdq pool selection */
-		TCALL(hw, mac.ops.set_vmdq_san_mac, 0);
+		TCALL(hw, mac.ops.set_vmdq_san_mac, VMDQ_P(0));
 	}
 	return err;
 }
@@ -5969,105 +6319,6 @@ void txgbe_do_reset(struct net_device *netdev)
 		txgbe_reset(adapter);
 }
 
-static netdev_features_t txgbe_fix_features(struct net_device *netdev,
-					    netdev_features_t features)
-{
-	struct txgbe_adapter *adapter = netdev_priv(netdev);
-
-	/* If Rx checksum is disabled, then RSC/LRO should also be disabled */
-	if (!(features & NETIF_F_RXCSUM))
-		features &= ~NETIF_F_LRO;
-
-	/* Turn off LRO if not RSC capable */
-	if (!(adapter->flags2 & TXGBE_FLAG2_RSC_CAPABLE))
-		features &= ~NETIF_F_LRO;
-
-	return features;
-}
-
-static int txgbe_set_features(struct net_device *netdev,
-			      netdev_features_t features)
-{
-	struct txgbe_adapter *adapter = netdev_priv(netdev);
-	bool need_reset = false;
-
-	/* Make sure RSC matches LRO, reset if change */
-	if (!(features & NETIF_F_LRO)) {
-		if (adapter->flags2 & TXGBE_FLAG2_RSC_ENABLED)
-			need_reset = true;
-		adapter->flags2 &= ~TXGBE_FLAG2_RSC_ENABLED;
-	} else if ((adapter->flags2 & TXGBE_FLAG2_RSC_CAPABLE) &&
-		   !(adapter->flags2 & TXGBE_FLAG2_RSC_ENABLED)) {
-		if (adapter->rx_itr_setting == 1 ||
-		    adapter->rx_itr_setting > TXGBE_MIN_RSC_ITR) {
-			adapter->flags2 |= TXGBE_FLAG2_RSC_ENABLED;
-			need_reset = true;
-		} else if ((netdev->features ^ features) & NETIF_F_LRO) {
-			netif_info(adapter, probe, netdev,
-				   "rx-usecs set too low, disabling RSC\n");
-		}
-	}
-
-	/* Check if Flow Director n-tuple support was enabled or disabled.  If
-	 * the state changed, we need to reset.
-	 */
-	switch (features & NETIF_F_NTUPLE) {
-	case NETIF_F_NTUPLE:
-		/* turn off ATR, enable perfect filters and reset */
-		if (!(adapter->flags & TXGBE_FLAG_FDIR_PERFECT_CAPABLE))
-			need_reset = true;
-
-		adapter->flags &= ~TXGBE_FLAG_FDIR_HASH_CAPABLE;
-		adapter->flags |= TXGBE_FLAG_FDIR_PERFECT_CAPABLE;
-		break;
-	default:
-		/* turn off perfect filters, enable ATR and reset */
-		if (adapter->flags & TXGBE_FLAG_FDIR_PERFECT_CAPABLE)
-			need_reset = true;
-
-		adapter->flags &= ~TXGBE_FLAG_FDIR_PERFECT_CAPABLE;
-
-		/* We cannot enable ATR if RSS is disabled */
-		if (adapter->ring_feature[RING_F_RSS].limit <= 1)
-			break;
-
-		/* A sample rate of 0 indicates ATR disabled */
-		if (!adapter->atr_sample_rate)
-			break;
-
-		adapter->flags |= TXGBE_FLAG_FDIR_HASH_CAPABLE;
-		break;
-	}
-
-	if (features & NETIF_F_HW_VLAN_CTAG_RX)
-		txgbe_vlan_strip_enable(adapter);
-	else
-		txgbe_vlan_strip_disable(adapter);
-
-	if (!(adapter->flags & TXGBE_FLAG_VXLAN_OFFLOAD_CAPABLE &&
-	      features & NETIF_F_RXCSUM))
-		txgbe_clear_vxlan_port(adapter);
-
-	if (features & NETIF_F_RXHASH) {
-		if (!(adapter->flags2 & TXGBE_FLAG2_RSS_ENABLED)) {
-			wr32m(&adapter->hw, TXGBE_RDB_RA_CTL,
-			      TXGBE_RDB_RA_CTL_RSS_EN, TXGBE_RDB_RA_CTL_RSS_EN);
-			adapter->flags2 |= TXGBE_FLAG2_RSS_ENABLED;
-		}
-	} else {
-		if (adapter->flags2 & TXGBE_FLAG2_RSS_ENABLED) {
-			wr32m(&adapter->hw, TXGBE_RDB_RA_CTL,
-			      TXGBE_RDB_RA_CTL_RSS_EN, ~TXGBE_RDB_RA_CTL_RSS_EN);
-			adapter->flags2 &= ~TXGBE_FLAG2_RSS_ENABLED;
-		}
-	}
-
-	if (need_reset)
-		txgbe_do_reset(netdev);
-
-	return 0;
-}
-
 static int txgbe_ndo_fdb_add(struct ndmsg *ndm, struct nlattr *tb[],
 			     struct net_device *dev,
 			     const unsigned char *addr,
@@ -6081,6 +6332,24 @@ static int txgbe_ndo_fdb_add(struct ndmsg *ndm, struct nlattr *tb[],
 	}
 
 	return ndo_dflt_fdb_add(ndm, tb, dev, addr, vid, flags);
+}
+
+void txgbe_full_sync_mac_table(struct txgbe_adapter *adapter)
+{
+	struct txgbe_hw *hw = &adapter->hw;
+	int i;
+
+	for (i = 0; i < hw->mac.num_rar_entries; i++) {
+		if (adapter->mac_table[i].state & TXGBE_MAC_STATE_IN_USE) {
+			TCALL(hw, mac.ops.set_rar, i,
+			      adapter->mac_table[i].addr,
+				adapter->mac_table[i].pools,
+				TXGBE_PSR_MAC_SWC_AD_H_AV);
+		} else {
+			TCALL(hw, mac.ops.clear_rar, i);
+		}
+		adapter->mac_table[i].state &= ~(TXGBE_MAC_STATE_MODIFIED);
+	}
 }
 
 #define TXGBE_MAX_TUNNEL_HDR_LEN 80
@@ -6121,6 +6390,115 @@ txgbe_features_check(struct sk_buff *skb, struct net_device *dev,
 	return features;
 }
 
+static netdev_features_t txgbe_fix_features(struct net_device *netdev, netdev_features_t features)
+{
+	struct txgbe_adapter *adapter = netdev_priv(netdev);
+
+	/* If Rx checksum is disabled, then RSC/LRO should also be disabled */
+	if (!(features & NETIF_F_RXCSUM))
+		features &= ~NETIF_F_LRO;
+
+	/* Turn off LRO if not RSC capable */
+	if (!(adapter->flags2 & TXGBE_FLAG2_RSC_CAPABLE))
+		features &= ~NETIF_F_LRO;
+
+	if (!(features & NETIF_F_HW_VLAN_CTAG_RX))
+		features &= ~NETIF_F_HW_VLAN_STAG_RX;
+	else
+		features |= NETIF_F_HW_VLAN_STAG_RX;
+	if (!(features & NETIF_F_HW_VLAN_CTAG_TX))
+		features &= ~NETIF_F_HW_VLAN_STAG_TX;
+	else
+		features |= NETIF_F_HW_VLAN_STAG_TX;
+
+	return features;
+}
+
+static int txgbe_set_features(struct net_device *netdev, netdev_features_t features)
+{
+	struct txgbe_adapter *adapter = netdev_priv(netdev);
+	bool need_reset = false;
+
+	/* Make sure RSC matches LRO, reset if change */
+	if (!(features & NETIF_F_LRO)) {
+		if (adapter->flags2 & TXGBE_FLAG2_RSC_ENABLED)
+			need_reset = true;
+		adapter->flags2 &= ~TXGBE_FLAG2_RSC_ENABLED;
+	} else if ((adapter->flags2 & TXGBE_FLAG2_RSC_CAPABLE) &&
+		   !(adapter->flags2 & TXGBE_FLAG2_RSC_ENABLED)) {
+		if (adapter->rx_itr_setting == 1 ||
+		    adapter->rx_itr_setting > TXGBE_MIN_RSC_ITR) {
+			adapter->flags2 |= TXGBE_FLAG2_RSC_ENABLED;
+			need_reset = true;
+		} else if ((netdev->features ^ features) & NETIF_F_LRO) {
+			e_info(probe, "rx-usecs set too low, falling back to GRO\n");
+		}
+	}
+
+	/* Check if Flow Director n-tuple support was enabled or disabled.  If
+	 * the state changed, we need to reset.
+	 */
+	switch (features & NETIF_F_NTUPLE) {
+	case NETIF_F_NTUPLE:
+		/* turn off ATR, enable perfect filters and reset */
+		if (!(adapter->flags & TXGBE_FLAG_FDIR_PERFECT_CAPABLE))
+			need_reset = true;
+
+		adapter->flags &= ~TXGBE_FLAG_FDIR_HASH_CAPABLE;
+		adapter->flags |= TXGBE_FLAG_FDIR_PERFECT_CAPABLE;
+		break;
+	default:
+		/* turn off perfect filters, enable ATR and reset */
+		if (adapter->flags & TXGBE_FLAG_FDIR_PERFECT_CAPABLE)
+			need_reset = true;
+
+		adapter->flags &= ~TXGBE_FLAG_FDIR_PERFECT_CAPABLE;
+
+		/* We cannot enable ATR if VMDq is enabled */
+		if (adapter->flags & TXGBE_FLAG_VMDQ_ENABLED)
+			break;
+
+		/* We cannot enable ATR if we have 2 or more traffic classes */
+		if (netdev_get_num_tc(netdev) > 1)
+			break;
+
+		/* We cannot enable ATR if RSS is disabled */
+		if (adapter->ring_feature[RING_F_RSS].limit <= 1)
+			break;
+
+		/* A sample rate of 0 indicates ATR disabled */
+		if (!adapter->atr_sample_rate)
+			break;
+
+		adapter->flags |= TXGBE_FLAG_FDIR_HASH_CAPABLE;
+		break;
+	}
+
+	if (features & NETIF_F_HW_VLAN_CTAG_RX && features & NETIF_F_HW_VLAN_STAG_RX)
+		txgbe_vlan_strip_enable(adapter);
+	else
+		txgbe_vlan_strip_disable(adapter);
+
+	if (features & NETIF_F_RXHASH) {
+		if (!(adapter->flags2 & TXGBE_FLAG2_RSS_ENABLED)) {
+			wr32m(&adapter->hw, TXGBE_RDB_RA_CTL,
+			      TXGBE_RDB_RA_CTL_RSS_EN, TXGBE_RDB_RA_CTL_RSS_EN);
+			adapter->flags2 |= TXGBE_FLAG2_RSS_ENABLED;
+		}
+	} else {
+		if (adapter->flags2 & TXGBE_FLAG2_RSS_ENABLED) {
+			wr32m(&adapter->hw, TXGBE_RDB_RA_CTL,
+			      TXGBE_RDB_RA_CTL_RSS_EN, ~TXGBE_RDB_RA_CTL_RSS_EN);
+			adapter->flags2 &= ~TXGBE_FLAG2_RSS_ENABLED;
+		}
+	}
+
+	if (need_reset)
+		txgbe_do_reset(netdev);
+
+	return 0;
+}
+
 static const struct net_device_ops txgbe_netdev_ops = {
 	.ndo_open               = txgbe_open,
 	.ndo_stop               = txgbe_close,
@@ -6136,8 +6514,15 @@ static const struct net_device_ops txgbe_netdev_ops = {
 	.ndo_get_stats64        = txgbe_get_stats64,
 	.ndo_fdb_add            = txgbe_ndo_fdb_add,
 	.ndo_features_check     = txgbe_features_check,
-	.ndo_set_features       = txgbe_set_features,
+	.ndo_set_vf_mac         = txgbe_ndo_set_vf_mac,
+	.ndo_set_vf_trust       = txgbe_ndo_set_vf_trust,
+	.ndo_set_vf_spoofchk    = txgbe_ndo_set_vf_spoofchk,
+	.ndo_set_vf_link_state	= txgbe_ndo_set_vf_link_state,
+	.ndo_set_vf_vlan        = txgbe_ndo_set_vf_vlan,
+	.ndo_set_vf_rate        = txgbe_ndo_set_vf_bw,
+	.ndo_get_vf_config      = txgbe_ndo_get_vf_config,
 	.ndo_fix_features       = txgbe_fix_features,
+	.ndo_set_features       = txgbe_set_features,
 };
 
 void txgbe_assign_netdev_ops(struct net_device *dev)
@@ -6195,6 +6580,7 @@ static int txgbe_probe(struct pci_dev *pdev,
 	char *info_string, *i_s_var;
 	u8 part_str[TXGBE_PBANUM_LENGTH];
 	bool disable_dev = false;
+	u32 match;
 
 	err = pci_enable_device_mem(pdev);
 	if (err)
@@ -6241,6 +6627,7 @@ static int txgbe_probe(struct pci_dev *pdev,
 	adapter->netdev = netdev;
 	adapter->pdev = pdev;
 	hw = &adapter->hw;
+	hw->back = adapter;
 	adapter->msg_enable = (1 << DEFAULT_DEBUG_LEVEL_SHIFT) - 1;
 
 	adapter->io_addr = devm_ioremap(&pdev->dev,
@@ -6284,6 +6671,28 @@ static int txgbe_probe(struct pci_dev *pdev,
 		dev_err(&pdev->dev, "HW Init failed: %d\n", err);
 		goto err_free_mac_table;
 	}
+	/* Store the permanent mac address */
+	TCALL(hw, mac.ops.get_mac_addr, hw->mac.perm_addr);
+
+#ifdef CONFIG_PCI_IOV
+	if (adapter->num_vfs > 0) {
+		netif_warn(adapter, probe, netdev,
+			   "Enabling SR-IOV VFs using the max_vfs module parameter is deprecated.\n");
+		netif_warn(adapter, probe, netdev, "Please use the pci sysfs interface instead. Ex:\n");
+		netif_warn(adapter, probe, netdev,
+			   "echo '%d' > /sys/bus/pci/devices/%04x:%02x:%02x.%1x/sriov_numvfs\n",
+			   adapter->num_vfs,
+			   pci_domain_nr(pdev->bus),
+			   pdev->bus->number,
+			   PCI_SLOT(pdev->devfn),
+			   PCI_FUNC(pdev->devfn)
+			   );
+	}
+
+	match = min_t(u32, adapter->vf_mode, TXGBE_MAX_VFS_DRV_LIMIT);
+	pci_sriov_set_totalvfs(pdev, match);
+	txgbe_enable_sriov(adapter);
+#endif /* CONFIG_PCI_IOV */
 
 	netdev->features = NETIF_F_SG |
 			   NETIF_F_LRO |
@@ -6305,7 +6714,8 @@ static int txgbe_probe(struct pci_dev *pdev,
 			       NETIF_F_HW_VLAN_CTAG_TX |
 			       NETIF_F_RXALL;
 
-	netdev->hw_features |= NETIF_F_NTUPLE;
+	netdev->features |= NETIF_F_NTUPLE;
+	adapter->flags |= TXGBE_FLAG_FDIR_HASH_CAPABLE;
 
 	netdev->features |= NETIF_F_HIGHDMA;
 
@@ -6330,7 +6740,6 @@ static int txgbe_probe(struct pci_dev *pdev,
 
 	netdev->min_mtu = ETH_MIN_MTU;
 	netdev->max_mtu = TXGBE_MAX_JUMBO_FRAME_SIZE - (ETH_HLEN + ETH_FCS_LEN);
-
 	/* make sure the EEPROM is good */
 	if (TCALL(hw, eeprom.ops.validate_checksum, NULL)) {
 		dev_err(&pdev->dev, "The EEPROM Checksum Is Not Valid\n");
@@ -6433,7 +6842,8 @@ static int txgbe_probe(struct pci_dev *pdev,
 	pci_set_drvdata(pdev, adapter);
 	adapter->netdev_registered = true;
 
-	if (!((hw->subsystem_device_id & TXGBE_NCSI_MASK) == TXGBE_NCSI_SUP))
+	if (!((hw->subsystem_device_id & TXGBE_NCSI_MASK) == TXGBE_NCSI_SUP ||
+	      adapter->eth_priv_flags & TXGBE_ETH_PRIV_FLAG_LLDP))
 		/* power down the optics for SFP+ fiber */
 		TCALL(hw, mac.ops.disable_tx_laser);
 
@@ -6483,6 +6893,7 @@ static int txgbe_probe(struct pci_dev *pdev,
 			  "allocation for info string failed\n");
 		goto no_info_string;
 	}
+
 	i_s_var = info_string;
 	i_s_var += sprintf(info_string, "Enabled Features: ");
 	i_s_var += sprintf(i_s_var, "RxQ: %d TxQ: %d ",
@@ -6499,6 +6910,12 @@ static int txgbe_probe(struct pci_dev *pdev,
 	netif_info(adapter, probe, netdev, "%s\n", info_string);
 	kfree(info_string);
 no_info_string:
+	if (adapter->flags & TXGBE_FLAG_SRIOV_ENABLED) {
+		int i;
+
+		for (i = 0; i < adapter->num_vfs; i++)
+			txgbe_vf_configuration(pdev, (i | 0x10000000));
+	}
 	/* firmware requires blank driver version */
 	TCALL(hw, mac.ops.set_fw_drv_ver, 0xFF, 0xFF, 0xFF, 0xFF);
 
@@ -6554,9 +6971,10 @@ static void txgbe_remove(struct pci_dev *pdev)
 	struct txgbe_adapter *adapter = pci_get_drvdata(pdev);
 	struct net_device *netdev;
 	bool disable_dev;
+	struct txgbe_hw *hw = &adapter->hw;
 
 	netdev = adapter->netdev;
-
+	txgbe_mac_set_default_filter(adapter, hw->mac.perm_addr);
 	txgbe_dbg_adapter_exit(adapter);
 
 	set_bit(__TXGBE_REMOVING, &adapter->state);
@@ -6573,6 +6991,10 @@ static void txgbe_remove(struct pci_dev *pdev)
 		unregister_netdev(netdev);
 		adapter->netdev_registered = false;
 	}
+
+#ifdef CONFIG_PCI_IOV
+	txgbe_disable_sriov(adapter);
+#endif
 
 	txgbe_clear_interrupt_scheme(adapter);
 	txgbe_release_hw_control(adapter);
@@ -6613,6 +7035,7 @@ static struct pci_driver txgbe_driver = {
 	.resume   = txgbe_resume,
 #endif
 	.shutdown = txgbe_shutdown,
+	.sriov_configure = txgbe_pci_sriov_configure,
 };
 
 /**
