@@ -18,7 +18,8 @@ int erdma_query_resource(struct erdma_dev *dev, u32 mod, u32 op, u32 index,
 
 	erdma_cmdq_build_reqhdr(&req.hdr, mod, op);
 
-	resp = dma_pool_alloc(dev->resp_pool, GFP_KERNEL, &dma_addr);
+	resp = dma_pool_alloc(dev->resp_pool, GFP_KERNEL | __GFP_ZERO,
+			      &dma_addr);
 	if (!resp)
 		return -ENOMEM;
 
