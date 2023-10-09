@@ -7,6 +7,7 @@
 #include <asm/sysreg.h>
 #include <asm/cputype.h>
 #include <asm/virt.h>
+#include <asm/barrier.h>
 #include <linux/cpu.h>
 #include <linux/init.h>
 #include <linux/kernel.h>
@@ -71,7 +72,9 @@ static void write_cpuectlr(void *dummy)
 	u64 new_cpuectlr;
 	struct cpuectlr_info *info = &per_cpu(cpuectlr_data, cpu);
 
+	mb(); /* avoid triggering prefetch */
 	write_sysreg_s(info->reg_cpuectlr_el1, SYS_IMP_CPUECTLR_EL1);
+	mb(); /* avoid triggering prefetch */
 
 	/* read again to verify writing is valid */
 	new_cpuectlr = read_sysreg_s(SYS_IMP_CPUECTLR_EL1);
@@ -81,8 +84,11 @@ static void write_cpuectlr(void *dummy)
 			cpu, info->reg_cpuectlr_el1, new_cpuectlr);
 
 		/* recall cpuectlr */
-		if (new_cpuectlr != *orig_cpuectlr)
+		if (new_cpuectlr != *orig_cpuectlr) {
+			mb(); /* Avoid triggering prefetch */
 			write_sysreg_s(*orig_cpuectlr, SYS_IMP_CPUECTLR_EL1);
+			mb(); /* Avoid triggering prefetch */
+		}
 
 		info->reg_cpuectlr_el1 = *orig_cpuectlr;
 
