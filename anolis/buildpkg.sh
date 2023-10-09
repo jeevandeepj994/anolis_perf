@@ -1,7 +1,9 @@
 set -xe
 
 function do_rpmbuild() {
-	if [ "$DIST_BUILD_MODE" == "official" ] || [ "$DIST_BUILD_MODE" == "nightly" ]; then
+	if [ "$DIST_BUILD_MODE" == "official" ] || \
+	   [ "$DIST_BUILD_MODE" == "nightly" ]  || \
+	   [ "$DIST_BUILD_MODE" == "diy" ]; then
 		CMD="-ba"
 	else
 		CMD="-bb"

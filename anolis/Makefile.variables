@@ -29,9 +29,6 @@ DIST_SPECIAL_VERSION_MINOR =
 # build number
 DIST_BUILD_NUMBER ?= 1
 
-# need to sign modules?
-DIST_DO_SIGNMODULES ?= 0
-
 # the kernel root
 DIST_SRCROOT = $(shell realpath ..)/
 DIST_SOURCES = $(DIST_SRCROOT)anolis/
@@ -63,9 +60,14 @@ DIST_GIT_HEAD_SHORT_COMMIT_ID = $(shell git rev-parse --short HEAD)
 DIST_GIT_HEAD_FULL_COMMIT_ID = $(shell git rev-parse HEAD)
 DIST_UNOFFICIAL_PKGRELEASEVERION = ${DIST_BUILD_NUMBER}.git.$(DIST_GIT_HEAD_SHORT_COMMIT_ID)
 
+# kernel version for diy build
+DIST_DIY_PKGRELEASEVERION = ${DIST_DIY}.diy
+
 # final kernel version
 ifeq ("${DIST_BUILD_MODE}", "official")
 DIST_PKGRELEASEVERION = $(DIST_OFFICIAL_PKGRELEASEVERION)
+else ifeq ("${DIST_BUILD_MODE}", "diy")
+DIST_PKGRELEASEVERION = $(DIST_DIY_PKGRELEASEVERION)
 else
 DIST_PKGRELEASEVERION = $(DIST_UNOFFICIAL_PKGRELEASEVERION)
 endif
