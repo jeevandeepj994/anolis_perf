@@ -6404,9 +6404,9 @@ static inline bool check_pasid_pt_sre(void)
 {
 	struct cpuinfo_x86 *c = &cpu_data(0);
 
-	if (c->x86_model == 0x8f && c->x86_stepping >= 4) {
-               pr_debug("SPR E0+, PASID PT SRE enabled");
-               return true;
+	if ((c->x86_model == 0x8f && c->x86_stepping >= 4) || c->x86_model == 0xcf) {
+		pr_debug("Platform PASID PT SRE enabled");
+		return true;
 	}
 	pr_alert("No PASID PT SRE, in-kernel PASID DMA not supported!!!");
 	return false;
