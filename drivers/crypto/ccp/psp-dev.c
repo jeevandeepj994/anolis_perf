@@ -75,6 +75,9 @@ static irqreturn_t psp_irq_handler(int irq, void *data)
 	/* Read the interrupt status: */
 	status = ioread32(psp->io_regs + psp->vdata->intsts_reg);
 
+	/* Clear the interrupt status by writing the same value we read. */
+	iowrite32(status, psp->io_regs + psp->vdata->intsts_reg);
+
 	/* Check if it is command completion: */
 	if (!(status & PSP_CMD_COMPLETE))
 		goto done;
@@ -87,9 +90,6 @@ static irqreturn_t psp_irq_handler(int irq, void *data)
 	}
 
 done:
-	/* Clear the interrupt status by writing the same value we read. */
-	iowrite32(status, psp->io_regs + psp->vdata->intsts_reg);
-
 	return IRQ_HANDLED;
 }
 
