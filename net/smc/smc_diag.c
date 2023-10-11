@@ -326,20 +326,25 @@ static int smc_diag_dump(struct sk_buff *skb, struct netlink_callback *cb)
 
 	rc = smc_diag_dump_proto(&smc_proto, skb, cb, SMCPROTO_SMC);
 	if (rc)
-		return rc;
+		goto out;
+
 #if IS_ENABLED(CONFIG_IPV6)
 	rc = smc_diag_dump_proto(&smc_proto6, skb, cb, SMCPROTO_SMC6);
 	if (rc)
-		return rc;
+		goto out;
 #endif
+
 	rc = smc_diag_dump_inet_proto(smc_inet_prot.h.hashinfo, skb, cb, SMCPROTO_SMC);
 	if (rc)
-		return rc;
+		goto out;
+
 #if IS_ENABLED(CONFIG_IPV6)
 	rc = smc_diag_dump_inet_proto(smc_inet6_prot.h.hashinfo, skb, cb, SMCPROTO_SMC6);
 	if (rc)
-		return rc;
+		goto out;
 #endif
+	return 0;
+out:
 	return skb->len;
 }
 
