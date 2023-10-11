@@ -305,4 +305,13 @@ void smcd_cdc_rx_init(struct smc_connection *conn);
 void smcd_cdc_rx_handler(struct smc_connection *conn);
 void smc_cdc_rx_handler_rwwi(struct ib_wc *wc);
 void smc_cdc_tx_handler_rwwi(struct ib_wc *wc);
+
+static inline bool smc_has_rcv_shutdown(struct sock *sk)
+{
+	if (smc_sock_is_inet_sock(sk))
+		return smc_cdc_rxed_any_close_or_senddone(&smc_sk(sk)->conn);
+	else
+		return sk->sk_shutdown & RCV_SHUTDOWN;
+}
+
 #endif /* SMC_CDC_H */
