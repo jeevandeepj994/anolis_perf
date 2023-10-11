@@ -3131,7 +3131,7 @@ static int smc_recvmsg(struct socket *sock, struct msghdr *msg, size_t len,
 
 	smc = smc_sk(sk);
 	lock_sock(sk);
-	if (smc_sk_state(sk) == SMC_CLOSED && (sk->sk_shutdown & RCV_SHUTDOWN)) {
+	if (smc_sk_state(sk) == SMC_CLOSED && smc_has_rcv_shutdown(sk)) {
 		/* socket was connected before, no more data to read */
 		rc = 0;
 		goto out;
@@ -3208,7 +3208,7 @@ static __poll_t smc_poll(struct file *file, struct socket *sock,
 			}
 			if (atomic_read(&smc->conn.bytes_to_rcv))
 				mask |= EPOLLIN | EPOLLRDNORM;
-			if (sk->sk_shutdown & RCV_SHUTDOWN)
+			if (smc_has_rcv_shutdown(sk))
 				mask |= EPOLLIN | EPOLLRDNORM | EPOLLRDHUP;
 			if (smc_sk_state(sk) == SMC_APPCLOSEWAIT1)
 				mask |= EPOLLIN;
@@ -3652,7 +3652,7 @@ static ssize_t smc_splice_read(struct socket *sock, loff_t *ppos,
 
 	smc = smc_sk(sk);
 	lock_sock(sk);
-	if (smc_sk_state(sk) == SMC_CLOSED && (sk->sk_shutdown & RCV_SHUTDOWN)) {
+	if (smc_sk_state(sk) == SMC_CLOSED && (smc_has_rcv_shutdown(sk))) {
 		/* socket was connected before, no more data to read */
 		rc = 0;
 		goto out;
