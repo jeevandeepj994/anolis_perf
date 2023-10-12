@@ -382,6 +382,12 @@ static struct z_erofs_decompressor decompressors[] = {
 		.name = "lzma"
 	},
 #endif
+#ifdef CONFIG_EROFS_FS_ZIP_DEFLATE
+	[Z_EROFS_COMPRESSION_DEFLATE] = {
+		.decompress = z_erofs_deflate_decompress,
+		.name = "deflate"
+	},
+#endif
 };
 
 int z_erofs_decompress(struct z_erofs_decompress_req *rq,

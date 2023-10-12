@@ -220,7 +220,11 @@ ifeq ($(strip $(STATIC)),true)
 else
 	$(QUIET) $(CC) $(CFLAGS) $(LDFLAGS) $(UTIL_OBJS) -lcpupower -lrt -lpci -L$(OUTPUT) -o $@
 endif
+# The reason for the special treatment is that binutils lib on sw_64 has error with running strip.
+# So this is a workaround for sw_64.
+ifneq ($(SRCARCH),sw_64)
 	$(QUIET) $(STRIPCMD) $@
+endif
 
 $(OUTPUT)po/$(PACKAGE).pot: $(UTIL_SRC)
 	$(ECHO) "  GETTEXT " $@

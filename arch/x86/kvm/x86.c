@@ -6001,6 +6001,20 @@ set_pit2_out:
 	case KVM_X86_SET_MSR_FILTER:
 		r = kvm_vm_ioctl_set_msr_filter(kvm, argp);
 		break;
+	case KVM_CONTROL_PRE_SYSTEM_RESET:
+		if (boot_cpu_data.x86_vendor == X86_VENDOR_HYGON &&
+		    kvm_x86_ops.control_pre_system_reset)
+			r = kvm_x86_ops.control_pre_system_reset(kvm);
+		else
+			r = -ENOTTY;
+		break;
+	case KVM_CONTROL_POST_SYSTEM_RESET:
+		if (boot_cpu_data.x86_vendor == X86_VENDOR_HYGON &&
+		    kvm_x86_ops.control_post_system_reset)
+			r = kvm_x86_ops.control_post_system_reset(kvm);
+		else
+			r = -ENOTTY;
+		break;
 	default:
 		r = -ENOTTY;
 	}

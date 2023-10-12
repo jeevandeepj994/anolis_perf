@@ -25,6 +25,9 @@ struct irq_work {
 	void (*func)(struct irq_work *);
 
 	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
+	CK_KABI_RESERVE(3)
+	CK_KABI_RESERVE(4)
 };
 
 static inline

@@ -68,6 +68,8 @@
 #define __kidled_ref __ref
 #endif
 
+DEFINE_STATIC_KEY_FALSE(kidled_enabled_key);
+
 unsigned int kidled_scan_target __read_mostly = KIDLED_SCAN_PAGE;
 struct kidled_scan_control kidled_scan_control;
 /*
@@ -131,6 +133,7 @@ int kidled_inc_page_age(pg_data_t *pgdat, unsigned long pfn)
 	unsigned long old, new;
 	int age;
 
+	page = compound_head(page);
 	do  {
 		age = ((page->flags >> KIDLED_AGE_PGSHIFT) & KIDLED_AGE_MASK);
 		if (age >= KIDLED_AGE_MASK)
@@ -151,6 +154,7 @@ void kidled_set_page_age(pg_data_t *pgdat, unsigned long pfn, int val)
 	struct page *page = pfn_to_page(pfn);
 	unsigned long old, new;
 
+	page = compound_head(page);
 	do  {
 		new = old = page->flags;
 		new &= ~(KIDLED_AGE_MASK << KIDLED_AGE_PGSHIFT);
@@ -425,7 +429,7 @@ static inline bool kidled_need_check_idle(pg_data_t *pgdat, unsigned long pfn)
 static inline int kidled_scan_page(pg_data_t *pgdat, unsigned long pfn)
 {
 	struct page *page;
-	int age, nr_pages = 1, idx;
+	int age, nr_pages = 1;
 	bool idle = false;
 
 	if (!pfn_valid(pfn))
@@ -496,9 +500,6 @@ static inline int kidled_scan_page(pg_data_t *pgdat, unsigned long pfn)
 			put_page(page);
 		}
 	}
-
-	for (idx = 1; idx < nr_pages; idx++)
-		kidled_set_page_age(pgdat, pfn + idx, age);
 
 out:
 	return nr_pages;
@@ -786,6 +787,10 @@ static inline bool kidled_should_run(struct kidled_scan_control *p,
 			kidled_reset();
 #endif
 		}
+
+		if (!scan_control.duration)
+			static_branch_disable(&kidled_enabled_key);
+
 		*p = scan_control;
 		*new = true;
 	} else if (unlikely(!kidled_is_scan_target_equal(p))) {
@@ -1078,6 +1083,13 @@ static ssize_t kidled_scan_period_store(struct kobject *kobj,
 		pr_warn("%s: Failed to enable kidled due to mglru enabled\n", __func__);
 		return -EINVAL;
 	}
+
+	/*
+	 * To avoid situation like lru_gen >= 0 && kidled disabled, disable
+	 * enabled_key after reset.
+	 */
+	if (secs)
+		static_branch_enable(&kidled_enabled_key);
 
 	kidled_set_scan_duration(secs);
 	wake_up_interruptible(&kidled_wait);

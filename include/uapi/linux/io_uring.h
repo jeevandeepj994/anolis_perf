@@ -43,6 +43,9 @@ struct io_uring_sqe {
 		__u32		statx_flags;
 		__u32		fadvise_advice;
 		__u32		splice_flags;
+		__u32		rename_flags;
+		__u32		unlink_flags;
+		__u32		hardlink_flags;
 	};
 	__u64	user_data;	/* data to be passed back at completion time */
 	/* pack this to avoid bogus arm OABI complaints */
@@ -54,7 +57,10 @@ struct io_uring_sqe {
 	} __attribute__((packed));
 	/* personality to use, if used */
 	__u16	personality;
-	__s32	splice_fd_in;
+	union {
+		__s32	splice_fd_in;
+		__u32	file_index;
+	};
 	union {
 		__u64	__pad2[2];
 		/*
@@ -100,10 +106,10 @@ enum {
 #define IORING_SETUP_CLAMP	(1U << 4)	/* clamp SQ/CQ ring sizes */
 #define IORING_SETUP_ATTACH_WQ	(1U << 5)	/* attach to existing wq */
 #define IORING_SETUP_R_DISABLED	(1U << 6)	/* start with ring disabled */
-#define IORING_SETUP_SQE128		(1U << 10) /* SQEs are 128 byte */
-#define IORING_SETUP_CQE32		(1U << 11) /* CQEs are 32 byte */
+#define IORING_SETUP_SQE128	(1U << 10)	/* SQEs are 128 byte */
+#define IORING_SETUP_CQE32	(1U << 11)	/* CQEs are 32 byte */
 #define IORING_SETUP_IDLE_US	(1U << 30)	/* unit of thread_idle is macrosecond */
-#define IORING_SETUP_SQPOLL_PERCPU	(1U << 31)	/* use percpu SQ poll thread */
+#define IORING_SETUP_SQPOLL_PERCPU     (1U << 31)      /* use percpu SQ poll thread */
 
 enum {
 	IORING_OP_NOP,
@@ -166,13 +172,33 @@ enum {
 /*
  * sqe->timeout_flags
  */
-#define IORING_TIMEOUT_ABS	(1U << 0)
-
+#define IORING_TIMEOUT_ABS		(1U << 0)
+#define IORING_TIMEOUT_UPDATE		(1U << 1)
+#define IORING_TIMEOUT_BOOTTIME		(1U << 2)
+#define IORING_TIMEOUT_REALTIME		(1U << 3)
+#define IORING_LINK_TIMEOUT_UPDATE	(1U << 4)
+#define IORING_TIMEOUT_CLOCK_MASK	(IORING_TIMEOUT_BOOTTIME | IORING_TIMEOUT_REALTIME)
+#define IORING_TIMEOUT_UPDATE_MASK	(IORING_TIMEOUT_UPDATE | IORING_LINK_TIMEOUT_UPDATE)
 /*
  * sqe->splice_flags
  * extends splice(2) flags
  */
 #define SPLICE_F_FD_IN_FIXED	(1U << 31) /* the last bit of __u32 */
+
+/*
+ * POLL_ADD flags. Note that since sqe->poll_events is the flag space, the
+ * command flags for POLL_ADD are stored in sqe->len.
+ *
+ * IORING_POLL_ADD_MULTI	Multishot poll. Sets IORING_CQE_F_MORE if
+ *				the poll handler will continue to report
+ *				CQEs on behalf of the same SQE.
+ *
+ * IORING_POLL_UPDATE		Update existing poll request, matching
+ *				sqe->addr as the old user_data field.
+ */
+#define IORING_POLL_ADD_MULTI	(1U << 0)
+#define IORING_POLL_UPDATE_EVENTS	(1U << 1)
+#define IORING_POLL_UPDATE_USER_DATA	(1U << 2)
 
 /*
  * IO completion data structure (Completion Queue Entry)
@@ -193,8 +219,10 @@ struct io_uring_cqe {
  * cqe->flags
  *
  * IORING_CQE_F_BUFFER	If set, the upper 16 bits are the buffer ID
+ * IORING_CQE_F_MORE	If set, parent SQE will generate more CQE entries
  */
 #define IORING_CQE_F_BUFFER		(1U << 0)
+#define IORING_CQE_F_MORE		(1U << 1)
 
 enum {
 	IORING_CQE_BUFFER_SHIFT		= 16,
@@ -284,6 +312,8 @@ struct io_uring_params {
 #define IORING_FEAT_POLL_32BITS 	(1U << 6)
 #define IORING_FEAT_SQPOLL_NONFIXED	(1U << 7)
 #define IORING_FEAT_EXT_ARG		(1U << 8)
+#define IORING_FEAT_NATIVE_WORKERS	(1U << 9)
+#define IORING_FEAT_RSRC_TAGS		(1U << 10)
 
 /*
  * io_uring_register(2) opcodes and arguments
@@ -303,15 +333,61 @@ enum {
 	IORING_REGISTER_RESTRICTIONS		= 11,
 	IORING_REGISTER_ENABLE_RINGS		= 12,
 
+	/* extended with tagging */
+	IORING_REGISTER_FILES2			= 13,
+	IORING_REGISTER_FILES_UPDATE2		= 14,
+	IORING_REGISTER_BUFFERS2		= 15,
+	IORING_REGISTER_BUFFERS_UPDATE		= 16,
+
+	/* set/clear io-wq thread affinities */
+	IORING_REGISTER_IOWQ_AFF		= 17,
+	IORING_UNREGISTER_IOWQ_AFF		= 18,
+
+	/* set/get max number of io-wq workers */
+	IORING_REGISTER_IOWQ_MAX_WORKERS	= 19,
+
 	/* this goes last */
 	IORING_REGISTER_LAST
 };
 
+/* io-wq worker categories */
+enum {
+	IO_WQ_BOUND,
+	IO_WQ_UNBOUND,
+};
+
+/* deprecated, see struct io_uring_rsrc_update */
 struct io_uring_files_update {
 	__u32 offset;
 	__u32 resv;
 	__aligned_u64 /* __s32 * */ fds;
 };
+
+struct io_uring_rsrc_register {
+	__u32 nr;
+	__u32 resv;
+	__u64 resv2;
+	__aligned_u64 data;
+	__aligned_u64 tags;
+};
+
+struct io_uring_rsrc_update {
+	__u32 offset;
+	__u32 resv;
+	__aligned_u64 data;
+};
+
+struct io_uring_rsrc_update2 {
+	__u32 offset;
+	__u32 resv;
+	__aligned_u64 data;
+	__aligned_u64 tags;
+	__u32 nr;
+	__u32 resv2;
+};
+
+/* Skip updating fd indexes set to this value in the fd table */
+#define IORING_REGISTER_FILES_SKIP	(-2)
 
 #define IO_URING_OP_SUPPORTED	(1U << 0)
 

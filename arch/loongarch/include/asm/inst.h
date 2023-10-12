@@ -7,6 +7,7 @@
 
 #include <linux/types.h>
 #include <asm/asm.h>
+#include <asm/ptrace.h>
 
 #define INSN_NOP		0x03400000
 
@@ -19,6 +20,10 @@
 #define ADDR_IMMSHIFT_ADDU16ID	16
 
 #define ADDR_IMM(addr, INSN)	((addr & ADDR_IMMMASK_##INSN) >> ADDR_IMMSHIFT_##INSN)
+
+enum reg0i15_op {
+	break_op	= 0x54,
+};
 
 enum reg0i26_op {
 	b_op		= 0x14,
@@ -149,7 +154,7 @@ struct reg2i14_format {
 };
 
 struct reg0i15_format {
-	unsigned int simmediate	: 15;
+	unsigned int immediate	: 15;
 	unsigned int opcode	: 17;
 };
 
@@ -233,6 +238,11 @@ static inline bool is_imm_negative(unsigned long val, unsigned int bit)
 	return val & (1UL << (bit - 1));
 }
 
+static inline bool is_break_ins(union loongarch_instruction *ip)
+{
+	return ip->reg0i15_format.opcode == break_op;
+}
+
 static inline unsigned long sign_extend(unsigned long val, unsigned int idx)
 {
 	if (!is_imm_negative(val, idx + 1))
@@ -275,4 +285,6 @@ u32 larch_insn_gen_lu32id(enum loongarch_gpr rd, int imm);
 u32 larch_insn_gen_lu52id(enum loongarch_gpr rd, enum loongarch_gpr rj, int imm);
 u32 larch_insn_gen_jirl(enum loongarch_gpr rd, enum loongarch_gpr rj, unsigned long pc, unsigned long dest);
 
+void simu_pc(struct pt_regs *regs, union loongarch_instruction insn);
+void simu_branch(struct pt_regs *regs, union loongarch_instruction insn);
 #endif /* _ASM_INST_H */

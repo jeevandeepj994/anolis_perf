@@ -286,9 +286,6 @@ static void early_detect_mem_encrypt(struct cpuinfo_x86 *c)
 {
 	u64 msr;
 	u32 eax;
-	char *cap;
-	const char *csv_flag = "csv";
-	const char *csv2_flag = "csv2";
 
 	eax = cpuid_eax(0x8000001f);
 
@@ -319,29 +316,6 @@ static void early_detect_mem_encrypt(struct cpuinfo_x86 *c)
 	rdmsrl(MSR_K7_HWCR, msr);
 	if (!(msr & MSR_K7_HWCR_SMMLOCK))
 		goto clear_csv;
-
-#ifdef CONFIG_X86_FEATURE_NAMES
-	if (eax & BIT(1)) {
-		if ((x86_cap_flags[X86_FEATURE_SEV] != NULL) &&
-		    (!WARN_ON(strlen(csv_flag) >
-			      strlen(x86_cap_flags[X86_FEATURE_SEV])))) {
-			cap = (char *)x86_cap_flags[X86_FEATURE_SEV];
-
-			memset(cap, 0, strlen(x86_cap_flags[X86_FEATURE_SEV]));
-			memcpy(cap, csv_flag, strlen(csv_flag));
-		}
-	}
-	if (eax & BIT(3)) {
-		if ((x86_cap_flags[X86_FEATURE_SEV_ES] != NULL) &&
-		    (!WARN_ON(strlen(csv2_flag) >
-			      strlen(x86_cap_flags[X86_FEATURE_SEV_ES])))) {
-			cap = (char *)x86_cap_flags[X86_FEATURE_SEV_ES];
-
-			memset(cap, 0, strlen(x86_cap_flags[X86_FEATURE_SEV_ES]));
-			memcpy(cap, csv2_flag, strlen(csv2_flag));
-		}
-	}
-#endif
 
 	return;
 

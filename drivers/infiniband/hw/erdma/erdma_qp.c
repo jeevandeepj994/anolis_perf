@@ -651,6 +651,10 @@ static int erdma_post_recv_one(struct erdma_qp *qp,
 	rqe->qe_idx = cpu_to_le16(qp->kern_qp.rq_pi + 1);
 	rqe->qpn = cpu_to_le32(QP_ID(qp));
 
+	if ((u16)(qp->kern_qp.rq_pi - qp->kern_qp.rq_ci) ==
+	    (u16)qp->attrs.rq_size)
+		return -ENOMEM;
+
 	if (recv_wr->num_sge == 0) {
 		rqe->length = 0;
 	} else if (recv_wr->num_sge == 1) {

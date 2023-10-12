@@ -82,6 +82,34 @@ DEFINE_EVENT(kvm_transition, kvm_out,
 #define KVM_TRACE_EXIT_CACHE	65
 #define KVM_TRACE_EXIT_SIGNAL	66
 
+#define kvm_trace_symbol_exit_types				\
+	{ KVM_TRACE_EXIT_INT,		"Interrupt" },		\
+	{ KVM_TRACE_EXIT_TLBLD,		"TLB (LD)" },		\
+	{ KVM_TRACE_EXIT_TLBST,		"TLB (ST)" },		\
+	{ KVM_TRACE_EXIT_TLBI,		"TLB Ifetch" },		\
+	{ KVM_TRACE_EXIT_TLBMOD,	"TLB Mod" },		\
+	{ KVM_TRACE_EXIT_TLBRI,		"TLB RI" },		\
+	{ KVM_TRACE_EXIT_TLBXI,		"TLB XI" },		\
+	{ KVM_TRACE_EXIT_TLBPE,		"TLB Previlege Error" },\
+	{ KVM_TRACE_EXIT_ADDE,		"Address Error" },	\
+	{ KVM_TRACE_EXIT_UNALIGN,	"Address unalign" },	\
+	{ KVM_TRACE_EXIT_ODB,		"Out boundary" },	\
+	{ KVM_TRACE_EXIT_SYSCALL,	"System Call" },	\
+	{ KVM_TRACE_EXIT_BP,		"Breakpoint" },		\
+	{ KVM_TRACE_EXIT_INE,		"Reserved Inst" },	\
+	{ KVM_TRACE_EXIT_IPE,		"Inst prev error" },	\
+	{ KVM_TRACE_EXIT_FPDIS,		"FPU disable" },	\
+	{ KVM_TRACE_EXIT_LSXDIS,	"LSX disable" },	\
+	{ KVM_TRACE_EXIT_LASXDIS,	"LASX disable" },	\
+	{ KVM_TRACE_EXIT_FPE,		"FPE" },		\
+	{ KVM_TRACE_EXIT_WATCH,		"DEBUG" },		\
+	{ KVM_TRACE_EXIT_GSPR,		"GSPR" },		\
+	{ KVM_TRACE_EXIT_HC,		"Hypercall" },		\
+	{ KVM_TRACE_EXIT_GCM,		"CSR Mod" },		\
+	{ KVM_TRACE_EXIT_IDLE,		"IDLE" },		\
+	{ KVM_TRACE_EXIT_CACHE,		"CACHE" },		\
+	{ KVM_TRACE_EXIT_SIGNAL,	"Signal" }
+
 TRACE_EVENT(kvm_exit,
 	    TP_PROTO(struct kvm_vcpu *vcpu, unsigned int reason),
 	    TP_ARGS(vcpu, reason),
@@ -114,18 +142,18 @@ TRACE_EVENT(kvm_exit,
 #define KVM_TRACE_AUX_FPU_LSX_LASX	7
 
 #define kvm_trace_symbol_aux_op			\
-	({ KVM_TRACE_AUX_RESTORE, "restore" },	\
+	{ KVM_TRACE_AUX_RESTORE, "restore" },	\
 	{ KVM_TRACE_AUX_SAVE,    "save" },	\
 	{ KVM_TRACE_AUX_ENABLE,  "enable" },	\
 	{ KVM_TRACE_AUX_DISABLE, "disable" },	\
-	{ KVM_TRACE_AUX_DISCARD, "discard" })
+	{ KVM_TRACE_AUX_DISCARD, "discard" }
 
 #define kvm_trace_symbol_aux_state		\
-	({ KVM_TRACE_AUX_FPU,     "FPU" },	\
+	{ KVM_TRACE_AUX_FPU,     "FPU" },	\
 	{ KVM_TRACE_AUX_LSX,     "LSX" },	\
 	{ KVM_TRACE_AUX_LASX,    "LASX" },	\
 	{ KVM_TRACE_AUX_FPU_LSX, "FPU & LSX" }, \
-	{ KVM_TRACE_AUX_FPU_LSX_LASX, "FPU & LSX & LASX" })
+	{ KVM_TRACE_AUX_FPU_LSX_LASX, "FPU & LSX & LASX" }
 
 TRACE_EVENT(kvm_aux,
 	    TP_PROTO(struct kvm_vcpu *vcpu, unsigned int op,

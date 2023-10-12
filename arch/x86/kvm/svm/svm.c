@@ -1322,6 +1322,7 @@ static int svm_create_vcpu(struct kvm_vcpu *vcpu)
 	struct vcpu_svm *svm;
 	struct page *vmcb_page;
 	struct page *vmsa_page = NULL;
+	struct page *reset_vmsa_page = NULL;
 	int err;
 
 	BUILD_BUG_ON(offsetof(struct vcpu_svm, vcpu) != 0);
@@ -1340,6 +1341,10 @@ static int svm_create_vcpu(struct kvm_vcpu *vcpu)
 		vmsa_page = alloc_page(GFP_KERNEL_ACCOUNT | __GFP_ZERO);
 		if (!vmsa_page)
 			goto error_free_vmcb_page;
+
+		reset_vmsa_page = alloc_page(GFP_KERNEL_ACCOUNT | __GFP_ZERO);
+		if (!reset_vmsa_page)
+			goto error_free_vmsa_page;
 
 		/*
 		 * SEV-ES guests maintain an encrypted version of their FPU
@@ -1376,6 +1381,9 @@ static int svm_create_vcpu(struct kvm_vcpu *vcpu)
 	if (vmsa_page)
 		svm->vmsa = page_address(vmsa_page);
 
+	if (reset_vmsa_page)
+		svm->reset_vmsa = page_address(reset_vmsa_page);
+
 	svm->asid_generation = 0;
 	init_vmcb(svm);
 
@@ -1391,6 +1399,8 @@ static int svm_create_vcpu(struct kvm_vcpu *vcpu)
 error_free_vmsa_page:
 	if (vmsa_page)
 		__free_page(vmsa_page);
+	if (reset_vmsa_page)
+		__free_page(reset_vmsa_page);
 error_free_vmcb_page:
 	__free_page(vmcb_page);
 out:
@@ -4718,6 +4728,9 @@ static struct kvm_x86_ops svm_x86_ops __initdata = {
 	.complete_emulated_msr = svm_complete_emulated_msr,
 
 	.vcpu_deliver_sipi_vector = svm_vcpu_deliver_sipi_vector,
+
+	.control_pre_system_reset = csv_control_pre_system_reset,
+	.control_post_system_reset = csv_control_post_system_reset,
 };
 
 static struct kvm_x86_init_ops svm_init_ops __initdata = {

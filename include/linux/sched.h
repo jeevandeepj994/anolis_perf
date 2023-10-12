@@ -500,6 +500,10 @@ struct sched_statistics {
 	u64				core_forceidle_sum;
 #endif
 
+#if defined(CONFIG_SCHED_ACPU) || defined(CONFIG_SCHED_ACPU)
+	u64				core_sibidle_sum;
+#endif
+
 	CK_KABI_RESERVE(1)
 	CK_KABI_RESERVE(2)
 	CK_KABI_RESERVE(3)
@@ -575,7 +579,7 @@ struct sched_entity {
 
 #ifdef CONFIG_SCHED_CORE
 	u64				core_vruntime;
-	unsigned int			ht_aware_quota_coefficient;
+	unsigned int			ht_ratio;
 #endif
 
 	CK_KABI_RESERVE(1)
@@ -1493,7 +1497,8 @@ struct task_struct {
 	int				mce_count;
 #endif
 
-	CK_KABI_RESERVE(1)
+	/* PF_IO_WORKER */
+	CK_KABI_USE(1, void *pf_io_worker)
 	CK_KABI_RESERVE(2)
 	CK_KABI_RESERVE(3)
 	CK_KABI_RESERVE(4)
@@ -2339,9 +2344,11 @@ extern void sched_core_free(struct task_struct *tsk);
 extern void sched_core_fork(struct task_struct *p);
 extern int sched_core_share_pid(unsigned int cmd, pid_t pid, enum pid_type type,
 				unsigned long uaddr);
+extern int sched_core_idle_cpu(int cpu);
 #else
 static inline void sched_core_free(struct task_struct *tsk) { }
 static inline void sched_core_fork(struct task_struct *p) { }
+static inline int sched_core_idle_cpu(int cpu) { return idle_cpu(cpu); }
 #endif
 
 #endif

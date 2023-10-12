@@ -5,9 +5,6 @@
 # For internal testing builds during development, it should be 0.
 %global released_kernel 1
 
-# Sign modules on all arches
-%global signmodules %%DIST_DO_SIGNMODULES%%
-
 # define buildid .local
 
 %global dist %%DIST%%
@@ -130,6 +127,14 @@
 %define kernel_image arch/arm64/boot/Image.gz
 %endif
 
+%ifarch sw_64
+%define all_arch_configs %{name}-%{version}-sw_64*.config
+%define asmarch sw_64
+%define hdrarch sw_64
+%define make_target vmlinux
+%define kernel_image arch/sw_64/boot/vmlinux
+%endif
+
 # To temporarily exclude an architecture from being built, add it to
 # %%nobuildarches. Do _NOT_ use the ExclusiveArch: line, because if we
 # don't build kernel-headers then the new build system will no longer let
@@ -150,7 +155,7 @@
 %endif
 
 # Architectures we build tools/cpupower on
-%define cpupowerarchs x86_64 aarch64
+%define cpupowerarchs x86_64 aarch64 sw_64
 
 
 #
@@ -170,7 +175,7 @@ Release: %{pkg_release}
 Summary: The Linux kernel, based on version %{version}, heavily modified with backports
 # DO NOT CHANGE THE 'ExclusiveArch' LINE TO TEMPORARILY EXCLUDE AN ARCHITECTURE BUILD.
 # SET %%nobuildarches (ABOVE) INSTEAD
-ExclusiveArch: noarch i686 x86_64 aarch64
+ExclusiveArch: noarch i686 x86_64 aarch64 sw_64
 ExclusiveOS: Linux
 %ifnarch %{nobuildarches}
 Requires: %{name}-core-uname-r = %{KVERREL}%{?variant}
@@ -246,8 +251,6 @@ BuildRequires: rpm-build, elfutils
 %global _no_recompute_build_ids 1
 %endif
 
-BuildRequires: openssl openssl-devel
-
 # These below are required to build man pages
 %if %{with_perf}
 BuildRequires: xmlto
@@ -263,12 +266,15 @@ Source17: mod-blacklist.sh
 
 Source90: filter-x86_64.sh
 Source93: filter-aarch64.sh
+Source96: filter-sw_64.sh
 Source99: filter-modules.sh
 
 Source20: kernel-%{version}-aarch64.config
 Source21: kernel-%{version}-aarch64-debug.config
 Source39: kernel-%{version}-x86_64.config
 Source40: kernel-%{version}-x86_64-debug.config
+Source3000: kernel-%{version}-sw_64.config
+Source3001: kernel-%{version}-sw_64-debug.config
 Source43: generate_bls_conf.sh
 Source44: mod-internal.list
 
@@ -864,11 +870,6 @@ BuildKernel() {
     %{make} -s %{?_smp_mflags} mrproper
     cp configs/$Config .config
 
-    %if %{signmodules}
-    cp %{SOURCE11} certs/.
-    cp %{SOURCE12} certs/.
-    %endif
-
     Arch=`head -1 .config | cut -b 3-`
     echo USING ARCH=$Arch
 
@@ -885,6 +886,11 @@ BuildKernel() {
 	%{make} -s ARCH=$Arch V=1 %{?_smp_mflags} KCFLAGS="$KCFLAGS" WITH_GCOV="%{?with_gcov}" modules %{?sparse_mflags} || exit 1
     fi
 
+%ifarch sw_64
+    objdump -d vmlinux>1
+    objcopy -O binary vmlinux vmlinux.bin
+    cp vmlinux.bin ./arch/sw_64/boot/vmlinux
+%endif
     mkdir -p $RPM_BUILD_ROOT/%{image_install_path}
     mkdir -p $RPM_BUILD_ROOT/lib/modules/$KernelVer
 %if %{with_debuginfo}
@@ -1168,14 +1174,6 @@ BuildKernel() {
     rm -f $RPM_BUILD_ROOT/mod-extra.list
     rm -f $RPM_BUILD_ROOT/mod-internal.list
 
-%if %{signmodules}
-    if [ $DoModules -eq 1 ]; then
-	# Save the signing keys so we can sign the modules in __modsign_install_post
-	cp certs/signing_key.pem certs/signing_key.pem.sign${Flav}
-	cp certs/signing_key.x509 certs/signing_key.x509.sign${Flav}
-    fi
-%endif
-
     # Move the devel headers out of the root file system
     mkdir -p $RPM_BUILD_ROOT/usr/src/kernels
     mv $RPM_BUILD_ROOT/lib/modules/$KernelVer/build $RPM_BUILD_ROOT/$DevelDir
@@ -1210,7 +1208,7 @@ BuildKernel %make_target %kernel_image debug
 %endif
 
 %if %{with_up}
-BuildKernel %make_target %kernel_image 
+BuildKernel %make_target %kernel_image
 %endif
 
 %ifarch aarch64
@@ -1296,28 +1294,6 @@ chmod -R a=rX Documentation
 find Documentation -type d | xargs chmod u+w
 %endif
 
-# In the modsign case, we do 3 things.  1) We check the "flavour" and hard
-# code the value in the following invocations.  This is somewhat sub-optimal
-# but we're doing this inside of an RPM macro and it isn't as easy as it
-# could be because of that.  2) We restore the .tmp_versions/ directory from
-# the one we saved off in BuildKernel above.  This is to make sure we're
-# signing the modules we actually built/installed in that flavour.  3) We
-# grab the arch and invoke mod-sign.sh command to actually sign the modules.
-#
-# We have to do all of those things _after_ find-debuginfo runs, otherwise
-# that will strip the signature off of the modules.
-
-%define __modsign_install_post \
-  if [ "%{signmodules}" -eq "1" ]; then \
-    if [ "%{with_debug}" -ne "0" ]; then \
-      %{modsign_cmd} certs/signing_key.pem.sign+debug certs/signing_key.x509.sign+debug $RPM_BUILD_ROOT/lib/modules/%{KVERREL}+debug/ \
-    fi \
-    if [ "%{with_up}" -ne "0" ]; then \
-      %{modsign_cmd} certs/signing_key.pem.sign certs/signing_key.x509.sign $RPM_BUILD_ROOT/lib/modules/%{KVERREL}/ \
-    fi \
-  fi \
-%{nil}
-
 ###
 ### Special hacks for debuginfo subpackages.
 ###
@@ -1343,8 +1319,7 @@ find Documentation -type d | xargs chmod u+w
 %define __spec_install_post \
   %{?__debug_package:%{__debug_install_post}}\
   %{__arch_install_post}\
-  %{__os_install_post}\
-  %{__modsign_install_post}
+  %{__os_install_post}
 
 ###
 ### install
@@ -1563,7 +1538,7 @@ fi\
 %{expand:%%posttrans %{?1:%{1}-}modules}\
 /bin/kernel-install add %{KVERREL}%{?1:+%{1}} /lib/modules/%{KVERREL}%{?1:+%{1}}/vmlinuz || exit $?\
 %ifarch aarch64  \
-grubby --update-kernel /boot/vmlinuz-%{KVERREL}%{?1:+%{1}} --args="cgroup.memory=nokmem crashkernel=0M-2G:0M,2G-64G:256M,64G-:384M iommu.passthrough=1 iommu.strict=0"\
+grubby --update-kernel /boot/vmlinuz-%{KVERREL}%{?1:+%{1}} --args="cgroup.memory=nokmem crashkernel=0M-2G:0M,2G-64G:256M,64G-:384M iommu.passthrough=1 iommu.strict=0 nospectre_bhb ssbd=force-off"\
 %else \
 grubby --update-kernel /boot/vmlinuz-%{KVERREL}%{?1:+%{1}} --args="cgroup.memory=nokmem crashkernel=0M-2G:0M,2G-8G:192M,8G-:256M"\
 %endif  \
@@ -1581,7 +1556,7 @@ then\
 fi\
 /bin/kernel-install add %{KVERREL}%{?1:+%{1}} /lib/modules/%{KVERREL}%{?1:+%{1}}/vmlinuz || exit $?\
 %ifarch aarch64  \
-grubby --update-kernel /boot/vmlinuz-%{KVERREL}%{?1:+%{1}} --args="cgroup.memory=nokmem crashkernel=0M-2G:0M,2G-64G:256M,64G-:384M iommu.passthrough=1 iommu.strict=0"\
+grubby --update-kernel /boot/vmlinuz-%{KVERREL}%{?1:+%{1}} --args="cgroup.memory=nokmem crashkernel=0M-2G:0M,2G-64G:256M,64G-:384M iommu.passthrough=1 iommu.strict=0 nospectre_bhb ssbd=force-off"\
 %else \
 grubby --update-kernel /boot/vmlinuz-%{KVERREL}%{?1:+%{1}} --args="cgroup.memory=nokmem crashkernel=0M-2G:0M,2G-8G:192M,8G-:256M"\
 %endif  \
@@ -1817,7 +1792,9 @@ fi
 /usr/src/kernels/%{KVERREL}%{?2:+%{2}}\
 %{expand:%%files -f %{name}-%{?2:%{2}-}modules-extra.list %{?2:%{2}-}modules-extra}\
 %defattr(-,root,root)\
+%ifnarch sw_64\
 %config(noreplace) /etc/modprobe.d/*-blacklist.conf\
+%endif\
 %{expand:%%files -f %{name}-%{?2:%{2}-}modules-internal.list %{?2:%{2}-}modules-internal}\
 %if %{with_debuginfo}\
 %ifnarch noarch\

@@ -413,30 +413,6 @@ struct device_domain_info *get_domain_info(struct device *dev)
 DEFINE_SPINLOCK(device_domain_lock);
 static LIST_HEAD(device_domain_list);
 
-/*
- * Iterate over elements in device_domain_list and call the specified
- * callback @fn against each element.
- */
-int for_each_device_domain(int (*fn)(struct device_domain_info *info,
-				     void *data), void *data)
-{
-	int ret = 0;
-	unsigned long flags;
-	struct device_domain_info *info;
-
-	spin_lock_irqsave(&device_domain_lock, flags);
-	list_for_each_entry(info, &device_domain_list, global) {
-		ret = fn(info, data);
-		if (ret) {
-			spin_unlock_irqrestore(&device_domain_lock, flags);
-			return ret;
-		}
-	}
-	spin_unlock_irqrestore(&device_domain_lock, flags);
-
-	return 0;
-}
-
 const struct iommu_ops intel_iommu_ops;
 
 static bool translation_pre_enabled(struct intel_iommu *iommu)
@@ -6428,9 +6404,9 @@ static inline bool check_pasid_pt_sre(void)
 {
 	struct cpuinfo_x86 *c = &cpu_data(0);
 
-	if (c->x86_model == 0x8f && c->x86_stepping >= 4) {
-               pr_debug("SPR E0+, PASID PT SRE enabled");
-               return true;
+	if ((c->x86_model == 0x8f && c->x86_stepping >= 4) || c->x86_model == 0xcf) {
+		pr_debug("Platform PASID PT SRE enabled");
+		return true;
 	}
 	pr_alert("No PASID PT SRE, in-kernel PASID DMA not supported!!!");
 	return false;

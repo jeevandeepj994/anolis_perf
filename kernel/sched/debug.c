@@ -595,6 +595,11 @@ void print_cfs_rq(struct seq_file *m, int cpu, struct cfs_rq *cfs_rq)
 	SEQ_printf(m, "  .%-30s: %d\n", "nr_spread_over",
 			cfs_rq->nr_spread_over);
 	SEQ_printf(m, "  .%-30s: %d\n", "nr_running", cfs_rq->nr_running);
+	SEQ_printf(m, "  .%-30s: %d\n", "h_nr_running", cfs_rq->h_nr_running);
+	SEQ_printf(m, "  .%-30s: %d\n", "idle_nr_running",
+			cfs_rq->idle_nr_running);
+	SEQ_printf(m, "  .%-30s: %d\n", "idle_h_nr_running",
+			cfs_rq->idle_h_nr_running);
 #ifdef CONFIG_GROUP_IDENTITY
 #ifdef CONFIG_SCHED_SMT
 	SEQ_printf(m, "  .%-30s: %d\n", "h_nr_expel_immune",
@@ -815,6 +820,7 @@ static void sched_debug_header(struct seq_file *m)
 	SEQ_printf(m, "  .%-40s: %Ld.%06ld\n", #x, SPLIT_NS(x))
 	PN(sysctl_sched_latency);
 	PN(sysctl_sched_min_granularity);
+	PN(sysctl_sched_idle_min_granularity);
 	PN(sysctl_sched_wakeup_granularity);
 	P(sysctl_sched_child_runs_first);
 	P(sysctl_sched_features);
@@ -1022,6 +1028,9 @@ void proc_sched_show_task(struct task_struct *p, struct seq_file *m)
 
 #ifdef CONFIG_SCHED_CORE
 		PN_SCHEDSTAT(se.statistics.core_forceidle_sum);
+#endif
+#ifdef CONFIG_SCHED_ACPU
+		PN_SCHEDSTAT(se.statistics.core_sibidle_sum);
 #endif
 	}
 

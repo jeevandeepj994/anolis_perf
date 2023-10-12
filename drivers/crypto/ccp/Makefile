@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: GPL-2.0
+obj-$(CONFIG_CRYPTO_DEV_HCT) += hct.o
 obj-$(CONFIG_CRYPTO_DEV_CCP_DD) += ccp.o
 ccp-objs  := sp-dev.o sp-platform.o
 ccp-$(CONFIG_CRYPTO_DEV_SP_CCP) += ccp-dev.o \
@@ -23,4 +24,9 @@ ccp-crypto-objs := ccp-crypto-main.o \
 		   ccp-crypto-des3.o \
 		   ccp-crypto-rsa.o \
 		   ccp-crypto-sha.o
+
+ccp-crypto-$(CONFIG_HYGON_GM) += ccp-crypto-sm2-hygon.o \
+		   ccp-crypto-sm3-hygon.o \
+		   ccp-crypto-sm4-hygon.o
+
 obj-$(CONFIG_TDM_KERNEL_GUARD) += tdm-kernel-guard.o

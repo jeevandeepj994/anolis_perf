@@ -95,35 +95,6 @@ struct kvm_stats_debugfs_item debugfs_entries[] = {
 	{NULL}
 };
 
-static const struct trace_print_flags kvm_trace_symbol_exit_types[] = {
-	{ KVM_TRACE_EXIT_INT,		"Interrupt" },
-	{ KVM_TRACE_EXIT_TLBLD,		"TLB (LD)" },
-	{ KVM_TRACE_EXIT_TLBST,		"TLB (ST)" },
-	{ KVM_TRACE_EXIT_TLBI,		"TLB Ifetch" },
-	{ KVM_TRACE_EXIT_TLBMOD,	"TLB Mod" },
-	{ KVM_TRACE_EXIT_TLBRI,		"TLB RI" },
-	{ KVM_TRACE_EXIT_TLBXI,		"TLB XI" },
-	{ KVM_TRACE_EXIT_TLBPE,		"TLB Previlege Error" },
-	{ KVM_TRACE_EXIT_ADDE,		"Address Error" },
-	{ KVM_TRACE_EXIT_UNALIGN,	"Address unalign" },
-	{ KVM_TRACE_EXIT_ODB,		"Out boundary" },
-	{ KVM_TRACE_EXIT_SYSCALL,	"System Call" },
-	{ KVM_TRACE_EXIT_BP,		"Breakpoint" },
-	{ KVM_TRACE_EXIT_INE,		"Reserved Inst" },
-	{ KVM_TRACE_EXIT_IPE,		"Inst prev error" },
-	{ KVM_TRACE_EXIT_FPDIS,		"FPU disable" },
-	{ KVM_TRACE_EXIT_LSXDIS,	"LSX disable" },
-	{ KVM_TRACE_EXIT_LASXDIS,	"LASX disable" },
-	{ KVM_TRACE_EXIT_FPE,		"FPE" },
-	{ KVM_TRACE_EXIT_WATCH,		"DEBUG" },
-	{ KVM_TRACE_EXIT_GSPR,		"GSPR" },
-	{ KVM_TRACE_EXIT_HC,		"Hypercall" },
-	{ KVM_TRACE_EXIT_GCM,		"CSR Mod" },
-	{ KVM_TRACE_EXIT_IDLE,		"IDLE" },
-	{ KVM_TRACE_EXIT_CACHE,		"CACHE" },
-	{ KVM_TRACE_EXIT_SIGNAL,	"Signal" },
-};
-
 bool kvm_trace_guest_mode_change;
 static struct kvm_context __percpu *vmcs;
 

@@ -1291,6 +1291,20 @@ static void smcr_buf_unuse(struct smc_buf_desc *buf_desc, bool is_rmb,
 	}
 }
 
+static void smcd_buf_detach(struct smc_connection *conn)
+{
+	struct smcd_dev *smcd = conn->lgr->smcd;
+	u64 peer_token = conn->peer_token;
+
+	if (!conn->sndbuf_desc)
+		return;
+
+	smc_ism_detach_dmb(smcd, peer_token);
+
+	kfree(conn->sndbuf_desc);
+	conn->sndbuf_desc = NULL;
+}
+
 static void smc_buf_unuse(struct smc_connection *conn,
 			  struct smc_link_group *lgr)
 {
@@ -1334,6 +1348,10 @@ void smc_conn_free(struct smc_connection *conn)
 		if (!list_empty(&lgr->list))
 			smc_ism_unset_conn(conn);
 		tasklet_kill(&conn->rx_tsklet);
+
+		/* detach sndbuf from peer RMB */
+		if (smc_ism_dmb_mappable(lgr->smcd))
+			smcd_buf_detach(conn);
 	} else {
 		smc_cdc_wait_pend_tx_wr(conn);
 		if (current_work() != &conn->abort_work)
@@ -2022,8 +2040,7 @@ static bool smcd_lgr_match(struct smc_link_group *lgr,
 	return lgr->peer_gid == peer_gid && lgr->smcd == smcismdev;
 }
 
-/* create a new SMC connection (and a new link group if necessary) */
-int smc_conn_create(struct smc_sock *smc, struct smc_init_info *ini)
+static int __smc_conn_create(struct smc_sock *smc, struct smc_init_info *ini, bool create_lgr)
 {
 	struct smc_connection *conn = &smc->conn;
 	struct net *net = sock_net(&smc->sk);
@@ -2087,6 +2104,8 @@ int smc_conn_create(struct smc_sock *smc, struct smc_init_info *ini)
 
 create:
 	if (ini->first_contact_local) {
+		if (!create_lgr)
+			return SMC_CLC_DECL_ERR_REQ_LGR;
 		rc = smc_lgr_create(smc, ini);
 		if (rc)
 			goto out;
@@ -2120,6 +2139,29 @@ create:
 
 out:
 	return rc;
+}
+
+/* create a new SMC connection (and a new link group if necessary) */
+int smc_conn_create(struct smc_sock *smc, struct smc_init_info *ini)
+{
+	int rc;
+
+	/* make no impact on SMCD */
+	if (ini->is_smcd)
+		goto locked;
+
+	/* try create conn without create lgr first */
+	rc = __smc_conn_create(smc, ini, /* disallow create lgr */ false);
+	if (!rc) {
+		/* not rely on new lgr, unlock lgr pending lock in advance. */
+		smc_lgr_pending_unlock(ini, ini->mutex);
+		return 0;
+	} else if (rc != SMC_CLC_DECL_ERR_REQ_LGR) {
+		/* that's unexcepted error */
+		return rc;
+	}
+locked:
+	return __smc_conn_create(smc, ini, /* create lgr if needed */ true);
 }
 
 #define SMCD_DMBE_SIZES		7 /* 0 -> 16KB, 1 -> 32KB, .. 7 -> 2MB */
@@ -2592,21 +2634,71 @@ void smc_rmb_sync_sg_for_cpu(struct smc_connection *conn)
  */
 int smc_buf_create(struct smc_sock *smc, bool is_smcd)
 {
+	bool sndbuf_created = false;
 	int rc;
+
+	if (is_smcd &&
+	    smc_ism_dmb_mappable(smc->conn.lgr->smcd))
+		goto create_rmb;
 
 	/* create send buffer */
 	rc = __smc_buf_create(smc, is_smcd, false);
 	if (rc)
 		return rc;
+	sndbuf_created = true;
+
+create_rmb:
 	/* create rmb */
 	rc = __smc_buf_create(smc, is_smcd, true);
-	if (rc) {
+	if (rc && sndbuf_created) {
 		down_write(&smc->conn.lgr->sndbufs_lock);
 		list_del(&smc->conn.sndbuf_desc->list);
 		up_write(&smc->conn.lgr->sndbufs_lock);
 		smc_buf_free(smc->conn.lgr, false, smc->conn.sndbuf_desc);
 		smc->conn.sndbuf_desc = NULL;
 	}
+	return rc;
+}
+
+int smcd_buf_attach(struct smc_sock *smc)
+{
+	struct smc_connection *conn = &smc->conn;
+	struct smcd_dev *smcd = conn->lgr->smcd;
+	u64 peer_token = conn->peer_token;
+	struct smc_buf_desc *buf_desc;
+	int rc;
+
+	buf_desc = kzalloc(sizeof(*buf_desc), GFP_KERNEL);
+	if (!buf_desc)
+		return -ENOMEM;
+
+	/* map local sndbuf desc to peer RMB, so operations on local
+	 * sndbuf are equivalent to operations on peer RMB.
+	 */
+	rc = smc_ism_attach_dmb(smcd, peer_token, buf_desc);
+	if (rc) {
+		rc = SMC_CLC_DECL_MEM;
+		goto free;
+	}
+
+	smc->sk.sk_sndbuf = buf_desc->len;
+	buf_desc->cpu_addr = (u8 *)buf_desc->cpu_addr + sizeof(struct smcd_cdc_msg);
+	buf_desc->len -=  sizeof(struct smcd_cdc_msg);
+	conn->sndbuf_desc = buf_desc;
+	conn->sndbuf_desc->used = 1;
+	atomic_set(&conn->sndbuf_space, conn->sndbuf_desc->len);
+	return 0;
+
+free:
+	if (conn->rmb_desc) {
+		/* free local RMB as well */
+		down_write(&conn->lgr->rmbs_lock);
+		list_del(&conn->rmb_desc->list);
+		up_write(&conn->lgr->rmbs_lock);
+		smc_buf_free(conn->lgr, true, conn->rmb_desc);
+		conn->rmb_desc = NULL;
+	}
+	kfree(buf_desc);
 	return rc;
 }
 

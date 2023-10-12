@@ -1779,6 +1779,15 @@ static struct ctl_table kern_table[] = {
 		.extra2		= &max_sched_granularity_ns,
 	},
 	{
+		.procname	= "sched_idle_min_granularity_ns",
+		.data		= &sysctl_sched_idle_min_granularity,
+		.maxlen		= sizeof(unsigned int),
+		.mode		= 0644,
+		.proc_handler	= sched_proc_update_handler,
+		.extra1		= SYSCTL_ZERO,
+		.extra2		= &max_sched_granularity_ns,
+	},
+	{
 		.procname	= "sched_latency_ns",
 		.data		= &sysctl_sched_latency,
 		.maxlen		= sizeof(unsigned int),
@@ -2027,6 +2036,28 @@ static struct ctl_table kern_table[] = {
 	},
 #endif
 #endif
+#ifdef CONFIG_SCHED_CORE
+	{
+		.procname	= "sched_core",
+		.data		= &sysctl_sched_core,
+		.maxlen		= sizeof(int),
+		.mode		= 0644,
+		.proc_handler	= sysctl_sched_core_handler,
+		.extra1		= SYSCTL_ZERO,
+		.extra2		= SYSCTL_ONE,
+	},
+#endif
+#ifdef CONFIG_SCHED_ACPU
+	{
+		.procname	= "sched_acpu",
+		.data		= &sysctl_sched_acpu_enabled,
+		.maxlen		= sizeof(unsigned int),
+		.mode		= 0644,
+		.proc_handler	= sched_acpu_enable_handler,
+		.extra1		= SYSCTL_ZERO,
+		.extra2		= SYSCTL_ONE,
+	},
+#endif /* CONFIG_SCHED_ACPU*/
 #ifdef CONFIG_PROVE_LOCKING
 	{
 		.procname	= "prove_locking",

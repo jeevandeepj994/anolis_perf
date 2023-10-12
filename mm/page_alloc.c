@@ -3087,7 +3087,21 @@ static int rmqueue_bulk(struct zone *zone, unsigned int order,
 
 	spin_lock(&zone->lock);
 #ifdef CONFIG_PAGE_PREZERO
-	zone->alloc_zero = prezero_pcp_enabled() && (gfp_flags & __GFP_ZERO);
+	/*
+	 * Since patch "mm/page_alloc: allow high-order pages to be stored on
+	 * the per-cpu lists", the PCP allocator nows stores THP and "cheap"
+	 * high-order pages.
+	 *
+	 * In prezero scenario, prezero_pcp_enabled() controls allocation
+	 * with order == 0, while prezero_buddy_enabled() controls allocation
+	 * with order > 0.
+	 *
+	 * A more straightforward function naming may be provided later.
+	 */
+	if (order == 0)
+		zone->alloc_zero = prezero_pcp_enabled() && (gfp_flags & __GFP_ZERO);
+	else
+		zone->alloc_zero = prezero_buddy_enabled() && (gfp_flags & __GFP_ZERO);
 #endif
 	for (i = 0; i < count; ++i) {
 		struct page *page = __rmqueue(zone, order, migratetype,
@@ -4182,6 +4196,24 @@ try_this_zone:
 		if (page) {
 			prep_new_page(page, order, gfp_mask, alloc_flags);
 
+#ifdef CONFIG_PGTABLE_BIND
+			/*
+			 * If allocated page belongs to remote numa node,
+			 * accumulate memcg->ck_reserved2 to show how many pages
+			 * are from remote node.
+			 */
+			if ((gfp_mask & __GFP_PGTABLE) &&
+			    (zone_to_nid(ac->preferred_zoneref->zone) != zone_to_nid(zone))) {
+				struct mem_cgroup *memcg;
+
+				memcg = get_mem_cgroup_from_mm(current->mm);
+				if (memcg) {
+					memcg->pgtable_misplaced++;
+					css_put(&memcg->css);
+				}
+			}
+#endif
+
 			/*
 			 * If this is a high-order atomic allocation then check
 			 * if the pageblock should be reserved for the future
@@ -5266,6 +5298,16 @@ __alloc_pages_nodemask(gfp_t gfp_mask, unsigned int order, int preferred_nid,
 	 */
 	ac.nodemask = nodemask;
 
+	/*
+	 * Restore the __GFP_THISNODE restriction if current allocation is page
+	 * table.
+	 */
+	if (gfp_mask & __GFP_PGTABLE) {
+		gfp_mask &= ~__GFP_THISNODE;
+		alloc_mask &= ~__GFP_THISNODE;
+		ac.zonelist = node_zonelist(preferred_nid, gfp_mask);
+	}
+
 	page = __alloc_pages_slowpath(alloc_mask, order, &ac);
 
 out:
@@ -5761,7 +5803,7 @@ void show_free_areas(unsigned int filter, nodemask_t *nodemask)
 		global_node_page_state_pages(NR_SLAB_UNRECLAIMABLE_B),
 		global_node_page_state(NR_FILE_MAPPED),
 		global_node_page_state(NR_SHMEM),
-		global_zone_page_state(NR_PAGETABLE),
+		global_node_page_state(NR_PAGETABLE),
 		global_zone_page_state(NR_BOUNCE),
 		global_zone_page_state(NR_FREE_PAGES),
 		free_pcp,
@@ -5793,6 +5835,7 @@ void show_free_areas(unsigned int filter, nodemask_t *nodemask)
 #ifdef CONFIG_SHADOW_CALL_STACK
 			" shadow_call_stack:%lukB"
 #endif
+			" pagetables:%lukB"
 			" all_unreclaimable? %s"
 			"\n",
 			pgdat->node_id,
@@ -5808,16 +5851,16 @@ void show_free_areas(unsigned int filter, nodemask_t *nodemask)
 			K(node_page_state(pgdat, NR_WRITEBACK)),
 			K(node_page_state(pgdat, NR_SHMEM)),
 #ifdef CONFIG_TRANSPARENT_HUGEPAGE
-			K(node_page_state(pgdat, NR_SHMEM_THPS) * HPAGE_PMD_NR),
-			K(node_page_state(pgdat, NR_SHMEM_PMDMAPPED)
-					* HPAGE_PMD_NR),
-			K(node_page_state(pgdat, NR_ANON_THPS) * HPAGE_PMD_NR),
+			K(node_page_state(pgdat, NR_SHMEM_THPS)),
+			K(node_page_state(pgdat, NR_SHMEM_PMDMAPPED)),
+			K(node_page_state(pgdat, NR_ANON_THPS)),
 #endif
 			K(node_page_state(pgdat, NR_WRITEBACK_TEMP)),
 			node_page_state(pgdat, NR_KERNEL_STACK_KB),
 #ifdef CONFIG_SHADOW_CALL_STACK
 			node_page_state(pgdat, NR_KERNEL_SCS_KB),
 #endif
+			K(node_page_state(pgdat, NR_PAGETABLE)),
 			pgdat->kswapd_failures >= MAX_RECLAIM_RETRIES ?
 				"yes" : "no");
 	}
@@ -5849,7 +5892,6 @@ void show_free_areas(unsigned int filter, nodemask_t *nodemask)
 			" present:%lukB"
 			" managed:%lukB"
 			" mlocked:%lukB"
-			" pagetables:%lukB"
 			" bounce:%lukB"
 			" free_pcp:%lukB"
 			" local_pcp:%ukB"
@@ -5870,7 +5912,6 @@ void show_free_areas(unsigned int filter, nodemask_t *nodemask)
 			K(zone->present_pages),
 			K(zone_managed_pages(zone)),
 			K(zone_page_state(zone, NR_MLOCK)),
-			K(zone_page_state(zone, NR_PAGETABLE)),
 			K(zone_page_state(zone, NR_BOUNCE)),
 			K(free_pcp),
 			K(this_cpu_read(zone->pageset->pcp.count)),

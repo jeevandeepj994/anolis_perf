@@ -11,6 +11,7 @@ config ARM64
 	select ACPI_PPTT if ACPI
 	select ARCH_HAS_DEBUG_WX
 	select ARCH_BINFMT_ELF_STATE
+	select ARCH_HAS_COPY_MC if ACPI_APEI_GHES
 	select ARCH_HAS_DEBUG_VIRTUAL
 	select ARCH_HAS_DEBUG_VM_PGTABLE
 	select ARCH_HAS_DEVMEM_IS_ALLOWED
@@ -1979,6 +1980,17 @@ config ARCH_ENABLE_THP_MIGRATION
 
 config ARCH_HAS_CPU_RELAX
         def_bool y
+
+config ARM64_CPU_EXTENDED_CTRL
+	bool "ARM64 cpu extended control register support"
+	depends on ARM64
+	help
+	  Register IMP_CPUECTLR_EL1  contains control bits that affect the
+	  CPU behavior. In some scenarios, adjusting the register configuration
+	  can effectively improve performance.
+
+	  This option provides the IMP_CPUECTLR_EL1 configuration interface
+	  under /sys/devices/system/cpu/cpuX/.
 
 menu "Power management options"
 

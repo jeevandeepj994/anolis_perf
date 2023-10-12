@@ -58,6 +58,7 @@
 #include "smc_sysctl.h"
 #include "smc_proc.h"
 #include "smc_inet.h"
+#include "smc_loopback.h"
 
 static DEFINE_MUTEX(smc_server_lgr_pending);	/* serialize link group
 						 * creation on server
@@ -1416,10 +1417,10 @@ static int smc_connect_rdma(struct smc_sock *smc,
 	if (reason_code)
 		return reason_code;
 
-	mutex_lock(&smc_client_lgr_pending);
+	smc_lgr_pending_lock(ini, &smc_client_lgr_pending);
 	reason_code = smc_conn_create(smc, ini);
 	if (reason_code) {
-		mutex_unlock(&smc_client_lgr_pending);
+		smc_lgr_pending_unlock(ini, &smc_client_lgr_pending);
 		return reason_code;
 	}
 
@@ -1516,7 +1517,7 @@ static int smc_connect_rdma(struct smc_sock *smc,
 		if (reason_code)
 			goto connect_abort;
 	}
-	mutex_unlock(&smc_client_lgr_pending);
+	smc_lgr_pending_unlock(ini, &smc_client_lgr_pending);
 
 	smc_copy_sock_settings_to_clc(smc);
 	smc->connect_nonblock = 0;
@@ -1526,7 +1527,7 @@ static int smc_connect_rdma(struct smc_sock *smc,
 	return 0;
 connect_abort:
 	smc_conn_abort(smc, ini->first_contact_local);
-	mutex_unlock(&smc_client_lgr_pending);
+	smc_lgr_pending_unlock(ini, &smc_client_lgr_pending);
 	smc->connect_nonblock = 0;
 
 	return reason_code;
@@ -1585,10 +1586,10 @@ static int smc_connect_ism(struct smc_sock *smc,
 	ini->ism_peer_gid[ini->ism_selected] = aclc->d0.gid;
 
 	/* there is only one lgr role for SMC-D; use server lock */
-	mutex_lock(&smc_server_lgr_pending);
+	smc_lgr_pending_lock(ini, &smc_server_lgr_pending);
 	rc = smc_conn_create(smc, ini);
 	if (rc) {
-		mutex_unlock(&smc_server_lgr_pending);
+		smc_lgr_pending_unlock(ini, &smc_server_lgr_pending);
 		return rc;
 	}
 
@@ -1600,6 +1601,12 @@ static int smc_connect_ism(struct smc_sock *smc,
 	}
 
 	smc_conn_save_peer_info(smc, aclc);
+
+	if (smc_ism_dmb_mappable(smc->conn.lgr->smcd)) {
+		rc = smcd_buf_attach(smc);
+		if (rc)
+			goto connect_abort;
+	}
 	smc_close_init(smc);
 	smc_rx_init(smc);
 	smc_tx_init(smc);
@@ -1615,7 +1622,7 @@ static int smc_connect_ism(struct smc_sock *smc,
 				  aclc->hdr.version, eid, ini);
 	if (rc)
 		goto connect_abort;
-	mutex_unlock(&smc_server_lgr_pending);
+	smc_lgr_pending_unlock(ini, &smc_server_lgr_pending);
 
 	smc_copy_sock_settings_to_clc(smc);
 	smc->connect_nonblock = 0;
@@ -1625,7 +1632,7 @@ static int smc_connect_ism(struct smc_sock *smc,
 	return 0;
 connect_abort:
 	smc_conn_abort(smc, ini->first_contact_local);
-	mutex_unlock(&smc_server_lgr_pending);
+	smc_lgr_pending_unlock(ini, &smc_server_lgr_pending);
 	smc->connect_nonblock = 0;
 
 	return rc;
@@ -2557,6 +2564,7 @@ static void smc_find_rdma_v2_device_serv(struct smc_sock *new_smc,
 	mutex_lock(&smc_ib_devices.mutex);
 	if (list_empty(&ini->smcrv2.ib_dev_v2->list)) {
 		smc_find_ism_store_rc(SMC_CLC_DECL_NOSMCRDEV, ini);
+		mutex_unlock(&smc_ib_devices.mutex);
 		goto not_found;
 	} else {
 		/* put below or in smc_listen_work */
@@ -2767,7 +2775,7 @@ static void smc_listen_work(struct work_struct *work)
 	if (rc)
 		goto out_decl;
 
-	mutex_lock(&smc_server_lgr_pending);
+	smc_lgr_pending_lock(ini, &smc_server_lgr_pending);
 	smc_close_init(new_smc);
 	smc_rx_init(new_smc);
 	smc_tx_init(new_smc);
@@ -2786,7 +2794,7 @@ static void smc_listen_work(struct work_struct *work)
 
 	/* SMC-D does not need this lock any more */
 	if (ini->is_smcd)
-		mutex_unlock(&smc_server_lgr_pending);
+		smc_lgr_pending_unlock(ini, &smc_server_lgr_pending);
 
 	/* receive SMC Confirm CLC message */
 	memset(buf, 0, sizeof(*buf));
@@ -2817,13 +2825,21 @@ static void smc_listen_work(struct work_struct *work)
 					    ini->first_contact_local, ini);
 		if (rc)
 			goto out_unlock;
-		mutex_unlock(&smc_server_lgr_pending);
+		smc_lgr_pending_unlock(ini, &smc_server_lgr_pending);
 	}
 	if (ini->smcrv2.ib_dev_v2)
 		smc_ib_put_pending_device(ini->smcrv2.ib_dev_v2);
 	if (ini->ib_dev)
 		smc_ib_put_pending_device(ini->ib_dev);
 	smc_conn_save_peer_info(new_smc, cclc);
+
+	if (ini->is_smcd &&
+	    smc_ism_dmb_mappable(new_smc->conn.lgr->smcd)) {
+		rc = smcd_buf_attach(new_smc);
+		if (rc)
+			goto out_decl;
+	}
+
 	smc_listen_out_connected(new_smc);
 	if (newclcsock->sk)
 		SMC_STAT_SERV_SUCC_INC(sock_net(newclcsock->sk), ini);
@@ -2834,7 +2850,7 @@ out_unlock:
 		smc_ib_put_pending_device(ini->smcrv2.ib_dev_v2);
 	if (ini->ib_dev)
 		smc_ib_put_pending_device(ini->ib_dev);
-	mutex_unlock(&smc_server_lgr_pending);
+	smc_lgr_pending_unlock(ini, &smc_server_lgr_pending);
 out_decl:
 	smc_listen_decline(new_smc, rc, ini ? ini->first_contact_local : 0,
 			   proposal_version);
@@ -4772,10 +4788,16 @@ static int __init smc_init(void)
 		goto out_sock;
 	}
 
+	rc = smc_loopback_init();
+	if (rc) {
+		pr_err("%s: smc_loopback_init fails with %d\n", __func__, rc);
+		goto out_ib;
+	}
+
 	rc = smc_proc_init();
 	if (rc) {
 		pr_err("%s: smc_proc_init fails with %d\n", __func__, rc);
-		goto out_ib;
+		goto out_lo;
 	}
 
 	/* init smc inet sock related proto and proto_ops */
@@ -4808,6 +4830,8 @@ out_proto_register:
 	proto_unregister(&smc_inet_prot);
 out_proc:
 	smc_proc_exit();
+out_lo:
+	smc_loopback_exit();
 out_ib:
 	smc_ib_unregister_client();
 out_sock:
@@ -4849,6 +4873,7 @@ static void __exit smc_exit(void)
 	smc_proc_exit();
 	sock_unregister(PF_SMC);
 	smc_core_exit();
+	smc_loopback_exit();
 	smc_ib_unregister_client();
 	smc_ism_exit();
 	destroy_workqueue(smc_close_wq);

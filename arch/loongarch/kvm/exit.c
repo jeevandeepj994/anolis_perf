@@ -189,7 +189,7 @@ static int _kvm_check_hypcall(struct kvm_vcpu *vcpu)
 	 * an error and we want to rollback the PC
 	 */
 	inst.word = vcpu->arch.badi;
-	code = inst.reg0i15_format.simmediate;
+	code = inst.reg0i15_format.immediate;
 	curr_pc = vcpu->arch.pc;
 	update_pc(&vcpu->arch);
 

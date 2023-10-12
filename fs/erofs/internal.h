@@ -179,9 +179,16 @@ struct erofs_sb_info {
 #define set_opt(opt, option)	((opt)->mount_opt |= EROFS_MOUNT_##option)
 #define test_opt(opt, option)	((opt)->mount_opt & EROFS_MOUNT_##option)
 
+static inline bool erofs_is_rafsv6_mode(struct super_block *sb)
+{
+	return !sb->s_bdev && EROFS_SB(sb)->bootstrap_path;
+}
+
 static inline bool erofs_is_fscache_mode(struct super_block *sb)
 {
-	return IS_ENABLED(CONFIG_EROFS_FS_ONDEMAND) && !sb->s_bdev;
+	/* to distinguish from rafsv6 which also works in nodev mode */
+	return IS_ENABLED(CONFIG_EROFS_FS_ONDEMAND) && !sb->s_bdev &&
+	       EROFS_SB(sb)->fsid;
 }
 
 enum {
@@ -564,6 +571,26 @@ static inline int z_erofs_load_lzma_config(struct super_block *sb,
 	return 0;
 }
 #endif	/* !CONFIG_EROFS_FS_ZIP */
+
+#ifdef CONFIG_EROFS_FS_ZIP_DEFLATE
+int __init z_erofs_deflate_init(void);
+void z_erofs_deflate_exit(void);
+int z_erofs_load_deflate_config(struct super_block *sb,
+				struct erofs_super_block *dsb,
+				struct z_erofs_deflate_cfgs *dfl, int size);
+#else
+static inline int z_erofs_deflate_init(void) { return 0; }
+static inline int z_erofs_deflate_exit(void) { return 0; }
+static inline int z_erofs_load_deflate_config(struct super_block *sb,
+			struct erofs_super_block *dsb,
+			struct z_erofs_deflate_cfgs *dfl, int size) {
+	if (dfl) {
+		erofs_err(sb, "deflate algorithm isn't enabled");
+		return -EINVAL;
+	}
+	return 0;
+}
+#endif	/* !CONFIG_EROFS_FS_ZIP_DEFLATE */
 
 /* fscache.c */
 #ifdef CONFIG_EROFS_FS_ONDEMAND
