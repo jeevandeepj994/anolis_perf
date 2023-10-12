@@ -431,6 +431,11 @@ static ssize_t rafs_v6_read_chunk(struct super_block *sb,
 				return ret;
 			}
 		} else if (iov_iter_is_kvec(to)) {
+			if (!to->kvec->iov_len) {
+				iov_iter_advance(to, 0);
+				continue;
+			}
+
 			iov_iter_kvec(&titer, READ, to->kvec, 1, size - read);
 
 			ret = vfs_iter_read(mdev.m_fp, &titer, &off, 0);
@@ -442,6 +447,11 @@ static ssize_t rafs_v6_read_chunk(struct super_block *sb,
 			}
 		} else {
 			struct iovec iovec = iov_iter_iovec(to);
+
+			if (!to->iov->iov_len) {
+				iov_iter_advance(to, 0);
+				continue;
+			}
 
 			if (iovec.iov_len > size - read)
 				iovec.iov_len = size - read;
