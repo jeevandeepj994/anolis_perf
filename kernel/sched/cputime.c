@@ -225,7 +225,7 @@ void account_idle_time(u64 cputime)
 }
 
 
-#if defined(CONFIG_SCHED_ACPU) || defined(CONFIG_SCHED_ACPU)
+#if defined(CONFIG_SCHED_ACPU) || defined(CONFIG_SCHED_CORE)
 /*
  * Account for sibidle, and for forceidle time due to core scheduling.
  *
