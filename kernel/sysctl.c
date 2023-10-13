@@ -129,7 +129,7 @@ static unsigned long penalty_extra_delay_max = HZ;
 #endif
 /* Constants used for minimum and  maximum */
 #ifdef CONFIG_LOCKUP_DETECTOR
-static int sixty = 60;
+static int one_hundred_fifty = 150;
 #endif
 
 static int __maybe_unused neg_one = -1;
@@ -1061,7 +1061,7 @@ static struct ctl_table kern_table[] = {
 		.mode		= 0644,
 		.proc_handler	= proc_watchdog_thresh,
 		.extra1		= &zero,
-		.extra2		= &sixty,
+		.extra2		= &one_hundred_fifty,
 	},
 	{
 		.procname       = "nmi_watchdog",
