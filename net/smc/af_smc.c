@@ -3892,9 +3892,9 @@ static void smc_inet_listen_work(struct work_struct *work)
 	smc_inet_sock_init_accompany_socket(sk);
 
 	/* current smc sock has not bee accept yet. */
-	sk->sk_wq = &smc_sk(sk)->accompany_socket.wq;
-
+	rcu_assign_pointer(sk->sk_wq, &smc_sk(sk)->accompany_socket.wq);
 	smc_listen_work(work);
+
 }
 
 /* caller MUST not access sk after smc_inet_sock_do_handshake
