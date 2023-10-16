@@ -1608,10 +1608,10 @@ static void __prep_new_huge_page(struct hstate *h, struct page *page)
 static void prep_new_huge_page(struct hstate *h, struct page *page, int nid)
 {
 	__prep_new_huge_page(h, page);
-	spin_lock(&hugetlb_lock);
+	spin_lock_irq(&hugetlb_lock);
 	__prep_account_new_huge_page(h, nid);
 	ClearHPageFreed(page);
-	spin_unlock(&hugetlb_lock);
+	spin_unlock_irq(&hugetlb_lock);
 }
 
 static void prep_compound_gigantic_page(struct page *page, unsigned int order)
@@ -5909,7 +5909,7 @@ bool isolate_huge_page(struct page *page, struct list_head *list)
 	ClearHPageMigratable(page);
 	list_move_tail(&page->lru, list);
 unlock:
-	spin_unlock(&hugetlb_lock);
+	spin_unlock_irq(&hugetlb_lock);
 	return ret;
 }
 
