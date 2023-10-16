@@ -253,9 +253,7 @@ out:
 
 void clear_all_cookie(void)
 {
-	int cpu;
 	struct task_struct *p, *t;
-	int ret;
 
 	read_lock(&tasklist_lock);
 	for_each_process_thread(p, t)
