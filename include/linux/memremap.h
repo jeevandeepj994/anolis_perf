@@ -97,6 +97,7 @@ struct dev_pagemap_ops {
 };
 
 #define PGMAP_ALTMAP_VALID	(1 << 0)
+#define PGMAP_ON_DEMAND		(1 << 1)
 
 /**
  * struct dev_pagemap - metadata for ZONE_DEVICE mappings
@@ -145,6 +146,34 @@ static inline struct vmem_altmap *pgmap_altmap(struct dev_pagemap *pgmap)
 }
 
 #ifdef CONFIG_ZONE_DEVICE
+extern spinlock_t zdm_lock;
+extern struct list_head zdm_list;
+struct zdm_context {
+	struct list_head	list;
+	struct dev_pagemap      *pgmap;
+	struct zone             *zone;
+	unsigned long           start_pfn;
+	unsigned long           nr_pages;
+	spinlock_t		lock;
+	struct rcu_head		rcu;
+};
+int zdm_insert(struct dev_pagemap *pgmap, struct zone *zone,
+	       unsigned long start_pfn, unsigned long nr_pages);
+void zdm_delete(unsigned long start_pfn, unsigned long nr_pages);
+struct zdm_context *zdm_lookup(unsigned long addr);
+void zdm_reinit_struct_pages(struct zdm_context *zdm,
+			     unsigned long page_pfn,
+			     unsigned long start_pfn,
+			     unsigned long end_pfn);
+void zdm_init_struct_pages(struct zone *zone,
+			   struct dev_pagemap *pgmap,
+			   unsigned long start_pfn,
+			   unsigned long end_pfn);
+int zdm_ondemand_enable(struct zone *zone,
+			unsigned long start_pfn,
+			unsigned long size,
+			struct dev_pagemap *pgmap);
+
 void *memremap_pages(struct dev_pagemap *pgmap, int nid);
 void memunmap_pages(struct dev_pagemap *pgmap);
 void *devm_memremap_pages(struct device *dev, struct dev_pagemap *pgmap);
