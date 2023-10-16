@@ -499,7 +499,11 @@ static int kvm_mmu_notifier_invalidate_range_start(struct mmu_notifier *mn,
 		kvm_flush_remote_tlbs(kvm);
 
 	spin_unlock(&kvm->mmu_lock);
-	kvm_arch_guest_memory_reclaimed(kvm);
+
+	/* we've to flush the cache before the pages can be freed */
+	if (need_tlb_flush)
+		kvm_arch_guest_memory_reclaimed(kvm);
+
 	srcu_read_unlock(&kvm->srcu, idx);
 
 	return 0;
