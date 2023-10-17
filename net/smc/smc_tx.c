@@ -494,7 +494,7 @@ static inline void smc_tx_advance_cursors(struct smc_connection *conn,
 	smc_curs_add(conn->sndbuf_desc->len, sent, len);
 }
 
-static inline int __smc_get_free_slot_rwwi(struct smc_link *link)
+static inline int __smc_get_free_slot_rwwi(struct smc_link *link, int *alloc)
 {
 	if (!smc_link_sendable(link))
 		return -ENOLINK;
@@ -502,8 +502,11 @@ static inline int __smc_get_free_slot_rwwi(struct smc_link *link)
 	if (atomic_dec_if_positive(&link->tx_inflight_credit) < 0)
 		return -EBUSY;
 
-	if (smc_wr_tx_get_credit(link))
+	if (smc_wr_tx_get_credit(link)) {
+		if (alloc)
+			*alloc = 1;
 		return 0;
+	}
 
 	atomic_inc(&link->tx_inflight_credit);
 	return -EBUSY;
@@ -520,24 +523,25 @@ static int smc_tx_get_free_slot_rwwi(struct smc_link *link,
 				     struct smc_connection *conn)
 {
 	struct smc_link_group *lgr = link->lgr;
-	int rc;
+	int rc, alloc = 0;
 
 	if (in_softirq() || lgr->terminating) {
-		rc = __smc_get_free_slot_rwwi(link);
+		rc = __smc_get_free_slot_rwwi(link, NULL);
 		if (rc)
 			return rc;
 	} else {
 		rc = wait_event_interruptible_timeout(link->wr_tx_wait,
 						      !smc_link_sendable(link) ||
 						      lgr->terminating ||
-						      (__smc_get_free_slot_rwwi(link) != -EBUSY),
+						      (__smc_get_free_slot_rwwi(link, &alloc) !=
+						      -EBUSY),
 						      SMC_WR_TX_WAIT_FREE_SLOT_TIME);
 		if (!rc) {
 			/* timeout - terminate link */
 			smcr_link_down_cond_sched(link);
 			return -EPIPE;
 		}
-		if (!smc_link_sendable(link) || lgr->terminating)
+		if (!alloc)
 			return -EPIPE;
 	}
 	if (conn->killed) {
