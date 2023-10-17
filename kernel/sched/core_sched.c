@@ -314,7 +314,12 @@ void __sched_core_account_sibidle(struct rq *rq)
 
 	WARN_ON_ONCE(!rq->core->core_sibidle_count);
 
-	if (rq->core->core_sibidle_start == 0)
+	/* can't be forced idle without a running task */
+	WARN_ON_ONCE(!rq->core->core_sibidle_occupation &&
+		     rq->core->core_forceidle_count);
+
+	if (rq->core->core_sibidle_start == 0 ||
+	    rq->core->core_sibidle_occupation == 0)
 		goto out;
 
 	delta = now - rq->core->core_sibidle_start;
@@ -323,10 +328,8 @@ void __sched_core_account_sibidle(struct rq *rq)
 
 	rq->core->core_sibidle_start = now;
 
-	if (WARN_ON_ONCE(!rq->core->core_sibidle_occupation)) {
-		/* can't be forced idle without a running task */
-	} else if (rq->core->core_sibidle_count > 1 ||
-		   rq->core->core_sibidle_occupation > 1) {
+	if (rq->core->core_sibidle_count > 1 ||
+	    rq->core->core_sibidle_occupation > 1) {
 		/*
 		 * For larger SMT configurations, we need to scale the charged
 		 * forced idle amount since there can be more than one forced
@@ -344,7 +347,7 @@ void __sched_core_account_sibidle(struct rq *rq)
 			continue;
 
 		/*
-		 * Note: this will account forceidle to the current cpu, even
+		 * Note: this will account sibidle to the current cpu, even
 		 * if it comes from our SMT sibling.
 		 */
 		__account_sibidle_time(p, delta, !!rq->core->core_forceidle_count);
