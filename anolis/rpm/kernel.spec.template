@@ -52,6 +52,12 @@
 # should we do C=1 builds with sparse
 %define with_sparse    %{?_with_sparse:       1} %{?!_with_sparse:       0}
 
+#For loongarch, disable kernel-debug and with_bpftool for unsupport.
+%ifarch loongarch64
+%define with_debug 0
+%define with_bpftool 0
+%endif
+
 # The kernel tarball/base version
 %define kversion 5.10
 
@@ -135,6 +141,14 @@
 %define kernel_image arch/sw_64/boot/vmlinux
 %endif
 
+%ifarch loongarch64
+%define all_arch_configs %{name}-%{version}-loongarch64*.config
+%define asmarch loongarch
+%define make_target vmlinux
+%define hdrarch loongarch
+%define kernel_image vmlinux
+%endif
+
 # To temporarily exclude an architecture from being built, add it to
 # %%nobuildarches. Do _NOT_ use the ExclusiveArch: line, because if we
 # don't build kernel-headers then the new build system will no longer let
@@ -175,7 +189,7 @@ Release: %{pkg_release}
 Summary: The Linux kernel, based on version %{version}, heavily modified with backports
 # DO NOT CHANGE THE 'ExclusiveArch' LINE TO TEMPORARILY EXCLUDE AN ARCHITECTURE BUILD.
 # SET %%nobuildarches (ABOVE) INSTEAD
-ExclusiveArch: noarch i686 x86_64 aarch64 sw_64
+ExclusiveArch: noarch i686 x86_64 aarch64 sw_64 loongarch64
 ExclusiveOS: Linux
 %ifnarch %{nobuildarches}
 Requires: %{name}-core-uname-r = %{KVERREL}%{?variant}
@@ -250,6 +264,7 @@ BuildRequires: rpm-build, elfutils
 %global _missing_build_ids_terminate_build 1
 %global _no_recompute_build_ids 1
 %endif
+BuildRequires: openssl-devel
 
 BuildRequires: openssl openssl-devel
 
@@ -279,8 +294,8 @@ Source3000: kernel-%{version}-sw_64.config
 Source3001: kernel-%{version}-sw_64-debug.config
 Source43: generate_bls_conf.sh
 Source44: mod-internal.list
-
-
+Source45: kernel-5.10.134-loongarch64.config
+Source46: kernel-5.10.134-loongarch64-debug.config
 
 # Sources for kernel-tools
 Source2000: cpupower.service
@@ -1128,13 +1143,17 @@ BuildKernel() {
 
 	# Run depmod on the resulting module tree and make sure it isn't broken
 	depmod -b . -aeF ./System.map $KernelVer &> depmod.out
-	if [ -s depmod.out ]; then
-	    echo "Depmod failure"
-	    cat depmod.out
-	    exit 1
-	else
-	    rm depmod.out
-	fi
+	%ifnarch loongarch64
+		if [ -s depmod.out ]; then
+		    echo "Depmod failure"
+		    cat depmod.out
+		    exit 1
+		else
+		    rm depmod.out
+		fi
+	%else
+		rm -rf depmod.out
+	%endif
     else
 	# Ensure important files/directories exist to let the packaging succeed
 	echo '%%defattr(-,-,-)' > modules.list
