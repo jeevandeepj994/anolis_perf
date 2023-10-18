@@ -775,7 +775,7 @@ struct perf_event {
 	struct list_head		sb_list;
 #endif /* CONFIG_PERF_EVENTS */
 
-	CK_KABI_RESERVE(1)
+	CK_KABI_USE_SPLIT(1, unsigned int group_generation)
 	CK_KABI_RESERVE(2)
 	CK_KABI_RESERVE(3)
 	CK_KABI_RESERVE(4)
