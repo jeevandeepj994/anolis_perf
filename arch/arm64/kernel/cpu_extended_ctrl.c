@@ -17,9 +17,7 @@
 #include <linux/arm-smccc.h>
 
 #define SYS_IMP_CPUECTLR_EL1		sys_reg(3, 0, 15, 1, 4)
-#define SYS_ACTLR_EL2			sys_reg(3, 4, 1, 0, 1)
 
-#define NEOVERSE_N2_ACTLR_EL2_ECTLREN_MASK	BIT(1)
 #define MIDR_EL1_NEOVERSE_N2_MASK	(GENMASK(31, 24) | GENMASK(19, 16) | \
 						GENMASK(15, 4))
 #define MIDR_EL1_NEOVERSE_N2_ID		0x410FD490
@@ -29,20 +27,9 @@
 
 #define CPUECTLR_WRITE_FAULT		GENMASK_ULL(63, 0)
 
-#define ARM_OEM_SMC_FN			0xC300FFEC
-#define ACTLR_EL3_CTRL_QUERY		0x51
-#define ACTLR_EL3_CTRL_QUERY_ENABLE	1
-#define ACTLR_EL3_CTRL_QUERY_DISABLE	0
-#define ACTLR_EL3_CTRL_DISABLE		0x52
-#define ACTLR_EL3_CTRL_ENABLE		0x53
-#define ACTLR_EL3_CTRL_ENABLE_OK	0
-
 #define CPUECTLR_SAFE_NONE		0
 #define CPUECTLR_SAFE_RO		1
 #define CPUECTLR_SAFE_RW		2
-
-#define BIOS_VENDOR_FILTER		"Alibaba"
-#define BIOS_VERSION_MATCH		"1.2.M1.AL."
 
 struct cpuectlr_info {
 	int	cpu_id;
@@ -185,9 +172,6 @@ static const struct attribute_group cpuectlr_ro_attr_group = {
 static int cpuectlr_rw_safe_check(void)
 {
 	bool is_guest;
-	u64 actlr_el2;
-	const char *bios_vendor;
-	const char *bios_version;
 	struct arm_smccc_res res;
 
 	is_guest = !is_hyp_mode_available();
@@ -202,39 +186,9 @@ static int cpuectlr_rw_safe_check(void)
 		return CPUECTLR_SAFE_RW;
 	}
 
-	/* Now, we check if host os rw cpuectlr safely, currentEL is EL2 */
-
-	/* check and enable neoverse n2 ACTLR_EL2.ECTLREN */
-	actlr_el2 = read_sysreg_s(SYS_ACTLR_EL2);
-	if (!(actlr_el2 & NEOVERSE_N2_ACTLR_EL2_ECTLREN_MASK))
-		write_sysreg_s((actlr_el2 | NEOVERSE_N2_ACTLR_EL2_ECTLREN_MASK),
-			SYS_ACTLR_EL2);
-
-	/* check actlr_el3_ectlren by smc.
-	 * This capability requires the BIOS vendor to be Alibaba
-	 * and the version is 1.2.M1.AL.*.*.*
+	/* Only retain read privilege when kernel is running on host os
+	 * currentEL is EL2
 	 */
-	bios_vendor = dmi_get_system_info(DMI_BIOS_VENDOR);
-	bios_version = dmi_get_system_info(DMI_BIOS_VERSION);
-
-	if (strcmp(bios_vendor, BIOS_VENDOR_FILTER))
-		return CPUECTLR_SAFE_RO;
-
-	/* check bios version prefix */
-	if (strncmp(bios_version, BIOS_VERSION_MATCH,
-			strlen(BIOS_VERSION_MATCH)))
-		return CPUECTLR_SAFE_RO;
-
-	arm_smccc_smc(ARM_OEM_SMC_FN, ACTLR_EL3_CTRL_QUERY,
-		0, 0, 0, 0, 0, 0, &res);
-	if (res.a0 == ACTLR_EL3_CTRL_QUERY_ENABLE)
-		return CPUECTLR_SAFE_RW;
-
-	arm_smccc_smc(ARM_OEM_SMC_FN, ACTLR_EL3_CTRL_ENABLE,
-		0, 0, 0, 0, 0, 0, &res);
-	if (res.a0 == ACTLR_EL3_CTRL_ENABLE_OK)
-		return CPUECTLR_SAFE_RW;
-
 	return CPUECTLR_SAFE_RO;
 }
 
