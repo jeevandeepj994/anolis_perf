@@ -144,6 +144,16 @@ static inline void smcd_curs_copy(union smcd_cdc_cursor *tgt,
 #endif
 }
 
+static inline void smc_curs_add_safe(int size, union smc_host_cursor *curs,
+				     int value, struct smc_connection *conn)
+{
+	union smc_host_cursor tmp;
+
+	smc_curs_copy(&tmp, curs, conn);
+	smc_curs_add(size, &tmp, value);
+	smc_curs_copy(curs, &tmp, conn);
+}
+
 /* calculate cursor difference between old and new, where old <= new and
  * difference cannot exceed size
  */

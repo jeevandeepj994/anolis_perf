@@ -597,7 +597,7 @@ static void smc_cdc_handle_rwwi_data_msg(struct smc_sock *smc,
 
 	diff_cons = imm_msg->data.diff_cons;
 	if (diff_cons)
-		smc_curs_add(conn->peer_rmbe_size, &conn->local_rx_ctrl.cons, diff_cons);
+		smc_curs_add_safe(conn->peer_rmbe_size, &conn->local_rx_ctrl.cons, diff_cons, conn);
 	/* cause this imm_data contains no conn_state_flags and prod_flags info, clean them */
 	memset(&conn->local_rx_ctrl.conn_state_flags, 0,
 	       sizeof(struct smc_cdc_conn_state_flags));
@@ -616,7 +616,7 @@ static void smc_cdc_handle_rwwi_data_with_flags_msg(struct smc_sock *smc,
 
 	diff_cons = imm_msg->data_with_flags.diff_cons;
 	if (diff_cons)
-		smc_curs_add(conn->peer_rmbe_size, &conn->local_rx_ctrl.cons, diff_cons);
+		smc_curs_add_safe(conn->peer_rmbe_size, &conn->local_rx_ctrl.cons, diff_cons, conn);
 	/* clean prod_flags that are not carried by this imm_data */
 	memset(&conn->local_rx_ctrl.prod_flags, 0,
 	       sizeof(struct smc_cdc_producer_flags));
@@ -642,7 +642,7 @@ static void smc_cdc_handle_rwwi_data_cr_msg(struct smc_sock *smc,
 
 	diff_cons = imm_msg->data_cr.diff_cons;
 	if (diff_cons)
-		smc_curs_add(conn->peer_rmbe_size, &conn->local_rx_ctrl.cons, diff_cons);
+		smc_curs_add_safe(conn->peer_rmbe_size, &conn->local_rx_ctrl.cons, diff_cons, conn);
 	/* cause this imm_data contains no conn_state_flags and prod_flags info, clean them */
 	memset(&conn->local_rx_ctrl.conn_state_flags, 0,
 	       sizeof(struct smc_cdc_conn_state_flags));
@@ -664,7 +664,7 @@ static void smc_cdc_handle_rwwi_data_with_flags_cr_msg(struct smc_sock *smc,
 
 	diff_cons = imm_msg->data_with_flags_cr.diff_cons;
 	if (diff_cons)
-		smc_curs_add(conn->peer_rmbe_size, &conn->local_rx_ctrl.cons, diff_cons);
+		smc_curs_add_safe(conn->peer_rmbe_size, &conn->local_rx_ctrl.cons, diff_cons, conn);
 	/* clean prod_flags that are not carried by this imm_data */
 	memset(&conn->local_rx_ctrl.prod_flags, 0,
 	       sizeof(struct smc_cdc_producer_flags));
@@ -715,7 +715,7 @@ void smc_cdc_rx_handler_rwwi(struct ib_wc *wc)
 	bh_lock_sock(&smc->sk);
 	diff_prod = wc->byte_len;
 	if (diff_prod)
-		smc_curs_add(conn->rmb_desc->len, &conn->local_rx_ctrl.prod, diff_prod);
+		smc_curs_add_safe(conn->rmb_desc->len, &conn->local_rx_ctrl.prod, diff_prod, conn);
 
 	switch (imm_msg.hdr.opcode) {
 	case SMC_WR_OP_DATA:

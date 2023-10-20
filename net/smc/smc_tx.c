@@ -466,7 +466,8 @@ static int __smcr_tx_rdma_writes_rwwi(struct smc_connection *conn, int dst_off,
 		 * since diff_cons will not be carried by imm_data in this case.
 		 */
 		if (update_rx_curs_confirmed && conn->rmb_desc)
-			smc_curs_add(conn->rmb_desc->len, &conn->rx_curs_confirmed, diff_cons);
+			smc_curs_add_safe(conn->rmb_desc->len,
+					  &conn->rx_curs_confirmed, diff_cons, conn);
 	} else {
 		smc_wr_rx_put_credits(link, saved_credits);
 		atomic_dec(&conn->cdc_pend_tx_wr);
