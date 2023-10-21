@@ -118,7 +118,7 @@ int __net_init smc_sysctl_net_init(struct net *net)
 		goto err_reg;
 
 	net->smc.sysctl_autocorking_size = SMC_AUTOCORKING_DEFAULT_SIZE;
-	net->smc.sysctl_smcr_buf_type = SMCR_PHYS_CONT_BUFS;
+	net->smc.sysctl_smcr_buf_type = SMCR_MIXED_BUFS;
 	net->smc.sysctl_vendor_exp_options = ~0U;
 	net->smc.sysctl_smcr_testlink_time = SMC_LLC_TESTLINK_DEFAULT_TIME;
 	net->smc.sysctl_wmem = 262144; /* 256 KiB */
