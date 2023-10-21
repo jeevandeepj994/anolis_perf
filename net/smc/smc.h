@@ -33,6 +33,7 @@ extern struct proto smc_proto;
 extern struct proto smc_proto6;
 
 extern bool reserve_mode;
+extern bool loopback_enable;
 extern u16 rsvd_ports_base;
 
 static __always_inline bool smc_sock_is_inet_sock(const struct sock *sk)
