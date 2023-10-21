@@ -661,6 +661,7 @@ static int smcr_tx_rdma_writes_rwwi(struct smc_connection *conn)
 		SMC_STAT_RMB_TX_PEER_FULL(smc, !conn->lnk);
 		return 0;
 	}
+	smp_rmb(); /* guarantee read rmbespace before local_rx_ctrl.cons */
 	smc_curs_copy(&prod, &conn->local_tx_ctrl.prod, conn);
 	smc_curs_copy(&cons, &conn->local_rx_ctrl.cons, conn);
 
@@ -837,6 +838,7 @@ static int smc_tx_rdma_writes(struct smc_connection *conn,
 		SMC_STAT_RMB_TX_PEER_FULL(smc, !conn->lnk);
 		return 0;
 	}
+	smp_rmb(); /* guarantee read rmbespace before local_rx_ctrl.cons */
 	smc_curs_copy(&prod, &conn->local_tx_ctrl.prod, conn);
 	smc_curs_copy(&cons, &conn->local_rx_ctrl.cons, conn);
 
