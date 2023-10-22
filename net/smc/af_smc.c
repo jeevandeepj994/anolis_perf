@@ -4527,7 +4527,7 @@ static int smc_inet_csk_wait_for_connect(struct sock *sk, long *timeo)
 		prepare_to_wait_exclusive(sk_sleep(sk), &wait,
 					  TASK_INTERRUPTIBLE);
 		release_sock(sk);
-		if (reqsk_queue_empty(&icsk->icsk_accept_queue))
+		if (smc_accept_queue_empty(sk) && reqsk_queue_empty(&icsk->icsk_accept_queue))
 			*timeo = schedule_timeout(*timeo);
 		sched_annotate_sleep();
 		lock_sock(sk);
