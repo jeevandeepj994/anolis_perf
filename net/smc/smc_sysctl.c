@@ -90,6 +90,7 @@ static struct ctl_table smc_table[] = {
 		.procname	= "experiment_syn_smc",
 		.data		= &init_net.smc.sysctl_experiment_syn_smc,
 		.maxlen		= sizeof(init_net.smc.sysctl_experiment_syn_smc),
+		.mode		= 0644,
 		.proc_handler   = proc_dointvec_minmax,
 		.extra1         = SYSCTL_ZERO,
 		.extra2         = SYSCTL_ONE,
