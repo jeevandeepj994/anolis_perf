@@ -82,6 +82,11 @@ static int smc_inet_sock_sort_csk_queue(struct sock *parent);
 /* default use reserve_mode */
 bool reserve_mode = true;
 
+/* default disable SMC-D loopback */
+bool loopback_enable;
+module_param(loopback_enable, bool, 0444);
+MODULE_PARM_DESC(loopback_enable, "Enable SMC-D loopback support");
+
 /* rsvd_ports_base must less than (u16 MAX - 8) */
 u16 rsvd_ports_base = SMC_IWARP_RSVD_PORTS_BASE;
 module_param(rsvd_ports_base, ushort, 0444);
@@ -1365,6 +1370,7 @@ static int smc_connect_rdma_v2_prepare(struct smc_sock *smc,
 	struct smc_clc_first_contact_ext *fce =
 		(struct smc_clc_first_contact_ext *)
 			(((u8 *)clc_v2) + sizeof(*clc_v2));
+	struct net *net = sock_net(&smc->sk);
 	int rc;
 
 	if (!ini->first_contact_peer || aclc->hdr.version == SMC_V1)
@@ -1374,7 +1380,7 @@ static int smc_connect_rdma_v2_prepare(struct smc_sock *smc,
 		memcpy(ini->smcrv2.nexthop_mac, &aclc->r0.lcl.mac, ETH_ALEN);
 		ini->smcrv2.uses_gateway = false;
 	} else {
-		if (smc_ib_find_route(smc->clcsock->sk->sk_rcv_saddr,
+		if (smc_ib_find_route(net, smc->clcsock->sk->sk_rcv_saddr,
 				      smc_ib_gid_to_ipv4(aclc->r0.lcl.gid),
 				      ini->smcrv2.nexthop_mac,
 				      &ini->smcrv2.uses_gateway))
