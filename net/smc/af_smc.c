@@ -3131,7 +3131,7 @@ static int smc_recvmsg(struct socket *sock, struct msghdr *msg, size_t len,
 
 	smc = smc_sk(sk);
 	lock_sock(sk);
-	if (smc_sk_state(sk) == SMC_CLOSED && (sk->sk_shutdown & RCV_SHUTDOWN)) {
+	if (smc_sk_state(sk) == SMC_CLOSED && smc_has_rcv_shutdown(sk)) {
 		/* socket was connected before, no more data to read */
 		rc = 0;
 		goto out;
@@ -3208,7 +3208,7 @@ static __poll_t smc_poll(struct file *file, struct socket *sock,
 			}
 			if (atomic_read(&smc->conn.bytes_to_rcv))
 				mask |= EPOLLIN | EPOLLRDNORM;
-			if (sk->sk_shutdown & RCV_SHUTDOWN)
+			if (smc_has_rcv_shutdown(sk))
 				mask |= EPOLLIN | EPOLLRDNORM | EPOLLRDHUP;
 			if (smc_sk_state(sk) == SMC_APPCLOSEWAIT1)
 				mask |= EPOLLIN;
@@ -3652,7 +3652,7 @@ static ssize_t smc_splice_read(struct socket *sock, loff_t *ppos,
 
 	smc = smc_sk(sk);
 	lock_sock(sk);
-	if (smc_sk_state(sk) == SMC_CLOSED && (sk->sk_shutdown & RCV_SHUTDOWN)) {
+	if (smc_sk_state(sk) == SMC_CLOSED && (smc_has_rcv_shutdown(sk))) {
 		/* socket was connected before, no more data to read */
 		rc = 0;
 		goto out;
@@ -3892,9 +3892,9 @@ static void smc_inet_listen_work(struct work_struct *work)
 	smc_inet_sock_init_accompany_socket(sk);
 
 	/* current smc sock has not bee accept yet. */
-	sk->sk_wq = &smc_sk(sk)->accompany_socket.wq;
-
+	rcu_assign_pointer(sk->sk_wq, &smc_sk(sk)->accompany_socket.wq);
 	smc_listen_work(work);
+
 }
 
 /* caller MUST not access sk after smc_inet_sock_do_handshake
@@ -4527,7 +4527,7 @@ static int smc_inet_csk_wait_for_connect(struct sock *sk, long *timeo)
 		prepare_to_wait_exclusive(sk_sleep(sk), &wait,
 					  TASK_INTERRUPTIBLE);
 		release_sock(sk);
-		if (reqsk_queue_empty(&icsk->icsk_accept_queue))
+		if (smc_accept_queue_empty(sk) && reqsk_queue_empty(&icsk->icsk_accept_queue))
 			*timeo = schedule_timeout(*timeo);
 		sched_annotate_sleep();
 		lock_sock(sk);
