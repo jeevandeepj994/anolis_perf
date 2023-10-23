@@ -342,10 +342,8 @@ static int smc_tx_rdma_write(struct smc_connection *conn, int peer_rmbe_offset,
 		rdma_wr->wr.wr_id = smc_wr_tx_get_next_wr_id(link);
 	rdma_wr->wr.num_sge = num_sges;
 	/* rtoken might be deleted if peer freed connection */
-	if (conn->rtoken_idx < 0) {
-		pr_warn_ratelimited("smc: unexpected sends during connection termination flow(rtoken idx invalid)\n");
+	if (conn->rtoken_idx < 0)
 		return -EINVAL;
-	}
 	rdma_wr->remote_addr =
 		lgr->rtokens[conn->rtoken_idx][link->link_idx].dma_addr +
 		/* RMBE within RMB */
@@ -354,10 +352,9 @@ static int smc_tx_rdma_write(struct smc_connection *conn, int peer_rmbe_offset,
 		peer_rmbe_offset;
 	rdma_wr->rkey = lgr->rtokens[conn->rtoken_idx][link->link_idx].rkey;
 	/* rtoken might be deleted if peer freed connection */
-	if (rdma_wr->remote_addr == (conn->tx_off + peer_rmbe_offset)) {
-		pr_warn_ratelimited("smc: unexpected sends during connection termination flow(addr invalid)\n");
+	if (rdma_wr->remote_addr == (conn->tx_off + peer_rmbe_offset))
 		return -EINVAL;
-	}
+
 	rc = ib_post_send(link->roce_qp, &rdma_wr->wr, NULL);
 	if (rc)
 		smcr_link_down_cond_sched(link);
@@ -469,7 +466,8 @@ static int __smcr_tx_rdma_writes_rwwi(struct smc_connection *conn, int dst_off,
 		 * since diff_cons will not be carried by imm_data in this case.
 		 */
 		if (update_rx_curs_confirmed && conn->rmb_desc)
-			smc_curs_add(conn->rmb_desc->len, &conn->rx_curs_confirmed, diff_cons);
+			smc_curs_add_safe(conn->rmb_desc->len,
+					  &conn->rx_curs_confirmed, diff_cons, conn);
 	} else {
 		smc_wr_rx_put_credits(link, saved_credits);
 		atomic_dec(&conn->cdc_pend_tx_wr);
@@ -494,7 +492,7 @@ static inline void smc_tx_advance_cursors(struct smc_connection *conn,
 	smc_curs_add(conn->sndbuf_desc->len, sent, len);
 }
 
-static inline int __smc_get_free_slot_rwwi(struct smc_link *link)
+static inline int __smc_get_free_slot_rwwi(struct smc_link *link, int *alloc)
 {
 	if (!smc_link_sendable(link))
 		return -ENOLINK;
@@ -502,8 +500,11 @@ static inline int __smc_get_free_slot_rwwi(struct smc_link *link)
 	if (atomic_dec_if_positive(&link->tx_inflight_credit) < 0)
 		return -EBUSY;
 
-	if (smc_wr_tx_get_credit(link))
+	if (smc_wr_tx_get_credit(link)) {
+		if (alloc)
+			*alloc = 1;
 		return 0;
+	}
 
 	atomic_inc(&link->tx_inflight_credit);
 	return -EBUSY;
@@ -520,24 +521,25 @@ static int smc_tx_get_free_slot_rwwi(struct smc_link *link,
 				     struct smc_connection *conn)
 {
 	struct smc_link_group *lgr = link->lgr;
-	int rc;
+	int rc, alloc = 0;
 
 	if (in_softirq() || lgr->terminating) {
-		rc = __smc_get_free_slot_rwwi(link);
+		rc = __smc_get_free_slot_rwwi(link, NULL);
 		if (rc)
 			return rc;
 	} else {
 		rc = wait_event_interruptible_timeout(link->wr_tx_wait,
 						      !smc_link_sendable(link) ||
 						      lgr->terminating ||
-						      (__smc_get_free_slot_rwwi(link) != -EBUSY),
+						      (__smc_get_free_slot_rwwi(link, &alloc) !=
+						      -EBUSY),
 						      SMC_WR_TX_WAIT_FREE_SLOT_TIME);
 		if (!rc) {
 			/* timeout - terminate link */
 			smcr_link_down_cond_sched(link);
 			return -EPIPE;
 		}
-		if (!smc_link_sendable(link) || lgr->terminating)
+		if (!alloc)
 			return -EPIPE;
 	}
 	if (conn->killed) {
@@ -659,6 +661,7 @@ static int smcr_tx_rdma_writes_rwwi(struct smc_connection *conn)
 		SMC_STAT_RMB_TX_PEER_FULL(smc, !conn->lnk);
 		return 0;
 	}
+	smp_rmb(); /* guarantee read rmbespace before local_rx_ctrl.cons */
 	smc_curs_copy(&prod, &conn->local_tx_ctrl.prod, conn);
 	smc_curs_copy(&cons, &conn->local_rx_ctrl.cons, conn);
 
@@ -835,6 +838,7 @@ static int smc_tx_rdma_writes(struct smc_connection *conn,
 		SMC_STAT_RMB_TX_PEER_FULL(smc, !conn->lnk);
 		return 0;
 	}
+	smp_rmb(); /* guarantee read rmbespace before local_rx_ctrl.cons */
 	smc_curs_copy(&prod, &conn->local_tx_ctrl.prod, conn);
 	smc_curs_copy(&cons, &conn->local_rx_ctrl.cons, conn);
 
