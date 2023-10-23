@@ -14,7 +14,6 @@ static int inspur_connector_get_modes(struct drm_connector *connector)
 				     connector->dev->mode_config.max_width,
 				     connector->dev->mode_config.max_height);
 	drm_set_preferred_mode(connector, 1024, 768);
-
 	return count;
 }
 
@@ -24,15 +23,6 @@ static int inspur_connector_mode_valid(struct drm_connector *connector,
 	return MODE_OK;
 }
 
-static void inspur_connector_destroy(struct drm_connector *connector)
-{
-	struct inspur_connector *inspur_connector =
-	    to_inspur_connector(connector);
-
-	i2c_del_adapter(&inspur_connector->adapter);
-	drm_connector_cleanup(connector);
-}
-
 static const struct drm_connector_helper_funcs inspur_connector_helper_funcs = {
 	.get_modes = inspur_connector_get_modes,
 	.mode_valid = inspur_connector_mode_valid,
@@ -40,7 +30,7 @@ static const struct drm_connector_helper_funcs inspur_connector_helper_funcs = {
 
 static const struct drm_connector_funcs inspur_connector_funcs = {
 	.fill_modes = drm_helper_probe_single_connector_modes,
-	.destroy = inspur_connector_destroy,
+	.destroy = drm_connector_cleanup,
 	.reset = drm_atomic_helper_connector_reset,
 	.atomic_duplicate_state = drm_atomic_helper_connector_duplicate_state,
 	.atomic_destroy_state = drm_atomic_helper_connector_destroy_state,
@@ -73,16 +63,9 @@ static const struct drm_encoder_funcs inspur_encoder_funcs = {
 int inspur_vdac_init(struct inspur_drm_private *priv)
 {
 	struct drm_device *dev = priv->dev;
-	struct inspur_connector *inspur_connector = &priv->connector;
 	struct drm_encoder *encoder;
-	struct drm_connector *connector = &inspur_connector->base;
+	struct drm_connector *connector;
 	int ret;
-
-	ret = inspur_ddc_create(dev, inspur_connector);
-	if (ret) {
-		drm_err(dev, "failed to create ddc: %d\n", ret);
-		return ret;
-	}
 
 	encoder = devm_kzalloc(dev->dev, sizeof(*encoder), GFP_KERNEL);
 	if (!encoder) {
@@ -100,11 +83,15 @@ int inspur_vdac_init(struct inspur_drm_private *priv)
 
 	drm_encoder_helper_add(encoder, &inspur_encoder_helper_funcs);
 
-	ret = drm_connector_init_with_ddc(dev, connector,
-					  &inspur_connector_funcs,
-					  DRM_MODE_CONNECTOR_VGA,
-					  &inspur_connector->adapter);
+	connector = devm_kzalloc(dev->dev, sizeof(*connector), GFP_KERNEL);
+	if (!connector) {
+		DRM_ERROR("failed to alloc memory when init connector\n");
+		return -ENOMEM;
+	}
 
+	ret = drm_connector_init(dev, connector,
+				 &inspur_connector_funcs,
+				 DRM_MODE_CONNECTOR_VGA);
 	if (ret) {
 		DRM_ERROR("failed to init connector: %d\n", ret);
 		return ret;

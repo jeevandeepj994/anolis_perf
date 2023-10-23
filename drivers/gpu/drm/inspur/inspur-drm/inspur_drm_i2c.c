@@ -9,7 +9,7 @@
 #include "inspur_drm_drv.h"
 
 #define GPIO_DATA		0x0802A0
-//Currently, the 0x802a4 use high for input and low for output
+/* Currently, the 0x802a4 use high for input and low for output */
 #define GPIO_DATA_DIRECTION	0x0802A4
 
 #define I2C_SCL_MASK		BIT(0)

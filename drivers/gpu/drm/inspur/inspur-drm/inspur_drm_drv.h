@@ -3,11 +3,6 @@
 #ifndef INSPUR_DRM_DRV_H
 #define INSPUR_DRM_DRV_H
 
-#include <linux/gpio/consumer.h>
-#include <linux/i2c-algo-bit.h>
-#include <linux/i2c.h>
-#include <drm/drm_edid.h>
-
 #include <linux/version.h>
 #include <drm/drm_atomic.h>
 #include <drm/drm_fb_helper.h>
@@ -21,13 +16,6 @@
 
 struct drm_device;
 struct drm_gem_object;
-
-struct inspur_connector {
-	struct drm_connector base;
-
-	struct i2c_adapter adapter;
-	struct i2c_algo_bit_data bit_data;
-};
 
 #define inspur_framebuffer drm_framebuffer
 #define BPP16_RED    0x0000f800
@@ -59,7 +47,6 @@ struct inspur_drm_private {
 
 	/* drm */
 	struct drm_device *dev;
-	struct inspur_connector connector;
 
 	bool mode_config_initialized;
 	struct drm_atomic_state *suspend_state;
@@ -73,13 +60,6 @@ struct inspur_drm_private {
 
 #define to_inspur_framebuffer(x) container_of(x, struct inspur_framebuffer, fb)
 
-#define to_inspur_connector(x) container_of(x, struct inspur_connector, base)
-
-static inline struct inspur_drm_private *to_inspur_drm_private(struct drm_device
-							       *dev)
-{
-	return dev->dev_private;
-}
 
 void inspur_set_power_mode(struct inspur_drm_private *priv,
 			   unsigned int power_mode);
@@ -96,9 +76,6 @@ int inspur_gem_create(struct drm_device *dev, u32 size, bool iskernel,
 
 int inspur_dumb_create(struct drm_file *file, struct drm_device *dev,
 		       struct drm_mode_create_dumb *args);
-
-int inspur_ddc_create(struct drm_device *drm_dev,
-		      struct inspur_connector *connector);
 
 extern const struct drm_mode_config_funcs inspur_mode_funcs;
 
