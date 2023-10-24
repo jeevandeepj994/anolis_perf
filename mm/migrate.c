@@ -1472,9 +1472,11 @@ put_anon:
 out_unlock:
 	unlock_page(hpage);
 out:
-	if (rc == MIGRATEPAGE_SUCCESS)
+	if (rc == MIGRATEPAGE_SUCCESS) {
 		putback_active_hugepage(hpage);
-	else if (rc != -EAGAIN && rc != MIGRATEPAGE_SUCCESS)
+		if (reason == MR_CONTIG_RANGE)
+			replace_free_huge_page(hpage);
+	} else if (rc != -EAGAIN && rc != MIGRATEPAGE_SUCCESS)
 		list_move_tail(&hpage->lru, ret);
 
 	/*
