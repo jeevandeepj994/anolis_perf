@@ -2219,25 +2219,24 @@ static int arm_cmn_acpi_probe(struct platform_device *pdev, struct arm_cmn *cmn)
 	 * be obtained from the second resource. Otherwise, it can be considered that
 	 * ROOT NODE BASE is PERIPHBASE. This is compatible with cmn-600 and cmn-any.
 	 */
-	if (pdev->num_resources > 1) {
-		root = platform_get_resource(pdev, IORESOURCE_MEM, 1);
-		if (!root)
-			return -EINVAL;
-
-		if (!resource_contains(cfg, root))
-			swap(cfg, root);
-	} else {
+	root = platform_get_resource(pdev, IORESOURCE_MEM, 1);
+	if (!root) {
 		root = cfg;
+		goto ioremap;
 	}
+
+	if (!resource_contains(cfg, root))
+		swap(cfg, root);
 	/*
 	 * Note that devm_ioremap_resource() is dumb and won't let the platform
 	 * device claim cfg when the ACPI companion device has already claimed
 	 * root within it. But since they *are* already both claimed in the
 	 * appropriate name, we don't really need to do it again here anyway.
 	 */
+ioremap:
 	cmn->base = devm_ioremap(cmn->dev, cfg->start, resource_size(cfg));
-	if (IS_ERR(cmn->base))
-		return PTR_ERR(cmn->base);
+	if (!cmn->base)
+		return -ENOMEM;
 
 	return root->start - cfg->start;
 }
