@@ -1007,6 +1007,10 @@ int perf_event_read_local(struct perf_event *event, u64 *value,
 extern u64 perf_event_read_value(struct perf_event *event,
 				 u64 *enabled, u64 *running);
 
+static inline bool branch_sample_counters(const struct perf_event *event)
+{
+	return event->attr.branch_sample_type & PERF_SAMPLE_BRANCH_COUNTERS;
+}
 
 struct perf_sample_data {
 	/*
@@ -1049,6 +1053,7 @@ struct perf_sample_data {
 	u64				cgroup;
 	u64				data_page_size;
 	u64				code_page_size;
+	CK_KABI_EXTEND(u64 *br_stack_cntr);
 } ____cacheline_aligned;
 
 /* default value for data source */
