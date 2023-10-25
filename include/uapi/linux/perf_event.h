@@ -1318,6 +1318,9 @@ struct perf_branch_entry {
 		reserved:40;
 };
 
+/* Size of used info bits in struct perf_branch_entry */
+#define PERF_BRANCH_ENTRY_INFO_BITS_MAX		33
+
 union perf_sample_weight {
 	__u64		full;
 #if defined(__LITTLE_ENDIAN_BITFIELD)
