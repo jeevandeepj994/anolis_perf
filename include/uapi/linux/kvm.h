@@ -1872,6 +1872,7 @@ enum csv_cmd_id {
 	KVM_CSV_LAUNCH_ENCRYPT_DATA,
 	KVM_CSV_LAUNCH_ENCRYPT_VMCB,
 	KVM_CSV_SEND_ENCRYPT_DATA,
+	KVM_CSV_SEND_ENCRYPT_CONTEXT,
 
 	KVM_CSV_NR_MAX,
 };
@@ -1891,6 +1892,13 @@ struct kvm_csv_send_encrypt_data {
 	__u32 hdr_len;
 	__u64 guest_addr_data;
 	__u32 guest_addr_len;
+	__u64 trans_uaddr;
+	__u32 trans_len;
+};
+
+struct kvm_csv_send_encrypt_context {
+	__u64 hdr_uaddr;
+	__u32 hdr_len;
 	__u64 trans_uaddr;
 	__u32 trans_len;
 };
