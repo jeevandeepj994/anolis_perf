@@ -6944,6 +6944,14 @@ void perf_output_sample(struct perf_output_handle *handle,
 			if (perf_sample_save_hw_index(event))
 				perf_output_put(handle, data->br_stack->hw_idx);
 			perf_output_copy(handle, data->br_stack->entries, size);
+			/*
+			 * Add the extension space which is appended
+			 * right after the struct perf_branch_stack.
+			 */
+			if (data->br_stack_cntr) {
+				size = data->br_stack->nr * sizeof(u64);
+				perf_output_copy(handle, data->br_stack_cntr, size);
+			}
 		} else {
 			/*
 			 * we always store at least the value of nr
@@ -7242,6 +7250,13 @@ void perf_prepare_sample(struct perf_event_header *header,
 			size += data->br_stack->nr
 			      * sizeof(struct perf_branch_entry);
 		}
+
+		/* The extra space is used to store branch stack
+		 * counter, it has nr entries as well
+		 */
+		if (data->br_stack_cntr)
+			size += data->br_stack->nr * sizeof(u64);
+
 		header->size += size;
 	}
 
