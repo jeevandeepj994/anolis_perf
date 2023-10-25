@@ -87,6 +87,7 @@ static inline bool constraint_match(struct event_constraint *c, u64 ecode)
 #define PERF_X86_EVENT_PEBS_STLAT	0x08000 /* st+stlat data address sampling */
 #define PERF_X86_EVENT_AMD_BRS		0x10000 /* AMD Branch Sampling */
 #define PERF_X86_EVENT_PEBS_LAT_HYBRID	0x20000 /* ld and st lat for hybrid */
+#define PERF_X86_EVENT_NEEDS_BRANCH_STACK	0x40000 /* require branch stack setup */
 
 static inline bool is_topdown_count(struct perf_event *event)
 {
