@@ -133,7 +133,7 @@ static int iax_crypto_enable(const char *val, const struct kernel_param *kp)
 	/* accept 'Yy1Nn0', or [oO][NnFf] for "on" and "off". */
 	ret = kstrtobool(val, &flag);
 	if (ret)
-		return ret;
+		goto skipping;
 	if (!flag) {
 		if (!iax_crypto_enabled)
 			goto skipping;
@@ -145,10 +145,13 @@ static int iax_crypto_enable(const char *val, const struct kernel_param *kp)
 		ret = iax_all_wqs_get();
 		if (ret < 0)
 			pr_err("%s: iax_crypto enable failed: ret=%d\n", __func__, ret);
-		else if (ret == 0)
+		else if (ret == 0) {
 			pr_info("%s: no wqs available, not enabling iax_crypto\n", __func__);
-		else
+			ret = -ENODEV;
+		} else {
 			iax_crypto_enabled = true;
+			ret = 0;
+		}
 	}
 
 skipping:

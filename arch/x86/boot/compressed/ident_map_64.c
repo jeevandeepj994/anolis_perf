@@ -28,6 +28,7 @@
 #include <asm/trap_pf.h>
 #include <asm/trapnr.h>
 #include <asm/init.h>
+#include "csv_command.h"
 /* Use the static base for this part of the boot process */
 #undef __PAGE_OFFSET
 #define __PAGE_OFFSET __PAGE_OFFSET_BASE
@@ -285,8 +286,10 @@ static int set_clr_page_flags(struct x86_mapping_info *info,
 	 * Changing encryption attributes of a page requires to flush it from
 	 * the caches.
 	 */
-	if ((set | clr) & _PAGE_ENC)
+	if ((set | clr) & _PAGE_ENC) {
 		clflush_page(address);
+		csv_update_page_attr(address, set, clr);
+	}
 
 	/* Update PTE */
 	pte = *ptep;

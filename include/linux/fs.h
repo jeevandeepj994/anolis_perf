@@ -1909,7 +1909,7 @@ struct file_operations {
 	int (*fadvise)(struct file *, loff_t, loff_t, int);
 	int (*uring_cmd)(struct io_uring_cmd *ioucmd, unsigned int issue_flags);
 	int (*uring_cmd_iopoll)(struct io_uring_cmd *ioucmd);
-	bool may_pollfree;
+	CK_KABI_DEPRECATE(bool, may_pollfree)
 
 	CK_KABI_RESERVE(1)
 	CK_KABI_RESERVE(2)

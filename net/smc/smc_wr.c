@@ -60,10 +60,15 @@ static inline bool smc_wr_is_tx_pend(struct smc_link *link)
 	return !bitmap_empty(link->wr_tx_mask, link->wr_tx_cnt);
 }
 
+static inline bool smc_wr_is_tx_pend_rwwi(struct smc_link *link)
+{
+	return link->lgr->use_rwwi && (atomic_read(&link->tx_inflight_credit) < link->wr_tx_cnt);
+}
+
 /* wait till all pending tx work requests on the given link are completed */
 void smc_wr_tx_wait_no_pending_sends(struct smc_link *link)
 {
-	wait_event(link->wr_tx_wait, !smc_wr_is_tx_pend(link));
+	wait_event(link->wr_tx_wait, !smc_wr_is_tx_pend(link) && !smc_wr_is_tx_pend_rwwi(link));
 }
 
 static inline int smc_wr_tx_find_pending_index(struct smc_link *link, u64 wr_id)

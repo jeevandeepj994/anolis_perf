@@ -798,9 +798,10 @@ static int smcd_query_rgid(struct smcd_dev *smcd, u64 rgid, u32 vid_valid,
 }
 
 static int smcd_register_dmb(struct smcd_dev *smcd, struct smcd_dmb *dmb,
-			     struct ism_client *client)
+			     void *client_priv)
 {
-	return ism_register_dmb(smcd->priv, (struct ism_dmb *)dmb, client);
+	return ism_register_dmb(smcd->priv, (struct ism_dmb *)dmb,
+				(struct ism_client *)client_priv);
 }
 
 static int smcd_unregister_dmb(struct smcd_dev *smcd, struct smcd_dmb *dmb)

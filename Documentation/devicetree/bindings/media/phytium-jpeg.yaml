@@ -1,0 +1,47 @@
+# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+%YAML 1.2
+---
+$id: http://devicetree.org/schemas/media/phytium-jpeg.yaml#
+$schema: http://devicetree.org/meta-schemas/core.yaml#
+
+title: Phytium JPEG Encoder driver
+
+maintainers:
+  - Chen Baozi <chenbaozi@phytium.com.cn>
+allOf:
+  - $ref: /schemas/media/phytium-jpeg.yaml#
+properties:
+  compatible:
+    const: phytium,jpeg
+  reg:
+    minItems: 1
+    items:
+      - description: contains the offset and length of the JPEG Engine memory region
+
+  interrupts:
+    maxItems: 1
+    items:
+      - description: the interrupt associated with the VE on this platform
+
+  phytium,ocm-buf-addr:
+    minItems: 1
+    items:
+      - description: the physical address used to storage the inputing video data
+unevaluatedProperties: false
+
+required:
+    - compatible
+    - reg
+    - interrupts
+    - phytium,ocm-buf-addr
+
+examples:
+    - |
+      jpeg: jpeg@32b32000 {
+            compatible = "phytium,jpeg";
+            reg = <0x0 0x32b32000 0 0x1000>;
+            interrupts = <0 41 4>;
+            phytium,ocm-buf-addr = <0x30c40000 0x30c60000>;
+            status = "okay";
+                        };
+...

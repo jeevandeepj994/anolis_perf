@@ -2230,7 +2230,7 @@ static void binder_deferred_fd_close(int fd)
 	if (!twcb)
 		return;
 	init_task_work(&twcb->twork, binder_do_fd_close);
-	__close_fd_get_file(fd, &twcb->file);
+	close_fd_get_file(fd, &twcb->file);
 	if (twcb->file) {
 		filp_close(twcb->file, current->files);
 		task_work_add(current, &twcb->twork, TWA_RESUME);
@@ -6072,7 +6072,6 @@ const struct file_operations binder_fops = {
 	.open = binder_open,
 	.flush = binder_flush,
 	.release = binder_release,
-	.may_pollfree = true,
 };
 
 static int __init init_binder_device(const char *name)

@@ -138,6 +138,11 @@ static int param_set_num_objects(const char *val, const struct kernel_param *kp)
 	if (ret < 0)
 		return ret;
 
+#ifdef CONFIG_ARM64
+	if (system_state == SYSTEM_BOOTING)
+		return 0;
+#endif
+
 	if (READ_ONCE(kfence_enabled) || !num)
 		return -EINVAL; /* can not change num_objects when enabled */
 

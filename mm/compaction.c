@@ -2166,6 +2166,7 @@ static enum compact_result __compaction_suitable(struct zone *zone, int order,
 					unsigned long wmark_target)
 {
 	unsigned long watermark;
+	bool nocma;
 
 	if (is_via_compact_memory(order))
 		return COMPACT_CONTINUE;
@@ -2196,8 +2197,9 @@ static enum compact_result __compaction_suitable(struct zone *zone, int order,
 	watermark = (order > PAGE_ALLOC_COSTLY_ORDER) ?
 				low_wmark_pages(zone) : min_wmark_pages(zone);
 	watermark += compact_gap(order);
+	nocma = !!(current->flags & PF_MEMALLOC_NOCMA);
 	if (!__zone_watermark_ok(zone, 0, watermark, highest_zoneidx,
-						ALLOC_CMA, wmark_target))
+						nocma ? 0 : ALLOC_CMA, wmark_target))
 		return COMPACT_SKIPPED;
 
 	return COMPACT_CONTINUE;

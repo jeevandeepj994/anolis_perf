@@ -67,13 +67,15 @@ int migrate_prep(void)
 {
 	/*
 	 * Clear the LRU lists so pages can be isolated.
-	 * Note that pages may be moved off the LRU after we have
-	 * drained them. Those pages will fail to migrate like other
-	 * pages that may be busy.
 	 */
-	lru_add_drain_all();
+	lru_cache_disable();
 
 	return 0;
+}
+
+void migrate_finish(void)
+{
+	lru_cache_enable();
 }
 
 /* Do the necessary work of migrate_prep but not if it involves other CPUs */
@@ -1470,9 +1472,11 @@ put_anon:
 out_unlock:
 	unlock_page(hpage);
 out:
-	if (rc == MIGRATEPAGE_SUCCESS)
+	if (rc == MIGRATEPAGE_SUCCESS) {
 		putback_active_hugepage(hpage);
-	else if (rc != -EAGAIN && rc != MIGRATEPAGE_SUCCESS)
+		if (reason == MR_CONTIG_RANGE)
+			replace_free_huge_page(hpage);
+	} else if (rc != -EAGAIN && rc != MIGRATEPAGE_SUCCESS)
 		list_move_tail(&hpage->lru, ret);
 
 	/*
@@ -2322,6 +2326,7 @@ out_flush:
 	if (err >= 0)
 		err = err1;
 out:
+	migrate_finish();
 	return err;
 }
 

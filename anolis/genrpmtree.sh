@@ -15,7 +15,7 @@ function do_prep() {
     if [ -n "$DIST_OFFICIAL_BUILD" ]; then
         if ! git tag | grep -q -x "${DIST_PKG_COMMIT_ID}"; then
             echo "cannot find official build tag: ${DIST_PKG_COMMIT_ID}"
-            exit 1 
+            exit 1
         fi
     fi
 
@@ -30,6 +30,10 @@ function do_prep() {
     cp ${DIST_SRCROOT}/arch/x86/configs/anolis-debug_defconfig	${DIST_RPMBUILDDIR_OUTPUT}/SOURCES/kernel-${DIST_KERNELVERSION}-x86_64-debug.config
     cp ${DIST_SRCROOT}/arch/arm64/configs/anolis_defconfig		${DIST_RPMBUILDDIR_OUTPUT}/SOURCES/kernel-${DIST_KERNELVERSION}-aarch64.config
     cp ${DIST_SRCROOT}/arch/arm64/configs/anolis-debug_defconfig	${DIST_RPMBUILDDIR_OUTPUT}/SOURCES/kernel-${DIST_KERNELVERSION}-aarch64-debug.config
+    cp ${DIST_SRCROOT}/arch/sw_64/configs/anolis_defconfig \
+    ${DIST_RPMBUILDDIR_OUTPUT}/SOURCES/kernel-${DIST_KERNELVERSION}-sw_64.config
+    cp ${DIST_SRCROOT}/arch/sw_64/configs/anolis-debug_defconfig \
+    ${DIST_RPMBUILDDIR_OUTPUT}/SOURCES/kernel-${DIST_KERNELVERSION}-sw_64-debug.config
 }
 
 do_prep

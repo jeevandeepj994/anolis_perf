@@ -50,6 +50,12 @@ struct smcd_dmb {
 	dma_addr_t dma_addr;
 };
 
+struct smcd_seid {
+	u8 seid_string[24];
+	u8 serial_number[4];
+	u8 type[4];
+};
+
 #define ISM_EVENT_DMB	0
 #define ISM_EVENT_GID	1
 #define ISM_EVENT_SWR	2
@@ -58,15 +64,20 @@ struct smcd_dmb {
 
 #define ISM_ERROR	0xFFFF
 
+enum {
+	ISM_DMB_MAPPABLE = 0,
+};
+
 struct smcd_dev;
-struct ism_client;
 
 struct smcd_ops {
 	int (*query_remote_gid)(struct smcd_dev *dev, u64 rgid, u32 vid_valid,
 				u32 vid);
 	int (*register_dmb)(struct smcd_dev *dev, struct smcd_dmb *dmb,
-			    struct ism_client *client);
+			    void *client_priv);
 	int (*unregister_dmb)(struct smcd_dev *dev, struct smcd_dmb *dmb);
+	int (*attach_dmb)(struct smcd_dev *dev, struct smcd_dmb *dmb);
+	int (*detach_dmb)(struct smcd_dev *dev, u64 token);
 	int (*add_vlan_id)(struct smcd_dev *dev, u64 vlan_id);
 	int (*del_vlan_id)(struct smcd_dev *dev, u64 vlan_id);
 	int (*set_vlan_required)(struct smcd_dev *dev);
@@ -81,11 +92,14 @@ struct smcd_ops {
 	u64 (*get_local_gid)(struct smcd_dev *dev);
 	u16 (*get_chid)(struct smcd_dev *dev);
 	struct device* (*get_dev)(struct smcd_dev *dev);
+	int (*get_dev_dmb_attr)(struct smcd_dev *dev);
 };
 
 struct smcd_dev {
 	const struct smcd_ops *ops;
 	void *priv;
+	void *client_priv;
+	struct device *parent_pci_dev;
 	struct list_head list;
 	spinlock_t lock;
 	struct smc_connection **conn;

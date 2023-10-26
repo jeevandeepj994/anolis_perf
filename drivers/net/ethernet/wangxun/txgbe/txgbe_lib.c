@@ -2,7 +2,67 @@
 /* Copyright (c) 2015 - 2022 Beijing WangXun Technology Co., Ltd. */
 
 #include "txgbe.h"
+#include "txgbe_sriov.h"
 
+/**
+ * txgbe_cache_ring_vmdq - Descriptor ring to register mapping for VMDq
+ * @adapter: board private structure to initialize
+ *
+ * Cache the descriptor ring offsets for VMDq to the assigned rings.  It
+ * will also try to cache the proper offsets if RSS/FCoE/SRIOV are enabled along
+ * with VMDq.
+ *
+ **/
+static bool txgbe_cache_ring_vmdq(struct txgbe_adapter *adapter)
+{
+	struct txgbe_ring_feature *vmdq = &adapter->ring_feature[RING_F_VMDQ];
+	struct txgbe_ring_feature *rss = &adapter->ring_feature[RING_F_RSS];
+	int i;
+	u16 reg_idx;
+
+	/* only proceed if VMDq is enabled */
+	if (!(adapter->flags & TXGBE_FLAG_VMDQ_ENABLED))
+		return false;
+
+	/* start at VMDq register offset for SR-IOV enabled setups */
+	reg_idx = vmdq->offset * __ALIGN_MASK(1, ~vmdq->mask);
+	for (i = 0; i < adapter->num_rx_queues; i++, reg_idx++) {
+		/* If we are greater than indices move to next pool */
+		if ((reg_idx & ~vmdq->mask) >= rss->indices)
+			reg_idx = __ALIGN_MASK(reg_idx, ~vmdq->mask);
+		adapter->rx_ring[i]->reg_idx = reg_idx;
+	}
+
+	reg_idx = vmdq->offset * __ALIGN_MASK(1, ~vmdq->mask);
+	for (i = 0; i < adapter->num_tx_queues; i++, reg_idx++) {
+		/* If we are greater than indices move to next pool */
+		if ((reg_idx & rss->mask) >= rss->indices)
+			reg_idx = __ALIGN_MASK(reg_idx, ~vmdq->mask);
+		adapter->tx_ring[i]->reg_idx = reg_idx;
+	}
+
+	return true;
+}
+
+/**
+ * txgbe_cache_ring_rss - Descriptor ring to register mapping for RSS
+ * @adapter: board private structure to initialize
+ *
+ * Cache the descriptor ring offsets for RSS, ATR, FCoE, and SR-IOV.
+ *
+ **/
+static bool txgbe_cache_ring_rss(struct txgbe_adapter *adapter)
+{
+	u16 i;
+
+	for (i = 0; i < adapter->num_rx_queues; i++)
+		adapter->rx_ring[i]->reg_idx = i;
+
+	for (i = 0; i < adapter->num_tx_queues; i++)
+		adapter->tx_ring[i]->reg_idx = i;
+
+	return true;
+}
 /**
  * txgbe_cache_ring_register - Descriptor ring to register mapping
  * @adapter: board private structure to initialize
@@ -16,13 +76,10 @@
  **/
 static void txgbe_cache_ring_register(struct txgbe_adapter *adapter)
 {
-	u16 i;
+	if (txgbe_cache_ring_vmdq(adapter))
+		return;
 
-	for (i = 0; i < adapter->num_rx_queues; i++)
-		adapter->rx_ring[i]->reg_idx = i;
-
-	for (i = 0; i < adapter->num_tx_queues; i++)
-		adapter->tx_ring[i]->reg_idx = i;
+	txgbe_cache_ring_rss(adapter);
 }
 
 #define TXGBE_RSS_64Q_MASK      0x3F
@@ -31,6 +88,59 @@ static void txgbe_cache_ring_register(struct txgbe_adapter *adapter)
 #define TXGBE_RSS_4Q_MASK       0x3
 #define TXGBE_RSS_2Q_MASK       0x1
 #define TXGBE_RSS_DISABLED_MASK 0x0
+
+static bool txgbe_set_vmdq_queues(struct txgbe_adapter *adapter)
+{
+	u16 vmdq_i = adapter->ring_feature[RING_F_VMDQ].limit;
+	u16 vmdq_m = 0;
+	u16 rss_i = adapter->ring_feature[RING_F_RSS].limit;
+	u16 rss_m = TXGBE_RSS_DISABLED_MASK;
+	/* only proceed if VMDq is enabled */
+	if (!(adapter->flags & TXGBE_FLAG_VMDQ_ENABLED))
+		return false;
+	/* Add starting offset to total pool count */
+	vmdq_i += adapter->ring_feature[RING_F_VMDQ].offset;
+
+	/* double check we are limited to maximum pools */
+	vmdq_i = min_t(u16, TXGBE_MAX_VMDQ_INDICES, vmdq_i);
+
+	/* 64 pool mode with 2 queues per pool, or
+	 * 16/32/64 pool mode with 1 queue per pool
+	 */
+	if (vmdq_i > 32 || rss_i < 4 || adapter->vf_mode == 63) {
+		vmdq_m = TXGBE_VMDQ_2Q_MASK;
+		rss_m = TXGBE_RSS_2Q_MASK;
+		rss_i = min_t(u16, rss_i, 2);
+	/* 32 pool mode with 4 queues per pool */
+	} else {
+		vmdq_m = TXGBE_VMDQ_4Q_MASK;
+		rss_m = TXGBE_RSS_4Q_MASK;
+		rss_i = 4;
+	}
+
+	/* remove the starting offset from the pool count */
+	vmdq_i -= adapter->ring_feature[RING_F_VMDQ].offset;
+
+	/* save features for later use */
+	adapter->ring_feature[RING_F_VMDQ].indices = vmdq_i;
+	adapter->ring_feature[RING_F_VMDQ].mask = vmdq_m;
+
+	/* limit RSS based on user input and save for later use */
+	adapter->ring_feature[RING_F_RSS].indices = rss_i;
+	adapter->ring_feature[RING_F_RSS].mask = rss_m;
+
+	adapter->queues_per_pool = rss_i;/*maybe same to num_rx_queues_per_pool*/
+	adapter->num_rx_pools = vmdq_i;
+	adapter->num_rx_queues_per_pool = rss_i;
+
+	adapter->num_rx_queues = vmdq_i * rss_i;
+	adapter->num_tx_queues = vmdq_i * rss_i;
+
+	/* disable ATR as it is not supported when VMDq is enabled */
+	adapter->flags &= ~TXGBE_FLAG_FDIR_HASH_CAPABLE;
+
+	return true;
+}
 
 /**
  * txgbe_set_rss_queues: Allocate queues for RSS
@@ -84,7 +194,13 @@ static void txgbe_set_num_queues(struct txgbe_adapter *adapter)
 	/* Start with base case */
 	adapter->num_rx_queues = 1;
 	adapter->num_tx_queues = 1;
+	adapter->queues_per_pool = 1;/*maybe same to num_rx_queues_per_pool*/
+	adapter->num_rx_pools = adapter->num_rx_queues;
+	adapter->num_rx_queues_per_pool = 1;
 
+
+	if (txgbe_set_vmdq_queues(adapter))
+		return;
 	txgbe_set_rss_queues(adapter);
 }
 
@@ -196,8 +312,10 @@ static int txgbe_alloc_q_vector(struct txgbe_adapter *adapter,
 	struct txgbe_ring *ring;
 	int node = -1;
 	int cpu = -1;
+	u8 tcs = netdev_get_num_tc(adapter->netdev);
+
 	int ring_count, size;
-	u16 rss_i = 0;
+	u16 __maybe_unused rss_i = 0;
 
 	/* note this will allocate space for the ring structure as well! */
 	ring_count = txr_count + rxr_count;
@@ -205,11 +323,14 @@ static int txgbe_alloc_q_vector(struct txgbe_adapter *adapter,
 	       (sizeof(struct txgbe_ring) * ring_count);
 
 	/* customize cpu for Flow Director mapping */
-	rss_i = adapter->ring_feature[RING_F_RSS].indices;
-	if (rss_i > 1 && adapter->atr_sample_rate) {
-		if (cpu_online(v_idx)) {
-			cpu = v_idx;
-			node = cpu_to_node(cpu);
+	if (tcs <= 1 && !(adapter->flags & TXGBE_FLAG_VMDQ_ENABLED)) {
+		u16 rss_i = adapter->ring_feature[RING_F_RSS].indices;
+
+		if (rss_i > 1 && adapter->atr_sample_rate) {
+			if (cpu_online(v_idx)) {
+				cpu = v_idx;
+				node = cpu_to_node(cpu);
+			}
 		}
 	}
 
@@ -272,7 +393,11 @@ static int txgbe_alloc_q_vector(struct txgbe_adapter *adapter,
 
 		/* apply Tx specific ring traits */
 		ring->count = adapter->tx_ring_count;
-		ring->queue_index = txr_idx;
+		if (adapter->num_vmdqs > 1)
+			ring->queue_index =
+				txr_idx % adapter->queues_per_pool;
+		else
+			ring->queue_index = txr_idx;
 
 		/* assign ring to adapter */
 		adapter->tx_ring[txr_idx] = ring;
@@ -298,7 +423,11 @@ static int txgbe_alloc_q_vector(struct txgbe_adapter *adapter,
 
 		/* apply Rx specific ring traits */
 		ring->count = adapter->rx_ring_count;
-		ring->queue_index = rxr_idx;
+		if (adapter->num_vmdqs > 1)
+			ring->queue_index =
+				rxr_idx % adapter->queues_per_pool;
+		else
+			ring->queue_index = rxr_idx;
 
 		/* assign ring to adapter */
 		adapter->rx_ring[rxr_idx] = ring;
@@ -446,6 +575,11 @@ void txgbe_set_interrupt_capability(struct txgbe_adapter *adapter)
 	if (!txgbe_acquire_msix_vectors(adapter))
 		return;
 
+#ifdef CONFIG_PCI_IOV
+	/* Disable SR-IOV support */
+	e_dev_warn("Disabling SR-IOV support\n");
+	txgbe_disable_sriov(adapter);
+#endif /* CONFIG_PCI_IOV */
 	/* Disable RSS */
 	dev_warn(&adapter->pdev->dev, "Disabling RSS support\n");
 	adapter->ring_feature[RING_F_RSS].limit = 1;

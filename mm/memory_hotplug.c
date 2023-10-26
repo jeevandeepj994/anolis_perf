@@ -1807,6 +1807,8 @@ int __ref offline_pages(unsigned long start_pfn, unsigned long nr_pages,
 	}
 	node = zone_to_nid(zone);
 
+	lru_cache_disable();
+
 	/* set above range as isolated */
 	ret = start_isolate_page_range(start_pfn, end_pfn,
 				       MIGRATE_MOVABLE,
@@ -1815,6 +1817,8 @@ int __ref offline_pages(unsigned long start_pfn, unsigned long nr_pages,
 		reason = "failure to isolate range";
 		goto failed_removal;
 	}
+
+	drain_all_pages(zone);
 
 	arg.start_pfn = start_pfn;
 	arg.nr_pages = nr_pages;
@@ -1837,7 +1841,6 @@ int __ref offline_pages(unsigned long start_pfn, unsigned long nr_pages,
 			}
 
 			cond_resched();
-			lru_add_drain_all();
 
 			ret = scan_movable_pages(pfn, end_pfn, &pfn);
 			if (!ret) {
@@ -1866,11 +1869,10 @@ int __ref offline_pages(unsigned long start_pfn, unsigned long nr_pages,
 		}
 
 		/*
-		 * per-cpu pages are drained in start_isolate_page_range, but if
-		 * there are still pages that are not free, make sure that we
-		 * drain again, because when we isolated range we might
-		 * have raced with another thread that was adding pages to pcp
-		 * list.
+		 * per-cpu pages are drained after start_isolate_page_range, but
+		 * if there are still pages that are not free, make sure that we
+		 * drain again, because when we isolated range we might have
+		 * raced with another thread that was adding pages to pcp list.
 		 *
 		 * Forward progress should be still guaranteed because
 		 * pages on the pcp list can only belong to MOVABLE_ZONE
@@ -1894,6 +1896,8 @@ int __ref offline_pages(unsigned long start_pfn, unsigned long nr_pages,
 	spin_lock_irqsave(&zone->lock, flags);
 	zone->nr_isolate_pageblock -= nr_pages / pageblock_nr_pages;
 	spin_unlock_irqrestore(&zone->lock, flags);
+
+	lru_cache_enable();
 
 	/* removal success */
 	adjust_managed_page_count(pfn_to_page(start_pfn), -nr_pages);

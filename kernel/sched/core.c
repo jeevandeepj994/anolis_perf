@@ -21,7 +21,7 @@
 #include <asm/tlb.h>
 
 #include "../workqueue_internal.h"
-#include "../../fs/io-wq.h"
+#include "../../io_uring/io-wq.h"
 #include "../smpboot.h"
 
 #include "pelt.h"
@@ -75,6 +75,11 @@ const_debug unsigned int sysctl_sched_nr_migrate = 32;
 unsigned int sysctl_sched_cfs_bw_burst_onset_percent;
 
 unsigned int sysctl_sched_cfs_bw_burst_enabled = 1;
+#endif
+
+#ifdef CONFIG_SCHED_ACPU
+DEFINE_STATIC_KEY_FALSE(acpu_enabled);
+unsigned int sysctl_sched_acpu_enabled;
 #endif
 
 /*
@@ -300,7 +305,7 @@ static void __sched_core_flip(bool enabled)
 		for_each_cpu(t, smt_mask)
 			cpu_rq(t)->core_enabled = enabled;
 
-		cpu_rq(cpu)->core->core_forceidle_start = 0;
+		cpu_rq(cpu)->core->core_sibidle_start = 0;
 
 		sched_core_unlock(cpu, &flags);
 
@@ -3913,6 +3918,122 @@ fire_sched_out_preempt_notifiers(struct task_struct *curr,
 
 #endif /* CONFIG_PREEMPT_NOTIFIERS */
 
+#ifdef CONFIG_SCHED_ACPU
+static void acpu_enable(void)
+{
+	int i;
+
+	for_each_possible_cpu(i) {
+		struct rq *rq = cpu_rq(i);
+
+		/* It may be not that accurate, but useful enough. */
+		rq->last_acpu_update_time = rq->clock;
+	}
+	static_branch_enable(&acpu_enabled);
+}
+
+static void acpu_disable(void)
+{
+	static_branch_disable(&acpu_enabled);
+}
+
+int sched_acpu_enable_handler(struct ctl_table *table, int write, void __user *buffer,
+			      size_t *lenp, loff_t *ppos)
+{
+	int ret;
+	unsigned int old, new;
+
+	if (!write) {
+		ret = proc_dointvec_minmax(table, write, buffer, lenp, ppos);
+		return ret;
+	}
+
+	old = sysctl_sched_acpu_enabled;
+	ret = proc_dointvec_minmax(table, write, buffer, lenp, ppos);
+	new = sysctl_sched_acpu_enabled;
+	if (!ret && write && (old != new)) {
+		if (new)
+			acpu_enable();
+		else
+			acpu_disable();
+	}
+
+	return ret;
+}
+
+static void update_acpu(struct rq *rq, struct task_struct *prev, struct task_struct *next)
+{
+	const int cpu = cpu_of(rq);
+	const struct cpumask *smt_mask = cpu_smt_mask(cpu);
+	u64 now = rq_clock(rq);
+	u64 sibidle_sum, last_update_time;
+	s64 delta, last;
+	int i;
+
+	if (!static_branch_likely(&acpu_enabled) || !schedstat_enabled())
+		return;
+
+	/*
+	 * If core sched is enabled and core_sibidle_count is not zero, we update sibidle
+	 * time in function __sched_core_account_sibidle().
+	 */
+#ifdef CONFIG_SCHED_CORE
+	if (rq->core->core_sibidle_count)
+		goto out;
+#endif
+
+	/* Update idle sum and busy sum for current rq. */
+	delta = now - rq->last_acpu_update_time;
+	if (prev == rq->idle)
+		rq->acpu_idle_sum += delta;
+
+	/*
+	 * Be carefule, smt_mask maybe NULL.
+	 * We only consider the case where there are two SMT at this stage.
+	 */
+	if (unlikely(!smt_mask) || unlikely(cpumask_weight(smt_mask) != 2))
+		goto out;
+
+	for_each_cpu(i, smt_mask) {
+		if (i != cpu) {
+			struct rq *rq_i = cpu_rq(i);
+			struct task_struct *curr_i = rq_i->curr;
+
+			last = (s64)(rq->last_acpu_update_time -
+				     rq_i->last_acpu_update_time);
+			last_update_time = last >= 0 ? rq->last_acpu_update_time :
+						       rq_i->last_acpu_update_time;
+			/*
+			 * Sibling may update acpu at the same time, and it's
+			 * timestamp may be newer than this rq.
+			 */
+			delta = now - last_update_time;
+			delta = delta > 0 ? delta : 0;
+
+			/* Add the delta to improve accuracy. */
+			sibidle_sum = last >= 0 ? rq->sibidle_sum : rq_i->acpu_idle_sum;
+			if (curr_i == rq_i->idle)
+				sibidle_sum += delta;
+		}
+	}
+
+	if (prev != rq->idle) {
+		delta = sibidle_sum - rq->sibidle_sum;
+		delta = delta > 0 ? delta : 0;
+		__account_sibidle_time(prev, delta, false);
+	}
+
+	if (next != rq->idle)
+		rq->sibidle_sum = sibidle_sum;
+out:
+	rq->last_acpu_update_time = now;
+}
+#else
+static inline void update_acpu(struct rq *rq, struct task_struct *prev, struct task_struct *next)
+{
+}
+#endif /* CONFIG_SCHED_ACPU */
+
 static inline void prepare_task(struct task_struct *next)
 {
 #ifdef CONFIG_SMP
@@ -4004,6 +4125,7 @@ prepare_task_switch(struct rq *rq, struct task_struct *prev,
 {
 	kcov_prepare_switch(prev);
 	sched_info_switch(rq, prev, next);
+	update_acpu(rq, prev, next);
 	perf_event_task_sched_out(prev, next);
 	rseq_preempt(prev);
 	fire_sched_out_preempt_notifiers(prev, next);
@@ -4456,6 +4578,7 @@ void scheduler_tick(void)
 	thermal_pressure = arch_scale_thermal_pressure(cpu_of(rq));
 	update_thermal_load_avg(rq_clock_thermal(rq), rq, thermal_pressure);
 	curr->sched_class->task_tick(rq, curr, 0);
+	update_acpu(rq, curr, curr);
 	calc_global_load_tick(rq);
 	psi_task_tick(rq);
 	sched_core_tick(rq);
@@ -4922,18 +5045,21 @@ pick_next_task(struct rq *rq, struct task_struct *prev, struct rq_flags *rf)
 
 	/* reset state */
 	rq->core->core_cookie = 0UL;
-	if (rq->core->core_forceidle_count) {
+	if (rq->core->core_sibidle_count) {
 		if (!core_clock_updated) {
 			update_rq_clock(rq->core);
 			core_clock_updated = true;
 		}
-		sched_core_account_forceidle(rq);
+		sched_core_account_sibidle(rq);
 		/* reset after accounting force idle */
-		rq->core->core_forceidle_start = 0;
-		rq->core->core_forceidle_count = 0;
-		rq->core->core_forceidle_occupation = 0;
-		need_sync = true;
-		fi_before = true;
+		rq->core->core_sibidle_start = 0;
+		rq->core->core_sibidle_count = 0;
+		rq->core->core_sibidle_occupation = 0;
+		if (rq->core->core_forceidle_count) {
+			rq->core->core_forceidle_count = 0;
+			need_sync = true;
+			fi_before = true;
+		}
 	}
 
 	/*
@@ -5009,6 +5135,7 @@ pick_next_task(struct rq *rq, struct task_struct *prev, struct rq_flags *rf)
 		rq_i->core_pick = p;
 
 		if (p == rq_i->idle) {
+			rq->core->core_sibidle_count++;
 			if (rq_i->nr_running) {
 				rq->core->core_forceidle_count++;
 				if (!fi_before)
@@ -5019,9 +5146,9 @@ pick_next_task(struct rq *rq, struct task_struct *prev, struct rq_flags *rf)
 		}
 	}
 
-	if (schedstat_enabled() && rq->core->core_forceidle_count) {
-		rq->core->core_forceidle_start = rq_clock(rq->core);
-		rq->core->core_forceidle_occupation = occ;
+	if (schedstat_enabled() && rq->core->core_sibidle_count) {
+		rq->core->core_sibidle_start = rq_clock(rq->core);
+		rq->core->core_sibidle_occupation = occ;
 	}
 
 	rq->core->core_pick_seq = rq->core->core_task_seq;
@@ -5063,7 +5190,8 @@ pick_next_task(struct rq *rq, struct task_struct *prev, struct rq_flags *rf)
 		if (!(fi_before && rq->core->core_forceidle_count))
 			task_vruntime_update(rq_i, rq_i->core_pick, !!rq->core->core_forceidle_count);
 
-		rq_i->core_pick->core_occupation = occ;
+		if (rq->core->core_forceidle_count)
+			rq_i->core_pick->core_occupation = occ;
 
 		if (i == cpu) {
 			rq_i->core_pick = NULL;
@@ -5283,14 +5411,15 @@ static void sched_core_cpu_deactivate(unsigned int cpu)
 	core_rq->core_cookie               = rq->core_cookie;
 	core_rq->core_forceidle_count      = rq->core_forceidle_count;
 	core_rq->core_forceidle_seq        = rq->core_forceidle_seq;
-	core_rq->core_forceidle_occupation = rq->core_forceidle_occupation;
+	core_rq->core_sibidle_occupation   = rq->core_sibidle_occupation;
+	core_rq->core_sibidle_count        = rq->core_sibidle_count;
 
 	/*
 	 * Accounting edge for forced idle is handled in pick_next_task().
 	 * Don't need another one here, since the hotplug thread shouldn't
 	 * have a cookie.
 	 */
-	core_rq->core_forceidle_start = 0;
+	core_rq->core_sibidle_start = 0;
 
 	/* install new leader */
 	for_each_cpu(t, smt_mask) {
@@ -6097,6 +6226,19 @@ struct task_struct *idle_task(int cpu)
 {
 	return cpu_rq(cpu)->idle;
 }
+
+#ifdef CONFIG_SCHED_CORE
+int sched_core_idle_cpu(int cpu)
+{
+	struct rq *rq = cpu_rq(cpu);
+
+	if (sched_core_enabled(rq) && rq->curr == rq->idle)
+		return 1;
+
+	return idle_cpu(cpu);
+}
+
+#endif
 
 /**
  * find_process_by_pid - find a process with a matching PID value.
@@ -7996,11 +8138,19 @@ int in_sched_functions(unsigned long addr)
 }
 
 #ifdef CONFIG_CGROUP_SCHED
+#ifdef CONFIG_SCHED_SLI
+static DEFINE_PER_CPU(struct sched_cgroup_lat_stat_cpu, root_lat_stat_cpu);
+#endif
+
 /*
  * Default task group.
  * Every task in system belongs to this group at bootup.
  */
-struct task_group root_task_group;
+struct task_group root_task_group = {
+#ifdef CONFIG_SCHED_SLI
+	.lat_stat_cpu	= &root_lat_stat_cpu,
+#endif
+};
 LIST_HEAD(task_groups);
 
 /* Cacheline aligned slab cache for task_group */
@@ -8150,6 +8300,12 @@ void __init sched_init(void)
 		rq_csd_init(rq, &rq->nohz_csd, nohz_csd_func);
 #endif
 #endif /* CONFIG_SMP */
+
+#ifdef CONFIG_SCHED_ACPU
+		rq->acpu_idle_sum = 0;
+		rq->sibidle_sum = 0;
+		rq->last_acpu_update_time = rq->clock;
+#endif
 		hrtick_rq_init(rq);
 		atomic_set(&rq->nr_iowait, 0);
 #if defined(CONFIG_GROUP_IDENTITY) && defined(CONFIG_SCHED_SMT)
@@ -8164,8 +8320,9 @@ void __init sched_init(void)
 		rq->core_enabled = 0;
 		rq->core_tree = RB_ROOT;
 		rq->core_forceidle_count = 0;
-		rq->core_forceidle_occupation = 0;
-		rq->core_forceidle_start = 0;
+		rq->core_sibidle_count = 0;
+		rq->core_sibidle_occupation = 0;
+		rq->core_sibidle_start = 0;
 
 		rq->core_cookie = 0UL;
 #endif
@@ -8415,6 +8572,12 @@ static void sched_free_group(struct task_group *tg)
 	free_fair_sched_group(tg);
 	free_rt_sched_group(tg);
 	autogroup_free(tg);
+
+#ifdef CONFIG_SCHED_SLI
+	if (tg->lat_stat_cpu)
+		free_percpu(tg->lat_stat_cpu);
+#endif
+
 	kmem_cache_free(task_group_cache, tg);
 }
 
@@ -8433,8 +8596,17 @@ struct task_group *sched_create_group(struct task_group *parent)
 	if (!alloc_rt_sched_group(tg, parent))
 		goto err;
 
+#ifdef CONFIG_SCHED_SLI
+	tg->lat_stat_cpu = alloc_percpu(struct sched_cgroup_lat_stat_cpu);
+	if (!tg->lat_stat_cpu)
+		goto err;
+#endif
+
 	alloc_uclamp_sched_group(tg, parent);
 
+#ifdef CONFIG_SCHED_CORE
+	tg->ht_ratio = 100;
+#endif
 	return tg;
 
 err:
@@ -9317,6 +9489,20 @@ static u64 cpu_rt_period_read_uint(struct cgroup_subsys_state *css,
 }
 #endif /* CONFIG_RT_GROUP_SCHED */
 
+#ifdef CONFIG_FAIR_GROUP_SCHED
+static s64 cpu_idle_read_s64(struct cgroup_subsys_state *css,
+			       struct cftype *cft)
+{
+	return css_tg(css)->idle;
+}
+
+static int cpu_idle_write_s64(struct cgroup_subsys_state *css,
+				struct cftype *cft, s64 idle)
+{
+	return sched_group_set_idle(css_tg(css), idle);
+}
+#endif
+
 #ifdef CONFIG_GROUP_IDENTITY
 static int cpu_bvt_warp_ns_write_s64(struct cgroup_subsys_state *css,
 				struct cftype *cftype, s64 val)
@@ -9351,12 +9537,49 @@ static s64 cpu_identity_read_s64(struct cgroup_subsys_state *css,
 }
 #endif
 
+#ifdef CONFIG_SCHED_CORE
+static int cpu_ht_ratio_write(struct cgroup_subsys_state *css,
+			      struct cftype *cftype, u64 ht_ratio)
+{
+	struct task_group *tg = css_tg(css);
+	int cpu;
+
+	if (ht_ratio < 100 || ht_ratio > 200)
+		return -1;
+
+	if (tg == &root_task_group)
+		return -1;
+
+	tg->ht_ratio = ht_ratio;
+	for_each_online_cpu(cpu) {
+		struct sched_entity *se = tg->se[cpu];
+
+		se->ht_ratio = ht_ratio;
+	}
+
+	return 0;
+}
+
+static u64 cpu_ht_ratio_read(struct cgroup_subsys_state *css,
+					       struct cftype *cft)
+{
+	struct task_group *tg = css_tg(css);
+
+	return tg->ht_ratio;
+}
+#endif
+
 static struct cftype cpu_legacy_files[] = {
 #ifdef CONFIG_FAIR_GROUP_SCHED
 	{
 		.name = "shares",
 		.read_u64 = cpu_shares_read_u64,
 		.write_u64 = cpu_shares_write_u64,
+	},
+	{
+		.name = "idle",
+		.read_s64 = cpu_idle_read_s64,
+		.write_s64 = cpu_idle_write_s64,
 	},
 #endif
 #ifdef CONFIG_CFS_BANDWIDTH
@@ -9452,6 +9675,13 @@ static struct cftype cpu_legacy_files[] = {
 		.name = "ht_stable",
 		.read_u64 = cpu_ht_stable_read_u64,
 		.write_u64 = cpu_ht_stable_write_u64,
+	},
+#endif
+#ifdef CONFIG_SCHED_CORE
+	{
+		.name = "ht_ratio",
+		.read_u64 = cpu_ht_ratio_read,
+		.write_u64 = cpu_ht_ratio_write,
 	},
 #endif
 	{ }	/* Terminate */
@@ -9604,6 +9834,298 @@ static ssize_t cpu_max_write(struct kernfs_open_file *of,
 }
 #endif
 
+#ifdef CONFIG_SCHED_SLI
+static DEFINE_STATIC_KEY_TRUE(cpu_no_sched_lat);
+static int cpu_sched_lat_enabled_show(struct seq_file *m, void *v)
+{
+	seq_printf(m, "%d\n", !static_key_enabled(&cpu_no_sched_lat));
+	return 0;
+}
+
+static int cpu_sched_lat_enabled_open(struct inode *inode,
+						struct file *file)
+{
+	return single_open(file, cpu_sched_lat_enabled_show, NULL);
+}
+
+static ssize_t cpu_sched_lat_enabled_write(struct file *file,
+						const char __user *ubuf,
+						size_t count, loff_t *ppos)
+{
+	char val = -1;
+	int ret = count;
+
+	if (count < 1 || *ppos) {
+		ret = -EINVAL;
+		goto out;
+	}
+
+	if (copy_from_user(&val, ubuf, 1)) {
+		ret = -EFAULT;
+		goto out;
+	}
+
+	switch (val) {
+	case '0':
+		static_branch_enable(&cpu_no_sched_lat);
+		break;
+	case '1':
+		static_branch_disable(&cpu_no_sched_lat);
+		break;
+	default:
+		ret = -EINVAL;
+	}
+
+out:
+	return ret;
+}
+
+static const struct proc_ops cpu_sched_lat_enabled_fops = {
+	.proc_open	= cpu_sched_lat_enabled_open,
+	.proc_read	= seq_read,
+	.proc_write	= cpu_sched_lat_enabled_write,
+	.proc_lseek	= seq_lseek,
+	.proc_release	= single_release,
+};
+
+static int __init init_cpu_sched_lat_enabled(void)
+{
+	struct proc_dir_entry *ca_dir, *sched_lat_enabled_file;
+
+	ca_dir = proc_mkdir("cpusli", NULL);
+	if (!ca_dir)
+		return -ENOMEM;
+
+	sched_lat_enabled_file = proc_create("sched_lat_enabled", 0600,
+			ca_dir, &cpu_sched_lat_enabled_fops);
+	if (!sched_lat_enabled_file) {
+		remove_proc_entry("cpusli", NULL);
+		return -ENOMEM;
+	}
+
+	return 0;
+}
+device_initcall(init_cpu_sched_lat_enabled);
+
+static inline enum sched_lat_count_t get_sched_lat_count_idx(u64 msecs)
+{
+	if (msecs < 1)
+		return SCHED_LAT_0_1;
+	if (msecs < 10)
+		return SCHED_LAT_0_1 + (msecs + 2) / 3;
+	if (msecs < 50)
+		return SCHED_LAT_7_10 + msecs / 10;
+	if (msecs < 100)
+		return SCHED_LAT_50_100;
+	if (msecs < 1000)
+		return SCHED_LAT_100_500 + (msecs / 500);
+	if (msecs < 10000)
+		return SCHED_LAT_1000_5000 + (msecs / 5000);
+
+	return SCHED_LAT_10000_INF;
+}
+
+struct task_group *cgroup_tg(struct cgroup *cgrp)
+{
+	return container_of(global_cgroup_css(cgrp, cpu_cgrp_id),
+				struct task_group, css);
+}
+
+void task_cpu_update_block(struct task_struct *tsk, u64 runtime)
+{
+	int idx;
+	enum sched_lat_stat_item s;
+	struct task_group *tg;
+	unsigned int msecs;
+
+	if (static_branch_likely(&cpu_no_sched_lat))
+		return;
+
+	rcu_read_lock();
+	tg = css_tg(task_css(tsk, cpu_cgrp_id));
+	if (!tg) {
+		rcu_read_unlock();
+		return;
+	}
+	if (tsk->in_iowait)
+		s = SCHED_LAT_IOBLOCK;
+	else
+		s = SCHED_LAT_BLOCK;
+
+	msecs = runtime >> 20; /* Proximately to speed up */
+	idx = get_sched_lat_count_idx(msecs);
+	this_cpu_inc(tg->lat_stat_cpu->item[s][idx]);
+	this_cpu_inc(tg->lat_stat_cpu->item[s][SCHED_LAT_NR]);
+	this_cpu_add(tg->lat_stat_cpu->item[s][SCHED_LAT_TOTAL], runtime);
+	rcu_read_unlock();
+}
+
+void cpu_update_latency(struct sched_entity *se, u64 delta)
+{
+	int idx;
+	enum sched_lat_stat_item s;
+	unsigned int msecs;
+	struct task_group *tg;
+
+	if (static_branch_likely(&cpu_no_sched_lat))
+		return;
+
+	rcu_read_lock();
+	tg = se->cfs_rq->tg;
+	if (!tg) {
+		rcu_read_unlock();
+		return;
+	}
+	if (entity_is_task(se))
+		s = SCHED_LAT_WAIT;
+	else
+		s = SCHED_LAT_CGROUP_WAIT;
+
+	msecs = delta >> 20; /* Proximately to speed up */
+	idx = get_sched_lat_count_idx(msecs);
+	this_cpu_inc(tg->lat_stat_cpu->item[s][idx]);
+	this_cpu_inc(tg->lat_stat_cpu->item[s][SCHED_LAT_NR]);
+	this_cpu_add(tg->lat_stat_cpu->item[s][SCHED_LAT_TOTAL], delta);
+	rcu_read_unlock();
+}
+
+#define SCHED_LAT_STAT_SMP_WRITE(name, sidx)				\
+static void smp_write_##name(void *info)				\
+{									\
+	struct task_group *tg = (struct task_group *)info;		\
+	int i;								\
+									\
+	for (i = SCHED_LAT_0_1; i < SCHED_LAT_NR_COUNT; i++)		\
+		this_cpu_write(tg->lat_stat_cpu->item[sidx][i], 0);	\
+}									\
+
+SCHED_LAT_STAT_SMP_WRITE(sched_wait_latency, SCHED_LAT_WAIT);
+SCHED_LAT_STAT_SMP_WRITE(sched_wait_cgroup_latency, SCHED_LAT_CGROUP_WAIT);
+SCHED_LAT_STAT_SMP_WRITE(sched_block_latency, SCHED_LAT_BLOCK);
+SCHED_LAT_STAT_SMP_WRITE(sched_ioblock_latency, SCHED_LAT_IOBLOCK);
+
+smp_call_func_t smp_sched_lat_write_funcs[] = {
+	smp_write_sched_wait_latency,
+	smp_write_sched_block_latency,
+	smp_write_sched_ioblock_latency,
+	smp_write_sched_wait_cgroup_latency
+};
+
+int sched_lat_stat_write(struct cgroup_subsys_state *css,
+				struct cftype *cft, u64 val)
+{
+	struct cgroup *cgrp = css->cgroup;
+	struct task_group *tg = cgroup_tg(cgrp);
+	enum sched_lat_stat_item idx = cft->private;
+	smp_call_func_t func = smp_sched_lat_write_funcs[idx];
+
+	if (unlikely(!tg)) {
+		WARN_ONCE(1, "cgroup \"cpu,cpuacct\" are not bound together");
+		return -EOPNOTSUPP;
+	}
+
+	if (val != 0)
+		return -EINVAL;
+
+	func((void *)tg);
+	smp_call_function(func, (void *)tg, 1);
+
+	return 0;
+}
+
+static u64 sched_lat_stat_gather(struct task_group *tg,
+				 enum sched_lat_stat_item sidx,
+				 enum sched_lat_count_t cidx)
+{
+	u64 sum = 0;
+	int cpu;
+
+	for_each_possible_cpu(cpu)
+		sum += per_cpu_ptr(tg->lat_stat_cpu, cpu)->item[sidx][cidx];
+
+	return sum;
+}
+
+int sched_lat_stat_show(struct seq_file *sf, void *v)
+{
+	struct task_group *tg = cgroup_tg(seq_css(sf)->cgroup);
+	enum sched_lat_stat_item s = seq_cft(sf)->private;
+
+	if (unlikely(!tg)) {
+		WARN_ONCE(1, "cgroup \"cpu,cpuacct\" are not bound together");
+		return -EOPNOTSUPP;
+	}
+
+	/* CFS scheduling latency cgroup and task histgrams */
+	seq_printf(sf, "0-1ms: \t%llu\n",
+		sched_lat_stat_gather(tg, s, SCHED_LAT_0_1));
+	seq_printf(sf, "1-4ms: \t%llu\n",
+		sched_lat_stat_gather(tg, s, SCHED_LAT_1_4));
+	seq_printf(sf, "4-7ms: \t%llu\n",
+		sched_lat_stat_gather(tg, s, SCHED_LAT_4_7));
+	seq_printf(sf, "7-10ms: \t%llu\n",
+		sched_lat_stat_gather(tg, s, SCHED_LAT_7_10));
+	seq_printf(sf, "10-20ms: \t%llu\n",
+		sched_lat_stat_gather(tg, s, SCHED_LAT_10_20));
+	seq_printf(sf, "20-30ms: \t%llu\n",
+		sched_lat_stat_gather(tg, s, SCHED_LAT_20_30));
+	seq_printf(sf, "30-40ms: \t%llu\n",
+		sched_lat_stat_gather(tg, s, SCHED_LAT_30_40));
+	seq_printf(sf, "40-50ms: \t%llu\n",
+		sched_lat_stat_gather(tg, s, SCHED_LAT_40_50));
+	seq_printf(sf, "50-100ms: \t%llu\n",
+		sched_lat_stat_gather(tg, s, SCHED_LAT_50_100));
+	seq_printf(sf, "100-500ms: \t%llu\n",
+		sched_lat_stat_gather(tg, s, SCHED_LAT_100_500));
+	seq_printf(sf, "500-1000ms: \t%llu\n",
+		sched_lat_stat_gather(tg, s, SCHED_LAT_500_1000));
+	seq_printf(sf, "1000-5000ms: \t%llu\n",
+		sched_lat_stat_gather(tg, s, SCHED_LAT_1000_5000));
+	seq_printf(sf, "5000-10000ms: \t%llu\n",
+		sched_lat_stat_gather(tg, s, SCHED_LAT_5000_10000));
+	seq_printf(sf, ">=10000ms: \t%llu\n",
+		sched_lat_stat_gather(tg, s, SCHED_LAT_10000_INF));
+	seq_printf(sf, "total(ms): \t%llu\n",
+		sched_lat_stat_gather(tg, s, SCHED_LAT_TOTAL) / 1000000);
+	seq_printf(sf, "nr: \t%llu\n",
+		sched_lat_stat_gather(tg, s, SCHED_LAT_NR));
+
+	return 0;
+}
+
+static int cpu_sched_cfs_show(struct seq_file *sf, void *v)
+{
+	struct task_group *tg = css_tg(seq_css(sf));
+	struct sched_entity *se;
+	int cpu;
+	u64 wait_max = 0, wait_sum = 0, wait_sum_other = 0, exec_sum = 0;
+
+	if (!schedstat_enabled())
+		goto out_show;
+
+	rcu_read_lock();
+	for_each_online_cpu(cpu) {
+		se = tg->se[cpu];
+		if (!se)
+			continue;
+		exec_sum += schedstat_val(se->sum_exec_runtime);
+		wait_sum_other +=
+			schedstat_val(se->statistics.parent_wait_contrib);
+		wait_sum += schedstat_val(se->statistics.wait_sum);
+		wait_max =
+			max(wait_max, schedstat_val(se->statistics.wait_max));
+	}
+	rcu_read_unlock();
+out_show:
+	/* [Serve time] [On CPU time] [Queue other time] [Queue sibling time] [Queue max time] */
+	seq_printf(sf, "%lld %lld %lld %lld %lld\n",
+			exec_sum + wait_sum, exec_sum, wait_sum_other,
+			wait_sum - wait_sum_other, wait_max);
+
+	return 0;
+}
+#endif
+
 static struct cftype cpu_files[] = {
 #ifdef CONFIG_FAIR_GROUP_SCHED
 	{
@@ -9617,6 +10139,12 @@ static struct cftype cpu_files[] = {
 		.flags = CFTYPE_NOT_ON_ROOT,
 		.read_s64 = cpu_weight_nice_read_s64,
 		.write_s64 = cpu_weight_nice_write_s64,
+	},
+	{
+		.name = "idle",
+		.flags = CFTYPE_NOT_ON_ROOT,
+		.read_s64 = cpu_idle_read_s64,
+		.write_s64 = cpu_idle_write_s64,
 	},
 #endif
 #ifdef CONFIG_CFS_BANDWIDTH
@@ -9687,6 +10215,43 @@ static struct cftype cpu_files[] = {
 		.name = "identity",
 		.read_s64 = cpu_identity_read_s64,
 		.write_s64 = cpu_identity_write_s64,
+	},
+#endif
+#ifdef CONFIG_SCHED_SLI
+	{
+		.name = "sched_cfs_statistics",
+		.seq_show = cpu_sched_cfs_show,
+	},
+	{
+		.name = "wait_latency",
+		.private = SCHED_LAT_WAIT,
+		.write_u64 = sched_lat_stat_write,
+		.seq_show = sched_lat_stat_show
+	},
+	{
+		.name = "cgroup_wait_latency",
+		.private = SCHED_LAT_CGROUP_WAIT,
+		.write_u64 = sched_lat_stat_write,
+		.seq_show = sched_lat_stat_show
+	},
+	{
+		.name = "block_latency",
+		.private = SCHED_LAT_BLOCK,
+		.write_u64 = sched_lat_stat_write,
+		.seq_show = sched_lat_stat_show
+	},
+	{
+		.name = "ioblock_latency",
+		.private = SCHED_LAT_IOBLOCK,
+		.write_u64 = sched_lat_stat_write,
+		.seq_show = sched_lat_stat_show
+	},
+#endif
+#ifdef CONFIG_SCHED_CORE
+	{
+		.name = "ht_ratio",
+		.read_u64 = cpu_ht_ratio_read,
+		.write_u64 = cpu_ht_ratio_write,
 	},
 #endif
 	{ }	/* terminate */

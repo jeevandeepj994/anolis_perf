@@ -4,6 +4,7 @@
 
 #include <linux/huge_mm.h>
 #include <linux/swap.h>
+#include <linux/kidled.h>
 
 /**
  * page_is_file_lru - should the page be on a file LRU or anon LRU?
@@ -273,7 +274,7 @@ static inline bool lru_gen_del_page(struct lruvec *lruvec, struct page *page, bo
 	unsigned long flags;
 	int gen = page_lru_gen(page);
 
-	if (gen < 0)
+	if (gen < 0 || is_kidled_enabled())
 		return false;
 
 	VM_WARN_ON_ONCE_PAGE(PageActive(page), page);

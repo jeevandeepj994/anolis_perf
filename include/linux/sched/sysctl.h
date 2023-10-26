@@ -28,6 +28,7 @@ enum { sysctl_hung_task_timeout_secs = 0 };
 
 extern unsigned int sysctl_sched_latency;
 extern unsigned int sysctl_sched_min_granularity;
+extern unsigned int sysctl_sched_idle_min_granularity;
 extern unsigned int sysctl_sched_wakeup_granularity;
 extern unsigned int sysctl_sched_child_runs_first;
 
@@ -89,6 +90,12 @@ extern unsigned int sysctl_sched_expel_update_interval;
 #endif
 #endif
 
+#ifdef CONFIG_SCHED_CORE
+extern int sysctl_sched_core;
+extern int sysctl_sched_core_handler(struct ctl_table *table, int write,
+				     void __user *buffer, size_t *lenp, loff_t *ppos);
+#endif
+
 #ifdef CONFIG_SCHED_AUTOGROUP
 extern unsigned int sysctl_sched_autogroup_enabled;
 #endif
@@ -113,4 +120,10 @@ int sched_energy_aware_handler(struct ctl_table *table, int write,
 		void *buffer, size_t *lenp, loff_t *ppos);
 #endif
 
+#ifdef CONFIG_SCHED_ACPU
+extern unsigned int sysctl_sched_acpu_enabled;
+extern int sched_acpu_enable_handler(struct ctl_table *table, int write,
+				     void __user *buffer, size_t *lenp,
+				     loff_t *ppos);
+#endif
 #endif /* _LINUX_SCHED_SYSCTL_H */

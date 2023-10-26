@@ -50,6 +50,7 @@
 #define SMC_CLC_DECL_MAXCONNERR	0x0303000a  /* max connections negotiate failed */
 #define SMC_CLC_DECL_MAXLINKERR	0x0303000b  /* max links negotiate failed */
 #define SMC_CLC_DECL_VENDORERR	0x0303000c  /* vendor opts negotiate failed */
+#define SMC_CLC_DECL_ERR_REQ_LGR 0x0303000d	/* required create link group */
 #define SMC_CLC_DECL_MODEUNSUPP	0x03040000  /* smc modes do not match (R or D)*/
 #define SMC_CLC_DECL_RMBE_EC	0x03050000  /* peer has eyecatcher in RMBE    */
 #define SMC_CLC_DECL_OPTUNSUPP	0x03060000  /* fastopen sockopt not supported */

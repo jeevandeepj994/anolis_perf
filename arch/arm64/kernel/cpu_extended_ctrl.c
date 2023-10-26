@@ -7,6 +7,7 @@
 #include <asm/sysreg.h>
 #include <asm/cputype.h>
 #include <asm/virt.h>
+#include <asm/barrier.h>
 #include <linux/cpu.h>
 #include <linux/init.h>
 #include <linux/kernel.h>
@@ -16,9 +17,7 @@
 #include <linux/arm-smccc.h>
 
 #define SYS_IMP_CPUECTLR_EL1		sys_reg(3, 0, 15, 1, 4)
-#define SYS_ACTLR_EL2			sys_reg(3, 4, 1, 0, 1)
 
-#define NEOVERSE_N2_ACTLR_EL2_ECTLREN_MASK	BIT(1)
 #define MIDR_EL1_NEOVERSE_N2_MASK	(GENMASK(31, 24) | GENMASK(19, 16) | \
 						GENMASK(15, 4))
 #define MIDR_EL1_NEOVERSE_N2_ID		0x410FD490
@@ -28,20 +27,9 @@
 
 #define CPUECTLR_WRITE_FAULT		GENMASK_ULL(63, 0)
 
-#define ARM_OEM_SMC_FN			0xC300FFEC
-#define ACTLR_EL3_CTRL_QUERY		0x51
-#define ACTLR_EL3_CTRL_QUERY_ENABLE	1
-#define ACTLR_EL3_CTRL_QUERY_DISABLE	0
-#define ACTLR_EL3_CTRL_DISABLE		0x52
-#define ACTLR_EL3_CTRL_ENABLE		0x53
-#define ACTLR_EL3_CTRL_ENABLE_OK	0
-
 #define CPUECTLR_SAFE_NONE		0
 #define CPUECTLR_SAFE_RO		1
 #define CPUECTLR_SAFE_RW		2
-
-#define BIOS_VENDOR_FILTER		"Alibaba"
-#define BIOS_VERSION_MATCH		"1.2.M1.AL."
 
 struct cpuectlr_info {
 	int	cpu_id;
@@ -71,7 +59,9 @@ static void write_cpuectlr(void *dummy)
 	u64 new_cpuectlr;
 	struct cpuectlr_info *info = &per_cpu(cpuectlr_data, cpu);
 
+	mb(); /* avoid triggering prefetch */
 	write_sysreg_s(info->reg_cpuectlr_el1, SYS_IMP_CPUECTLR_EL1);
+	mb(); /* avoid triggering prefetch */
 
 	/* read again to verify writing is valid */
 	new_cpuectlr = read_sysreg_s(SYS_IMP_CPUECTLR_EL1);
@@ -81,8 +71,11 @@ static void write_cpuectlr(void *dummy)
 			cpu, info->reg_cpuectlr_el1, new_cpuectlr);
 
 		/* recall cpuectlr */
-		if (new_cpuectlr != *orig_cpuectlr)
+		if (new_cpuectlr != *orig_cpuectlr) {
+			mb(); /* Avoid triggering prefetch */
 			write_sysreg_s(*orig_cpuectlr, SYS_IMP_CPUECTLR_EL1);
+			mb(); /* Avoid triggering prefetch */
+		}
 
 		info->reg_cpuectlr_el1 = *orig_cpuectlr;
 
@@ -151,25 +144,11 @@ static void write_cpuectlr(void *dummy)
 		cpuectlr_attr_ro_##_name = __ATTR_RO(_name)
 
 CPUECTLR_ATTR(cmc_min_ways, 63, 61);
-CPUECTLR_ATTR(inst_res_ways_l2, 60, 58);
-CPUECTLR_ATTR(prefetchtgt_ld_st, 39, 38);
-CPUECTLR_ATTR(ws_threshold_l2, 25, 24);
-CPUECTLR_ATTR(ws_threshold_l3, 23, 22);
-CPUECTLR_ATTR(ws_threshold_l4, 21, 20);
-CPUECTLR_ATTR(ws_threshold_dram, 19, 18);
-CPUECTLR_ATTR(prefetch_disable, 15, 15);
 CPUECTLR_ATTR(prefetch_sts_disable, 9, 9);
 CPUECTLR_ATTR(prefetch_sti_disable, 8, 8);
 
 static struct attribute *cpuectlr_rw_attrs[] = {
 	&cpuectlr_attr_rw_cmc_min_ways.attr,
-	&cpuectlr_attr_rw_inst_res_ways_l2.attr,
-	&cpuectlr_attr_rw_prefetchtgt_ld_st.attr,
-	&cpuectlr_attr_rw_ws_threshold_l2.attr,
-	&cpuectlr_attr_rw_ws_threshold_l3.attr,
-	&cpuectlr_attr_rw_ws_threshold_l4.attr,
-	&cpuectlr_attr_rw_ws_threshold_dram.attr,
-	&cpuectlr_attr_rw_prefetch_disable.attr,
 	&cpuectlr_attr_rw_prefetch_sts_disable.attr,
 	&cpuectlr_attr_rw_prefetch_sti_disable.attr,
 	NULL
@@ -177,13 +156,6 @@ static struct attribute *cpuectlr_rw_attrs[] = {
 
 static struct attribute *cpuectlr_ro_attrs[] = {
 	&cpuectlr_attr_ro_cmc_min_ways.attr,
-	&cpuectlr_attr_ro_inst_res_ways_l2.attr,
-	&cpuectlr_attr_ro_prefetchtgt_ld_st.attr,
-	&cpuectlr_attr_ro_ws_threshold_l2.attr,
-	&cpuectlr_attr_ro_ws_threshold_l3.attr,
-	&cpuectlr_attr_ro_ws_threshold_l4.attr,
-	&cpuectlr_attr_ro_ws_threshold_dram.attr,
-	&cpuectlr_attr_ro_prefetch_disable.attr,
 	&cpuectlr_attr_ro_prefetch_sts_disable.attr,
 	&cpuectlr_attr_ro_prefetch_sti_disable.attr,
 	NULL
@@ -200,9 +172,6 @@ static const struct attribute_group cpuectlr_ro_attr_group = {
 static int cpuectlr_rw_safe_check(void)
 {
 	bool is_guest;
-	u64 actlr_el2;
-	const char *bios_vendor;
-	const char *bios_version;
 	struct arm_smccc_res res;
 
 	is_guest = !is_hyp_mode_available();
@@ -217,39 +186,9 @@ static int cpuectlr_rw_safe_check(void)
 		return CPUECTLR_SAFE_RW;
 	}
 
-	/* Now, we check if host os rw cpuectlr safely, currentEL is EL2 */
-
-	/* check and enable neoverse n2 ACTLR_EL2.ECTLREN */
-	actlr_el2 = read_sysreg_s(SYS_ACTLR_EL2);
-	if (!(actlr_el2 & NEOVERSE_N2_ACTLR_EL2_ECTLREN_MASK))
-		write_sysreg_s((actlr_el2 | NEOVERSE_N2_ACTLR_EL2_ECTLREN_MASK),
-			SYS_ACTLR_EL2);
-
-	/* check actlr_el3_ectlren by smc.
-	 * This capability requires the BIOS vendor to be Alibaba
-	 * and the version is 1.2.M1.AL.*.*.*
+	/* Only retain read privilege when kernel is running on host os
+	 * currentEL is EL2
 	 */
-	bios_vendor = dmi_get_system_info(DMI_BIOS_VENDOR);
-	bios_version = dmi_get_system_info(DMI_BIOS_VERSION);
-
-	if (strcmp(bios_vendor, BIOS_VENDOR_FILTER))
-		return CPUECTLR_SAFE_RO;
-
-	/* check bios version prefix */
-	if (strncmp(bios_version, BIOS_VERSION_MATCH,
-			strlen(BIOS_VERSION_MATCH)))
-		return CPUECTLR_SAFE_RO;
-
-	arm_smccc_smc(ARM_OEM_SMC_FN, ACTLR_EL3_CTRL_QUERY,
-		0, 0, 0, 0, 0, 0, &res);
-	if (res.a0 == ACTLR_EL3_CTRL_QUERY_ENABLE)
-		return CPUECTLR_SAFE_RW;
-
-	arm_smccc_smc(ARM_OEM_SMC_FN, ACTLR_EL3_CTRL_ENABLE,
-		0, 0, 0, 0, 0, 0, &res);
-	if (res.a0 == ACTLR_EL3_CTRL_ENABLE_OK)
-		return CPUECTLR_SAFE_RW;
-
 	return CPUECTLR_SAFE_RO;
 }
 

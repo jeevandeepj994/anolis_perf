@@ -16,8 +16,20 @@
 #include <linux/net.h>
 #include <net/sock.h>
 
+#define HASH_COPY_IOVEC_LEN     1
+#define HASH_UPDATE_IOVEC_LEN   2
+
+struct hash_alg_sgl {
+	struct af_alg_sgl sgl;
+	struct list_head list;
+};
+
 struct hash_ctx {
 	struct af_alg_sgl sgl;
+
+	struct hash_alg_sgl first_sgl;
+	struct hash_alg_sgl *last_sgl;
+	struct list_head tsgl_list;
 
 	u8 *result;
 
@@ -60,6 +72,177 @@ static void hash_free_result(struct sock *sk, struct hash_ctx *ctx)
 	ctx->result = NULL;
 }
 
+static int hash_alg_get_tsgl(struct sock *sk, struct hash_ctx *ctx,
+			     struct msghdr *msg, size_t size)
+{
+	struct hash_alg_sgl *tsgl;
+	int err;
+
+	while (size > 0) {
+		if (list_empty(&ctx->tsgl_list)) {
+			tsgl = &ctx->first_sgl;
+		} else {
+			tsgl = sock_kmalloc(sk, sizeof(*tsgl), GFP_KERNEL);
+			if (!tsgl)
+				return -ENOMEM;
+		}
+
+		list_add_tail(&tsgl->list, &ctx->tsgl_list);
+
+		err = af_alg_make_sg(&tsgl->sgl, &msg->msg_iter, size);
+		if (err < 0)
+			return err;
+
+		if (ctx->last_sgl)
+			af_alg_sgl_link(&ctx->last_sgl->sgl, &tsgl->sgl);
+
+		ctx->last_sgl = tsgl;
+		size -= err;
+		iov_iter_advance(&msg->msg_iter, err);
+	}
+
+	return 0;
+}
+
+static void hash_alg_put_tsgl(struct sock *sk, struct hash_ctx *ctx, int sg_err)
+{
+	struct hash_alg_sgl *tsgl, *tmp;
+
+	list_for_each_entry_safe(tsgl, tmp, &ctx->tsgl_list, list) {
+		if (!sg_err)
+			af_alg_free_sg(&tsgl->sgl);
+
+		list_del(&tsgl->list);
+		if (tsgl != &ctx->first_sgl)
+			sock_kfree_s(sk, tsgl, sizeof(*tsgl));
+	}
+	ctx->last_sgl = NULL;
+}
+
+#ifdef CONFIG_X86
+static int hash_alg_cmsg_send(struct hash_ctx *ctx, struct msghdr *msg, int *set)
+{
+	struct af_alg_control con = {};
+	unsigned int ds;
+	int err;
+
+	err = af_alg_ctrl_cmsg_send(msg, &con);
+	if (err)
+		return err;
+
+	if (con.iv) {
+		ds = crypto_ahash_digestsize(crypto_ahash_reqtfm(&ctx->req));
+		if (con.iv->ivlen != ds)
+			return -EINVAL;
+		*set = 1;
+	}
+
+	return 0;
+}
+
+static int hash_sendmsg_ex(struct socket *sock, struct msghdr *msg)
+{
+	int limit = ALG_MAX_PAGES * ALG_MAX_PAGES * PAGE_SIZE;
+	struct sock *sk = sock->sk;
+	struct alg_sock *ask = alg_sk(sk);
+	struct hash_ctx *ctx = ask->private;
+	char state[HASH_MAX_STATESIZE];
+	unsigned statesize =
+		crypto_ahash_statesize(crypto_ahash_reqtfm(&ctx->req));
+	long copied = 0;
+	int setiv = 0;
+	int remain = 0;
+	int err;
+
+	lock_sock(sk);
+	if (!ctx->more) {
+		if ((msg->msg_flags & MSG_MORE))
+			hash_free_result(sk, ctx);
+
+		err = crypto_wait_req(crypto_ahash_init(&ctx->req), &ctx->wait);
+		if (err)
+			goto unlock;
+	}
+
+	err = hash_alg_cmsg_send(ctx, msg, &setiv);
+	if (err)
+		goto unlock;
+
+	/* setiv == 1: need exchange context data with userspace */
+	if (setiv) {
+		/* msg->msg_iter.nr_segs == 1: copy context data from userspace
+		 * msg->msg_iter.nr_segs == 2: transfer context data to userspace
+		 */
+		if (msg->msg_iter.nr_segs == HASH_COPY_IOVEC_LEN) {
+			err = memcpy_from_msg((void *)state, msg, statesize);
+			if (err)
+				goto unlock;
+			err = crypto_ahash_import(&ctx->req, state);
+			if (err)
+				goto unlock;
+		} else if (msg->msg_iter.nr_segs == HASH_UPDATE_IOVEC_LEN) {
+			remain = statesize;
+		} else {
+			err = -EINVAL;
+			goto unlock;
+		}
+	}
+
+	ctx->more = 0;
+
+	while (msg_data_left(msg) - remain) {
+		int len = msg_data_left(msg) - remain;
+
+		if (len > limit)
+			len = limit;
+
+		err = hash_alg_get_tsgl(sk, ctx, msg, len);
+		if (err < 0) {
+			err = copied ? 0 : err;
+			hash_alg_put_tsgl(sk, ctx, 1);
+			goto unlock;
+		}
+
+		ahash_request_set_crypt(&ctx->req, ctx->first_sgl.sgl.sg, NULL, len);
+
+		err = crypto_wait_req(crypto_ahash_update(&ctx->req),
+				      &ctx->wait);
+		if (err) {
+			hash_alg_put_tsgl(sk, ctx, 0);
+			goto unlock;
+		}
+
+		hash_alg_put_tsgl(sk, ctx, 0);
+		copied += len;
+	}
+
+	if (remain) {
+		err = crypto_ahash_export(&ctx->req, state);
+		if (err)
+			goto unlock;
+		memcpy_to_msg(msg, (void *)state, statesize);
+	}
+
+	err = 0;
+
+	ctx->more = msg->msg_flags & MSG_MORE;
+	if (!ctx->more) {
+		err = hash_alloc_result(sk, ctx);
+		if (err)
+			goto unlock;
+
+		ahash_request_set_crypt(&ctx->req, NULL, ctx->result, 0);
+		err = crypto_wait_req(crypto_ahash_final(&ctx->req),
+				      &ctx->wait);
+	}
+
+unlock:
+	release_sock(sk);
+
+	return err ?: copied;
+}
+#endif
+
 static int hash_sendmsg(struct socket *sock, struct msghdr *msg,
 			size_t ignored)
 {
@@ -69,6 +252,11 @@ static int hash_sendmsg(struct socket *sock, struct msghdr *msg,
 	struct hash_ctx *ctx = ask->private;
 	long copied = 0;
 	int err;
+
+#ifdef CONFIG_X86
+	if (boot_cpu_data.x86_vendor == X86_VENDOR_HYGON)
+		return hash_sendmsg_ex(sock, msg);
+#endif
 
 	if (limit > sk->sk_sndbuf)
 		limit = sk->sk_sndbuf;
@@ -431,6 +619,8 @@ static int hash_accept_parent_nokey(void *private, struct sock *sk)
 	ctx->len = len;
 	ctx->more = false;
 	crypto_init_wait(&ctx->wait);
+	ctx->last_sgl = NULL;
+	INIT_LIST_HEAD(&ctx->tsgl_list);
 
 	ask->private = ctx;
 

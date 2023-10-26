@@ -1004,6 +1004,8 @@ static inline void ClearPageSlabPfmemalloc(struct page *page)
 /*
  * Flags checked when a page is freed.  Pages being freed should not have
  * these flags set.  It they are, there is a problem.
+ *
+ * To avoid conflict with kidled, we skip to check LRU_GEN_MASK.
  */
 #define PAGE_FLAGS_CHECK_AT_FREE				\
 	(1UL << PG_lru		| 1UL << PG_locked	|	\
@@ -1011,7 +1013,7 @@ static inline void ClearPageSlabPfmemalloc(struct page *page)
 	 1UL << PG_writeback	| 1UL << PG_reserved	|	\
 	 1UL << PG_slab		| 1UL << PG_active 	|	\
 	 1UL << PG_unevictable	| __PG_MLOCKED		|	\
-	 __PG_DUP		| LRU_GEN_MASK)
+	 __PG_DUP)
 
 /*
  * Flags checked when a page is prepped for return by the page allocator.

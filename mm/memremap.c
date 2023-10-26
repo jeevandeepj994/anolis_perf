@@ -158,6 +158,22 @@ static void pageunmap_range(struct dev_pagemap *pgmap, int range_id)
 	}
 	mem_hotplug_done();
 
+	if (pgmap->flags & PGMAP_ON_DEMAND) {
+		unsigned long start_pfn = PHYS_PFN(range->start);
+		unsigned long nr_pages = PHYS_PFN(range_len(range));
+
+#ifdef ARM64_SWAPPER_USES_SECTION_MAPS
+		unsigned long start_align = ALIGN(start_pfn, PAGES_PER_SECTION);
+		unsigned long end_align = ALIGN_DOWN(start_pfn + nr_pages,
+						     PAGES_PER_SECTION);
+
+		if (start_align != end_align)
+			zdm_delete(start_align, end_align - start_align);
+#else
+		zdm_delete(start_pfn, nr_pages);
+#endif
+	}
+
 	untrack_pfn(NULL, PHYS_PFN(range->start), range_len(range));
 	pgmap_array_delete(range);
 }

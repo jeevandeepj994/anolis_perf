@@ -72,6 +72,13 @@ config TDM_KERNEL_GUARD
 	  are protected by default, and others are added later according to the
 	  requirements.
 
+config HYGON_GM
+	bool "Hygon GM (sm2/sm3/sm4) Interface"
+	default y
+	depends on CRYPTO_DEV_CCP_CRYPTO && X86_64
+	help
+	  Hygon GM ccp driver
+
 config CRYPTO_DEV_CCP_DEBUGFS
 	bool "Enable CCP Internals in DebugFS"
 	default n
@@ -79,3 +86,11 @@ config CRYPTO_DEV_CCP_DEBUGFS
 	help
 	  Expose CCP device information such as operation statistics, feature
 	  information, and descriptor queue contents.
+
+config CRYPTO_DEV_HCT
+	tristate "HCT CCP device"
+	default m
+	depends on VFIO_MDEV && X86_64
+	help
+	  Provides hygon crypto technology ccp device driver.
+	  If you choose 'M' here, this module will be called hct ccp.

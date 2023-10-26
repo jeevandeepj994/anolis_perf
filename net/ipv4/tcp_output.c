@@ -417,6 +417,7 @@ static inline bool tcp_urg_mode(const struct tcp_sock *tp)
 #define OPTION_FAST_OPEN_COOKIE	(1 << 8)
 #define OPTION_SMC		(1 << 9)
 #define OPTION_MPTCP		(1 << 10)
+#define OPTION_SMC_OK		BIT(11)
 
 static void smc_options_write(__be32 *ptr, u16 *options)
 {
@@ -428,6 +429,12 @@ static void smc_options_write(__be32 *ptr, u16 *options)
 				       (TCPOPT_EXP <<  8) |
 				       (TCPOLEN_EXP_SMC_BASE));
 			*ptr++ = htonl(TCPOPT_SMC_MAGIC);
+		} else if (OPTION_SMC_OK & *options) {
+			*ptr++ = htonl((TCPOPT_NOP  << 24) |
+				       (TCPOPT_NOP  << 16) |
+				       (TCPOPT_EXP <<  8) |
+				       (TCPOLEN_EXP_SMC_BASE));
+			*ptr++ = htonl(TCPOPT_SMC_OK_MAGIC);
 		}
 	}
 #endif
@@ -727,10 +734,15 @@ static void smc_set_option_cond(const struct tcp_sock *tp,
 				unsigned int *remaining)
 {
 #if IS_ENABLED(CONFIG_SMC)
+	const struct sock *sk;
+
+	sk = &tp->inet_conn.icsk_inet.sk;
+
 	if (static_branch_unlikely(&tcp_have_smc)) {
 		if (tp->syn_smc && ireq->smc_ok) {
 			if (*remaining >= TCPOLEN_EXP_SMC_BASE_ALIGNED) {
-				opts->options |= OPTION_SMC;
+				opts->options |= sock_net(sk)->smc.sysctl_experiment_syn_smc ?
+					OPTION_SMC_OK : OPTION_SMC;
 				*remaining -= TCPOLEN_EXP_SMC_BASE_ALIGNED;
 			}
 		}

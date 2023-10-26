@@ -95,4 +95,6 @@ int z_erofs_decompress(struct z_erofs_decompress_req *rq,
 /* prototypes for specific algorithms */
 int z_erofs_lzma_decompress(struct z_erofs_decompress_req *rq,
 			    struct page **pagepool);
+int z_erofs_deflate_decompress(struct z_erofs_decompress_req *rq,
+			       struct page **pagepool);
 #endif

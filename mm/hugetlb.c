@@ -43,6 +43,7 @@
 #include <linux/page_owner.h>
 #include "internal.h"
 #include "hugetlb_vmemmap.h"
+#include <linux/migrate.h>
 
 int hugetlb_max_hstate __read_mostly;
 unsigned int default_hstate_idx;
@@ -1608,10 +1609,10 @@ static void __prep_new_huge_page(struct hstate *h, struct page *page)
 static void prep_new_huge_page(struct hstate *h, struct page *page, int nid)
 {
 	__prep_new_huge_page(h, page);
-	spin_lock(&hugetlb_lock);
+	spin_lock_irq(&hugetlb_lock);
 	__prep_account_new_huge_page(h, nid);
 	ClearHPageFreed(page);
-	spin_unlock(&hugetlb_lock);
+	spin_unlock_irq(&hugetlb_lock);
 }
 
 static void prep_compound_gigantic_page(struct page *page, unsigned int order)
@@ -2512,6 +2513,33 @@ int isolate_or_dissolve_huge_page(struct page *page, struct list_head *list)
 		ret = alloc_and_dissolve_huge_page(h, head, list);
 
 	return ret;
+}
+
+void replace_free_huge_page(struct page *page)
+{
+	struct hstate *h;
+	struct page *head;
+
+	LIST_HEAD(isolate_list);
+
+	spin_lock_irq(&hugetlb_lock);
+	if (PageHuge(page)) {
+		head = compound_head(page);
+		h = page_hstate(head);
+	} else {
+		spin_unlock_irq(&hugetlb_lock);
+		return;
+	}
+	spin_unlock_irq(&hugetlb_lock);
+
+	if (hstate_is_gigantic(h))
+		return;
+
+	if (!page_count(head)) {
+		alloc_and_dissolve_huge_page(h, head, &isolate_list);
+		if (!list_empty(&isolate_list))
+			putback_movable_pages(&isolate_list);
+	}
 }
 
 struct page *alloc_huge_page(struct vm_area_struct *vma,
@@ -5909,7 +5937,7 @@ bool isolate_huge_page(struct page *page, struct list_head *list)
 	ClearHPageMigratable(page);
 	list_move_tail(&page->lru, list);
 unlock:
-	spin_unlock(&hugetlb_lock);
+	spin_unlock_irq(&hugetlb_lock);
 	return ret;
 }
 

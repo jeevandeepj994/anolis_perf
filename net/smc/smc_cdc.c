@@ -18,6 +18,7 @@
 #include "smc_tx.h"
 #include "smc_rx.h"
 #include "smc_close.h"
+#include "smc_ism.h"
 
 /********************************** send *************************************/
 
@@ -325,17 +326,24 @@ int smcd_cdc_msg_send(struct smc_connection *conn)
 		return rc;
 	smc_curs_copy(&conn->rx_curs_confirmed, &curs, conn);
 	conn->local_rx_ctrl.prod_flags.cons_curs_upd_req = 0;
-	/* Calculate transmitted data and increment free send buffer space */
-	diff = smc_curs_diff(conn->sndbuf_desc->len, &conn->tx_curs_fin,
-			     &conn->tx_curs_sent);
-	/* increased by confirmed number of bytes */
-	smp_mb__before_atomic();
-	atomic_add(diff, &conn->sndbuf_space);
-	/* guarantee 0 <= sndbuf_space <= sndbuf_desc->len */
-	smp_mb__after_atomic();
-	smc_curs_copy(&conn->tx_curs_fin, &conn->tx_curs_sent, conn);
+	if (!smc_ism_dmb_mappable(conn->lgr->smcd)) {
+		/* If local sndbuf has been mapped to peer RMB, then
+		 * don't update the tx_curs_fin and sndbuf_space until
+		 * peer has consumed the data in RMB.
+		 */
 
-	smc_tx_sndbuf_nonfull(smc);
+		/* Calculate transmitted data and increment free send buffer space */
+		diff = smc_curs_diff(conn->sndbuf_desc->len, &conn->tx_curs_fin,
+				     &conn->tx_curs_sent);
+		/* increased by confirmed number of bytes */
+		smp_mb__before_atomic();
+		atomic_add(diff, &conn->sndbuf_space);
+		/* guarantee 0 <= sndbuf_space <= sndbuf_desc->len */
+		smp_mb__after_atomic();
+		smc_curs_copy(&conn->tx_curs_fin, &conn->tx_curs_sent, conn);
+
+		smc_tx_sndbuf_nonfull(smc);
+	}
 	return rc;
 }
 
@@ -392,6 +400,7 @@ static void __smc_cdc_msg_recv_action(struct smc_sock *smc,
 				      int diff_prod, int diff_cons)
 {
 	struct smc_connection *conn = &smc->conn;
+	int diff_tx;
 
 	if (diff_cons) {
 		/* peer_rmbe_space is decreased during data transfer with RDMA
@@ -401,6 +410,26 @@ static void __smc_cdc_msg_recv_action(struct smc_sock *smc,
 		atomic_add(diff_cons, &conn->peer_rmbe_space);
 		/* guarantee 0 <= peer_rmbe_space <= peer_rmbe_size */
 		smp_mb__after_atomic();
+
+		if (conn->lgr->is_smcd &&
+		    smc_ism_dmb_mappable(conn->lgr->smcd)) {
+			/* If local sndbuf has been mapped to peer RMB, then
+			 * update tx_curs_fin and sndbuf_space when peer has
+			 * consumed the data in it's RMB.
+			 */
+
+			/* calculate peer rmb consumed data */
+			diff_tx = smc_curs_diff(conn->sndbuf_desc->len, &conn->tx_curs_fin,
+						&conn->local_rx_ctrl.cons);
+			/* increase local sndbuf space and fin_curs */
+			smp_mb__before_atomic();
+			atomic_add(diff_tx, &conn->sndbuf_space);
+			/* guarantee 0 <= sndbuf_space <= sndbuf_desc->len */
+			smp_mb__after_atomic();
+			smc_curs_copy(&conn->tx_curs_fin, &conn->local_rx_ctrl.cons, conn);
+
+			smc_tx_sndbuf_nonfull(smc);
+		}
 	}
 	if (diff_prod) {
 		if (conn->local_rx_ctrl.prod_flags.urg_data_present)
@@ -436,10 +465,9 @@ static void __smc_cdc_msg_recv_action(struct smc_sock *smc,
 		smc->sk.sk_write_space(&smc->sk);
 	}
 
-	if (conn->local_rx_ctrl.conn_state_flags.peer_conn_abort) {
+	if (conn->local_rx_ctrl.conn_state_flags.peer_conn_abort)
 		smc->sk.sk_err = ECONNRESET;
-		conn->local_tx_ctrl.conn_state_flags.peer_conn_abort = 1;
-	}
+
 	if (smc_cdc_rxed_any_close_or_senddone(conn)) {
 		smc->sk.sk_shutdown |= RCV_SHUTDOWN;
 		if (smc->clcsock && smc->clcsock->sk)
@@ -487,7 +515,14 @@ static void smc_cdc_msg_recv(struct smc_sock *smc, struct smc_cdc_msg *cdc)
  */
 static void smcd_cdc_rx_tsklet(struct tasklet_struct *t)
 {
-	struct smc_connection *conn = from_tasklet(conn, t, rx_tsklet);
+	struct smc_connection *conn =
+		from_tasklet(conn, t, rx_tsklet);
+
+	smcd_cdc_rx_handler(conn);
+}
+
+void smcd_cdc_rx_handler(struct smc_connection *conn)
+{
 	struct smcd_cdc_msg *data_cdc;
 	struct smcd_cdc_msg cdc;
 	struct smc_sock *smc;
@@ -562,7 +597,7 @@ static void smc_cdc_handle_rwwi_data_msg(struct smc_sock *smc,
 
 	diff_cons = imm_msg->data.diff_cons;
 	if (diff_cons)
-		smc_curs_add(conn->peer_rmbe_size, &conn->local_rx_ctrl.cons, diff_cons);
+		smc_curs_add_safe(conn->peer_rmbe_size, &conn->local_rx_ctrl.cons, diff_cons, conn);
 	/* cause this imm_data contains no conn_state_flags and prod_flags info, clean them */
 	memset(&conn->local_rx_ctrl.conn_state_flags, 0,
 	       sizeof(struct smc_cdc_conn_state_flags));
@@ -581,7 +616,7 @@ static void smc_cdc_handle_rwwi_data_with_flags_msg(struct smc_sock *smc,
 
 	diff_cons = imm_msg->data_with_flags.diff_cons;
 	if (diff_cons)
-		smc_curs_add(conn->peer_rmbe_size, &conn->local_rx_ctrl.cons, diff_cons);
+		smc_curs_add_safe(conn->peer_rmbe_size, &conn->local_rx_ctrl.cons, diff_cons, conn);
 	/* clean prod_flags that are not carried by this imm_data */
 	memset(&conn->local_rx_ctrl.prod_flags, 0,
 	       sizeof(struct smc_cdc_producer_flags));
@@ -607,7 +642,7 @@ static void smc_cdc_handle_rwwi_data_cr_msg(struct smc_sock *smc,
 
 	diff_cons = imm_msg->data_cr.diff_cons;
 	if (diff_cons)
-		smc_curs_add(conn->peer_rmbe_size, &conn->local_rx_ctrl.cons, diff_cons);
+		smc_curs_add_safe(conn->peer_rmbe_size, &conn->local_rx_ctrl.cons, diff_cons, conn);
 	/* cause this imm_data contains no conn_state_flags and prod_flags info, clean them */
 	memset(&conn->local_rx_ctrl.conn_state_flags, 0,
 	       sizeof(struct smc_cdc_conn_state_flags));
@@ -629,7 +664,7 @@ static void smc_cdc_handle_rwwi_data_with_flags_cr_msg(struct smc_sock *smc,
 
 	diff_cons = imm_msg->data_with_flags_cr.diff_cons;
 	if (diff_cons)
-		smc_curs_add(conn->peer_rmbe_size, &conn->local_rx_ctrl.cons, diff_cons);
+		smc_curs_add_safe(conn->peer_rmbe_size, &conn->local_rx_ctrl.cons, diff_cons, conn);
 	/* clean prod_flags that are not carried by this imm_data */
 	memset(&conn->local_rx_ctrl.prod_flags, 0,
 	       sizeof(struct smc_cdc_producer_flags));
@@ -680,7 +715,7 @@ void smc_cdc_rx_handler_rwwi(struct ib_wc *wc)
 	bh_lock_sock(&smc->sk);
 	diff_prod = wc->byte_len;
 	if (diff_prod)
-		smc_curs_add(conn->rmb_desc->len, &conn->local_rx_ctrl.prod, diff_prod);
+		smc_curs_add_safe(conn->rmb_desc->len, &conn->local_rx_ctrl.prod, diff_prod, conn);
 
 	switch (imm_msg.hdr.opcode) {
 	case SMC_WR_OP_DATA:

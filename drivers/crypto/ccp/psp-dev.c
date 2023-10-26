@@ -105,6 +105,9 @@ static irqreturn_t psp_irq_handler(int irq, void *data)
 	/* Read the interrupt status: */
 	status = ioread32(psp->io_regs + psp->vdata->intsts_reg);
 
+	/* Clear the interrupt status by writing the same value we read. */
+	iowrite32(status, psp->io_regs + psp->vdata->intsts_reg);
+
 	/* invoke subdevice interrupt handlers */
 	if (status) {
 		if (psp->sev_irq_handler)
@@ -113,9 +116,6 @@ static irqreturn_t psp_irq_handler(int irq, void *data)
 		if (psp->tee_irq_handler)
 			psp->tee_irq_handler(irq, psp->tee_irq_data, status);
 	}
-
-	/* Clear the interrupt status by writing the same value we read. */
-	iowrite32(status, psp->io_regs + psp->vdata->intsts_reg);
 
 	return IRQ_HANDLED;
 }
@@ -283,7 +283,8 @@ static int psp_init(struct psp_device *psp, unsigned int capability)
 			return ret;
 	}
 
-	if (!psp_check_tee_support(psp, capability)) {
+	if ((boot_cpu_data.x86_vendor != X86_VENDOR_HYGON) &&
+	    !psp_check_tee_support(psp, capability)) {
 		ret = tee_dev_init(psp);
 		if (ret)
 			return ret;

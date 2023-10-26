@@ -90,6 +90,8 @@ enum fixed_addresses {
 	FIX_PUD,
 	FIX_PGD,
 
+	FIX_ZDM,
+
 	__end_of_fixed_addresses
 };
 

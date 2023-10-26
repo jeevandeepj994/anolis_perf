@@ -346,10 +346,6 @@ static inline bool page_is_reclaimable(struct mem_cgroup *memcg,
 		if (PageWriteback(page))
 			return false;
 
-		/* Bail if swapping is disallowed */
-		if (!reclaim_coldpgs_memcg_swappiness(memcg))
-			return false;
-
 		/* Bail if there is no enough swap space */
 		if (my_mem_cgroup_get_nr_swap_pages(memcg) <
 		    thp_nr_pages(page))
@@ -1183,11 +1179,9 @@ static void reclaim_coldpgs_from_memcg(struct mem_cgroup *memcg,
 	}
 
 	/*
-	 * When the swappiness is zero or no available swap space, the
-	 * swapout won't be issued.
+	 * When no available swap space, the swapout won't be issued.
 	 */
 	if (reclaim_coldpgs_has_mode(filter, RECLAIM_MODE_ANON_OUT) &&
-	    reclaim_coldpgs_memcg_swappiness(memcg) &&
 	    my_mem_cgroup_get_nr_swap_pages(memcg) > 0) {
 		bitmap_set(&bitmap, LRU_INACTIVE_ANON, 1);
 		bitmap_set(&bitmap, LRU_ACTIVE_ANON, 1);

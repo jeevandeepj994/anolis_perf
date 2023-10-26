@@ -36,6 +36,8 @@
 #define CREATE_TRACE_POINTS
 #include <asm/trace/exceptions.h>
 
+#include <linux/page-isolation.h>
+
 /*
  * Returns 0 if mmiotrace is disabled, or if the fault is not
  * handled by mmiotrace:
@@ -1175,6 +1177,106 @@ bool fault_in_kernel_space(unsigned long address)
 	return address >= TASK_SIZE_MAX;
 }
 
+#ifdef CONFIG_ZONE_DEVICE
+int zdm_ondemand_enable(struct zone *zone,
+			unsigned long start_pfn,
+			unsigned long size,
+			struct dev_pagemap *pgmap)
+{
+	unsigned long pfn, end_pfn = start_pfn + size;
+
+	if (!(pgmap->flags & PGMAP_ON_DEMAND) ||
+	    zdm_insert(pgmap, zone, start_pfn, size))
+		return -EINVAL;
+
+	pfn = ALIGN(start_pfn, pageblock_nr_pages);
+	while (pfn < end_pfn) {
+		set_pageblock_migratetype(pfn_to_page(pfn), MIGRATE_MOVABLE);
+		pfn += pageblock_nr_pages;
+
+		if (IS_ALIGNED(pfn, PAGES_PER_SECTION))
+			cond_resched();
+	}
+
+	pfn = start_pfn;
+	while (pfn < end_pfn) {
+		unsigned int level;
+		pte_t *pte;
+		pmd_t *pmd;
+
+		pte = lookup_address((unsigned long)pfn_to_page(pfn), &level);
+		BUG_ON(!pte);
+		if (level == PG_LEVEL_4K) {
+			set_pte(pte, __pte(pte_val(*pte) & ~_PAGE_PRESENT));
+			pfn += PAGE_SIZE/sizeof(struct page);
+
+			if (IS_ALIGNED(pfn, PAGES_PER_SECTION))
+				cond_resched();
+		} else if (level == PG_LEVEL_2M) {
+			pmd = (pmd_t *)pte;
+			set_pmd(pmd, __pmd(pmd_val(*pmd) & ~_PAGE_PRESENT));
+			pfn += PMD_SIZE/sizeof(struct page);
+		}
+	}
+	flush_tlb_kernel_range((unsigned long)pfn_to_page(start_pfn),
+				(unsigned long)pfn_to_page(end_pfn));
+
+	pr_info("zdm pagemap on demand enabled at [0x%lx-0x%lx]\n",
+		start_pfn, end_pfn - 1);
+	return 0;
+}
+
+int __ref memmap_page_fault(unsigned long address)
+{
+	struct zdm_context *zdm;
+	unsigned long start_pfn = 0, end_pfn, page_pfn, flags;
+	unsigned int level;
+	pte_t *pte;
+	pmd_t *pmd;
+
+	rcu_read_lock();
+	zdm = zdm_lookup(address);
+	if (!zdm) {
+		rcu_read_unlock();
+		return 0;
+	}
+
+	spin_lock_irqsave(&zdm->lock, flags);
+	pte = lookup_address(address, &level);
+	BUG_ON(!pte);
+	if (pte_flags(*pte) & _PAGE_PRESENT)
+		goto out;
+
+	if (level == PG_LEVEL_4K) {
+		address &= PAGE_MASK;
+		page_pfn = pte_pfn(__pte(pte_val(*pte) | _PAGE_PRESENT));
+		start_pfn = page_to_pfn((struct page *)address);
+		end_pfn = start_pfn + PAGE_SIZE/sizeof(struct page);
+	} else {
+		pmd = (pmd_t *)pte;
+		address &= PMD_MASK;
+		page_pfn = pmd_pfn(__pmd(pmd_val(*pmd) | _PAGE_PRESENT));
+		start_pfn = page_to_pfn((struct page *)address);
+		end_pfn = start_pfn + PMD_SIZE/sizeof(struct page);
+	}
+
+	zdm_reinit_struct_pages(zdm, page_pfn, start_pfn, end_pfn);
+
+	/* All job is done, recover the page table */
+	if (level == PG_LEVEL_4K) {
+		set_pte(pte, __pte(pte_val(*pte) | _PAGE_PRESENT));
+	} else {
+		pmd = (pmd_t *)pte;
+		set_pmd(pmd, __pmd(pmd_val(*pmd) | _PAGE_PRESENT));
+	}
+out:
+	spin_unlock_irqrestore(&zdm->lock, flags);
+	rcu_read_unlock();
+
+	return 1;
+}
+#endif
+
 /*
  * Called for all faults where 'address' is part of the kernel address
  * space.  Might get called for faults that originate from *code* that
@@ -1230,6 +1332,10 @@ do_kern_addr_fault(struct pt_regs *regs, unsigned long hw_error_code,
 	if (kprobe_page_fault(regs, X86_TRAP_PF))
 		return;
 
+#ifdef CONFIG_ZONE_DEVICE
+	if (memmap_page_fault(address))
+		return;
+#endif
 	/*
 	 * Note, despite being a "bad area", there are quite a few
 	 * acceptable reasons to get here, such as erratum fixups

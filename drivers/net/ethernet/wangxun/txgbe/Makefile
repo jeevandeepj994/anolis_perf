@@ -8,7 +8,8 @@ obj-$(CONFIG_TXGBE) += txgbe.o
 
 txgbe-objs := txgbe_main.o txgbe_ethtool.o \
               txgbe_hw.o txgbe_phy.o \
-              txgbe_lib.o txgbe_ptp.o
+              txgbe_lib.o txgbe_ptp.o \
+              txgbe_mbx.o txgbe_sriov.o
 
 txgbe-$(CONFIG_DEBUG_FS) += txgbe_debugfs.o
 txgbe-${CONFIG_SYSFS} += txgbe_sysfs.o

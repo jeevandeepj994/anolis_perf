@@ -1769,9 +1769,9 @@ static long __gup_longterm_locked(struct mm_struct *mm,
 			return -EINVAL;
 
 		if (!vmas_tmp) {
-			vmas_tmp = kcalloc(nr_pages,
-					   sizeof(struct vm_area_struct *),
-					   GFP_KERNEL);
+			vmas_tmp = kvcalloc(nr_pages,
+					    sizeof(struct vm_area_struct *),
+					    GFP_KERNEL);
 			if (!vmas_tmp)
 				return -ENOMEM;
 		}
@@ -1802,7 +1802,7 @@ out:
 	}
 
 	if (vmas_tmp != vmas)
-		kfree(vmas_tmp);
+		kvfree(vmas_tmp);
 	return rc;
 }
 #else /* !CONFIG_FS_DAX && !CONFIG_CMA */

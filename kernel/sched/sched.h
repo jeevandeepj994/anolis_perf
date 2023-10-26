@@ -394,6 +394,52 @@ struct rt_rq;
 
 extern struct list_head task_groups;
 
+enum sched_lat_stat_item {
+	SCHED_LAT_WAIT,
+	SCHED_LAT_BLOCK,
+	SCHED_LAT_IOBLOCK,
+	SCHED_LAT_CGROUP_WAIT,
+	SCHED_LAT_NR_STAT
+};
+
+/*
+ * [0, 1ms)
+ * [1, 4ms)
+ * [4, 7ms)
+ * [7, 10ms)
+ * [10, 100ms)
+ * [100, 500ms)
+ * [500, 1000ms)
+ * [1000, 5000ms)
+ * [5000, 10000ms)
+ * [10000ms, INF)
+ * total(ms)
+ */
+/* Scheduler latency histogram distribution, in milliseconds */
+enum sched_lat_count_t {
+	SCHED_LAT_0_1,
+	SCHED_LAT_1_4,
+	SCHED_LAT_4_7,
+	SCHED_LAT_7_10,
+	SCHED_LAT_10_20,
+	SCHED_LAT_20_30,
+	SCHED_LAT_30_40,
+	SCHED_LAT_40_50,
+	SCHED_LAT_50_100,
+	SCHED_LAT_100_500,
+	SCHED_LAT_500_1000,
+	SCHED_LAT_1000_5000,
+	SCHED_LAT_5000_10000,
+	SCHED_LAT_10000_INF,
+	SCHED_LAT_TOTAL,
+	SCHED_LAT_NR,
+	SCHED_LAT_NR_COUNT,
+};
+
+struct sched_cgroup_lat_stat_cpu {
+	unsigned long item[SCHED_LAT_NR_STAT][SCHED_LAT_NR_COUNT];
+};
+
 struct cfs_bandwidth {
 #ifdef CONFIG_CFS_BANDWIDTH
 	raw_spinlock_t		lock;
@@ -444,6 +490,9 @@ struct task_group {
 	struct cfs_rq		**cfs_rq;
 	unsigned long		shares;
 
+	/* A positive value indicates that this is a SCHED_IDLE group. */
+	int			idle;
+
 #ifdef	CONFIG_SMP
 	/*
 	 * load_avg can be heavily contended at clock tick time, so put
@@ -492,6 +541,13 @@ struct task_group {
 	bool			need_ht_stable;
 #endif
 
+#ifdef CONFIG_SCHED_SLI
+	struct sched_cgroup_lat_stat_cpu __percpu *lat_stat_cpu;
+#endif
+
+#ifdef CONFIG_SCHED_CORE
+	unsigned int		ht_ratio;
+#endif
 	CK_KABI_RESERVE(1)
 	CK_KABI_RESERVE(2)
 	CK_KABI_RESERVE(3)
@@ -569,6 +625,8 @@ extern void sched_move_task(struct task_struct *tsk);
 #ifdef CONFIG_FAIR_GROUP_SCHED
 extern int sched_group_set_shares(struct task_group *tg, unsigned long shares);
 
+extern int sched_group_set_idle(struct task_group *tg, long idle);
+
 #ifdef CONFIG_SMP
 extern void set_task_rq_fair(struct sched_entity *se,
 			     struct cfs_rq *prev, struct cfs_rq *next);
@@ -608,6 +666,7 @@ struct cfs_rq {
 	struct load_weight	load;
 	unsigned int		nr_running;
 	unsigned int		h_nr_running;      /* SCHED_{NORMAL,BATCH,IDLE} */
+	unsigned int		idle_nr_running;   /* SCHED_IDLE */
 	unsigned int		idle_h_nr_running; /* SCHED_IDLE */
 
 	u64			exec_clock;
@@ -697,6 +756,9 @@ struct cfs_rq {
 	int			on_list;
 	struct list_head	leaf_cfs_rq_list;
 	struct task_group	*tg;	/* group that "owns" this runqueue */
+
+	/* Locally cached copy of our task_group's idle value */
+	int			idle;
 
 #ifdef CONFIG_CFS_BANDWIDTH
 	int			runtime_enabled;
@@ -1249,16 +1311,18 @@ struct rq {
 	unsigned long		core_cookie;
 	unsigned int		core_forceidle_count;
 	unsigned int		core_forceidle_seq;
-	unsigned int		core_forceidle_occupation;
-	u64			core_forceidle_start;
+	unsigned int		core_sibidle_occupation;
+	u64			core_sibidle_start;
 	unsigned int		core_id;
-	unsigned int		core_realidle_count;
-	unsigned int		core_realidle_occupation;
-	u64			core_realidle_start;
-	u64			rq_realidle_time;
+	unsigned int		core_sibidle_count;
 	bool			in_forceidle;
-	bool			in_realidle;
 	struct task_struct	*force_idled_core_pick;
+#endif
+
+#ifdef CONFIG_SCHED_ACPU
+	u64 acpu_idle_sum;
+	u64 sibidle_sum;
+	u64 last_acpu_update_time;
 #endif
 
 	CK_KABI_RESERVE(1)
@@ -1425,6 +1489,7 @@ extern void sched_core_dequeue(struct rq *rq, struct task_struct *p, int flags);
 extern void sched_core_get(void);
 extern void sched_core_put(void);
 
+extern void account_ht_aware_quota(struct task_struct *p, u64 delta);
 #else /* !CONFIG_SCHED_CORE */
 
 static inline bool sched_core_enabled(struct rq *rq)
@@ -2038,12 +2103,12 @@ static inline void flush_smp_call_function_from_idle(void) { }
 
 #if defined(CONFIG_SCHED_CORE) && defined(CONFIG_SCHEDSTATS)
 
-extern void __sched_core_account_forceidle(struct rq *rq);
+extern void __sched_core_account_sibidle(struct rq *rq);
 
-static inline void sched_core_account_forceidle(struct rq *rq)
+static inline void sched_core_account_sibidle(struct rq *rq)
 {
 	if (schedstat_enabled())
-		__sched_core_account_forceidle(rq);
+		__sched_core_account_sibidle(rq);
 }
 
 extern void __sched_core_tick(struct rq *rq);
@@ -2056,7 +2121,7 @@ static inline void sched_core_tick(struct rq *rq)
 
 #else
 
-static inline void sched_core_account_forceidle(struct rq *rq) {}
+static inline void sched_core_account_sibidle(struct rq *rq) {}
 
 static inline void sched_core_tick(struct rq *rq) {}
 
@@ -3191,15 +3256,19 @@ static inline bool is_per_cpu_kthread(struct task_struct *p)
 extern u64 get_idle_time(struct kernel_cpustat *kcs, int cpu);
 extern u64 get_iowait_time(struct kernel_cpustat *kcs, int cpu);
 extern void task_ca_increase_nr_migrations(struct task_struct *tsk);
-void cpuacct_update_latency(struct sched_entity *se, u64 delta);
-void task_ca_update_block(struct task_struct *tsk, u64 runtime);
+void cpu_update_latency(struct sched_entity *se, u64 delta);
+void task_cpu_update_block(struct task_struct *tsk, u64 runtime);
 void calc_cgroup_load(void);
 bool async_load_calc_enabled(void);
+struct task_group *cgroup_tg(struct cgroup *cgrp);
+int sched_lat_stat_show(struct seq_file *sf, void *v);
+int sched_lat_stat_write(struct cgroup_subsys_state *css,
+				struct cftype *cft, u64 val);
 #else
 static inline void task_ca_increase_nr_migrations(struct task_struct *tsk) { }
-static inline void cpuacct_update_latency(struct sched_entity *se,
+static inline void cpu_update_latency(struct sched_entity *se,
 		u64 delta) { }
-static inline void task_ca_update_block(struct task_struct *tsk,
+static inline void task_cpu_update_block(struct task_struct *tsk,
 		u64 runtime) { }
 static inline void calc_cgroup_load(void) { }
 static inline bool async_load_calc_enabled(void)

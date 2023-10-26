@@ -1,11 +1,5 @@
-config DRM_INSPUR
-	tristate "DRM Support for Inspur BMC"
-	depends on DRM && PCI && MMU
-	select DRM_KMS_HELPER
-	select DRM_VRAM_HELPER
+# License: GPL-2.0
+#
+# inspur drm device configuration.
 
-	help
-	  Choose this option if you have a Inspur soc chipset.
-	  If M is selected the module will be called inspur-drm.
-	  IF you use gnome3, please set "WaylandEnable=false" in
-	  "vim /etc/gdm3/custom.conf" and reboot.
+source "drivers/gpu/drm/inspur/inspur-drm/Kconfig"
