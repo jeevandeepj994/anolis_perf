@@ -288,12 +288,12 @@ int sysctl_sched_core_handler(struct ctl_table *table, int write,
 	if (new) {
 		static_branch_enable(&__sysctl_sched_core_enabled);
 	} else {
-		static_branch_disable(&__sysctl_sched_core_enabled);
 		/*
 		 * When turn off sched_core, we need to clear cookie of all the tasks, to
 		 * make __sched_core_enabled off.
 		 */
 		clear_all_cookie();
+		static_branch_disable(&__sysctl_sched_core_enabled);
 	}
 
 	return err;
