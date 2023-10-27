@@ -6362,7 +6362,7 @@ CONFIG_EVM_LOAD_X509=y
 CONFIG_EVM_X509_PATH="/etc/keys/x509_evm.der"
 CONFIG_DEFAULT_SECURITY_SELINUX=y
 # CONFIG_DEFAULT_SECURITY_DAC is not set
-CONFIG_LSM="integrity,selinux,smack,tomoyo,apparmor"
+CONFIG_LSM="integrity,selinux,smack,tomoyo,apparmor,bpf"
 
 #
 # Kernel hardening options
