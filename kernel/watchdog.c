@@ -197,6 +197,13 @@ static atomic_t unrecovered_softlockup_count = ATOMIC_INIT(0);
 static unsigned long unrecovered_softlockup_start_secs;
 static DECLARE_BITMAP(softlockup_cpu_bits, CONFIG_NR_CPUS);
 
+static int __init softlockup_panic_setup(char *str)
+{
+	softlockup_panic = simple_strtoul(str, NULL, 0);
+	return 1;
+}
+__setup("softlockup_panic=", softlockup_panic_setup);
+
 static int __init nowatchdog_setup(char *str)
 {
 	watchdog_user_enabled = 0;
