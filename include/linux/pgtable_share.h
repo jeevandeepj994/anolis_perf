@@ -18,6 +18,11 @@ extern void pgtable_share_create(struct vm_area_struct *vma);
 extern struct pgtable_share_struct *vma_get_pgtable_share_data(struct vm_area_struct *vma);
 extern void vma_set_pgtable_share_mm(struct vm_area_struct *vma,
 				     struct pgtable_share_struct *info);
+extern unsigned long pgtable_share_get_unmapped_area(struct file *filp,
+						     unsigned long addr,
+						     unsigned long len,
+						     unsigned long pgoff,
+						     unsigned long flags);
 
 static inline bool vma_is_pgtable_shared(const struct vm_area_struct *vma)
 {
@@ -56,6 +61,16 @@ static inline vm_fault_t find_shared_vma(struct vm_area_struct **vmap,
 
 static inline void pgtable_share_create(struct vm_area_struct *vma)
 {
+}
+
+static unsigned long pgtable_share_get_unmapped_area(struct file *filp,
+						     unsigned long addr,
+						     unsigned long len,
+						     unsigned long pgoff,
+						     unsigned long flags)
+{
+	BUILD_BUG();
+	return 0;
 }
 #endif
 #endif
