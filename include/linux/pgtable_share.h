@@ -24,6 +24,9 @@ extern unsigned long pgtable_share_get_unmapped_area(struct file *filp,
 extern vm_fault_t pgtable_share_copy_pmd(struct vm_area_struct *orig_vma,
 				  struct vm_area_struct *shadow_vma,
 				  unsigned long addr);
+
+extern void __pgtable_share_clear_pmd(struct mm_struct *mm, pmd_t *pmdp,
+				      unsigned long addr);
 extern void pgtable_share_clear_pmd(struct mmu_gather *tlb, struct vm_area_struct *vma,
 				    pmd_t *pmdp, unsigned long addr, unsigned long end);
 extern long pgtable_share_dontneed_single_vma(struct vm_area_struct *vma,
@@ -86,6 +89,11 @@ static inline vm_fault_t pgtable_share_copy_pmd(struct vm_area_struct *orig_vma,
 				  unsigned long addr)
 {
 	return 0;
+}
+
+static inline void __pgtable_share_clear_pmd(struct mm_struct *mm, pmd_t *pmdp,
+					     unsigned long addr)
+{
 }
 
 static inline void pgtable_share_clear_pmd(struct mmu_gather *tlb,
