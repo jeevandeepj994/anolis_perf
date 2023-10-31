@@ -259,13 +259,8 @@ static inline void free_pmd_range(struct mmu_gather *tlb, pud_t *pud,
 
 	pmd = pmd_offset(pud, start);
 	pud_clear(pud);
-	if (shared_pte) {
-		tlb_flush_pud_range(tlb, start, PAGE_SIZE);
-		tlb->freed_tables = 1;
-	} else {
-		pmd_free_tlb(tlb, pmd, start);
-		mm_dec_nr_pmds(tlb->mm);
-	}
+	pmd_free_tlb(tlb, pmd, start);
+	mm_dec_nr_pmds(tlb->mm);
 }
 
 static inline void free_pud_range(struct mmu_gather *tlb, p4d_t *p4d,
