@@ -13060,6 +13060,7 @@ void account_ht_aware_quota(struct task_struct *p, u64 delta)
 	struct sched_entity *se;
 	unsigned int ht_ratio;
 	struct cfs_rq *cfs_rq;
+	struct task_group *tg;
 
 	/* We only account ht_aware_quota for cookied task. */
 	if (sched_feat(SCHED_CORE_HT_AWARE_QUOTA) && p->core_cookie) {
@@ -13068,7 +13069,19 @@ void account_ht_aware_quota(struct task_struct *p, u64 delta)
 
 		if (se->parent) {
 			ht_ratio = se->parent->ht_ratio;
-			if (ht_ratio >= 100 && ht_ratio <= 200)
+			/* Copy ht_ratio from tg when use. */
+			if (unlikely(ht_ratio < 100 || ht_ratio > 200)) {
+				tg = cfs_rq->tg;
+				ht_ratio = tg->ht_ratio;
+
+				if (likely(ht_ratio >= 100 && ht_ratio <= 200))
+					se->parent->ht_ratio = ht_ratio;
+				else
+					return;
+
+			}
+
+			if (ht_ratio != 100)
 				account_cfs_rq_runtime(cfs_rq, delta * (ht_ratio - 100) / 100);
 		}
 	}
@@ -13506,9 +13519,6 @@ int alloc_fair_sched_group(struct task_group *tg, struct task_group *parent)
 		init_cfs_rq(cfs_rq);
 		init_tg_cfs_entry(tg, cfs_rq, se, i, parent->se[i]);
 		init_entity_runnable_average(se);
-#ifdef CONFIG_SCHED_CORE
-		se->ht_ratio = 100;
-#endif
 	}
 
 	return 1;
