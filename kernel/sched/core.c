@@ -4023,8 +4023,7 @@ static void update_acpu(struct rq *rq, struct task_struct *prev, struct task_str
 		__account_sibidle_time(prev, delta, false);
 	}
 
-	if (next != rq->idle)
-		rq->sibidle_sum = sibidle_sum;
+	rq->sibidle_sum = sibidle_sum;
 out:
 	rq->last_acpu_update_time = now;
 }
