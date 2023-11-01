@@ -165,6 +165,24 @@ static struct ngbe_reg_test reg_test_sapphire[] = {
 	{ .reg = 0 }
 };
 
+struct ngbe_priv_flags {
+	char flag_string[ETH_GSTRING_LEN];
+	u64 flag;
+	bool read_only;
+};
+
+#define NGBE_PRIV_FLAG(_name, _flag, _read_only) { \
+	.flag_string = _name, \
+	.flag = _flag, \
+	.read_only = _read_only, \
+}
+
+static const struct ngbe_priv_flags ngbe_gstrings_priv_flags[] = {
+	NGBE_PRIV_FLAG("lldp", NGBE_ETH_PRIV_FLAG_LLDP, 0),
+};
+
+#define NGBE_PRIV_FLAGS_STR_LEN ARRAY_SIZE(ngbe_gstrings_priv_flags)
+
 int ngbe_get_link_ksettings(struct net_device *netdev,
 			    struct ethtool_link_ksettings *cmd)
 {
@@ -1115,8 +1133,98 @@ static int ngbe_get_sset_count(struct net_device *netdev, int sset)
 		} else {
 			return NGBE_STATS_LEN;
 		}
+	case ETH_SS_PRIV_FLAGS:
+		return NGBE_PRIV_FLAGS_STR_LEN;
 	default:
 		return -EOPNOTSUPP;
+	}
+}
+
+/**
+ * ngbe_get_priv_flags - report device private flags
+ * @dev: network interface device structure
+ *
+ * The get string set count and the string set should be matched for each
+ * flag returned.  Add new strings for each flag to the ngbe_gstrings_priv_flags
+ * array.
+ *
+ * Returns a u32 bitmap of flags.
+ **/
+static u32 ngbe_get_priv_flags(struct net_device *dev)
+{
+	struct ngbe_adapter *adapter = netdev_priv(dev);
+	u32 i = 0;
+	u32 ret_flags = 0;
+
+	for (i = 0; i < NGBE_PRIV_FLAGS_STR_LEN; i++) {
+		const struct ngbe_priv_flags *priv_flags;
+
+		priv_flags = &ngbe_gstrings_priv_flags[i];
+
+		if (priv_flags->flag & adapter->eth_priv_flags)
+			ret_flags |= BIT(i);
+	}
+	return ret_flags;
+}
+
+/**
+ * ngbe_set_priv_flags - set private flags
+ * @dev: network interface device structure
+ * @flags: bit flags to be set
+ **/
+static int ngbe_set_priv_flags(struct net_device *dev, u32 flags)
+{
+	struct ngbe_adapter *adapter = netdev_priv(dev);
+	u32 orig_flags, new_flags, changed_flags;
+	u32 i;
+	int status = 0;
+
+	orig_flags = adapter->eth_priv_flags;
+	new_flags = orig_flags;
+
+	if (!netif_running(dev))
+		return -EINVAL;
+
+	for (i = 0; i < NGBE_PRIV_FLAGS_STR_LEN; i++) {
+		const struct ngbe_priv_flags *priv_flags;
+
+		priv_flags = &ngbe_gstrings_priv_flags[i];
+
+		if (flags & BIT(i))
+			new_flags |= priv_flags->flag;
+		else
+			new_flags &= ~(priv_flags->flag);
+
+		/* If this is a read-only flag, it can't be changed */
+		if (priv_flags->read_only &&
+		    ((orig_flags ^ new_flags) & ~BIT(i)))
+			return -EOPNOTSUPP;
+	}
+
+	changed_flags = orig_flags ^ new_flags;
+
+	if (!changed_flags)
+		return 0;
+
+	if (changed_flags & NGBE_ETH_PRIV_FLAG_LLDP) {
+		status = ngbe_hic_write_lldp(&adapter->hw,
+					     (u32)(new_flags & NGBE_ETH_PRIV_FLAG_LLDP));
+		if (!status)
+			adapter->eth_priv_flags = new_flags;
+	}
+
+	return status;
+}
+
+static void ngbe_get_priv_flag_strings(struct net_device *netdev, u8 *data)
+{
+	char *p = (char *)data;
+	unsigned int i;
+
+	for (i = 0; i < NGBE_PRIV_FLAGS_STR_LEN; i++) {
+		snprintf(p, ETH_GSTRING_LEN, "%s",
+			 ngbe_gstrings_priv_flags[i].flag_string);
+		p += ETH_GSTRING_LEN;
 	}
 }
 
@@ -1246,6 +1354,9 @@ static void ngbe_get_strings(struct net_device *netdev, u32 stringset, u8 *data)
 			sprintf(p, "VF %d MC Packets", i);
 			p += ETH_GSTRING_LEN;
 		}
+		break;
+	case ETH_SS_PRIV_FLAGS:
+		ngbe_get_priv_flag_strings(netdev, data);
 		break;
 	}
 }
@@ -2687,6 +2798,8 @@ static const struct ethtool_ops ngbe_ethtool_ops = {
 	.self_test              = ngbe_diag_test,
 	.get_strings            = ngbe_get_strings,
 	.set_phys_id            = ngbe_set_phys_id,
+	.get_priv_flags		= ngbe_get_priv_flags,
+	.set_priv_flags		= ngbe_set_priv_flags,
 	.get_sset_count         = ngbe_get_sset_count,
 	.get_ethtool_stats      = ngbe_get_ethtool_stats,
 	.get_coalesce           = ngbe_get_coalesce,
