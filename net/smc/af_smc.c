@@ -56,7 +56,6 @@
 #include "smc_stats.h"
 #include "smc_tracepoint.h"
 #include "smc_sysctl.h"
-#include "smc_proc.h"
 #include "smc_inet.h"
 #include "smc_loopback.h"
 
@@ -266,13 +265,11 @@ int smc_hash_sk(struct sock *sk)
 	struct smc_hashinfo *h = sk->sk_prot->h.smc_hash;
 	struct hlist_head *head;
 
+	head = &h->ht;
+
 	write_lock_bh(&h->lock);
-
-	head = &h->ht[h->bkt_idx++ & (SMC_HTABLE_SIZE - 1)];
-
 	sk_add_node(sk, head);
 	sock_prot_inuse_add(sock_net(sk), sk->sk_prot, 1);
-
 	write_unlock_bh(&h->lock);
 
 	return 0;
@@ -4700,7 +4697,7 @@ int smc_inet_listen(struct socket *sock, int backlog)
 
 static int __init smc_init(void)
 {
-	int rc, i;
+	int rc;
 
 	if (reserve_mode) {
 		pr_info_ratelimited("smc: load SMC module with reserve_mode\n");
@@ -4782,11 +4779,8 @@ static int __init smc_init(void)
 		pr_err("%s: sock_register fails with %d\n", __func__, rc);
 		goto out_proto6;
 	}
-
-	for (i = 0; i < SMC_HTABLE_SIZE; i++) {
-		INIT_HLIST_HEAD(&smc_v4_hashinfo.ht[i]);
-		INIT_HLIST_HEAD(&smc_v6_hashinfo.ht[i]);
-	}
+	INIT_HLIST_HEAD(&smc_v4_hashinfo.ht);
+	INIT_HLIST_HEAD(&smc_v6_hashinfo.ht);
 
 	rc = smc_ib_register_client();
 	if (rc) {
@@ -4800,12 +4794,6 @@ static int __init smc_init(void)
 		goto out_ib;
 	}
 
-	rc = smc_proc_init();
-	if (rc) {
-		pr_err("%s: smc_proc_init fails with %d\n", __func__, rc);
-		goto out_lo;
-	}
-
 	/* init smc inet sock related proto and proto_ops */
 	rc = smc_inet_sock_init();
 	if (!rc) {
@@ -4813,7 +4801,7 @@ static int __init smc_init(void)
 		rc = proto_register(&smc_inet_prot, 1);
 		if (rc) {
 			pr_err("%s: proto_register smc_inet_prot fails with %d\n", __func__, rc);
-			goto out_proc;
+			goto out_lo;
 		}
 		/* no return value */
 		inet_register_protosw(&smc_inet_protosw);
@@ -4834,8 +4822,6 @@ static int __init smc_init(void)
 out_proto_register:
 	inet_unregister_protosw(&smc_inet_protosw);
 	proto_unregister(&smc_inet_prot);
-out_proc:
-	smc_proc_exit();
 out_lo:
 	smc_loopback_exit();
 out_ib:
@@ -4876,7 +4862,6 @@ static void __exit smc_exit(void)
 #if IS_ENABLED(CONFIG_IPV6)
 	inet6_unregister_protosw(&smc_inet6_protosw);
 #endif
-	smc_proc_exit();
 	sock_unregister(PF_SMC);
 	smc_core_exit();
 	smc_loopback_exit();
