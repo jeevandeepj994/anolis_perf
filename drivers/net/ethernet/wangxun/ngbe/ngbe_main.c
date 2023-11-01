@@ -1147,9 +1147,14 @@ static int ngbe_request_irq(struct ngbe_adapter *adapter)
 
 static void ngbe_get_hw_control(struct ngbe_adapter *adapter)
 {
+	struct ngbe_hw *hw = &adapter->hw;
+
 	/* Let firmware know the driver has taken over */
 	wr32m(&adapter->hw, NGBE_CFG_PORT_CTL,
 	      NGBE_CFG_PORT_CTL_DRV_LOAD, NGBE_CFG_PORT_CTL_DRV_LOAD);
+
+	if (hw->phy.type == ngbe_phy_yt8521s_sfi)
+		wr32(&adapter->hw, NGBE_CFG_LED_CTL, BIT(18));
 }
 
 static void ngbe_setup_gpie(struct ngbe_adapter *adapter)
@@ -1294,14 +1299,18 @@ static int ngbe_non_sfp_link_config(struct ngbe_hw *hw)
 	else
 		speed = hw->phy.force_speed;
 
-	if (!((hw->subsystem_device_id & NGBE_OEM_MASK) == NGBE_SUBID_OCP_CARD ||
-	      ((hw->subsystem_device_id & NGBE_NCSI_MASK) == NGBE_NCSI_SUP) ||
-		((hw->subsystem_device_id & NGBE_OEM_MASK) == NGBE_SUBID_RGMII_FPGA))) {
-		mdelay(50);
+	if ((hw->subsystem_device_id & NGBE_OEM_MASK) == NGBE_SUBID_OCP_CARD ||
+	    (hw->subsystem_device_id & NGBE_NCSI_MASK) == NGBE_NCSI_SUP ||
+		(hw->subsystem_device_id & NGBE_OEM_MASK) == NGBE_SUBID_RGMII_FPGA)
+		return 0;
+
 		if (hw->phy.type == ngbe_phy_internal ||
-		    hw->phy.type == ngbe_phy_internal_yt8521s_sfi)
-			TCALL(hw, phy.ops.setup_once);
-	}
+			hw->phy.type == ngbe_phy_internal_yt8521s_sfi) {
+			mdelay(50);
+			if (hw->phy.type == ngbe_phy_internal ||
+			    hw->phy.type == ngbe_phy_internal_yt8521s_sfi)
+				TCALL(hw, phy.ops.setup_once);
+		}
 
 	ret = TCALL(hw, mac.ops.setup_link, speed, false);
 
@@ -1519,9 +1528,14 @@ void ngbe_down(struct ngbe_adapter *adapter)
 
 static void ngbe_release_hw_control(struct ngbe_adapter *adapter)
 {
+	struct ngbe_hw *hw = &adapter->hw;
+
 	/* Let firmware take over control of h/w */
 	wr32m(&adapter->hw, NGBE_CFG_PORT_CTL,
 	      NGBE_CFG_PORT_CTL_DRV_LOAD, 0);
+
+	if (hw->phy.type == ngbe_phy_yt8521s_sfi)
+		wr32(&adapter->hw, NGBE_CFG_LED_CTL, 0x0);
 }
 
 /**
