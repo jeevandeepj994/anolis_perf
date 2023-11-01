@@ -57,3 +57,17 @@ rmem - INTEGER
     only allowed 2MiB for SMC-R and 2MiB for SMC-D.
 
     Default: 256K
+
+experiment_vendor_options - UNSIGNED INTEGER
+    Controls whether to enable experimental vendor options or not. It is a bitmap
+    and each bit indicates an experimental vendor option. Bit value 0 means disable
+    the option and bit value 1 means enable the option. The bits definition is as
+    follows,
+    bit31: enable/disable all experimental vendor options.
+    bit30: enable/disable SMC-R with rdma write with immediate feature.
+    bit29: enable/disable SMC-R with rdma flow control feature.
+    bit0-bit28: Reserved.
+
+    Notice that it is experimental and may be removed in the future.
+
+    Default: 0xFFFFFFFF
