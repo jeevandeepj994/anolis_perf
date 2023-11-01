@@ -80,7 +80,7 @@ static struct ctl_table smc_table[] = {
 		.extra2         = SYSCTL_ONE,
 	},
 	{
-		.procname	= "vendor_exp_options",
+		.procname	= "experiment_vendor_options",
 		.data		= &init_net.smc.sysctl_vendor_exp_options,
 		.maxlen		= sizeof(init_net.smc.sysctl_vendor_exp_options),
 		.mode		= 0644,
