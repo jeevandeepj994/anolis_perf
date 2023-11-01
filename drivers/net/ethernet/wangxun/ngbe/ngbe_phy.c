@@ -508,6 +508,32 @@ s32 ngbe_phy_init(struct ngbe_hw *hw)
 	return ret_val;
 }
 
+static int ngbe_gphy_reset(struct ngbe_hw *hw, bool need_restart_AN)
+{
+	int status, i;
+	u16 val;
+
+	if (!need_restart_AN)
+		return 0;
+
+	val = NGBE_MDI_PHY_RESET;
+	status = hw->phy.ops.write_reg(hw, 0, 0, val);
+	for (i = 0; i < NGBE_PHY_RST_WAIT_PERIOD; i++) {
+		status = hw->phy.ops.read_reg(hw, 0, 0, &val);
+		if (!(val & NGBE_MDI_PHY_RESET))
+			break;
+		usleep_range(1000, 2000);
+	}
+
+	if (i == NGBE_PHY_RST_WAIT_PERIOD) {
+		ERROR_REPORT1(hw, NGBE_ERROR_POLLING,
+			      "PHY MODE RESET did not complete.\n");
+		return NGBE_ERR_RESET_FAILED;
+	}
+
+	return status;
+}
+
 s32 ngbe_phy_reset(struct ngbe_hw *hw)
 {
 	s32 status = 0;
@@ -684,8 +710,8 @@ u32 ngbe_phy_setup_link(struct ngbe_hw *hw,
 	u16 value = 0;
 	s32 status = 0;
 
+	status = ngbe_gphy_reset(hw, need_restart_AN);
 	if (!hw->mac.autoneg) {
-		status = TCALL(hw, phy.ops.reset);
 		if (status) {
 			ERROR_REPORT1(hw, NGBE_ERROR_POLLING,
 				      "call phy reset return %d.\n", status);
