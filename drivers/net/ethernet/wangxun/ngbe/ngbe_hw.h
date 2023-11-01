@@ -36,7 +36,7 @@
 #define NGBE_TAF_SYM_PAUSE (0x1)
 #define NGBE_TAF_ASM_PAUSE (0x2)
 
-u32 ngbe_flash_read_dword(struct ngbe_hw *hw, u32 addr);
+int ngbe_flash_read_dword(struct ngbe_hw *hw, u32 addr, u32 *data);
 int ngbe_check_flash_load(struct ngbe_hw *hw, u32 check_bit);
 s32 ngbe_init_hw(struct ngbe_hw *hw);
 s32 ngbe_host_if_command(struct ngbe_hw *hw, u32 *buffer,
@@ -53,5 +53,7 @@ int ngbe_upgrade_flash(struct ngbe_hw *hw, u32 region,
 s32 ngbe_upgrade_flash_hostif(struct ngbe_hw *hw, u32 region,
 			      const u8 *data, u32 size);
 s32 ngbe_init_ops_common(struct ngbe_hw *hw);
+int ngbe_is_lldp(struct ngbe_hw *hw);
+s32 ngbe_hic_write_lldp(struct ngbe_hw *hw, u32 open);
 
 #endif

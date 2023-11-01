@@ -1285,6 +1285,9 @@ enum ngbe_l2_ptypes {
 /* Calculate PCI Bus delay for low thresholds */
 #define NGBE_PCI_DELAY 10000
 
+#define NGBE_LLDP_REG         0xf1000
+#define NGBE_LLDP_ON          0x0000000f
+
 /* Calculate delay value in bit times */
 #define NGBE_DV(_max_frame_link, _max_frame_tc) \
 			((36 * \
@@ -1921,6 +1924,13 @@ enum ngbe_upg_flag {
 struct ngbe_hic_upg_verify {
 	struct ngbe_hic_hdr hdr;
 	u32 action_flag;
+};
+
+struct ngbe_hic_write_lldp {
+	struct ngbe_hic_hdr hdr;
+	u8 func;
+	u8 pad2;
+	u16 pad3;
 };
 
 static inline u32

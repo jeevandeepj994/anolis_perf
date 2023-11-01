@@ -444,8 +444,8 @@ static int ngbe_sw_init(struct ngbe_adapter *adapter)
 		hw->subsystem_vendor_id = pdev->subsystem_vendor;
 		hw->subsystem_device_id = pdev->subsystem_device;
 	} else {
-		ssid = ngbe_flash_read_dword(hw, 0xfffdc);
-		if (ssid == 0x1) {
+		err = ngbe_flash_read_dword(hw, 0xfffdc, &ssid);
+		if (err) {
 			e_err(probe, "read of internal subsystem device id failed\n");
 			err = -ENODEV;
 			goto out;
@@ -3911,7 +3911,8 @@ void ngbe_disable_device(struct ngbe_adapter *adapter)
 	/*OCP NCSI need it*/
 	if (!(((hw->subsystem_device_id & NGBE_OEM_MASK) == NGBE_SUBID_OCP_CARD) ||
 	      ((hw->subsystem_device_id & NGBE_WOL_MASK) == NGBE_WOL_SUP) ||
-		((hw->subsystem_device_id & NGBE_NCSI_MASK) == NGBE_NCSI_SUP)))
+		   ((hw->subsystem_device_id & NGBE_NCSI_MASK) == NGBE_NCSI_SUP) ||
+		    adapter->eth_priv_flags & NGBE_ETH_PRIV_FLAG_LLDP))
 		wr32m(hw, NGBE_MAC_TX_CFG, NGBE_MAC_TX_CFG_TE, 0);
 
 	/* disable transmits in the hardware now that interrupts are off */
@@ -5854,6 +5855,9 @@ static int ngbe_probe(struct pci_dev *pdev,
 	err = ngbe_check_flash_load(hw, NGBE_SPI_ILDR_STATUS_PWRRST);
 	if (err)
 		goto err_sw_init;
+
+	if (ngbe_is_lldp(hw))
+		e_dev_err("Can not get lldp flags from flash\n");
 
 	hw->phy.reset_if_overtemp = true;
 	err = TCALL(hw, mac.ops.reset_hw);
