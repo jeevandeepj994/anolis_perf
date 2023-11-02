@@ -815,13 +815,13 @@ int smcr_iw_net_reserve_ports(struct net *net)
 			goto release;
 		}
 	}
-	pr_info_ratelimited("smc: netns %pK reserved ports [%d ~ %d] for eRDMA OOB\n",
-			    net, ports_base, ports_base + SMC_IWARP_RSVD_PORTS_NUM - 1);
+	pr_info_ratelimited("smc: netns [%u] reserved ports [%d ~ %d] for eRDMA OOB\n",
+			    net->ns.inum, ports_base, ports_base + SMC_IWARP_RSVD_PORTS_NUM - 1);
 	return 0;
 
 release:
-	pr_warn_ratelimited("warning: smc: netns %pK reserved ports %d FAIL for eRDMA OOB\n",
-			    net, ports_base + i);
+	pr_warn_ratelimited("warning: smc: netns [%u] reserved ports %d FAIL for eRDMA OOB\n",
+			    net->ns.inum, ports_base + i);
 	for (j = 0; j < i; j++) {
 		sock_release(net->smc.rsvd_sock[j]);
 		net->smc.rsvd_sock[j] = NULL;
@@ -837,8 +837,8 @@ void smcr_iw_net_release_ports(struct net *net)
 		sock_release(net->smc.rsvd_sock[i]);
 		net->smc.rsvd_sock[i] = NULL;
 	}
-	pr_info_ratelimited("smc: netns %pK released ports [%d ~ %d] used by eRDMA OOB\n",
-			    net, rsvd_ports_base,
+	pr_info_ratelimited("smc: netns [%u] released ports [%d ~ %d] used by eRDMA OOB\n",
+			    net->ns.inum, rsvd_ports_base,
 			    rsvd_ports_base + SMC_IWARP_RSVD_PORTS_NUM - 1);
 }
 
