@@ -19,11 +19,6 @@
 #include "smc_stats.h"
 #include "smc_core.h"
 
-struct smc_lgr_list smc_lgr_stats_list = {/* statistic link groups */
-	.lock = __SPIN_LOCK_UNLOCKED(smc_lgr_stats_list.lock),
-	.list = LIST_HEAD_INIT(smc_lgr_stats_list.list),
-};
-
 int smc_stats_init(struct net *net)
 {
 	net->smc.fback_rsn = kzalloc(sizeof(*net->smc.fback_rsn), GFP_KERNEL);
@@ -50,8 +45,6 @@ void smc_stats_exit(struct net *net)
 
 int smc_lgr_link_stats_init(struct smc_link_group *lgr)
 {
-	struct list_head *lgr_stats_list = &smc_lgr_stats_list.list;
-	spinlock_t *lgr_stats_lock = &smc_lgr_stats_list.lock;
 	int i, j;
 
 	for (i = 0; i < SMC_LINKS_PER_LGR_MAX; i++) {
@@ -60,9 +53,6 @@ int smc_lgr_link_stats_init(struct smc_link_group *lgr)
 		if (!lgr->lnk_stats[i].ib_stats)
 			goto err;
 	}
-	spin_lock_bh(lgr_stats_lock);
-	list_add_tail(&lgr->stats_list, lgr_stats_list);
-	spin_unlock_bh(lgr_stats_lock);
 	return 0;
 
 err:
@@ -75,12 +65,7 @@ err:
 
 void smc_lgr_link_stats_free(struct smc_link_group *lgr)
 {
-	spinlock_t *lgr_stats_lock = &smc_lgr_stats_list.lock;
 	int i;
-
-	spin_lock_bh(lgr_stats_lock);
-	list_del_init(&lgr->stats_list);
-	spin_unlock_bh(lgr_stats_lock);
 
 	for (i = 0; i < SMC_LINKS_PER_LGR_MAX; i++) {
 		free_percpu(lgr->lnk_stats[i].ib_stats);
