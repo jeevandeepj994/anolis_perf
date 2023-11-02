@@ -89,12 +89,11 @@ struct smc_stats {
 };
 
 struct smc_link_ib_stats {
-	u64	s_wr_cnt;  /* send request cnt*/
-	u64	s_wc_cnt;  /* send tx complete cnt */
-	u64	r_wr_cnt;  /* recv wr cnt */
-	u64	r_wc_cnt;  /* recv complete cnt */
-	u64	rw_wr_cnt; /* rdma write(with imm) request cnt */
-	u64	rw_wc_cnt; /* rdma write(with imm) tx complete cnt */
+	u64	s_wr_cnt;
+	u64	s_wc_cnt;
+	u64	r_wr_cnt;
+	u64	r_wc_cnt;
+	u64	rw_wc_cnt;
 };
 
 struct smc_link_stats {
@@ -130,8 +129,6 @@ do { \
 	} else { \
 		if (op == IB_WR_SEND || op == IB_WR_REG_MR) \
 			SMC_LINK_STAT_IB(_lnk_stats, s, wr); \
-		else if (op == IB_WR_RDMA_WRITE_WITH_IMM) \
-			SMC_LINK_STAT_IB(_lnk_stats, rw, wr); \
 	} \
 } \
 while (0)
