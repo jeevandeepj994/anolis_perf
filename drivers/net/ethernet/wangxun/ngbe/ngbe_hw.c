@@ -3583,6 +3583,8 @@ s32 ngbe_init_ops_common(struct ngbe_hw *hw)
 	mac->ops.check_link = ngbe_check_mac_link;
 	mac->ops.setup_rxpba = ngbe_set_rxpba;
 
+	hw->mbx.ops.init_params = ngbe_init_mbx_params_pf;
+
 	/* EEPROM */
 	eeprom->ops.init_params = ngbe_init_eeprom_params;
 	eeprom->ops.calc_checksum = ngbe_calc_eeprom_checksum;
