@@ -399,13 +399,9 @@ static int smc_nl_fill_lgr_link(struct smc_link_group *lgr,
 				struct netlink_callback *cb)
 {
 	char smc_ibname[IB_DEVICE_NAME_MAX];
-	struct smc_link_stats *lnk_stats;
-	struct smc_link_ib_stats *stats;
 	u8 smc_gid_target[41];
 	struct nlattr *attrs;
 	u32 link_uid = 0;
-	int cpu, i, size;
-	u64 *src, *sum;
 	void *nlh;
 
 	nlh = genlmsg_put(skb, NETLINK_CB(cb->skb).portid, cb->nlh->nlmsg_seq,
@@ -446,43 +442,10 @@ static int smc_nl_fill_lgr_link(struct smc_link_group *lgr,
 	smc_gid_be16_convert(smc_gid_target, link->peer_gid);
 	if (nla_put_string(skb, SMC_NLA_LINK_PEER_GID, smc_gid_target))
 		goto errattr;
-	lnk_stats = &lgr->lnk_stats[link->link_idx];
-	stats = kzalloc(sizeof(*stats), GFP_KERNEL);
-	if (!stats)
-		goto errattr;
-	size = sizeof(*stats) / sizeof(u64);
-	for_each_possible_cpu(cpu) {
-		src = (u64 *)per_cpu_ptr(lnk_stats->ib_stats, cpu);
-		sum = (u64 *)stats;
-		for (i = 0; i < size; i++)
-			*(sum++) += *(src++);
-	}
-	if (nla_put_u32(skb, SMC_NLA_LINK_QPN, lnk_stats->qpn))
-		goto errstats;
-	if (nla_put_u32(skb, SMC_NLA_LINK_PEER_QPN, lnk_stats->peer_qpn))
-		goto errstats;
-	if (nla_put_u64_64bit(skb, SMC_NLA_LINK_SWR_CNT,
-			      stats->s_wr_cnt, SMC_NLA_LINK_UNSPEC))
-		goto errstats;
-	if (nla_put_u64_64bit(skb, SMC_NLA_LINK_SWC_CNT,
-			      stats->s_wc_cnt, SMC_NLA_LINK_UNSPEC))
-		goto errstats;
-	if (nla_put_u64_64bit(skb, SMC_NLA_LINK_RWR_CNT,
-			      stats->r_wr_cnt, SMC_NLA_LINK_UNSPEC))
-		goto errstats;
-	if (nla_put_u64_64bit(skb, SMC_NLA_LINK_RWC_CNT,
-			      stats->r_wc_cnt, SMC_NLA_LINK_UNSPEC))
-		goto errstats;
-	if (nla_put_u64_64bit(skb, SMC_NLA_LINK_WWC_CNT,
-			      stats->rw_wc_cnt, SMC_NLA_LINK_UNSPEC))
-		goto errstats;
 
 	nla_nest_end(skb, attrs);
 	genlmsg_end(skb, nlh);
-	kfree(stats);
 	return 0;
-errstats:
-	kfree(stats);
 errattr:
 	nla_nest_cancel(skb, attrs);
 errout:
@@ -1048,13 +1011,9 @@ static int smc_lgr_create(struct smc_sock *smc, struct smc_init_info *ini)
 		}
 		memcpy(lgr->pnet_id, ibdev->pnetid[ibport - 1],
 		       SMC_MAX_PNETID_LEN);
-
-		rc = smc_lgr_link_stats_init(lgr);
-		if (rc)
-			goto free_wq;
 		rc = smc_wr_alloc_lgr_mem(lgr);
 		if (rc)
-			goto free_stats;
+			goto free_wq;
 		smc_llc_lgr_init(lgr, smc);
 
 		link_idx = SMC_SINGLE_LINK;
@@ -1064,7 +1023,7 @@ static int smc_lgr_create(struct smc_sock *smc, struct smc_init_info *ini)
 		rc = smcr_link_init(lgr, lnk, link_idx, ini);
 		if (rc) {
 			smc_wr_free_lgr_mem(lgr);
-			goto free_stats;
+			goto free_wq;
 		}
 		lgr->net = smc_ib_net(lnk->smcibdev);
 		lgr_list = &smc_lgr_list.list;
@@ -1078,9 +1037,6 @@ static int smc_lgr_create(struct smc_sock *smc, struct smc_init_info *ini)
 	spin_unlock_bh(lgr_lock);
 	return 0;
 
-free_stats:
-	if (!ini->is_smcd)
-		smc_lgr_link_stats_free(lgr);
 free_wq:
 	destroy_workqueue(lgr->tx_wq);
 free_lgr:
@@ -1434,7 +1390,6 @@ static void __smcr_link_clear(struct smc_link *lnk)
 	smc_ibdev_cnt_dec(lnk);
 	put_device(&lnk->smcibdev->ibdev->dev);
 	smcibdev = lnk->smcibdev;
-	smcr_link_stats_clear(lnk);
 	memset(lnk, 0, sizeof(struct smc_link));
 	lnk->state = SMC_LNK_UNUSED;
 	if (!atomic_dec_return(&smcibdev->lnk_cnt))
@@ -1547,8 +1502,6 @@ static void __smc_lgr_free(struct smc_link_group *lgr)
 		if (!atomic_dec_return(&lgr_cnt))
 			wake_up(&lgrs_deleted);
 	}
-	if (!lgr->is_smcd)
-		smc_lgr_link_stats_free(lgr);
 	kfree(lgr);
 }
 
