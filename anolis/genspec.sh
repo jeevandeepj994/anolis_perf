@@ -5,7 +5,7 @@
 mkdir -p ${DIST_OUTPUT}
 cp -f ${DIST_RPM}/${DIST_SPEC_TEMPLATE} ${DIST_OUTPUT}/${DIST_SPEC_FILE}
 
-for changelog_file in "$(ls ${DIST_CHANGELOG} | sort)"
+for changelog_file in $(ls ${DIST_CHANGELOG} | sort)
 do
     sed -i "/%changelog/r ${DIST_CHANGELOG}/${changelog_file}" ${DIST_OUTPUT}/${DIST_SPEC_FILE}
 done

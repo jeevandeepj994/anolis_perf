@@ -251,6 +251,8 @@ BuildRequires: rpm-build, elfutils
 %global _no_recompute_build_ids 1
 %endif
 
+BuildRequires: openssl openssl-devel
+
 # These below are required to build man pages
 %if %{with_perf}
 BuildRequires: xmlto
