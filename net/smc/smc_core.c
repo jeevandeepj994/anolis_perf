@@ -2533,8 +2533,8 @@ static int __smc_buf_create(struct smc_sock *smc, bool is_smcd, bool is_rmb)
 		/* use socket recv buffer size (w/o overhead) as start value */
 		sk_buf_size = smc->sk.sk_rcvbuf;
 	else
-		/* use socket send buffer size (w/o overhead) as start value */
-		sk_buf_size = smc->sk.sk_sndbuf;
+		/* only inet sock will set smc_sk_sndbuf, for smc sock it is zero */
+		sk_buf_size = smc->smc_sk_sndbuf ?: smc->sk.sk_sndbuf;
 
 	for (bufsize_short = smc_compress_bufsize(sk_buf_size, is_smcd, is_rmb);
 	     bufsize_short >= 0; bufsize_short--) {
