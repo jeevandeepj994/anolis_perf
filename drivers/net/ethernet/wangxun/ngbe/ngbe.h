@@ -819,7 +819,6 @@ enum {
 
 /* needed by ngbe_ethtool.c */
 extern char ngbe_driver_name[];
-extern const char ngbe_driver_version[];
 
 void ngbe_unmap_and_free_tx_res(struct ngbe_ring *ring, struct ngbe_tx_buffer *tx_buffer);
 void ngbe_disable_device(struct ngbe_adapter *adapter);
