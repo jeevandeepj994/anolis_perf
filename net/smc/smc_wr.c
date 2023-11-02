@@ -302,9 +302,6 @@ int smc_wr_tx_send(struct smc_link *link, struct smc_wr_tx_pend_priv *priv)
 	if (rc) {
 		smc_wr_tx_put_slot(link, priv);
 		smcr_link_down_cond_sched(link);
-	} else {
-		SMC_LINK_STAT_WR(&link->lgr->lnk_stats[link->link_idx],
-				 link->wr_tx_ibs[pend->idx].opcode, 0);
 	}
 	return rc;
 }
@@ -319,9 +316,6 @@ int smc_wr_tx_v2_send(struct smc_link *link, struct smc_wr_tx_pend_priv *priv,
 	if (rc) {
 		smc_wr_tx_put_slot(link, priv);
 		smcr_link_down_cond_sched(link);
-	} else {
-		SMC_LINK_STAT_WR(&link->lgr->lnk_stats[link->link_idx],
-				 link->wr_tx_v2_ib->opcode, 0);
 	}
 	return rc;
 }
@@ -367,9 +361,6 @@ int smc_wr_reg_send(struct smc_link *link, struct ib_mr *mr)
 	rc = ib_post_send(link->roce_qp, &link->wr_reg.wr, NULL);
 	if (rc)
 		return rc;
-	else
-		SMC_LINK_STAT_WR(&link->lgr->lnk_stats[link->link_idx],
-				 link->wr_reg.wr.opcode, 0);
 
 	percpu_ref_get(&link->wr_reg_refs);
 	rc = wait_event_interruptible_timeout(link->wr_reg_wait,
@@ -476,28 +467,20 @@ static void smc_wr_tasklet_fn(struct tasklet_struct *t)
 {
 	struct smc_ib_cq *smcibcq = from_tasklet(smcibcq, t, tasklet);
 	struct ib_wc wc[SMC_WR_MAX_POLL_CQE];
-	struct smc_link_stats *lnk_stats;
 	int i, rc, completed = 0;
-	struct smc_link *link;
 
 again:
 	do {
 		memset(&wc, 0, sizeof(wc));
 		rc = ib_poll_cq(smcibcq->ib_cq, SMC_WR_MAX_POLL_CQE, wc);
 		for (i = 0; i < rc; i++) {
-			link = wc[i].qp->qp_context;
-			lnk_stats = &link->lgr->lnk_stats[link->link_idx];
 			if (SMC_WR_IS_TX_RWWI(wc[i].wr_id)) {
-				SMC_LINK_STAT_WC(lnk_stats, wc[i].opcode, 0);
 				smc_wr_tx_process_cqe(&wc[i], true);
 			} else {
-				if (smc_wr_id_is_rx(wc[i].wr_id)) {
-					SMC_LINK_STAT_WC(lnk_stats, wc[i].opcode, 1);
+				if (smc_wr_id_is_rx(wc[i].wr_id))
 					smc_wr_rx_process_cqe(&wc[i]);
-				} else {
-					SMC_LINK_STAT_WC(lnk_stats, wc[i].opcode, 0);
+				else
 					smc_wr_tx_process_cqe(&wc[i], false);
-				}
 			}
 		}
 
@@ -541,8 +524,6 @@ int smc_wr_rx_post_init(struct smc_link *link)
 
 void smc_wr_remember_qp_attr(struct smc_link *lnk)
 {
-	struct smc_link_stats *lnk_stats =
-		&lnk->lgr->lnk_stats[lnk->link_idx];
 	struct ib_qp_attr *attr = &lnk->qp_attr;
 	struct ib_qp_init_attr init_attr;
 
@@ -572,7 +553,6 @@ void smc_wr_remember_qp_attr(struct smc_link *lnk)
 			       lnk->qp_attr.cap.max_send_wr);
 	lnk->wr_rx_cnt = min_t(size_t, SMC_WR_BUF_CNT,
 			       lnk->qp_attr.cap.max_recv_wr);
-	lnk_stats->qpn = lnk->roce_qp->qp_num;
 }
 
 static void smc_wr_init_sge(struct smc_link *lnk)
