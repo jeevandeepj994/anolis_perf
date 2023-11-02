@@ -2811,7 +2811,7 @@ static int ngbe_set_flash(struct net_device *netdev, struct ethtool_flash *ef)
 }
 
 static const struct ethtool_ops ngbe_ethtool_ops = {
-	.supported_coalesce_params = ETHTOOL_COALESCE_RX_USECS,
+	.supported_coalesce_params = ETHTOOL_COALESCE_RX_USECS | ETHTOOL_COALESCE_TX_MAX_FRAMES_IRQ,
 	.get_link_ksettings = ngbe_get_link_ksettings,
 	.set_link_ksettings = ngbe_set_link_ksettings,
 	.get_drvinfo            = ngbe_get_drvinfo,
