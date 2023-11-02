@@ -111,6 +111,8 @@ static inline int smc_inet_sock_set_syn_smc(struct sock *sk, int flags)
 					       smc_inet_sock_state_change,
 					       &smc_sk(sk)->clcsk_state_change);
 		rc = 1;
+		/* restore the smc_sk_sndbuf before connect */
+		smc_sk(sk)->smc_sk_sndbuf = READ_ONCE(sk->sk_sndbuf);
 	}
 	read_unlock_bh(&sk->sk_callback_lock);
 	return rc;

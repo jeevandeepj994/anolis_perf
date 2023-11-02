@@ -484,6 +484,8 @@ static void smc_sock_init_passive(struct sock *par, struct sock *sk)
 
 	smc_sock_init_common(sk);
 	smc_sk(sk)->listen_smc = parent;
+	/* restore the smc_sk_sndbuf before handshake */
+	smc_sk(sk)->smc_sk_sndbuf = READ_ONCE(sock_net(sk)->smc.sysctl_wmem);
 
 	smc_sock_clone_negotiator_ops(par, sk);
 
