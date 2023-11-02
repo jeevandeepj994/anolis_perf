@@ -1452,6 +1452,7 @@ s32 ngbe_gphy_efuse_calibration(struct ngbe_hw *hw)
 {
 	u32 efuse[2];
 	struct ngbe_adapter *adapter = hw->back;
+	u16 val;
 
 	ngbe_gphy_wait_mdio_access_on(hw);
 
@@ -1477,6 +1478,12 @@ s32 ngbe_gphy_efuse_calibration(struct ngbe_hw *hw)
 	ngbe_gphy_wait_mdio_access_on(hw);
 	ngbe_phy_write_reg(hw, 27, 0xa43, 0x8011);
 	ngbe_phy_write_reg(hw, 28, 0xa43, 0x5737);
+
+	/* dis fall to 100m */
+	ngbe_phy_read_reg(hw, 17, 0xa44, &val);
+	val &= ~0x8;
+	ngbe_phy_write_reg(hw, 17, 0xa44, val);
+
 	ngbe_gphy_dis_eee(hw);
 
 	return 0;
