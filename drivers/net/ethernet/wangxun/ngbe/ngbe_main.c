@@ -527,6 +527,10 @@ static int ngbe_sw_init(struct ngbe_adapter *adapter)
 	adapter->tx_work_limit = NGBE_DEFAULT_TX_WORK;
 	adapter->rx_work_limit = NGBE_DEFAULT_RX_WORK;
 
+	/* enable itr by default in dynamic mode */
+	adapter->rx_itr_setting = 1;
+	adapter->tx_itr_setting = 1;
+
 	adapter->tx_timeout_recovery_level = 0;
 	/* PF holds first pool slot */
 	adapter->num_vmdqs = 1;
