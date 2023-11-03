@@ -399,13 +399,9 @@ static int smc_nl_fill_lgr_link(struct smc_link_group *lgr,
 				struct netlink_callback *cb)
 {
 	char smc_ibname[IB_DEVICE_NAME_MAX];
-	struct smc_link_stats *lnk_stats;
-	struct smc_link_ib_stats *stats;
 	u8 smc_gid_target[41];
 	struct nlattr *attrs;
 	u32 link_uid = 0;
-	int cpu, i, size;
-	u64 *src, *sum;
 	void *nlh;
 
 	nlh = genlmsg_put(skb, NETLINK_CB(cb->skb).portid, cb->nlh->nlmsg_seq,
@@ -446,46 +442,10 @@ static int smc_nl_fill_lgr_link(struct smc_link_group *lgr,
 	smc_gid_be16_convert(smc_gid_target, link->peer_gid);
 	if (nla_put_string(skb, SMC_NLA_LINK_PEER_GID, smc_gid_target))
 		goto errattr;
-	lnk_stats = &lgr->lnk_stats[link->link_idx];
-	stats = kzalloc(sizeof(*stats), GFP_KERNEL);
-	if (!stats)
-		goto errattr;
-	size = sizeof(*stats) / sizeof(u64);
-	for_each_possible_cpu(cpu) {
-		src = (u64 *)per_cpu_ptr(lnk_stats->ib_stats, cpu);
-		sum = (u64 *)stats;
-		for (i = 0; i < size; i++)
-			*(sum++) += *(src++);
-	}
-	if (nla_put_u32(skb, SMC_NLA_LINK_QPN, lnk_stats->qpn))
-		goto errstats;
-	if (nla_put_u32(skb, SMC_NLA_LINK_PEER_QPN, lnk_stats->peer_qpn))
-		goto errstats;
-	if (nla_put_u64_64bit(skb, SMC_NLA_LINK_SWR_CNT,
-			      stats->s_wr_cnt, SMC_NLA_LINK_UNSPEC))
-		goto errstats;
-	if (nla_put_u64_64bit(skb, SMC_NLA_LINK_SWC_CNT,
-			      stats->s_wc_cnt, SMC_NLA_LINK_UNSPEC))
-		goto errstats;
-	if (nla_put_u64_64bit(skb, SMC_NLA_LINK_RWR_CNT,
-			      stats->r_wr_cnt, SMC_NLA_LINK_UNSPEC))
-		goto errstats;
-	if (nla_put_u64_64bit(skb, SMC_NLA_LINK_RWC_CNT,
-			      stats->r_wc_cnt, SMC_NLA_LINK_UNSPEC))
-		goto errstats;
-	if (nla_put_u64_64bit(skb, SMC_NLA_LINK_WWR_CNT,
-			      stats->rw_wr_cnt, SMC_NLA_LINK_UNSPEC))
-		goto errstats;
-	if (nla_put_u64_64bit(skb, SMC_NLA_LINK_WWC_CNT,
-			      stats->rw_wc_cnt, SMC_NLA_LINK_UNSPEC))
-		goto errstats;
 
 	nla_nest_end(skb, attrs);
 	genlmsg_end(skb, nlh);
-	kfree(stats);
 	return 0;
-errstats:
-	kfree(stats);
 errattr:
 	nla_nest_cancel(skb, attrs);
 errout:
@@ -514,7 +474,7 @@ static int smc_nl_handle_lgr(struct smc_link_group *lgr,
 	if (!list_links)
 		goto out;
 	for (i = 0; i < SMC_LINKS_PER_LGR_MAX; i++) {
-		if (lgr->lnk[i].state == SMC_LNK_UNUSED)
+		if (!smc_link_usable(&lgr->lnk[i]))
 			continue;
 		if (smc_nl_fill_lgr_link(lgr, &lgr->lnk[i], skb, cb))
 			goto errout;
@@ -539,7 +499,7 @@ static void smc_nl_fill_lgr_list(struct smc_lgr_list *smc_lgr,
 	int num = 0;
 
 	spin_lock_bh(&smc_lgr->lock);
-	list_for_each_entry(lgr, &smc_lgr->list, stats_list) {
+	list_for_each_entry(lgr, &smc_lgr->list, list) {
 		if (num < snum)
 			goto next;
 		if (smc_nl_handle_lgr(lgr, skb, cb, list_links))
@@ -669,7 +629,7 @@ int smcr_nl_get_lgr(struct sk_buff *skb, struct netlink_callback *cb)
 {
 	bool list_links = false;
 
-	smc_nl_fill_lgr_list(&smc_lgr_stats_list, skb, cb, list_links);
+	smc_nl_fill_lgr_list(&smc_lgr_list, skb, cb, list_links);
 	return skb->len;
 }
 
@@ -677,7 +637,7 @@ int smcr_nl_get_link(struct sk_buff *skb, struct netlink_callback *cb)
 {
 	bool list_links = true;
 
-	smc_nl_fill_lgr_list(&smc_lgr_stats_list, skb, cb, list_links);
+	smc_nl_fill_lgr_list(&smc_lgr_list, skb, cb, list_links);
 	return skb->len;
 }
 
@@ -815,13 +775,13 @@ int smcr_iw_net_reserve_ports(struct net *net)
 			goto release;
 		}
 	}
-	pr_info_ratelimited("smc: netns %pK reserved ports [%d ~ %d] for eRDMA OOB\n",
-			    net, ports_base, ports_base + SMC_IWARP_RSVD_PORTS_NUM - 1);
+	pr_info_ratelimited("smc: netns [%u] reserved ports [%d ~ %d] for eRDMA OOB\n",
+			    net->ns.inum, ports_base, ports_base + SMC_IWARP_RSVD_PORTS_NUM - 1);
 	return 0;
 
 release:
-	pr_warn_ratelimited("warning: smc: netns %pK reserved ports %d FAIL for eRDMA OOB\n",
-			    net, ports_base + i);
+	pr_warn_ratelimited("warning: smc: netns [%u] reserved ports %d FAIL for eRDMA OOB\n",
+			    net->ns.inum, ports_base + i);
 	for (j = 0; j < i; j++) {
 		sock_release(net->smc.rsvd_sock[j]);
 		net->smc.rsvd_sock[j] = NULL;
@@ -837,8 +797,8 @@ void smcr_iw_net_release_ports(struct net *net)
 		sock_release(net->smc.rsvd_sock[i]);
 		net->smc.rsvd_sock[i] = NULL;
 	}
-	pr_info_ratelimited("smc: netns %pK released ports [%d ~ %d] used by eRDMA OOB\n",
-			    net, rsvd_ports_base,
+	pr_info_ratelimited("smc: netns [%u] released ports [%d ~ %d] used by eRDMA OOB\n",
+			    net->ns.inum, rsvd_ports_base,
 			    rsvd_ports_base + SMC_IWARP_RSVD_PORTS_NUM - 1);
 }
 
@@ -1051,13 +1011,9 @@ static int smc_lgr_create(struct smc_sock *smc, struct smc_init_info *ini)
 		}
 		memcpy(lgr->pnet_id, ibdev->pnetid[ibport - 1],
 		       SMC_MAX_PNETID_LEN);
-
-		rc = smc_lgr_link_stats_init(lgr);
-		if (rc)
-			goto free_wq;
 		rc = smc_wr_alloc_lgr_mem(lgr);
 		if (rc)
-			goto free_stats;
+			goto free_wq;
 		smc_llc_lgr_init(lgr, smc);
 
 		link_idx = SMC_SINGLE_LINK;
@@ -1067,7 +1023,7 @@ static int smc_lgr_create(struct smc_sock *smc, struct smc_init_info *ini)
 		rc = smcr_link_init(lgr, lnk, link_idx, ini);
 		if (rc) {
 			smc_wr_free_lgr_mem(lgr);
-			goto free_stats;
+			goto free_wq;
 		}
 		lgr->net = smc_ib_net(lnk->smcibdev);
 		lgr_list = &smc_lgr_list.list;
@@ -1081,9 +1037,6 @@ static int smc_lgr_create(struct smc_sock *smc, struct smc_init_info *ini)
 	spin_unlock_bh(lgr_lock);
 	return 0;
 
-free_stats:
-	if (!ini->is_smcd)
-		smc_lgr_link_stats_free(lgr);
 free_wq:
 	destroy_workqueue(lgr->tx_wq);
 free_lgr:
@@ -1437,7 +1390,6 @@ static void __smcr_link_clear(struct smc_link *lnk)
 	smc_ibdev_cnt_dec(lnk);
 	put_device(&lnk->smcibdev->ibdev->dev);
 	smcibdev = lnk->smcibdev;
-	smcr_link_stats_clear(lnk);
 	memset(lnk, 0, sizeof(struct smc_link));
 	lnk->state = SMC_LNK_UNUSED;
 	if (!atomic_dec_return(&smcibdev->lnk_cnt))
@@ -1550,8 +1502,6 @@ static void __smc_lgr_free(struct smc_link_group *lgr)
 		if (!atomic_dec_return(&lgr_cnt))
 			wake_up(&lgrs_deleted);
 	}
-	if (!lgr->is_smcd)
-		smc_lgr_link_stats_free(lgr);
 	kfree(lgr);
 }
 
@@ -2171,8 +2121,8 @@ locked:
 	return __smc_conn_create(smc, ini, /* create lgr if needed */ true);
 }
 
-#define SMCD_DMBE_SIZES		7 /* 0 -> 16KB, 1 -> 32KB, .. 7 -> 2MB */
-#define SMCR_RMBE_SIZES		7 /* 0 -> 16KB, 1 -> 32KB, .. 7 -> 2MB */
+#define SMCD_DMBE_SIZES		6 /* 0 -> 16KB, 1 -> 32KB, .. 6 -> 1MB */
+#define SMCR_RMBE_SIZES		5 /* 0 -> 16KB, 1 -> 32KB, .. 5 -> 512KB */
 
 /* convert the RMB size into the compressed notation (minimum 16K, see
  * SMCD/R_DMBE_SIZES.
@@ -2181,6 +2131,7 @@ locked:
  */
 static u8 smc_compress_bufsize(int size, bool is_smcd, bool is_rmb)
 {
+	const unsigned int max_scat = SG_MAX_SINGLE_ALLOC * PAGE_SIZE;
 	u8 compressed;
 
 	if (size <= SMC_BUF_MIN_SIZE)
@@ -2189,6 +2140,10 @@ static u8 smc_compress_bufsize(int size, bool is_smcd, bool is_rmb)
 	size = (size - 1) >> 14;  /* convert to 16K multiple */
 	compressed = min_t(u8, ilog2(size) + 1,
 			   is_smcd ? SMCD_DMBE_SIZES : SMCR_RMBE_SIZES);
+
+	if (!is_smcd && is_rmb)
+		/* RMBs are backed by & limited to max size of scatterlists */
+		compressed = min_t(u8, compressed, ilog2(max_scat >> 14));
 
 	return compressed;
 }
