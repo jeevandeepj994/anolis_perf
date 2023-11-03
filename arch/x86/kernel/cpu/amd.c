@@ -28,8 +28,6 @@
 
 #include "cpu.h"
 
-static const int amd_erratum_1485[];
-
 static bool cpu_has_amd_erratum(struct cpuinfo_x86 *cpu, const int *erratum);
 
 /*
@@ -1087,6 +1085,9 @@ static void init_amd_zen3(struct cpuinfo_x86 *c)
 static void init_amd_zen4(struct cpuinfo_x86 *c)
 {
 	init_amd_zen_common();
+
+	if (!cpu_has(c, X86_FEATURE_HYPERVISOR))
+		msr_set_bit(MSR_ZEN4_BP_CFG, MSR_ZEN4_BP_CFG_SHARED_BTB_FIX_BIT);
 }
 
 static void init_amd(struct cpuinfo_x86 *c)
@@ -1186,10 +1187,6 @@ static void init_amd(struct cpuinfo_x86 *c)
 
 	check_null_seg_clears_base(c);
 
-	if (!cpu_has(c, X86_FEATURE_HYPERVISOR) &&
-	     cpu_has_amd_erratum(c, amd_erratum_1485))
-		msr_set_bit(MSR_ZEN4_BP_CFG, MSR_ZEN4_BP_CFG_SHARED_BTB_FIX_BIT);
-
 	/*
 	 * Make sure EFER[AIBRSE - Automatic IBRS Enable] is set. The APs are brought up
 	 * using the trampoline code and as part of it, MSR_EFER gets prepared there in
@@ -1200,7 +1197,6 @@ static void init_amd(struct cpuinfo_x86 *c)
 	if (spectre_v2_in_eibrs_mode(spectre_v2_enabled) &&
 	    cpu_has(c, X86_FEATURE_AUTOIBRS))
 		WARN_ON_ONCE(msr_set_bit(MSR_EFER, _EFER_AUTOIBRS));
-
 }
 
 #ifdef CONFIG_X86_32
@@ -1320,10 +1316,6 @@ cpu_dev_register(amd_cpu_dev);
 #define AMD_MODEL_RANGE_FAMILY(range)	(((range) >> 24) & 0xff)
 #define AMD_MODEL_RANGE_START(range)	(((range) >> 12) & 0xfff)
 #define AMD_MODEL_RANGE_END(range)	((range) & 0xfff)
-
-static const int amd_erratum_1485[] =
-	AMD_LEGACY_ERRATUM(AMD_MODEL_RANGE(0x19, 0x10, 0x0, 0x1f, 0xf),
-			   AMD_MODEL_RANGE(0x19, 0x60, 0x0, 0xaf, 0xf));
 
 static bool cpu_has_amd_erratum(struct cpuinfo_x86 *cpu, const int *erratum)
 {
