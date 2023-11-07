@@ -935,5 +935,11 @@ void ngbe_full_sync_mac_table(struct ngbe_adapter *adapter);
 int ngbe_add_mac_filter(struct ngbe_adapter *adapter, u8 *addr, u16 pool);
 int ngbe_del_mac_filter(struct ngbe_adapter *adapter, u8 *addr, u16 pool);
 void ngbe_sriov_reinit(struct ngbe_adapter *adapter);
+int ngbe_sysfs_init(struct ngbe_adapter *adapter);
+void ngbe_sysfs_exit(struct ngbe_adapter *adapter);
+void ngbe_dbg_adapter_init(struct ngbe_adapter *adapter);
+void ngbe_dbg_adapter_exit(struct ngbe_adapter *adapter);
+void ngbe_dbg_init(void);
+void ngbe_dbg_exit(void);
 
 #endif /* _NGBE_H_ */
