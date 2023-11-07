@@ -1972,6 +1972,28 @@ static void ngbe_diag_test(struct net_device *netdev,
 	}
 	set_bit(__NGBE_TESTING, &adapter->state);
 	if (eth_test->flags == ETH_TEST_FL_OFFLINE) {
+		if (adapter->flags & NGBE_FLAG_SRIOV_ENABLED) {
+			int i;
+
+			for (i = 0; i < adapter->num_vfs; i++) {
+				if (adapter->vfinfo[i].clear_to_send) {
+					e_warn(drv, "Please take active VFS "
+					       "offline and restart the "
+					       "adapter before running NIC "
+					       "diagnostics\n");
+					data[0] = 1;
+					data[1] = 1;
+					data[2] = 1;
+					data[3] = 1;
+					data[4] = 1;
+					eth_test->flags |= ETH_TEST_FL_FAILED;
+					clear_bit(__NGBE_TESTING,
+						  &adapter->state);
+					goto skip_ol_tests;
+				}
+			}
+		}
+
 		/* Offline tests */
 		e_info(hw, "offline testing starting\n");
 
@@ -2046,6 +2068,8 @@ skip_loopback:
 
 		clear_bit(__NGBE_TESTING, &adapter->state);
 	}
+skip_ol_tests:
+	msleep_interruptible(4 * 1000);
 }
 
 static int ngbe_wol_exclusion(struct ngbe_adapter *adapter,
