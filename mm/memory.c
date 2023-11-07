@@ -77,6 +77,7 @@
 #include <linux/page_dup.h>
 #include <linux/damon.h>
 #include <linux/mm_inline.h>
+#include <linux/pgtable_share.h>
 
 #include <trace/events/kmem.h>
 
