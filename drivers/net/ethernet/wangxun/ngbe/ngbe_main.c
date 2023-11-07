@@ -6265,6 +6265,14 @@ no_info_string:
 	e_info(probe, "WangXun(R) Gigabit Network Connection\n");
 	cards_found++;
 
+#ifdef CONFIG_SYSFS
+	if (ngbe_sysfs_init(adapter))
+		netif_err(adapter, probe, netdev,
+			  "failed to allocate sysfs resources\n");
+#endif
+
+	ngbe_dbg_adapter_init(adapter);
+
 	pcie_capability_read_word(pdev, PCI_EXP_DEVCTL2, &pvalue);
 	pvalue = pvalue | 0x10;
 	pcie_capability_write_word(pdev, PCI_EXP_DEVCTL2, pvalue);
@@ -6310,6 +6318,9 @@ static void ngbe_remove(struct pci_dev *pdev)
 
 	set_bit(__NGBE_REMOVING, &adapter->state);
 	cancel_work_sync(&adapter->service_task);
+
+	ngbe_dbg_adapter_exit(adapter);
+	ngbe_sysfs_exit(adapter);
 
 	if (adapter->netdev_registered) {
 		unregister_netdev(netdev);
@@ -6573,6 +6584,8 @@ static int __init ngbe_init_module(void)
 		return -ENOMEM;
 	}
 
+	ngbe_dbg_init();
+
 	ret = pci_register_driver(&ngbe_driver);
 	return ret;
 }
@@ -6587,6 +6600,7 @@ static void __exit ngbe_exit_module(void)
 {
 	pci_unregister_driver(&ngbe_driver);
 	destroy_workqueue(ngbe_wq);
+	ngbe_dbg_exit();
 }
 
 module_exit(ngbe_exit_module);
