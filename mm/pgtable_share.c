@@ -17,6 +17,7 @@
 #include <linux/pgtable_share.h>
 #include <linux/hugetlb.h>
 #include <linux/mmdebug.h>
+#include <asm/tlb.h>
 
 static bool vma_is_suitable_pgtable_share(struct vm_area_struct *vma)
 {
@@ -320,4 +321,25 @@ unsigned long pgtable_share_get_unmapped_area(struct file *filp, unsigned long a
 
 	ret = __pgtable_share_get_unmapped_area(filp, addr, len, off, flags, PMD_SIZE);
 	return (ret == 0) ? -ENOMEM : ret;
+}
+
+void pgtable_share_clear_pmd(struct mmu_gather *tlb, struct vm_area_struct *vma,
+			     pmd_t *pmdp, unsigned long addr, unsigned long end)
+{
+	/* pgtable share vmas always align with PMD size */
+	spinlock_t *ptl;
+
+	ptl = pmd_lock(vma->vm_mm, pmdp);
+	/*
+	 * Make sure page fault will happen when accessing
+	 * this area.
+	 */
+	put_page(pmd_pgtable(*pmdp));
+	pmd_clear(pmdp);
+	add_mm_counter(vma->vm_mm, MM_SHMEMPAGES, -HPAGE_PMD_NR);
+	spin_unlock(ptl);
+
+	tlb_change_page_size(tlb, PAGE_SIZE);
+	tlb_flush_pte_range(tlb, addr, end - addr);
+	tlb_flush_mmu_tlbonly(tlb);
 }
