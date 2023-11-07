@@ -682,3 +682,11 @@ void ngbe_dbg_init(void)
 	if (!ngbe_dbg_root)
 		pr_err("init of debugfs failed\n");
 }
+
+/**
+ * ngbe_dbg_exit - clean out debugfs for the driver
+ **/
+void ngbe_dbg_exit(void)
+{
+	debugfs_remove_recursive(ngbe_dbg_root);
+}
