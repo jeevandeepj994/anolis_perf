@@ -104,6 +104,7 @@ CONFIG_PREEMPT_NONE=y
 # CONFIG_PREEMPT is not set
 CONFIG_PREEMPT_COUNT=y
 CONFIG_SCHED_CORE=y
+CONFIG_SCHED_ACPU=y
 
 #
 # CPU/Task time and stats accounting
