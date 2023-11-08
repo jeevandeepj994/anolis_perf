@@ -12,6 +12,7 @@
 #include <linux/rwsem.h>
 #include <linux/memcontrol.h>
 #include <linux/highmem.h>
+#include <linux/pgtable_share.h>
 
 /*
  * The anon_vma heads a list of private "related" vmas, to scan if
@@ -211,6 +212,11 @@ void try_to_unmap_zeropage(struct page *page, enum ttu_flags flags);
 /* Avoid extra judgement of zeropage */
 #define PVMW_ZEROPAGE           (1 << 2)
 
+#ifdef CONFIG_PAGETABLE_SHARE
+/* Avoid unnecessary page walk for shared pgtable */
+#define PVMW_SHARED_PGTABLE	(1 << 3)
+#endif
+
 struct page_vma_mapped_walk {
 	struct page *page;
 	struct vm_area_struct *vma;
@@ -224,7 +230,7 @@ struct page_vma_mapped_walk {
 static inline void page_vma_mapped_walk_done(struct page_vma_mapped_walk *pvmw)
 {
 	/* HugeTLB pte is set to the relevant page table entry without pte_mapped. */
-	if (pvmw->pte && !PageHuge(pvmw->page))
+	if (pvmw->pte && !PageHuge(pvmw->page) && !vma_is_pgtable_shared(pvmw->vma))
 		pte_unmap(pvmw->pte);
 	if (pvmw->ptl)
 		spin_unlock(pvmw->ptl);
