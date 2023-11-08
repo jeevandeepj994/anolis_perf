@@ -74,7 +74,6 @@
 #include <linux/userfaultfd_k.h>
 #include <linux/page_dup.h>
 #include <linux/mm_inline.h>
-#include <linux/pgtable_share.h>
 
 #include <asm/tlbflush.h>
 
@@ -1439,9 +1438,11 @@ static bool try_to_unmap_one(struct page *page, struct vm_area_struct *vma,
 		return true;
 
 #ifdef CONFIG_PAGETABLE_SHARE
-	if (IS_ENABLED(CONFIG_MIGRATION) && (flags & TTU_MIGRATION) &&
-	    vma_is_pgtable_shared(vma))
-		return true;
+	if (vma_is_pgtable_shared(vma) || vma_is_pgtable_shadow(vma)) {
+		if (IS_ENABLED(CONFIG_MIGRATION) && (flags & TTU_MIGRATION))
+			return true;
+		pvmw.flags |= PVMW_SHARED_PGTABLE;
+	}
 #endif
 
 	if (flags & TTU_SPLIT_HUGE_PMD) {
@@ -1469,6 +1470,12 @@ static bool try_to_unmap_one(struct page *page, struct vm_area_struct *vma,
 		adjust_range_if_pmd_sharing_possible(vma, &range.start,
 						     &range.end);
 	}
+#ifdef CONFIG_PAGETABLE_SHARE
+	else if (vma_is_pgtable_shared(vma)) {
+		/* ditto */
+		pgtable_share_adjust_range(vma, &range.start, &range.end);
+	}
+#endif
 	mmu_notifier_invalidate_range_start(&range);
 
 	while (page_vma_mapped_walk(&pvmw)) {
@@ -1517,6 +1524,18 @@ static bool try_to_unmap_one(struct page *page, struct vm_area_struct *vma,
 				continue;
 		}
 
+#ifdef CONFIG_PAGETABLE_SHARE
+		if (vma_is_pgtable_shared(vma)) {
+			pmd_t *pmd = (pmd_t *)pvmw.pte;
+
+			flush_cache_range(vma, range.start, range.end);
+			__pgtable_share_clear_pmd(mm, pmd, address);
+			flush_tlb_range(vma, range.start, range.end);
+			mmu_notifier_invalidate_range(mm, range.start, range.end);
+			page_vma_mapped_walk_done(&pvmw);
+			break;
+		}
+#endif
 		/* Unexpected PMD-mapped THP? */
 		VM_BUG_ON_PAGE(!pvmw.pte, page);
 

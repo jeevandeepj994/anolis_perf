@@ -163,11 +163,11 @@ bool page_vma_mapped_walk(struct page_vma_mapped_walk *pvmw)
 	/* The only possible pmd mapping has been handled on last iteration */
 	if (pvmw->pmd && !pvmw->pte)
 		return not_found(pvmw);
+
 #ifdef CONFIG_PAGETABLE_SHARE
-	if (vma_is_pgtable_shared(pvmw->vma) &&
-	    (pvmw->flags & PVMW_MIGRATION)) {
+	if ((vma_is_pgtable_shared(pvmw->vma) || vma_is_pgtable_shadow(pvmw->vma)) &&
+	    !(pvmw->flags & PVMW_SHARED_PGTABLE))
 		return not_found(pvmw);
-	}
 #endif
 
 	if (unlikely(PageHuge(page))) {
@@ -224,6 +224,20 @@ restart:
 		 */
 		pmde = READ_ONCE(*pvmw->pmd);
 
+#ifdef CONFIG_PAGETABLE_SHARE
+		if (vma_is_pgtable_shared(pvmw->vma)) {
+			pvmw->ptl = pmd_lock(mm, pvmw->pmd);
+			if (!pmd_none(pmde)) {
+				pvmw->pte = (pte_t *)pvmw->pmd;
+				pvmw->pmd = NULL;
+				return true;
+			}
+			spin_unlock(pvmw->ptl);
+			pvmw->ptl = NULL;
+			step_forward(pvmw, PMD_SIZE);
+			continue;
+		}
+#endif
 		if (pmd_trans_huge(pmde) || is_pmd_migration_entry(pmde)) {
 			pvmw->ptl = pmd_lock(mm, pvmw->pmd);
 			pmde = *pvmw->pmd;
