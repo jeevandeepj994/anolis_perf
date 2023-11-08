@@ -235,10 +235,12 @@ void __account_sibidle_time(struct task_struct *p, u64 delta, bool fi)
 {
 	__schedstat_add(p->se.statistics.core_sibidle_sum, delta);
 	task_group_account_field(p, CPUTIME_SIBIDLE, delta);
+#ifdef CONFIG_SCHED_CORE
 	if (fi) {
 		__schedstat_add(p->se.statistics.core_forceidle_sum, delta);
 		task_group_account_field(p, CPUTIME_FORCEIDLE, delta);
 	}
+#endif
 }
 #endif
 
