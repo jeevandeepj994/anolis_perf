@@ -37,7 +37,6 @@
 #include <linux/gpio/machine.h>
 
 static char mode_option[32] = "1280x1024-32@2M";
-static char buf[32];
 module_param_string(mode, mode_option, sizeof(mode_option), 0444);
 static int useshell;
 module_param(useshell, int, 0664);
@@ -59,6 +58,13 @@ struct ls2k500sfb_struct {
 	unsigned long reset_time;
 	char *penv;
 	char saved_env[16];
+};
+
+struct ls2k500_data {
+	unsigned int xres;
+	unsigned int yres;
+	unsigned int bpp;
+	long offset;
 };
 
 static int saved_console;
@@ -650,6 +656,70 @@ static struct platform_driver simplefb_driver = {
 	.remove = simplefb_remove,
 };
 
+static int parse_ls2k500_data(const char *data_str, struct ls2k500_data *data)
+{
+	char buf[36] = {0};
+	int xres_specified = 0, yres_specified = 0, bpp_specified = 0;
+	int offset_specified = 0;
+	int multiplier = 1;
+	int i;
+
+	strncpy(buf, data_str, 32);
+
+	for (i = strlen(buf) - 1; i >= 0; i--) {
+		switch (buf[i]) {
+		case 'M':
+		case 'm':
+			buf[i] = '\0';
+			multiplier = 1024 * 1024;
+			break;
+		case 'K':
+		case 'k':
+			buf[i] = '\0';
+			multiplier = 1024;
+			break;
+		case '@':
+			buf[i] = '\0';
+			if (!offset_specified && !bpp_specified &&
+			    !kstrtol(&buf[i+1], 0, &data->offset)) {
+				data->offset *= multiplier;
+
+				offset_specified = 1;
+			} else
+				goto done;
+			break;
+		case '-':
+			buf[i] = '\0';
+			if (!bpp_specified && !yres_specified &&
+			    !kstrtou32(&buf[i+1], 0, &data->bpp))
+				bpp_specified = 1;
+			else
+				goto done;
+			break;
+		case 'x':
+			buf[i] = '\0';
+			if (!yres_specified &&
+			    !kstrtou32(&buf[i+1], 0, &data->yres))
+				yres_specified = 1;
+			else
+				goto done;
+			break;
+		case '0' ... '9':
+			break;
+		default:
+			goto done;
+		}
+	}
+	if (i < 0 && yres_specified && !kstrtou32(buf, 0, &data->xres))
+		xres_specified = 1;
+
+done:
+	if (xres_specified && yres_specified && bpp_specified && offset_specified)
+		return 0;
+	else
+		return -EINVAL;
+}
+
 static void *kcs_data[2] = {&event_jiffies, &mscycles};
 static int ls2k500sfb_probe(struct pci_dev *dev, const struct pci_device_id *id)
 {
@@ -657,9 +727,9 @@ static int ls2k500sfb_probe(struct pci_dev *dev, const struct pci_device_id *id)
 	struct resource res[3];
 	struct platform_device *pd;
 	struct ls2k500sfb_struct *priv;
+	struct ls2k500_data data = {0};
 	long phybase, videooffset, videomemorysize;
 	char *pmode = mode_option;
-	int depth;
 	char *penv;
 	int ret, i, error;
 
@@ -679,45 +749,25 @@ static int ls2k500sfb_probe(struct pci_dev *dev, const struct pci_device_id *id)
 	priv->penv =  penv + 6;
 	memcpy(priv->saved_env, priv->penv, sizeof(priv->saved_env));
 
-	error = kstrtou32(pmode, 0, &mode.width);
-	if (!error)
+	error = parse_ls2k500_data(pmode, &data);
+	if (error) {
+		pci_err(dev, "failed to parse mode option\n");
 		return error;
+	}
 
-	pmode = pmode + sprintf(buf, "%d", mode.width) + 1;
+	mode.width = data.xres;
+	mode.height = data.yres;
 
-	error = kstrtou32(pmode, 0, &mode.height);
-	if (!error)
-		return error;
+	mode.stride = mode.width * data.bpp / 8;
+	if (data.bpp == 32)
+		mode.format = "a8r8g8b8";
+	else
+		mode.format = "r5g6b5";
 
-	pmode = pmode + sprintf(buf, "%d", mode.height) + 1;
-
-	error = kstrtou32(pmode, 0, &depth);
-	if (!error)
-		return error;
-
-	if (pmode && pmode[0]) {
-		pmode = pmode + sprintf(buf, "%d", depth) + 1;
-
-		error = kstrtol(pmode, 0, &videooffset);
-		if (!error)
-			return error;
-
-		if (pmode && pmode[0]) {
-			switch (pmode[0]) {
-			case 'M':
-			case 'm':
-				videooffset *= 0x100000;
-				break;
-			case 'K':
-			case 'k':
-				videooffset *= 1024;
-				break;
-			}
-		}
-	} else
+	if (data.offset)
+		videooffset = data.offset;
+	else
 		videooffset = 0x200000;
-	mode.stride = mode.width * depth / 8;
-	mode.format = depth == 32 ? "a8r8g8b8" : "r5g6b5";
 
 	videomemorysize = 0x400000;
 
