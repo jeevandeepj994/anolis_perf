@@ -1483,6 +1483,21 @@ static inline bool sched_core_enqueued(struct task_struct *p)
 	return !RB_EMPTY_NODE(&p->core_node);
 }
 
+static inline u64 get_forceidled_sum(struct rq *rq)
+{
+	const int cpu = cpu_of(rq);
+	const struct cpumask *smt_mask = cpu_smt_mask(cpu);
+	int i;
+
+	/* We assume smt == 2 here. */
+	for_each_cpu(i, smt_mask) {
+		if (i != cpu)
+			return kcpustat_cpu(i).cpustat[CPUTIME_FORCEIDLE];
+	}
+
+	return 0;
+}
+
 extern void sched_core_enqueue(struct rq *rq, struct task_struct *p);
 extern void sched_core_dequeue(struct rq *rq, struct task_struct *p, int flags);
 
@@ -1527,6 +1542,11 @@ static inline bool sched_group_cookie_match(struct rq *rq,
 					    struct sched_group *group)
 {
 	return true;
+}
+
+static inline u64 get_forceidled_sum(struct rq *rq)
+{
+	return 0;
 }
 #endif /* CONFIG_SCHED_CORE */
 
