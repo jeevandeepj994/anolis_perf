@@ -504,8 +504,8 @@ struct sched_statistics {
 	u64				core_sibidle_sum;
 #endif
 
-	CK_KABI_RESERVE(1)
-	CK_KABI_RESERVE(2)
+	CK_KABI_USE(1, unsigned long forceidled_sum)
+	CK_KABI_USE(2, unsigned long forceidled_sum_base)
 	CK_KABI_RESERVE(3)
 	CK_KABI_RESERVE(4)
 	CK_KABI_RESERVE(5)
