@@ -67,6 +67,7 @@ enum smc_inet_sock_negotiation_state {
 	/* flags */
 	SMC_NEGOTIATION_LISTEN_FLAG = 0x01,
 	SMC_NEGOTIATION_ABORT_FLAG = 0x02,
+	SMC_NEGOTIATION_NOT_SUPPORT_FLAG = 0x04,
 };
 
 static __always_inline void isck_smc_negotiation_store(struct smc_sock *smc,
@@ -91,31 +92,31 @@ static __always_inline int isck_smc_negotiation_get_flags(struct smc_sock *smc)
 	return smc->isck_smc_negotiation & 0x0f;
 }
 
-static inline int smc_inet_sock_set_syn_smc(struct sock *sk, int flags)
+int smc_inet_sock_move_state_locked(struct sock *sk, int except, int target);
+
+static inline int smc_inet_sock_set_syn_smc_locked(struct sock *sk, int value)
 {
-	int rc = 0;
+	int flags;
 
-    /* already set */
-	if (unlikely(tcp_sk(sk)->syn_smc))
-		return 1;
-
-	read_lock_bh(&sk->sk_callback_lock);
-	/* Only set syn_smc when negotiation still be SMC_NEGOTIATION_TBD,
-	 * it can prevent sock that have already been fallback from being enabled again.
-	 * For example, setsockopt might actively fallback before call connect().
-	 */
-	if (isck_smc_negotiation_load(smc_sk(sk)) == SMC_NEGOTIATION_TBD) {
-		tcp_sk(sk)->syn_smc = 1;
-		if (flags & O_NONBLOCK)
-			smc_clcsock_replace_cb(&sk->sk_state_change,
-					       smc_inet_sock_state_change,
-					       &smc_sk(sk)->clcsk_state_change);
-		rc = 1;
-		/* restore the smc_sk_sndbuf before connect */
-		smc_sk(sk)->smc_sk_sndbuf = READ_ONCE(sk->sk_sndbuf);
+	/* not set syn smc */
+	if (value == 0) {
+		if (smc_sk_state(sk) != SMC_LISTEN) {
+			smc_inet_sock_move_state_locked(sk, SMC_NEGOTIATION_TBD,
+							SMC_NEGOTIATION_NO_SMC);
+			smc_sk_set_state(sk, SMC_ACTIVE);
+		}
+		return 0;
 	}
-	read_unlock_bh(&sk->sk_callback_lock);
-	return rc;
+	/* set syn smc */
+	flags = isck_smc_negotiation_get_flags(smc_sk(sk));
+	if (isck_smc_negotiation_load(smc_sk(sk)) != SMC_NEGOTIATION_TBD)
+		return 0;
+	if (flags & SMC_NEGOTIATION_ABORT_FLAG)
+		return 0;
+	if (flags & SMC_NEGOTIATION_NOT_SUPPORT_FLAG)
+		return 0;
+	tcp_sk(sk)->syn_smc = 1;
+	return 1;
 }
 
 static inline void smc_inet_sock_abort(struct sock *sk)
@@ -130,38 +131,26 @@ static inline void smc_inet_sock_abort(struct sock *sk)
 	sk->sk_error_report(sk);
 }
 
-int smc_inet_sock_move_state_locked(struct sock *sk, int except, int target);
-
-static inline int smc_inet_sock_try_fallback_fast(struct sock *sk, int abort)
+static inline int smc_inet_sock_try_disable_smc(struct sock *sk, int flag)
 {
 	struct smc_sock *smc = smc_sk(sk);
-	int syn_smc = 1;
+	int success = 0;
 
 	write_lock_bh(&sk->sk_callback_lock);
 	switch (isck_smc_negotiation_load(smc)) {
 	case SMC_NEGOTIATION_TBD:
-		/* fallback is meanless for listen socks */
-		if (unlikely(inet_sk_state_load(sk) == TCP_LISTEN))
+		/* can not disable now */
+		if (flag != SMC_NEGOTIATION_ABORT_FLAG && tcp_sk(sk)->syn_smc)
 			break;
-		if (abort)
-			isck_smc_negotiation_set_flags(smc_sk(sk), SMC_NEGOTIATION_ABORT_FLAG);
-		else if (tcp_sk(sk)->syn_smc)
-			break;
-		/* In the implementation of INET sock, syn_smc will only be determined after
-		 * smc_inet_connect or smc_inet_listen, which means that if there is
-		 * no syn_smc set, we can easily fallback.
-		 */
-		smc_inet_sock_move_state_locked(sk, SMC_NEGOTIATION_TBD, SMC_NEGOTIATION_NO_SMC);
-		smc_sk_set_state(sk, SMC_ACTIVE);
+		isck_smc_negotiation_set_flags(smc_sk(sk), flag);
 		fallthrough;
 	case SMC_NEGOTIATION_NO_SMC:
-		syn_smc = 0;
+		success = 1;
 	default:
 		break;
 	}
 	write_unlock_bh(&sk->sk_callback_lock);
-
-	return syn_smc;
+	return success;
 }
 
 static __always_inline bool smc_inet_sock_check_smc(struct sock *sk)
@@ -182,15 +171,21 @@ static __always_inline bool smc_inet_sock_check_fallback(struct sock *sk)
 	return isck_smc_negotiation_load(smc_sk(sk)) == SMC_NEGOTIATION_NO_SMC;
 }
 
-static inline int smc_inet_sock_access_before(struct sock *sk)
+static inline int smc_inet_sock_access_check(struct sock *sk)
 {
-	if (smc_inet_sock_check_fallback(sk))
-		return 0;
+	int cur = isck_smc_negotiation_load(smc_sk(sk));
 
-	if (unlikely(isck_smc_negotiation_load(smc_sk(sk)) == SMC_NEGOTIATION_TBD))
-		return smc_inet_sock_try_fallback_fast(sk, /* try best */ 0);
-
-	return 1;
+	switch (cur) {
+	case SMC_NEGOTIATION_TBD:
+		if (!smc_inet_sock_try_disable_smc(sk, SMC_NEGOTIATION_NOT_SUPPORT_FLAG))
+			break;
+		fallthrough;
+	case SMC_NEGOTIATION_NO_SMC:
+		return SMC_NEGOTIATION_NO_SMC;
+	default:
+		break;
+	}
+	return cur;
 }
 
 static __always_inline bool smc_inet_sock_is_active_open(struct sock *sk)
