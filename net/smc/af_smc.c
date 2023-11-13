@@ -91,7 +91,7 @@ u16 rsvd_ports_base = SMC_IWARP_RSVD_PORTS_BASE;
 module_param(rsvd_ports_base, ushort, 0444);
 MODULE_PARM_DESC(rsvd_ports_base, "base of rsvd ports for reserve_mode");
 
-static int smc_sock_should_select_smc(const struct smc_sock *smc)
+static int smc_sock_should_select_smc(const struct smc_sock *smc, struct sockaddr *addr)
 {
 	const struct smc_sock_negotiator_ops *ops;
 	int ret;
@@ -107,7 +107,7 @@ static int smc_sock_should_select_smc(const struct smc_sock *smc)
 		return SK_PASS;
 	}
 
-	ret = ops->negotiate((struct sock *)&smc->sk);
+	ret = ops->negotiate((struct sock *)&smc->sk, addr);
 	rcu_read_unlock();
 	return ret;
 }
@@ -229,7 +229,7 @@ static bool smc_hs_congested(const struct sock *sk)
 	if (workqueue_congested(WORK_CPU_UNBOUND, smc_hs_wq))
 		return true;
 
-	if (!smc_sock_should_select_smc(smc))
+	if (!smc_sock_should_select_smc(smc, NULL))
 		return true;
 
 	/* only works for inet sock */
@@ -1876,7 +1876,8 @@ static int smc_connect(struct socket *sock, struct sockaddr *addr,
 	if (smc_sock_is_inet_sock(sk)) {
 		write_lock_bh(&sk->sk_callback_lock);
 		if (smc_inet_sock_set_syn_smc_locked(sk,
-						     smc_sock_should_select_smc(smc) == SK_PASS)) {
+						     smc_sock_should_select_smc(smc, addr)
+						     == SK_PASS)) {
 			if (flags & O_NONBLOCK)
 				smc_clcsock_replace_cb(&sk->sk_state_change,
 						       smc_inet_sock_state_change,
@@ -1887,7 +1888,7 @@ static int smc_connect(struct socket *sock, struct sockaddr *addr,
 			smc_switch_to_fallback(smc, /* active fallback */ SMC_CLC_DECL_ACTIVE);
 		}
 		write_unlock_bh(&sk->sk_callback_lock);
-	} else if (smc_sock_should_select_smc(smc) != SK_PASS) {
+	} else if (smc_sock_should_select_smc(smc, addr) != SK_PASS) {
 		tcp_sk(smc->clcsock->sk)->syn_smc = 0;
 		smc_switch_to_fallback(smc, /* active fallback */ SMC_CLC_DECL_ACTIVE);
 	} else {
