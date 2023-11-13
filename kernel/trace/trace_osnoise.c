@@ -1740,6 +1740,10 @@ static int start_kthread(unsigned int cpu)
 	void *main = osnoise_main;
 	char comm[24];
 
+	kthread = per_cpu(per_cpu_osnoise_var, cpu).kthread;
+	if (kthread)
+		return 0;
+
 	if (timerlat_enabled()) {
 		snprintf(comm, 24, "timerlat/%d", cpu);
 		main = timerlat_main;
@@ -1802,7 +1806,7 @@ static void osnoise_hotplug_workfn(struct work_struct *dummy)
 
 	mutex_lock(&trace_types_lock);
 
-	if (!osnoise_has_registered_instances())
+	if (!osnoise_has_registered_instances() || trace_osnoise_callback_enabled)
 		goto out_unlock_trace;
 
 	mutex_lock(&interface_lock);
