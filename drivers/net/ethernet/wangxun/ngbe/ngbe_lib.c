@@ -2,6 +2,7 @@
 /* Copyright (c) 2019 - 2022 Beijing WangXun Technology Co., Ltd. */
 
 #include "ngbe.h"
+#include "ngbe_sriov.h"
 
 #define NGBE_RSS_8Q_MASK       0x7
 
@@ -131,6 +132,10 @@ static int ngbe_acquire_msix_vectors(struct ngbe_adapter *adapter)
 	 * handler, and (2) an Other (Link Status Change, etc.) handler.
 	 */
 	vector_threshold = MIN_MSIX_COUNT;
+
+	/* we need to alloc (7vfs+1pf+1misc) or (8vfs+1misc) msix entries */
+	if (adapter->flags2 & NGBE_FLAG2_SRIOV_MISC_IRQ_REMAP)
+		vectors += adapter->ring_feature[RING_F_VMDQ].offset;
 
 	adapter->msix_entries = kcalloc(vectors,
 					sizeof(struct msix_entry),
@@ -443,6 +448,14 @@ void ngbe_set_interrupt_capability(struct ngbe_adapter *adapter)
 	/* Disable VMDq support */
 	e_dev_warn("Disabling VMQd support\n");
 	adapter->flags &= ~NGBE_FLAG_VMDQ_ENABLED;
+
+#ifdef CONFIG_PCI_IOV
+	/* Disable SR-IOV support */
+	e_dev_warn("Disabling SR-IOV support\n");
+	ngbe_disable_sriov(adapter);
+	if (adapter->flags2 & NGBE_FLAG2_SRIOV_MISC_IRQ_REMAP)
+		adapter->flags2 &= ~NGBE_FLAG2_SRIOV_MISC_IRQ_REMAP;
+#endif /* CONFIG_PCI_IOV */
 
 	/* Disable RSS */
 	e_dev_warn("Disabling RSS support\n");
