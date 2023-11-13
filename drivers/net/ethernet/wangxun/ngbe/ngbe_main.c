@@ -896,10 +896,14 @@ void ngbe_irq_enable(struct ngbe_adapter *adapter, bool queues, bool flush)
 	wr32(hw, NGBE_PX_MISC_IEN, mask);
 
 	/* unmask interrupt */
-	if (queues)
+	if (queues) {
 		ngbe_intr_enable(&adapter->hw, NGBE_INTR_ALL);
-	else
-		ngbe_intr_enable(&adapter->hw, NGBE_INTR_MISC(adapter));
+	} else {
+		if (!(adapter->flags2 & NGBE_FLAG2_SRIOV_MISC_IRQ_REMAP))
+			ngbe_intr_enable(&adapter->hw, NGBE_INTR_MISC(adapter));
+		else
+			ngbe_intr_enable(&adapter->hw, NGBE_INTR_MISC_VMDQ(adapter));
+	}
 
 	/* flush configuration */
 	if (flush)
@@ -1075,8 +1079,14 @@ static int ngbe_request_msix_irqs(struct ngbe_adapter *adapter)
 		}
 	}
 
+	if (adapter->flags2 & NGBE_FLAG2_SRIOV_MISC_IRQ_REMAP)
+		vector += adapter->irq_remap_offset;
+
 	err = request_irq(adapter->msix_entries[vector].vector,
 			  ngbe_msix_other, 0, netdev->name, adapter);
+
+	if (adapter->flags2 & NGBE_FLAG2_SRIOV_MISC_IRQ_REMAP)
+		vector -= adapter->irq_remap_offset;
 
 	if (err) {
 		e_err(probe, "request_irq for msix_other failed: %d\n", err);
@@ -1300,6 +1310,10 @@ static void ngbe_configure_msix(struct ngbe_adapter *adapter)
 		ngbe_write_eitr(q_vector);
 	}
 
+	/* misc ivar from seq 1 to seq 8 */
+	if (adapter->flags2 & NGBE_FLAG2_SRIOV_MISC_IRQ_REMAP)
+		v_idx += adapter->ring_feature[RING_F_VMDQ].offset;
+
 	ngbe_set_ivar(adapter, -1, 0, v_idx);
 	wr32(&adapter->hw, NGBE_PX_ITR(v_idx), 1950);
 }
@@ -1444,8 +1458,13 @@ static void ngbe_free_irq(struct ngbe_adapter *adapter)
 
 		free_irq(entry->vector, q_vector);
 	}
+	if (adapter->flags2 & NGBE_FLAG2_SRIOV_MISC_IRQ_REMAP) {
+		int offset = vector + adapter->irq_remap_offset;
 
-	free_irq(adapter->msix_entries[vector++].vector, adapter);
+		free_irq(adapter->msix_entries[offset].vector, adapter);
+	} else {
+		free_irq(adapter->msix_entries[vector++].vector, adapter);
+	}
 }
 
 /**
