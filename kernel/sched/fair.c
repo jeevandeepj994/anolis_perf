@@ -2611,9 +2611,10 @@ static void update_curr_fair(struct rq *rq)
 static inline void
 update_stats_wait_start(struct cfs_rq *cfs_rq, struct sched_entity *se)
 {
-	u64 wait_start, prev_wait_start;
-	u64 parent_wait_sum, delta, clock = rq_clock(rq_of(cfs_rq));
+	u64 wait_start, prev_wait_start, parent_wait_sum, forceidled_sum, delta;
 	struct sched_entity *pse = parent_entity(se);
+	struct rq *rq = rq_of(cfs_rq);
+	u64 clock = rq_clock(rq);
 
 	if (!schedstat_enabled())
 		return;
@@ -2626,6 +2627,9 @@ update_stats_wait_start(struct cfs_rq *cfs_rq, struct sched_entity *se)
 		wait_start -= prev_wait_start;
 
 	__schedstat_set(se->statistics.wait_start, wait_start);
+
+	forceidled_sum = get_forceidled_sum(rq);
+	__schedstat_set(se->statistics.forceidled_sum_base, forceidled_sum);
 
 	if (!pse)
 		return;
@@ -2641,10 +2645,11 @@ update_stats_wait_start(struct cfs_rq *cfs_rq, struct sched_entity *se)
 static inline void
 update_stats_wait_end(struct cfs_rq *cfs_rq, struct sched_entity *se)
 {
-	struct task_struct *p;
+	u64 parent_wait_sum, forceidled_sum, forceidled_delta, delta;
 	struct sched_entity *pse = parent_entity(se);
-	u64 parent_wait_sum, clock = rq_clock(rq_of(cfs_rq));
-	u64 delta;
+	struct rq *rq = rq_of(cfs_rq);
+	u64 clock = rq_clock(rq);
+	struct task_struct *p;
 
 	if (!schedstat_enabled())
 		return;
@@ -2672,6 +2677,10 @@ update_stats_wait_end(struct cfs_rq *cfs_rq, struct sched_entity *se)
 	__schedstat_add(se->statistics.wait_sum, delta);
 	__schedstat_set(se->statistics.wait_start, 0);
 
+	forceidled_sum = get_forceidled_sum(rq);
+	forceidled_delta = forceidled_sum - schedstat_val(se->statistics.forceidled_sum_base);
+	__schedstat_add(se->statistics.forceidled_sum, forceidled_delta);
+
 	if (!pse)
 		return;
 
@@ -2681,7 +2690,7 @@ update_stats_wait_end(struct cfs_rq *cfs_rq, struct sched_entity *se)
 	else
 		delta = 0;
 	parent_wait_sum = schedstat_val(pse->statistics.wait_sum) + delta;
-	delta = parent_wait_sum -
+	delta = parent_wait_sum - forceidled_delta -
 		schedstat_val(se->statistics.parent_wait_sum_base);
 	__schedstat_add(se->statistics.parent_wait_contrib, delta);
 }

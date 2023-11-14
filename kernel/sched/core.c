@@ -10097,7 +10097,7 @@ static int cpu_sched_cfs_show(struct seq_file *sf, void *v)
 	struct task_group *tg = css_tg(seq_css(sf));
 	struct sched_entity *se;
 	int cpu;
-	u64 wait_max = 0, wait_sum = 0, wait_sum_other = 0, exec_sum = 0;
+	u64 wait_max = 0, wait_sum = 0, wait_sum_other = 0, wait_sum_fi = 0, exec_sum = 0;
 
 	if (!schedstat_enabled())
 		goto out_show;
@@ -10110,16 +10110,20 @@ static int cpu_sched_cfs_show(struct seq_file *sf, void *v)
 		exec_sum += schedstat_val(se->sum_exec_runtime);
 		wait_sum_other +=
 			schedstat_val(se->statistics.parent_wait_contrib);
+		wait_sum_fi += schedstat_val(se->statistics.forceidled_sum);
 		wait_sum += schedstat_val(se->statistics.wait_sum);
 		wait_max =
 			max(wait_max, schedstat_val(se->statistics.wait_max));
 	}
 	rcu_read_unlock();
 out_show:
-	/* [Serve time] [On CPU time] [Queue other time] [Queue sibling time] [Queue max time] */
-	seq_printf(sf, "%lld %lld %lld %lld %lld\n",
+	/*
+	 * [Serve time] [On CPU time] [Queue other time]
+	 * [Queue sibling time] [Queue max time] [Force idled time]
+	 */
+	seq_printf(sf, "%lld %lld %lld %lld %lld %lld\n",
 			exec_sum + wait_sum, exec_sum, wait_sum_other,
-			wait_sum - wait_sum_other, wait_max);
+			wait_sum - wait_sum_other - wait_sum_fi, wait_max, wait_sum_fi);
 
 	return 0;
 }
