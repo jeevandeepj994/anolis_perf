@@ -91,7 +91,7 @@ u16 rsvd_ports_base = SMC_IWARP_RSVD_PORTS_BASE;
 module_param(rsvd_ports_base, ushort, 0444);
 MODULE_PARM_DESC(rsvd_ports_base, "base of rsvd ports for reserve_mode");
 
-static int smc_sock_should_select_smc(const struct smc_sock *smc)
+static int smc_sock_should_select_smc(const struct smc_sock *smc, struct sockaddr *addr)
 {
 	const struct smc_sock_negotiator_ops *ops;
 	int ret;
@@ -107,7 +107,7 @@ static int smc_sock_should_select_smc(const struct smc_sock *smc)
 		return SK_PASS;
 	}
 
-	ret = ops->negotiate((struct sock *)&smc->sk);
+	ret = ops->negotiate((struct sock *)&smc->sk, addr);
 	rcu_read_unlock();
 	return ret;
 }
@@ -229,7 +229,7 @@ static bool smc_hs_congested(const struct sock *sk)
 	if (workqueue_congested(WORK_CPU_UNBOUND, smc_hs_wq))
 		return true;
 
-	if (!smc_sock_should_select_smc(smc))
+	if (!smc_sock_should_select_smc(smc, NULL))
 		return true;
 
 	/* only works for inet sock */
@@ -713,7 +713,7 @@ static int smcr_clnt_conf_first_link(struct smc_sock *smc)
 	int rc;
 
 	/* receive CONFIRM LINK request from server over RoCE fabric */
-	qentry = smc_llc_wait(link->lgr, NULL, SMC_LLC_WAIT_TIME,
+	qentry = smc_llc_wait(link->lgr, NULL, 2 * SMC_LLC_WAIT_TIME,
 			      SMC_LLC_CONFIRM_LINK);
 	if (!qentry) {
 		struct smc_clc_msg_decline dclc;
@@ -1040,11 +1040,8 @@ static int smc_switch_to_fallback(struct smc_sock *smc, int reason_code)
 	trace_smc_switch_to_fallback(smc, reason_code);
 
 	/* inet sock  */
-	if (smc_sock_is_inet_sock(&smc->sk)) {
-		smc_inet_sock_move_state(&smc->sk, SMC_NEGOTIATION_TBD,
-					 SMC_NEGOTIATION_NO_SMC);
+	if (smc_sock_is_inet_sock(&smc->sk))
 		return 0;
-	}
 
 	/* smc sock */
 	mutex_lock(&smc->clcsock_release_lock);
@@ -1876,20 +1873,28 @@ static int smc_connect(struct socket *sock, struct sockaddr *addr,
 
 	smc_copy_sock_settings_to_clc(smc);
 
-	if (smc_sock_should_select_smc(smc) !=  SK_PASS) {
+	if (smc_sock_is_inet_sock(sk)) {
+		write_lock_bh(&sk->sk_callback_lock);
+		if (smc_inet_sock_set_syn_smc_locked(sk,
+						     smc_sock_should_select_smc(smc, addr)
+						     == SK_PASS)) {
+			if (flags & O_NONBLOCK)
+				smc_clcsock_replace_cb(&sk->sk_state_change,
+						       smc_inet_sock_state_change,
+						       &smc->clcsk_state_change);
+			/* restore the smc_sk_sndbuf before connect */
+			smc->smc_sk_sndbuf = READ_ONCE(sk->sk_sndbuf);
+		} else if (!tcp_sk(sk)->syn_smc && !smc->use_fallback) {
+			smc_switch_to_fallback(smc, /* active fallback */ SMC_CLC_DECL_ACTIVE);
+		}
+		write_unlock_bh(&sk->sk_callback_lock);
+	} else if (smc_sock_should_select_smc(smc, addr) != SK_PASS) {
 		tcp_sk(smc->clcsock->sk)->syn_smc = 0;
 		smc_switch_to_fallback(smc, /* active fallback */ SMC_CLC_DECL_ACTIVE);
-		goto do_tcp_connect;
-	}
-
-	if (smc_sock_is_inet_sock(sk)) {
-		if (!smc_inet_sock_set_syn_smc(sk, flags))
-			smc_switch_to_fallback(smc, SMC_CLC_DECL_ACTIVE);
 	} else {
 		tcp_sk(smc->clcsock->sk)->syn_smc = 1;
 	}
 
-do_tcp_connect:
 	rc = kernel_connect(smc->clcsock, addr, alen, flags);
 	if (rc && rc != -EINPROGRESS)
 		goto out;
@@ -1915,6 +1920,12 @@ do_tcp_connect:
 again:
 			switch (isck_smc_negotiation_load(smc)) {
 			case SMC_NEGOTIATION_TBD:
+				/* already abort */
+				if (isck_smc_negotiation_get_flags(smc_sk(sk)) &
+								   SMC_NEGOTIATION_ABORT_FLAG) {
+					rc = -ECONNABORTED;
+					break;
+				}
 				smc_inet_sock_move_state_locked(sk, SMC_NEGOTIATION_TBD,
 								SMC_NEGOTIATION_PREPARE_SMC);
 				write_unlock_bh(&sk->sk_callback_lock);
@@ -4004,7 +4015,7 @@ int smc_inet_init_sock(struct sock *sk)
 	smc_sk_set_state(sk, SMC_INIT);
 
 	/* built link */
-	smc->clcsock = &smc->accompany_socket;
+	smc_inet_sock_init_accompany_socket(sk);
 
 	/* Initialize negotiation state, see more details in
 	 * enum smc_inet_sock_negotiation_state.
@@ -4030,8 +4041,6 @@ void smc_inet_sock_proto_release_cb(struct sock *sk)
 int smc_inet_connect(struct socket *sock, struct sockaddr *addr,
 		     int alen, int flags)
 {
-	/* Initialize accompanying socket */
-	smc_inet_sock_init_accompany_socket(sock->sk);
 	return smc_connect(sock, addr, alen, flags);
 }
 
@@ -4057,9 +4066,10 @@ int smc_inet_setsockopt(struct socket *sock, int level, int optname,
 	 */
 	if (!fallback && level == SOL_TCP && smc_is_unsupport_tcp_sockopt(optname)) {
 		/* can not fallback, but with not-supported option */
-		if (smc_inet_sock_try_fallback_fast(sk, /* try best */ 0))
+		if (!smc_inet_sock_try_disable_smc(sk, SMC_NEGOTIATION_NOT_SUPPORT_FLAG))
 			return -EOPNOTSUPP;
 		fallback = true;
+		smc_switch_to_fallback(smc_sk(sk), SMC_CLC_DECL_OPTUNSUPP);
 	}
 
 	/* call original setsockopt */
@@ -4117,7 +4127,7 @@ int smc_inet_sendmsg(struct socket *sock, struct msghdr *msg, size_t len)
 	 * If it dues to user's incorrect usage, then it is also an error for TCP.
 	 * Users should correct that error themselves.
 	 */
-	if (!smc_inet_sock_access_before(sk))
+	if (smc_inet_sock_access_check(sk) == SMC_NEGOTIATION_NO_SMC)
 		goto no_smc;
 
 	rc = smc_sendmsg(sock, msg, len);
@@ -4142,7 +4152,7 @@ int smc_inet_recvmsg(struct socket *sock, struct msghdr *msg, size_t len,
 	 * support in SMC（see smc_recvmsg), we should try our best to fallback
 	 * if passible.
 	 */
-	if (!smc_inet_sock_access_before(sk))
+	if (smc_inet_sock_access_check(sk) == SMC_NEGOTIATION_NO_SMC)
 		goto no_smc;
 
 	rc = smc_recvmsg(sock, msg, len, flags);
@@ -4164,7 +4174,7 @@ ssize_t smc_inet_sendpage(struct socket *sock, struct page *page,
 	smc = smc_sk(sk);
 
 	/* same reason with smc_recvmsg */
-	if (!smc_inet_sock_access_before(sk))
+	if (smc_inet_sock_access_check(sk) == SMC_NEGOTIATION_NO_SMC)
 		goto no_smc;
 
 	rc = smc_sendpage(sock, page, offset, size, flags);
@@ -4186,7 +4196,7 @@ ssize_t smc_inet_splice_read(struct socket *sock, loff_t *ppos,
 
 	smc = smc_sk(sk);
 
-	if (!smc_inet_sock_access_before(sk))
+	if (smc_inet_sock_access_check(sk) == SMC_NEGOTIATION_NO_SMC)
 		goto no_smc;
 
 	rc = smc_splice_read(sock, ppos, pipe, len, flags);
@@ -4250,7 +4260,7 @@ int smc_inet_shutdown(struct socket *sock, int how)
 	/* shutdown during SMC_NEGOTIATION_TBD, we can force it to be
 	 * fallback.
 	 */
-	if (!smc_inet_sock_try_fallback_fast(sk, /* force it to no_smc */ 1))
+	if (smc_inet_sock_try_disable_smc(sk, SMC_NEGOTIATION_ABORT_FLAG))
 		return 0;
 
 	/* executing the corresponding semantics if can not be fallback */
@@ -4290,8 +4300,10 @@ int smc_inet_release(struct socket *sock)
 
 	sock_hold(sk);	/* sock put bellow */
 
+	smc_inet_sock_try_disable_smc(sk, SMC_NEGOTIATION_ABORT_FLAG);
+
 	/* check fallback ? */
-	if (!smc_inet_sock_try_fallback_fast(sk, /* force it to no_smc */ 1)) {
+	if (smc_inet_sock_check_fallback(sk)) {
 		if (smc_sk_state(sk) == SMC_ACTIVE)
 			sock_put(sk);	/* sock put for passive closing */
 		smc_sock_set_flag(sk, SOCK_DEAD);
@@ -4570,7 +4582,8 @@ struct sock *__smc_inet_csk_accept(struct sock *sk, int flags, int *err, bool ke
 		switch (cur) {
 		case SMC_NEGOTIATION_NO_SMC:
 			smc_sk_set_state(child, SMC_ACTIVE);
-			smc_switch_to_fallback(smc_sk(child), SMC_CLC_DECL_PEERNOSMC);
+			if (!smc_sk(child)->use_fallback)
+				smc_switch_to_fallback(smc_sk(child), SMC_CLC_DECL_PEERNOSMC);
 			smc_sock_clone_negotiator_ops(sk, child);
 			break;
 		case SMC_NEGOTIATION_PREPARE_SMC:

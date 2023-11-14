@@ -380,7 +380,7 @@ struct smc_sock_negotiator_ops {
 	void (*release)(struct sock *sk);
 
 	/* advice for negotiate */
-	int (*negotiate)(struct sock *sk);
+	int (*negotiate)(struct sock *sk, struct sockaddr *addr);
 
 	/* info gathering timing */
 	void (*collect_info)(struct sock *sk, int timing);
