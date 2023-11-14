@@ -11,8 +11,10 @@
 #include <linux/errno.h>
 #include <linux/tracehook.h>
 #include <linux/syscalls.h>
+#include <linux/livepatch.h>
 
 #include <asm/ucontext.h>
+#include <asm/uprobes.h>
 #include <asm/vdso.h>
 #include <asm/switch_to.h>
 
@@ -166,7 +168,7 @@ do_sigreturn(struct sigcontext __user *sc)
 	/* Send SIGTRAP if we're single-stepping: */
 	if (ptrace_cancel_bpt(current)) {
 		force_sig_fault(SIGTRAP, TRAP_BRKPT,
-				(void __user *)regs->pc, 0);
+				(void __user *)regs->pc);
 	}
 	return;
 
@@ -197,7 +199,7 @@ do_rt_sigreturn(struct rt_sigframe __user *frame)
 	/* Send SIGTRAP if we're single-stepping: */
 	if (ptrace_cancel_bpt(current)) {
 		force_sig_fault(SIGTRAP, TRAP_BRKPT,
-				(void __user *)regs->pc, 0);
+				(void __user *)regs->pc);
 	}
 	return;
 
@@ -342,7 +344,7 @@ syscall_restart(unsigned long r0, unsigned long r19,
 			regs->r0 = EINTR;
 			break;
 		}
-		/* else: fallthrough */
+		fallthrough;
 	case ERESTARTNOINTR:
 		regs->r0 = r0;	/* reset v0 and a3 and replay syscall */
 		regs->r19 = r19;
@@ -420,8 +422,15 @@ do_work_pending(struct pt_regs *regs, unsigned long thread_flags,
 		} else {
 			local_irq_enable();
 
-			if (thread_flags & _TIF_UPROBE)
+			if (thread_flags & _TIF_UPROBE) {
+				unsigned long pc = regs->pc;
+
 				uprobe_notify_resume(regs);
+				sw64_fix_uretprobe(regs, pc - 4);
+			}
+
+			if (thread_flags & _TIF_PATCH_PENDING)
+				klp_update_patch_state(current);
 
 			if (thread_flags & _TIF_SIGPENDING) {
 				do_signal(regs, r0, r19);

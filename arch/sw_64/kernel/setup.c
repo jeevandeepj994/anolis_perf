@@ -361,7 +361,7 @@ void __init process_memmap(void)
 	static int i;	// Make it static so we won't start over again every time.
 	int ret;
 	phys_addr_t base, size;
-	unsigned long dma_end __maybe_unused = virt_to_phys((void *)MAX_DMA_ADDRESS);
+	unsigned long dma_end __maybe_unused = (MAX_DMA32_PFN << PAGE_SHIFT);
 
 	if (!memblock_initialized)
 		return;
@@ -795,17 +795,6 @@ setup_arch(char **cmdline_p)
 	}
 #endif /* CMDLINE_EXTEND */
 #endif
-	if (IS_ENABLED(CONFIG_SW64_CHIP3_ASIC_DEBUG) &&
-			IS_ENABLED(CONFIG_SW64_CHIP3)) {
-		unsigned long bmc, cpu_online, node;
-
-		bmc = *(unsigned long *)__va(0x800000);
-		pr_info("bmc = %ld\n", bmc);
-		cpu_online = sw64_chip->get_cpu_num();
-		for (node = 0; node < cpu_online; node++)
-			sw64_io_write(node, SI_FAULT_INT_EN, 0);
-		sprintf(boot_command_line, "root=/dev/sda2 ip=172.16.137.%ld::172.16.137.254:255.255.255.0::eth0:off", 180+bmc);
-	}
 
 	strlcpy(command_line, boot_command_line, COMMAND_LINE_SIZE);
 	*cmdline_p = command_line;
@@ -897,7 +886,7 @@ show_cpuinfo(struct seq_file *f, void *slot)
 	int i;
 	unsigned long cpu_freq;
 
-	cpu_freq = get_cpu_freq() / 1000 / 1000;
+	cpu_freq = cpuid(GET_CPU_FREQ, 0);
 
 	for_each_online_cpu(i) {
 		/*
@@ -921,7 +910,7 @@ show_cpuinfo(struct seq_file *f, void *slot)
 				"cache size\t: %u KB\n"
 				"physical id\t: %d\n"
 				"bogomips\t: %lu.%02lu\n",
-				cpu_freq, cpu_data[i].tcache.size >> 10,
+				get_cpu_freq() / 1000 / 1000, cpu_data[i].tcache.size >> 10,
 				cpu_topology[i].package_id,
 				loops_per_jiffy / (500000/HZ),
 				(loops_per_jiffy / (5000/HZ)) % 100);

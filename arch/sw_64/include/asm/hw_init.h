@@ -83,11 +83,9 @@ static inline unsigned long get_cpu_freq(void)
 	return cpu_desc.frequency;
 }
 
-static inline void update_cpu_freq(unsigned long freq)
+static inline void update_cpu_freq(unsigned long khz)
 {
-	freq = freq * 1000000;
-	if (cpu_desc.frequency != freq)
-		cpu_desc.frequency = freq;
+	cpu_desc.frequency = khz * 1000;
 }
 
 #define EMUL_FLAG	(0x1UL << 63)

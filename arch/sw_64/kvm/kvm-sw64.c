@@ -16,6 +16,7 @@
 #include <linux/msi.h>
 #include <asm/kvm_timer.h>
 #include <asm/kvm_emulate.h>
+#include <asm/core.h>
 
 #define CREATE_TRACE_POINTS
 #include "trace.h"
@@ -39,19 +40,10 @@ extern bool bind_vcpu_enabled;
 #define HARDWARE_VPN_MASK	((1UL << WIDTH_HARDWARE_VPN) - 1)
 #define VPN_SHIFT		(64 - WIDTH_HARDWARE_VPN)
 
-#define VCPU_STAT(n, x, ...) \
-	{ n, offsetof(struct kvm_vcpu, stat.x), KVM_STAT_VCPU, ##  __VA_ARGS__ }
-#define VM_STAT(n, x, ...) \
-	{ n, offsetof(struct kvm, stat.x), KVM_STAT_VM, ## __VA_ARGS__ }
+#define GUEST_RESET_PC          0xffffffff80011100
+
 #define DFX_STAT(n, x, ...) \
 	{ n, offsetof(struct kvm_vcpu_stat, x), DFX_STAT_U64, ## __VA_ARGS__ }
-
-static DEFINE_PER_CPU(struct kvm_vcpu *, kvm_running_vcpu);
-
-static void kvm_set_running_vcpu(struct kvm_vcpu *vcpu)
-{
-	__this_cpu_write(kvm_running_vcpu, vcpu);
-}
 
 int vcpu_interrupt_line(struct kvm_vcpu *vcpu, int number, bool level)
 {
@@ -272,7 +264,7 @@ void kvm_arch_commit_memory_region(struct kvm *kvm,
 {
 	/*
 	 * At this point memslot has been committed and there is an
-	 * allocated dirty_bitmap[], dirty pages will be be tracked while the
+	 * allocated dirty_bitmap[], dirty pages will be tracked while the
 	 * memory slot is write protected.
 	 */
 
@@ -400,14 +392,17 @@ static void setup_segment_table(struct kvm *kvm,
 	struct kvm_memory_slot *memslot, unsigned long addr, size_t size)
 {
 	unsigned long *seg_pgd = kvm->arch.seg_pgd;
-	unsigned int num_of_entry = size >> 30;
-	unsigned long base_hpa = addr >> 30;
-	int i;
+	unsigned long num_of_entry;
+	unsigned long base_hpa = addr;
+	unsigned long i;
+
+	num_of_entry = round_up(size, 1 << 30) >> 30;
 
 	for (i = 0; i < num_of_entry; i++) {
-		*seg_pgd = base_hpa + i;
+		*seg_pgd = base_hpa + (i << 30);
 		seg_pgd++;
 	}
+
 }
 #endif
 
@@ -481,7 +476,7 @@ int kvm_arch_prepare_memory_region(struct kvm *kvm,
 #endif
 
 		info->start = addr;
-		info->size = size;
+		info->size = mem->memory_size;
 		vma->vm_private_data = (void *) info;
 
 		vma->vm_ops = &vmem_vm_ops;
@@ -597,7 +592,6 @@ static void update_steal_time(struct kvm_vcpu *vcpu)
 void kvm_arch_vcpu_load(struct kvm_vcpu *vcpu, int cpu)
 {
 	vcpu->cpu = cpu;
-	kvm_set_running_vcpu(vcpu);
 	update_steal_time(vcpu);
 }
 
@@ -609,7 +603,6 @@ void kvm_arch_vcpu_put(struct kvm_vcpu *vcpu)
 	 * optimized make_all_cpus_request path.
 	 */
 	vcpu->cpu = -1;
-	kvm_set_running_vcpu(NULL);
 }
 
 int kvm_arch_vcpu_ioctl_get_mpstate(struct kvm_vcpu *vcpu,
@@ -656,7 +649,7 @@ void _debug_printk_vcpu(struct kvm_vcpu *vcpu)
 	disp16 = insn & 0xffff;
 
 	if (opc == 0x06 && disp16 == 0x1000) /* RD_F */
-		pr_info("vcpu exit: pc = %#lx (%px), insn[%x] : rd_f r%d [%#lx]\n",
+		pr_info("vcpu exit: pc = %#lx (%p), insn[%x] : rd_f r%d [%#lx]\n",
 				pc, pc_phys, insn, ra, vcpu_get_reg(vcpu, ra));
 }
 
@@ -744,6 +737,13 @@ int kvm_arch_vcpu_ioctl_run(struct kvm_vcpu *vcpu)
 		memset(&hargs, 0, sizeof(hargs));
 
 		clear_vcpu_irq(vcpu);
+
+		if (vcpu->arch.restart == 1) {
+			/* handle reset vCPU */
+			vcpu->arch.regs.pc = GUEST_RESET_PC;
+			vcpu->arch.restart = 0;
+		}
+
 		irq = interrupt_pending(vcpu, &more);
 		if (irq < SWVM_IRQS)
 			try_deliver_interrupt(vcpu, irq, more);
@@ -941,11 +941,11 @@ void vcpu_mem_hotplug(struct kvm_vcpu *vcpu, unsigned long start_addr)
 			unsigned long *seg_pgd;
 			unsigned long num_of_entry = slot->npages >> 17;
 			unsigned long base_hpa = slot->arch.host_phys_addr;
-			int i;
+			unsigned long i;
 
 			seg_pgd = kvm->arch.seg_pgd + (start_pfn >> 17);
 			for (i = 0; i < num_of_entry; i++) {
-				*seg_pgd = (base_hpa >> 30) + i;
+				*seg_pgd = base_hpa + (i << 30);
 				seg_pgd++;
 			}
 		}
@@ -953,9 +953,12 @@ void vcpu_mem_hotplug(struct kvm_vcpu *vcpu, unsigned long start_addr)
 }
 #endif
 
-void vcpu_send_ipi(struct kvm_vcpu *vcpu, int target_vcpuid)
+void vcpu_send_ipi(struct kvm_vcpu *vcpu, int target_vcpuid, int type)
 {
 	struct kvm_vcpu *target_vcpu = kvm_get_vcpu(vcpu->kvm, target_vcpuid);
+
+	if (type == II_RESET)
+		target_vcpu->arch.restart = 1;
 
 	if (target_vcpu != NULL)
 		vcpu_interrupt_line(target_vcpu, 1, 1);

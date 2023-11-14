@@ -56,8 +56,6 @@ EXPORT_SYMBOL(smp_num_cpus);
 #define send_sleep_interrupt(cpu)	send_ipi((cpu), II_SLEEP)
 #define send_wakeup_interrupt(cpu)	send_ipi((cpu), II_WAKE)
 
-void __weak enable_chip_int(void) { }
-
 /*
  * Where secondaries begin a life of C.
  */
@@ -66,8 +64,6 @@ void smp_callin(void)
 	int cpuid = smp_processor_id();
 
 	local_irq_disable();
-
-	enable_chip_int();
 
 	if (cpu_online(cpuid)) {
 		printk("??, cpu 0x%x already present??\n", cpuid);
@@ -268,6 +264,10 @@ int vt_cpu_up(unsigned int cpu, struct task_struct *tidle)
 
 	wmb();
 	smp_rcb->ready = 0;
+	if (smp_booted) {
+		/* irq must be disabled before reset vCPU */
+		reset_cpu(cpu);
+	}
 	smp_boot_one_cpu(cpu, tidle);
 
 	return cpu_online(cpu) ? 0 : -ENOSYS;
@@ -373,6 +373,8 @@ void handle_ipi(struct pt_regs *regs)
 
 			case IPI_CPU_STOP:
 				ipi_cpu_stop(cpu);
+				break;
+
 			default:
 				pr_crit("Unknown IPI on CPU %d: %lu\n", cpu, which);
 				break;

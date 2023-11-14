@@ -164,7 +164,7 @@ do_entArith(unsigned long summary, unsigned long write_mask,
 	if (!user_mode(regs))
 		die("Arithmetic fault", regs, 0);
 
-	force_sig_fault(SIGFPE, si_code, (void __user *)regs->pc, 0);
+	force_sig_fault(SIGFPE, si_code, (void __user *)regs->pc);
 }
 
 void simd_emulate(unsigned int inst, unsigned long va)
@@ -217,7 +217,7 @@ do_entIF(unsigned long inst_type, unsigned long va, struct pt_regs *regs)
 
 	switch (type) {
 	case IF_BREAKPOINT: /* gdb do pc-4 for sigtrap */
-		force_sig_fault(SIGTRAP, TRAP_BRKPT, (void __user *)regs->pc, 0);
+		force_sig_fault(SIGTRAP, TRAP_BRKPT, (void __user *)regs->pc);
 		return;
 
 	case IF_GENTRAP:
@@ -280,7 +280,7 @@ do_entIF(unsigned long inst_type, unsigned long va, struct pt_regs *regs)
 			break;
 		}
 
-		force_sig_fault(signo, code, (void __user *)regs->pc, regs->r16);
+		force_sig_fault(signo, code, (void __user *)regs->pc);
 		return;
 
 	case IF_FEN:
@@ -293,17 +293,20 @@ do_entIF(unsigned long inst_type, unsigned long va, struct pt_regs *regs)
 		case BREAK_KPROBE:
 			if (notify_die(DIE_BREAK, "kprobe", regs, 0, 0, SIGTRAP) == NOTIFY_STOP)
 				return;
+			break;
 		case BREAK_KPROBE_SS:
 			if (notify_die(DIE_SSTEPBP, "single_step", regs, 0, 0, SIGTRAP) == NOTIFY_STOP)
 				return;
+			break;
 #endif
 #ifdef CONFIG_UPROBES
 		case UPROBE_BRK_UPROBE:
 			if (notify_die(DIE_UPROBE, "uprobe", regs, 0, 0, SIGTRAP) == NOTIFY_STOP)
-				return sw64_fix_uretprobe(regs);
+				return;
+			break;
 		case UPROBE_BRK_UPROBE_XOL:
 			if (notify_die(DIE_UPROBE_XOL, "uprobe_xol", regs, 0, 0, SIGTRAP) == NOTIFY_STOP)
-				return sw64_fix_uretprobe(regs);
+				return;
 #endif
 		}
 
@@ -318,7 +321,7 @@ do_entIF(unsigned long inst_type, unsigned long va, struct pt_regs *regs)
 		break;
 	}
 
-	force_sig_fault(SIGILL, ILL_ILLOPC, (void __user *)regs->pc, 0);
+	force_sig_fault(SIGILL, ILL_ILLOPC, (void __user *)regs->pc);
 }
 
 asmlinkage void
@@ -1481,12 +1484,12 @@ give_sigsegv:
 			si_code = SEGV_MAPERR;
 		up_read(&mm->mmap_lock);
 	}
-	force_sig_fault(SIGSEGV, si_code, va, 0);
+	force_sig_fault(SIGSEGV, si_code, va);
 	return;
 
 give_sigbus:
 	regs->pc -= 4;
-	force_sig_fault(SIGBUS, BUS_ADRALN, va, 0);
+	force_sig_fault(SIGBUS, BUS_ADRALN, va);
 }
 
 void
