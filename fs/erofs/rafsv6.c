@@ -239,6 +239,58 @@ static int __rafs_v6_file_mmap(struct file *file, struct vm_area_struct *vma)
 	return 0;
 }
 
+static int __rafs_v6_file_direct_mmap(struct file *file, struct vm_area_struct *vma)
+{
+	struct inode *inode = file_inode(file);
+	struct erofs_map_blocks map = { 0 };
+	struct erofs_map_dev mdev;
+	int err;
+
+	if (file != vma->vm_file) {
+		WARN_ON_ONCE(1);
+		return -EIO;
+	}
+
+	err = erofs_map_blocks(inode, &map);
+	if (err) {
+		erofs_err(inode->i_sb, "direct_mmap: failed to map_blocks err %d",
+			  err);
+		return err;
+	}
+
+	mdev = (struct erofs_map_dev) {
+		.m_deviceid = map.m_deviceid,
+		.m_pa = map.m_pa,
+	};
+	err = erofs_map_dev(inode->i_sb, &mdev);
+	if (err) {
+		erofs_err(inode->i_sb, "direct_mmap: failed to map_dev err %d",
+			  err);
+		return err;
+	}
+
+	if (!mdev.m_fp || !mdev.m_fp->f_op->mmap) {
+		erofs_err(inode->i_sb, "direct_mmap: mdev.m_fp %p",
+			  mdev.m_fp);
+		return -EOPNOTSUPP;
+	}
+
+	vma->vm_file = get_file(mdev.m_fp);
+	vma->vm_pgoff += mdev.m_pa >> PAGE_SHIFT;
+	err = call_mmap(vma->vm_file, vma);
+	if (err) {
+		printk_ratelimited(KERN_ERR "direct_mmap: call_mmap failed with err %d\n",
+				   err);
+		vma->vm_file = file;
+		vma->vm_pgoff -= mdev.m_pa >> PAGE_SHIFT;
+		fput(mdev.m_fp);
+	} else {
+		fput(file);
+	}
+
+	return err;
+}
+
 static int rafs_v6_file_mmap(struct file *file, struct vm_area_struct *vma)
 {
 	struct inode *inode = file_inode(file);
@@ -246,14 +298,21 @@ static int rafs_v6_file_mmap(struct file *file, struct vm_area_struct *vma)
 	if (test_opt(&EROFS_I_SB(inode)->opt, BLOB_MMAP_PIN))
 		return __rafs_v6_file_mmap(file, vma);
 
-	return -EOPNOTSUPP;
+	return __rafs_v6_file_direct_mmap(file, vma);
 }
 
 const struct file_operations rafs_v6_file_ro_fops = {
 	.llseek		= generic_file_llseek,
 	.read_iter	= rafs_v6_file_read_iter,
 	.mmap		= rafs_v6_file_mmap,
-//	.mmap		= generic_file_readonly_mmap,
+	.splice_read	= generic_file_splice_read,
+};
+
+// Fops for regular files with multiple non-contiguous chunks
+static const struct file_operations rafs_v6_chunk_ro_fops = {
+	.llseek		= generic_file_llseek,
+	.read_iter	= rafs_v6_file_read_iter,
+	.mmap		= generic_file_readonly_mmap,
 	.splice_read	= generic_file_splice_read,
 };
 
@@ -320,8 +379,17 @@ const struct address_space_operations rafs_v6_access_aops = {
 };
 
 void erofs_rafsv6_set_fops(struct inode *inode)
-{
-	inode->i_fop = &rafs_v6_file_ro_fops;
+	{
+	struct erofs_inode *vi = EROFS_I(inode);
+
+	if (vi->datalayout == EROFS_INODE_FLAT_PLAIN) {
+		inode->i_fop = &rafs_v6_file_ro_fops;
+	} else if (vi->datalayout == EROFS_INODE_CHUNK_BASED &&
+		   (1 << vi->chunkbits) >= inode->i_size) {
+		inode->i_fop = &rafs_v6_file_ro_fops;
+	} else {
+		inode->i_fop = &rafs_v6_chunk_ro_fops;
+	}
 }
 
 void erofs_rafsv6_set_aops(struct inode *inode)
