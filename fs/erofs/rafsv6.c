@@ -4,6 +4,8 @@
  */
 #include <linux/uio.h>
 #include <linux/file.h>
+#include <linux/printk.h>
+#include <linux/ratelimit.h>
 #include "internal.h"
 
 static ssize_t rafs_v6_read_chunk(struct super_block *sb,
@@ -19,8 +21,11 @@ static ssize_t rafs_v6_read_chunk(struct super_block *sb,
 	int err;
 
 	err = erofs_map_dev(sb, &mdev);
-	if (err)
+	if (err) {
+		erofs_err(sb, "read_chunk: failed to map_dev err %d",
+			  err);
 		return err;
+	}
 	off = mdev.m_pa;
 	do {
 		ssize_t ret;
@@ -29,10 +34,13 @@ static ssize_t rafs_v6_read_chunk(struct super_block *sb,
 			iov_iter_pipe(&titer, READ, to->pipe, size - read);
 
 			ret = vfs_iter_read(mdev.m_fp, &titer, &off, 0);
-			pr_debug("pipe ret %ld off %llu size %llu read %ld\n",
+			erofs_dbg("pipe ret %ld off %llu size %llu read %ld",
 				 ret, off, size, read);
 			if (ret <= 0) {
-				pr_err("%s: pipe failed to read blob ret %ld\n", __func__, ret);
+				erofs_err(sb, "failed to read blob ret %ld (pipe off %llu size %llu read %ld device_id %u mdev m_deviceid %u m_pa %llu m_fp %p m_fscache %p)",
+				       ret, off, size, read, device_id,
+				       mdev.m_deviceid, mdev.m_pa, mdev.m_fp,
+				       mdev.m_fscache);
 				return ret;
 			}
 		} else if (iov_iter_is_kvec(to)) {
@@ -44,10 +52,13 @@ static ssize_t rafs_v6_read_chunk(struct super_block *sb,
 			iov_iter_kvec(&titer, READ, to->kvec, 1, size - read);
 
 			ret = vfs_iter_read(mdev.m_fp, &titer, &off, 0);
-			pr_debug("kvec ret %ld off %llu size %llu read %ld\n",
+			erofs_dbg("kvec ret %ld off %llu size %llu read %ld",
 				 ret, off, size, read);
 			if (ret <= 0) {
-				pr_err("%s: kvec failed to read blob ret %ld\n", __func__, ret);
+				erofs_err(sb, "failed to read blob ret %ld (kvec off %llu size %llu read %ld device_id %u mdev m_deviceid %u m_pa %llu m_fp %p m_fscache %p)",
+				       ret, off, size, read, device_id,
+				       mdev.m_deviceid, mdev.m_pa, mdev.m_fp,
+				       mdev.m_fscache);
 				return ret;
 			}
 		} else {
@@ -61,14 +72,17 @@ static ssize_t rafs_v6_read_chunk(struct super_block *sb,
 			if (iovec.iov_len > size - read)
 				iovec.iov_len = size - read;
 
-			pr_debug("%s: off %llu size %llu iov_len %lu blob_index %u\n",
-				 __func__, off, size, iovec.iov_len, device_id);
+			erofs_dbg("read_chunk: off %llu size %llu iov_len %lu blob_index %u",
+				 off, size, iovec.iov_len, device_id);
 
 			/* TODO async */
 			iov_iter_init(&titer, READ, &iovec, 1, iovec.iov_len);
 			ret = vfs_iter_read(mdev.m_fp, &titer, &off, 0);
 			if (ret <= 0) {
-				pr_err("%s: iovec failed to read blob ret %ld\n", __func__, ret);
+				erofs_err(sb, "failed to read blob ret %ld (iovec off %llu size %llu read %ld device_id %u mdev m_deviceid %u m_pa %llu m_fp %p m_fscache %p)",
+				       ret, off, size, read, device_id,
+				       mdev.m_deviceid, mdev.m_pa, mdev.m_fp,
+				       mdev.m_fscache);
 				return ret;
 			} else if (ret < iovec.iov_len) {
 				return read;
@@ -99,20 +113,24 @@ static ssize_t rafs_v6_file_read_iter(struct kiocb *iocb, struct iov_iter *to)
 
 			map.m_la = pos;
 			err = erofs_map_blocks(inode, &map);
-			if (err)
+			if (err) {
+				erofs_err(inode->i_sb,
+					  "rafs_v6_read: failed to map_blocks err %d",
+					  err);
 				return err;
+			}
 			if (map.m_la >= inode->i_size)
 				break;
 		}
 		delta = pos - map.m_la;
 		size = min_t(u64, map.m_llen - delta, total);
-		pr_debug("inode i_size %llu pa %llu delta %llu size %llu",
+		erofs_dbg("inode i_size %llu pa %llu delta %llu size %llu",
 			 inode->i_size, map.m_pa, delta, size);
 		read = rafs_v6_read_chunk(inode->i_sb, to, map.m_pa + delta,
 					  size, map.m_deviceid);
 		if (read <= 0 || read < size) {
 			erofs_err(inode->i_sb,
-				  "short read %ld pos %llu size %llu @ nid %llu",
+				  "rafs_v6_read: short read %ld pos %llu size %llu @ nid %llu",
 				  read, pos, size, EROFS_I(inode)->nid);
 			return read < 0 ? read : -EIO;
 		}
@@ -211,13 +229,14 @@ static int __rafs_v6_file_mmap(struct file *file, struct vm_area_struct *vma)
 	int ret;
 
 	if (!realfile || !realfile->f_op->mmap) {
-		pr_err("%s: no bootstrap or mmap\n", __func__);
+		erofs_err(inode->i_sb, "nondirect_mmap: no bootstrap or mmap\n");
 		return -EOPNOTSUPP;
 	}
 
 	ret = call_mmap(EROFS_I_SB(inode)->bootstrap, vma);
 	if (ret) {
-		pr_err("%s: call_mmap failed ret %d\n", __func__, ret);
+		erofs_err(inode->i_sb,
+			  "nondirect_mmap: call_mmap failed ret %d\n", ret);
 		return ret;
 	}
 
@@ -331,8 +350,11 @@ static int rafs_v6_readpage(struct file *file, struct page *page)
 	int err;
 
 	err = erofs_map_blocks(inode, &map);
-	if (err)
+	if (err) {
+		erofs_err(inode->i_sb, "readpage: failed to map_blocks err %d",
+			  err);
 		goto err_out;
+	}
 
 	mdev = (struct erofs_map_dev) {
 		.m_deviceid = map.m_deviceid,
@@ -340,7 +362,8 @@ static int rafs_v6_readpage(struct file *file, struct page *page)
 	};
 	err = erofs_map_dev(sb, &mdev);
 	if (err) {
-		WARN_ON_ONCE(1);
+		erofs_err(inode->i_sb, "readpage: failed to map_dev err %d",
+			  err);
 		goto err_out;
 	}
 
@@ -358,8 +381,8 @@ static int rafs_v6_readpage(struct file *file, struct page *page)
 	err = call_read_iter(mdev.m_fp, &kiocb, &iter);
 	if (err < iov.iov_len) {
 		if (err < 0)
-			erofs_err(inode->i_sb, "%s: failed to read blob ret %d",
-			       __func__, err);
+			erofs_err(inode->i_sb, "readpage: failed to read blob ret %d",
+				  err);
 		goto err_out;
 	}
 	if (iov.iov_len < PAGE_SIZE)
