@@ -441,6 +441,8 @@
 /* HYGON Secure Isolated Virtualization */
 #define X86_FEATURE_CSV3		(19*32 + 30) /* HYGON Secure Isolated Virtualization */
 
+#define X86_FEATURE_AUTOIBRS		(20*32+ 8) /* "" Automatic IBRS */
+
 /* HYGON-defined CPU features, CPUID level 0x8c860000:0 (EDX), word 21 */
 #define X86_FEATURE_SM3			(21*32 + 1) /* SM3 instructions */
 #define X86_FEATURE_SM4			(21*32 + 2) /* SM4 instructions */
