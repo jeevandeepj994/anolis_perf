@@ -4981,8 +4981,6 @@ static inline struct task_struct *pick_task(struct rq *rq)
 	BUG(); /* The idle class should always have a runnable task. */
 }
 
-extern void task_vruntime_update(struct rq *rq, struct task_struct *p, bool in_fi);
-
 static void queue_core_balance(struct rq *rq);
 
 static struct task_struct *
@@ -5086,7 +5084,6 @@ pick_next_task(struct rq *rq, struct task_struct *prev, struct rq_flags *rf)
 			 * unconstrained picks as well.
 			 */
 			WARN_ON_ONCE(fi_before);
-			task_vruntime_update(rq, next, false);
 			goto out_set_next;
 		}
 	}
@@ -5137,8 +5134,6 @@ pick_next_task(struct rq *rq, struct task_struct *prev, struct rq_flags *rf)
 			rq->core->core_sibidle_count++;
 			if (rq_i->nr_running) {
 				rq->core->core_forceidle_count++;
-				if (!fi_before)
-					rq->core->core_forceidle_seq++;
 			}
 		} else {
 			occ++;
@@ -5177,17 +5172,6 @@ pick_next_task(struct rq *rq, struct task_struct *prev, struct rq_flags *rf)
 		 */
 		if (!rq_i->core_pick)
 			continue;
-
-		/*
-		 * Update for new !FI->FI transitions, or if continuing to be in !FI:
-		 * fi_before     fi      update?
-		 *  0            0       1
-		 *  0            1       1
-		 *  1            0       1
-		 *  1            1       0
-		 */
-		if (!(fi_before && rq->core->core_forceidle_count))
-			task_vruntime_update(rq_i, rq_i->core_pick, !!rq->core->core_forceidle_count);
 
 		if (rq->core->core_forceidle_count)
 			rq_i->core_pick->core_occupation = occ;
@@ -5336,7 +5320,7 @@ static void sched_core_cpu_starting(unsigned int cpu)
 	const struct cpumask *smt_mask = cpu_smt_mask(cpu);
 	struct rq *rq = cpu_rq(cpu), *core_rq = NULL;
 	unsigned long flags;
-	int t;
+	int t, core_id;
 
 	sched_core_lock(cpu, &flags);
 
@@ -5353,6 +5337,7 @@ static void sched_core_cpu_starting(unsigned int cpu)
 		rq = cpu_rq(t);
 		if (rq->core == rq) {
 			core_rq = rq;
+			core_id = t;
 			break;
 		}
 	}
@@ -5364,8 +5349,11 @@ static void sched_core_cpu_starting(unsigned int cpu)
 	for_each_cpu(t, smt_mask) {
 		rq = cpu_rq(t);
 
-		if (t == cpu)
+		if (t == cpu) {
 			rq->core = core_rq;
+			rq->core_id = core_id;
+			rq->cfs.core = &core_rq->cfs;
+		}
 
 		WARN_ON_ONCE(rq->core != core_rq);
 	}
@@ -5379,7 +5367,7 @@ static void sched_core_cpu_deactivate(unsigned int cpu)
 	const struct cpumask *smt_mask = cpu_smt_mask(cpu);
 	struct rq *rq = cpu_rq(cpu), *core_rq = NULL;
 	unsigned long flags;
-	int t;
+	int t, core_id;
 
 	sched_core_lock(cpu, &flags);
 
@@ -5398,6 +5386,7 @@ static void sched_core_cpu_deactivate(unsigned int cpu)
 		if (t == cpu)
 			continue;
 		core_rq = cpu_rq(t);
+		core_id = t;
 		break;
 	}
 
@@ -5409,7 +5398,6 @@ static void sched_core_cpu_deactivate(unsigned int cpu)
 	core_rq->core_pick_seq             = rq->core_pick_seq;
 	core_rq->core_cookie               = rq->core_cookie;
 	core_rq->core_forceidle_count      = rq->core_forceidle_count;
-	core_rq->core_forceidle_seq        = rq->core_forceidle_seq;
 	core_rq->core_sibidle_occupation   = rq->core_sibidle_occupation;
 	core_rq->core_sibidle_count        = rq->core_sibidle_count;
 
@@ -5424,6 +5412,8 @@ static void sched_core_cpu_deactivate(unsigned int cpu)
 	for_each_cpu(t, smt_mask) {
 		rq = cpu_rq(t);
 		rq->core = core_rq;
+		rq->core_id = core_id;
+		rq->cfs.core = &core_rq->cfs;
 	}
 
 unlock:
@@ -5434,8 +5424,11 @@ static inline void sched_core_cpu_dying(unsigned int cpu)
 {
 	struct rq *rq = cpu_rq(cpu);
 
-	if (rq->core != rq)
+	if (rq->core != rq) {
 		rq->core = rq;
+		rq->core_id = cpu;
+		rq->cfs.core = &rq->cfs;
+	}
 }
 
 #else /* !CONFIG_SCHED_CORE */
@@ -8322,6 +8315,8 @@ void __init sched_init(void)
 		rq->core_sibidle_count = 0;
 		rq->core_sibidle_occupation = 0;
 		rq->core_sibidle_start = 0;
+		rq->core_id = i;
+		rq->cfs.core = &rq->cfs;
 
 		rq->core_cookie = 0UL;
 #endif

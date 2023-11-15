@@ -2237,25 +2237,43 @@ static void update_min_vruntime(struct cfs_rq *cfs_rq)
 	struct rb_node *leftmost = rb_first_cached(&cfs_rq->tasks_timeline);
 
 	u64 vruntime = cfs_rq->min_vruntime;
+#ifdef CONFIG_SCHED_CORE
+	u64 core_vruntime = cfs_rq->core->core_min_vruntime;
+#endif
 
 	if (curr) {
-		if (curr->on_rq && !is_underclass(curr))
+		if (curr->on_rq && !is_underclass(curr)) {
 			vruntime = curr->vruntime;
-		else
+#ifdef CONFIG_SCHED_CORE
+			core_vruntime = curr->core_vruntime;
+#endif
+		} else {
 			curr = NULL;
+		}
 	}
 
 	if (leftmost) { /* non-empty tree */
 		struct sched_entity *se = __node_2_se(leftmost);
 
-		if (!curr)
+		if (!curr) {
 			vruntime = se->vruntime;
-		else
+#ifdef CONFIG_SCHED_CORE
+			core_vruntime = se->core_vruntime;
+#endif
+		} else {
 			vruntime = min_vruntime(vruntime, se->vruntime);
+#ifdef CONFIG_SCHED_CORE
+			core_vruntime = min_vruntime(core_vruntime, se->core_vruntime);
+#endif
+		}
 	}
 
 	/* ensure we never gain time by being placed backwards. */
 	cfs_rq->min_vruntime = max_vruntime(cfs_rq->min_vruntime, vruntime);
+#ifdef CONFIG_SCHED_CORE
+	cfs_rq->core->core_min_vruntime =
+		max_vruntime(cfs_rq->core->core_min_vruntime, core_vruntime);
+#endif
 #ifndef CONFIG_64BIT
 	smp_wmb();
 	cfs_rq->min_vruntime_copy = cfs_rq->min_vruntime;
@@ -2570,7 +2588,7 @@ static void update_curr(struct cfs_rq *cfs_rq)
 {
 	struct sched_entity *curr = cfs_rq->curr;
 	u64 now = rq_clock_task(rq_of(cfs_rq));
-	u64 delta_exec;
+	u64 delta_exec, delta_fair;
 
 	if (unlikely(!curr))
 		return;
@@ -2587,7 +2605,11 @@ static void update_curr(struct cfs_rq *cfs_rq)
 	curr->sum_exec_runtime += delta_exec;
 	schedstat_add(cfs_rq->exec_clock, delta_exec);
 
-	curr->vruntime += calc_delta_fair(delta_exec, curr);
+	delta_fair = calc_delta_fair(delta_exec, curr);
+	curr->vruntime += delta_fair;
+#ifdef CONFIG_SCHED_CORE
+	curr->core_vruntime += delta_fair;
+#endif
 	update_min_vruntime(cfs_rq);
 
 	if (entity_is_task(curr)) {
@@ -5990,6 +6012,9 @@ static void
 place_entity(struct cfs_rq *cfs_rq, struct sched_entity *se, int initial)
 {
 	u64 vruntime = id_min_vruntime(cfs_rq, se);
+#ifdef CONFIG_SCHED_CORE
+	u64 core_vruntime = cfs_rq->core->core_min_vruntime;
+#endif
 
 	/*
 	 * The 'current' period is already promised to the current tasks,
@@ -5997,8 +6022,12 @@ place_entity(struct cfs_rq *cfs_rq, struct sched_entity *se, int initial)
 	 * little, place the new task so that it fits in the slot that
 	 * stays open at the end.
 	 */
-	if (initial && sched_feat(START_DEBIT))
+	if (initial && sched_feat(START_DEBIT)) {
 		vruntime += sched_vslice(cfs_rq, se);
+#ifdef CONFIG_SCHED_CORE
+		core_vruntime += sched_vslice(cfs_rq, se);
+#endif
+	}
 
 	/* sleeps up to a single latency don't count. */
 	if (!initial) {
@@ -6017,6 +6046,9 @@ place_entity(struct cfs_rq *cfs_rq, struct sched_entity *se, int initial)
 			thresh >>= 1;
 
 		vruntime -= thresh;
+#ifdef CONFIG_SCHED_CORE
+		core_vruntime -= thresh;
+#endif
 	}
 
 #ifdef CONFIG_GROUP_IDENTITY
@@ -6052,10 +6084,17 @@ place_entity(struct cfs_rq *cfs_rq, struct sched_entity *se, int initial)
 	 *     2^63 / scale_load_down(NICE_0_LOAD) ~ 104 days
 	 * should be safe.
 	 */
-	if (entity_is_long_sleeper(se))
+	if (entity_is_long_sleeper(se)) {
 		se->vruntime = vruntime;
-	else
+#ifdef CONFIG_SCHED_CORE
+		se->core_vruntime = core_vruntime;
+#endif
+	} else {
 		se->vruntime = max_vruntime(se->vruntime, vruntime);
+#ifdef CONFIG_SCHED_CORE
+		se->core_vruntime = max_vruntime(se->core_vruntime, core_vruntime);
+#endif
+	}
 }
 
 static void check_enqueue_throttle(struct cfs_rq *cfs_rq);
@@ -6122,8 +6161,12 @@ enqueue_entity(struct cfs_rq *cfs_rq, struct sched_entity *se, int flags)
 	 * If we're the current task, we must renormalise before calling
 	 * update_curr().
 	 */
-	if (renorm && curr)
+	if (renorm && curr) {
 		se->vruntime += id_min_vruntime(cfs_rq, se);
+#ifdef CONFIG_SCHED_CORE
+		se->core_vruntime += cfs_rq->core->core_min_vruntime;
+#endif
+	}
 
 	update_curr(cfs_rq);
 
@@ -6133,8 +6176,12 @@ enqueue_entity(struct cfs_rq *cfs_rq, struct sched_entity *se, int flags)
 	 * placed in the past could significantly boost this task to the
 	 * fairness detriment of existing tasks.
 	 */
-	if (renorm && !curr)
+	if (renorm && !curr) {
 		se->vruntime += id_min_vruntime(cfs_rq, se);
+#ifdef CONFIG_SCHED_CORE
+		se->core_vruntime += cfs_rq->core->core_min_vruntime;
+#endif
+	}
 
 	/*
 	 * When enqueuing a sched_entity, we must:
@@ -6255,8 +6302,12 @@ dequeue_entity(struct cfs_rq *cfs_rq, struct sched_entity *se, int flags)
 	 * update_min_vruntime() again, which will discount @se's position and
 	 * can move min_vruntime forward still more.
 	 */
-	if (!(flags & DEQUEUE_SLEEP))
+	if (!(flags & DEQUEUE_SLEEP)) {
 		se->vruntime -= id_min_vruntime(cfs_rq, se);
+#ifdef CONFIG_SCHED_CORE
+		se->core_vruntime -= cfs_rq->core->core_min_vruntime;
+#endif
+	}
 
 	/* return excess runtime on last dequeue */
 	return_cfs_rq_runtime(cfs_rq);
@@ -8900,6 +8951,9 @@ static void migrate_task_rq_fair(struct task_struct *p, int new_cpu)
 #endif
 
 		se->vruntime -= id_min_vruntime(cfs_rq, se);
+#ifdef CONFIG_SCHED_CORE
+		se->core_vruntime -= cfs_rq->core->core_min_vruntime;
+#endif
 	}
 
 	if (p->on_rq == TASK_ON_RQ_MIGRATING) {
@@ -12977,34 +13031,6 @@ static inline void task_tick_core(struct rq *rq, struct task_struct *curr)
 		resched_curr(rq);
 }
 
-/*
- * se_fi_update - Update the cfs_rq->min_vruntime_fi in a CFS hierarchy if needed.
- */
-static void se_fi_update(struct sched_entity *se, unsigned int fi_seq, bool forceidle)
-{
-	for_each_sched_entity(se) {
-		struct cfs_rq *cfs_rq = cfs_rq_of(se);
-
-		if (forceidle) {
-			if (cfs_rq->forceidle_seq == fi_seq)
-				break;
-			cfs_rq->forceidle_seq = fi_seq;
-		}
-
-		cfs_rq->min_vruntime_fi = cfs_rq->min_vruntime;
-	}
-}
-
-void task_vruntime_update(struct rq *rq, struct task_struct *p, bool in_fi)
-{
-	struct sched_entity *se = &p->se;
-
-	if (p->sched_class != &fair_sched_class)
-		return;
-
-	se_fi_update(se, rq->core->core_forceidle_seq, in_fi);
-}
-
 bool cfs_prio_less(struct task_struct *a, struct task_struct *b, bool in_fi)
 {
 	struct rq *rq = task_rq(a);
@@ -13031,9 +13057,6 @@ bool cfs_prio_less(struct task_struct *a, struct task_struct *b, bool in_fi)
 			seb = parent_entity(seb);
 	}
 
-	se_fi_update(sea, rq->core->core_forceidle_seq, in_fi);
-	se_fi_update(seb, rq->core->core_forceidle_seq, in_fi);
-
 	cfs_rqa = sea->cfs_rq;
 	cfs_rqb = seb->cfs_rq;
 #else
@@ -13046,9 +13069,7 @@ bool cfs_prio_less(struct task_struct *a, struct task_struct *b, bool in_fi)
 	 * min_vruntime_fi, which would have been updated in prior calls
 	 * to se_fi_update().
 	 */
-	delta = (s64)(sea->vruntime - seb->vruntime) +
-		(s64)(cfs_rqb->min_vruntime_fi - cfs_rqa->min_vruntime_fi);
-
+	delta = (s64)(sea->core_vruntime - seb->core_vruntime);
 	return delta > 0;
 }
 
@@ -13095,9 +13116,21 @@ void account_ht_aware_quota(struct task_struct *p, u64 delta)
 		}
 	}
 }
+
+static inline void sched_core_init_cfs_rq(struct task_group *tg, struct cfs_rq *cfs_rq)
+{
+#ifdef CONFIG_FAIR_GROUP_SCHED
+	struct rq *rq = rq_of(cfs_rq);
+	int core_id = rq->core_id;
+
+	cfs_rq->core = tg->cfs_rq[core_id];
+#endif
+}
 #else
 static inline void task_tick_core(struct rq *rq, struct task_struct *curr) {}
+static inline void sched_core_init_cfs_rq(struct task_group *tg, struct cfs_rq *cfs_rq) {}
 #endif
+
 
 /*
  * scheduler tick hitting a task of our scheduling class.
@@ -13146,6 +13179,9 @@ static void task_fork_fair(struct task_struct *p)
 	if (curr) {
 		update_curr(cfs_rq);
 		se->vruntime = curr->vruntime;
+#ifdef CONFIG_SCHED_CORE
+		se->core_vruntime = curr->core_vruntime;
+#endif
 	}
 	place_entity(cfs_rq, se, 1);
 
@@ -13155,10 +13191,16 @@ static void task_fork_fair(struct task_struct *p)
 		 * 'current' within the tree based on its new key value.
 		 */
 		swap(curr->vruntime, se->vruntime);
+#ifdef CONFIG_SCHED_CORE
+		swap(curr->core_vruntime, se->core_vruntime);
+#endif
 		resched_curr(rq);
 	}
 
 	se->vruntime -= id_min_vruntime(cfs_rq, se);
+#ifdef CONFIG_SCHED_CORE
+	se->core_vruntime -= cfs_rq->core->core_min_vruntime;
+#endif
 	rq_unlock(rq, &rf);
 }
 
@@ -13288,6 +13330,9 @@ static void detach_task_cfs_rq(struct task_struct *p)
 		 */
 		place_entity(cfs_rq, se, 0);
 		se->vruntime -= id_min_vruntime(cfs_rq, se);
+#ifdef CONFIG_SCHED_CORE
+		se->core_vruntime -= cfs_rq->core->core_min_vruntime;
+#endif
 	}
 
 	detach_entity_cfs_rq(se);
@@ -13300,8 +13345,12 @@ static void attach_task_cfs_rq(struct task_struct *p)
 
 	attach_entity_cfs_rq(se);
 
-	if (!vruntime_normalized(p))
+	if (!vruntime_normalized(p)) {
 		se->vruntime += id_min_vruntime(cfs_rq, se);
+#ifdef CONFIG_SCHED_CORE
+		se->core_vruntime += cfs_rq->core->core_min_vruntime;
+#endif
+	}
 }
 
 static void switched_from_fair(struct rq *rq, struct task_struct *p)
@@ -13527,6 +13576,7 @@ int alloc_fair_sched_group(struct task_group *tg, struct task_group *parent)
 
 		init_cfs_rq(cfs_rq);
 		init_tg_cfs_entry(tg, cfs_rq, se, i, parent->se[i]);
+		sched_core_init_cfs_rq(tg, cfs_rq);
 		init_entity_runnable_average(se);
 	}
 
