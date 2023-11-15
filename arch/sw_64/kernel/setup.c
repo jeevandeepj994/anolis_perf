@@ -32,6 +32,7 @@
 #include <asm/kvm_cma.h>
 #include <asm/mmu_context.h>
 #include <asm/sw64_init.h>
+#include <asm/timer.h>
 
 #include "proto.h"
 #include "pci_impl.h"
@@ -43,9 +44,12 @@
 #define DBGDCONT(args...)
 #endif
 
+int __cpu_to_rcid[NR_CPUS];		/* Map logical to physical */
+EXPORT_SYMBOL(__cpu_to_rcid);
 
 DEFINE_PER_CPU(unsigned long, hard_node_id) = { 0 };
 
+#ifdef CONFIG_SUBARCH_C3B
 #if defined(CONFIG_KVM) || defined(CONFIG_KVM_MODULE)
 struct cma *sw64_kvm_cma;
 EXPORT_SYMBOL(sw64_kvm_cma);
@@ -55,6 +59,7 @@ static phys_addr_t kvm_mem_base;
 
 struct gen_pool *sw64_kvm_pool;
 EXPORT_SYMBOL(sw64_kvm_pool);
+#endif
 #endif
 
 static inline int phys_addr_valid(unsigned long addr)
@@ -632,25 +637,6 @@ static void __init setup_cpu_info(void)
 	cpu_desc.pa_bits = CPUID_PA_BITS(val);
 	cpu_desc.va_bits = CPUID_VA_BITS(val);
 
-	if (*(unsigned long *)MMSIZE) {
-		static_branch_disable(&run_mode_host_key);
-		if (*(unsigned long *)MMSIZE & EMUL_FLAG) {
-			pr_info("run mode: emul\n");
-			static_branch_disable(&run_mode_guest_key);
-			static_branch_enable(&run_mode_emul_key);
-
-		} else {
-			pr_info("run mode: guest\n");
-			static_branch_enable(&run_mode_guest_key);
-			static_branch_disable(&run_mode_emul_key);
-		}
-	} else {
-		pr_info("run mode: host\n");
-		static_branch_enable(&run_mode_host_key);
-		static_branch_disable(&run_mode_guest_key);
-		static_branch_disable(&run_mode_emul_key);
-	}
-
 	for (i = 0; i < VENDOR_ID_MAX; i++) {
 		val = cpuid(GET_VENDOR_ID, i);
 		memcpy(cpu_desc.vendor_id + (i * 8), &val, 8);
@@ -694,6 +680,28 @@ static void __init setup_cpu_info(void)
 	}
 }
 
+static void __init setup_run_mode(void)
+{
+	if (*(unsigned long *)MMSIZE) {
+		static_branch_disable(&run_mode_host_key);
+		if (*(unsigned long *)MMSIZE & EMUL_FLAG) {
+			pr_info("run mode: emul\n");
+			static_branch_disable(&run_mode_guest_key);
+			static_branch_enable(&run_mode_emul_key);
+
+		} else {
+			pr_info("run mode: guest\n");
+			static_branch_enable(&run_mode_guest_key);
+			static_branch_disable(&run_mode_emul_key);
+		}
+	} else {
+		pr_info("run mode: host\n");
+		static_branch_enable(&run_mode_host_key);
+		static_branch_disable(&run_mode_guest_key);
+		static_branch_disable(&run_mode_emul_key);
+	}
+}
+
 static void __init setup_socket_info(void)
 {
 	int i;
@@ -728,6 +736,7 @@ static void __init reserve_mem_for_initrd(void)
 }
 #endif /* CONFIG_BLK_DEV_INITRD */
 
+#ifdef CONFIG_SUBARCH_C3B
 #if defined(CONFIG_KVM) || defined(CONFIG_KVM_MODULE)
 static int __init early_kvm_reserved_mem(char *p)
 {
@@ -750,24 +759,22 @@ void __init sw64_kvm_reserve(void)
 			PAGE_SIZE, 0, "sw64_kvm_cma", &sw64_kvm_cma);
 }
 #endif
+#endif
 
 void __init
 setup_arch(char **cmdline_p)
 {
 	jump_label_init();
 	setup_cpu_info();
-	sw64_chip->fixup();
-	sw64_chip_init->fixup();
+	setup_run_mode();
+	setup_chip_ops();
 	setup_socket_info();
 	show_socket_mem_layout();
-	sw64_chip_init->early_init.setup_core_start(&core_start);
+	sw64_chip_init->early_init.setup_core_map(&core_start);
 	if (is_guest_or_emul())
-		sw64_chip_init->early_init.get_smp_info();
+		get_vt_smp_info();
 
 	setup_sched_clock();
-#ifdef CONFIG_GENERIC_SCHED_CLOCK
-	sw64_sched_clock_init();
-#endif
 
 	setup_machine_fdt();
 
@@ -820,8 +827,10 @@ setup_arch(char **cmdline_p)
 	reserve_crashkernel();
 
 	/* Reserve large chunks of memory for use by CMA for KVM. */
+#ifdef CONFIG_SUBARCH_C3B
 #if defined(CONFIG_KVM) || defined(CONFIG_KVM_MODULE)
 	sw64_kvm_reserve();
+#endif
 #endif
 
 	sw64_numa_init();
@@ -1000,6 +1009,7 @@ static int __init sw64_of_init(void)
 core_initcall(sw64_of_init);
 #endif
 
+#ifdef CONFIG_SUBARCH_C3B
 #if defined(CONFIG_KVM) || defined(CONFIG_KVM_MODULE)
 static int __init sw64_kvm_pool_init(void)
 {
@@ -1043,4 +1053,5 @@ out:
 	return -ENOMEM;
 }
 core_initcall_sync(sw64_kvm_pool_init);
+#endif
 #endif

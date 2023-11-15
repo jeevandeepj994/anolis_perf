@@ -15,10 +15,11 @@ endif
 
 obj-y    := entry.o fpu.o traps.o process.o sys_sw64.o irq.o \
 	    irq_sw64.o signal.o setup.o ptrace.o time.o \
-	    systbls.o dup_print.o tc.o timer.o \
+	    systbls.o dup_print.o chip_setup.o \
 	    insn.o early_init.o topology.o cacheinfo.o \
 	    vdso.o vdso/ hmcall.o stacktrace.o idle.o reset.o
 
+obj-$(CONFIG_SUBARCH_C3B) += tc.o
 obj-$(CONFIG_ACPI) += acpi.o
 obj-$(CONFIG_SMP)	+= smp.o
 obj-$(CONFIG_PCI)	+= pci.o pci-sysfs.o
@@ -43,7 +44,7 @@ obj-y += pci-noop.o
 endif
 
 ifdef CONFIG_KVM
-obj-y += kvm_cma.o
+obj-$(CONFIG_SUBARCH_C3B) += kvm_cma.o
 endif
 
 # Core logic support

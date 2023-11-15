@@ -315,6 +315,10 @@ config PCIE_PHYTIUM_EP
 	  or End Point with different phytium firmware. But End Point mode only support
 	  one physical function.
 
+config PCI_SW64
+	bool
+	depends on SW64 && PCI
+
 source "drivers/pci/controller/dwc/Kconfig"
 source "drivers/pci/controller/mobiveil/Kconfig"
 source "drivers/pci/controller/cadence/Kconfig"
