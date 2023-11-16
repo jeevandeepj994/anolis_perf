@@ -582,7 +582,7 @@ struct sched_entity {
 	unsigned int			ht_ratio;
 #endif
 
-	CK_KABI_RESERVE(1)
+	CK_KABI_USE(1, long priority)
 	CK_KABI_RESERVE(2)
 	CK_KABI_RESERVE(3)
 	CK_KABI_RESERVE(4)

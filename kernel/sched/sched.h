@@ -548,7 +548,7 @@ struct task_group {
 #ifdef CONFIG_SCHED_CORE
 	unsigned int		ht_ratio;
 #endif
-	CK_KABI_RESERVE(1)
+	CK_KABI_USE(1, long priority)
 	CK_KABI_RESERVE(2)
 	CK_KABI_RESERVE(3)
 	CK_KABI_RESERVE(4)
@@ -626,6 +626,8 @@ extern void sched_move_task(struct task_struct *tsk);
 extern int sched_group_set_shares(struct task_group *tg, unsigned long shares);
 
 extern int sched_group_set_idle(struct task_group *tg, long idle);
+
+extern int sched_group_set_priority(struct task_group *tg, s64 priority);
 
 #ifdef CONFIG_SMP
 extern void set_task_rq_fair(struct sched_entity *se,
