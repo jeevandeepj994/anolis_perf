@@ -4935,6 +4935,7 @@ static vm_fault_t pgtable_share_fault(struct vm_area_struct *vma,
 
 	/* Switch to shadow vma and shadow mm. */
 	vmf.vma = shadow_vma;
+	vmf.orig_vma = vma;
 
 	ret = VM_FAULT_OOM;
 	pgd = pgd_offset(shadow_mm, address);
