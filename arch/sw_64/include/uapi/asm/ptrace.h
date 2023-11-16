@@ -30,8 +30,7 @@ struct user_fpsimd_state {
 /* PTRACE_DETACH is 17 */
 
 #define PT_REG_BASE		0
-#define PT_REG_END		29
-#define PT_USP			30
+#define PT_REG_END		30
 #define PT_FPREG_BASE		32
 #define PT_FPREG_END		62
 #define PT_FPCR			63
@@ -47,5 +46,11 @@ struct user_fpsimd_state {
 #define PT_DV_MATCH		165
 #define PT_DV_MASK		166
 #define PT_DC_CTL		167
+#define PT_MATCH_CTL		167
+#define PT_IA_MATCH		168
+#define PT_IA_MASK		169
+#define PT_IV_MATCH		170
+#define PT_IDA_MATCH		171
+#define PT_IDA_MASK		172
 
 #endif /* _UAPI_ASM_SW64_PTRACE_H */

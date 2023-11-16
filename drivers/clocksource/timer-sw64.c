@@ -13,8 +13,8 @@
 #include <asm/hw_init.h>
 #include <asm/sw64_init.h>
 
-#define SHTCLK_RATE	2500000
-#define SHTCLK_RATE_KHZ	2500
+#define SHTCLK_RATE_KHZ	25000
+#define SHTCLK_RATE	(SHTCLK_RATE_KHZ * 1000)
 
 #if defined(CONFIG_SUBARCH_C4)
 static u64 read_longtime(struct clocksource *cs)
@@ -122,13 +122,20 @@ static struct clocksource clocksource_tc = {
 };
 #endif /* SMP */
 
+#define DEFAULT_MCLK	25	/* Mhz */
+
 void __init sw64_setup_clocksource(void)
 {
+	unsigned int mclk = *((unsigned char *)__va(0x908001));
+
+	if (!mclk)
+		mclk = DEFAULT_MCLK;
+
 #ifdef CONFIG_SMP
 	if (is_in_host())
-		clocksource_register_khz(&clocksource_longtime, 25000);
+		clocksource_register_khz(&clocksource_longtime, mclk * 1000);
 	else
-		clocksource_register_khz(&clocksource_vtime, 25000);
+		clocksource_register_khz(&clocksource_vtime, DEFAULT_MCLK * 1000);
 #else
 	clocksource_register_hz(&clocksource_tc, get_cpu_freq());
 	pr_info("Setup clocksource TC, mult = %d\n", clocksource_tc.mult);
