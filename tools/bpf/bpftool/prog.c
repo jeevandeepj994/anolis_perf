@@ -592,6 +592,13 @@ static int do_dump(int argc, char **argv)
 		goto err_free;
 	}
 
+	if (func_info && !info.func_info) {
+		/* kernel.kptr_restrict is set.  No func_info available. */
+		free(func_info);
+		func_info = NULL;
+		finfo_cnt = 0;
+	}
+
 	if ((member_len == &info.jited_prog_len &&
 	     info.jited_prog_insns == 0) ||
 	    (member_len == &info.xlated_prog_len &&
@@ -1143,6 +1150,7 @@ static int do_help(int argc, char **argv)
 		"                         [pinmaps MAP_DIR]\n"
 		"       %s %s attach PROG ATTACH_TYPE [MAP]\n"
 		"       %s %s detach PROG ATTACH_TYPE [MAP]\n"
+		"       %s %s tracelog\n"
 		"       %s %s help\n"
 		"\n"
 		"       " HELP_SPEC_MAP "\n"
@@ -1161,7 +1169,7 @@ static int do_help(int argc, char **argv)
 		"",
 		bin_name, argv[-2], bin_name, argv[-2], bin_name, argv[-2],
 		bin_name, argv[-2], bin_name, argv[-2], bin_name, argv[-2],
-		bin_name, argv[-2], bin_name, argv[-2]);
+		bin_name, argv[-2], bin_name, argv[-2], bin_name, argv[-2]);
 
 	return 0;
 }
@@ -1176,6 +1184,7 @@ static const struct cmd cmds[] = {
 	{ "loadall",	do_loadall },
 	{ "attach",	do_attach },
 	{ "detach",	do_detach },
+	{ "tracelog",	do_tracelog },
 	{ 0 }
 };
 

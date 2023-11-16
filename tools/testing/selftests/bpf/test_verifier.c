@@ -721,8 +721,18 @@ static struct bpf_test tests[] = {
 			BPF_ALU32_IMM(BPF_ARSH, BPF_REG_0, 5),
 			BPF_EXIT_INSN(),
 		},
-		.result = REJECT,
-		.errstr = "unknown opcode c4",
+		.result = ACCEPT,
+		.retval = 0,
+	},
+	{
+		"arsh32 on imm 2",
+		.insns = {
+			BPF_LD_IMM64(BPF_REG_0, 0x1122334485667788),
+			BPF_ALU32_IMM(BPF_ARSH, BPF_REG_0, 7),
+			BPF_EXIT_INSN(),
+		},
+		.result = ACCEPT,
+		.retval = -16069393,
 	},
 	{
 		"arsh32 on reg",
@@ -732,8 +742,19 @@ static struct bpf_test tests[] = {
 			BPF_ALU32_REG(BPF_ARSH, BPF_REG_0, BPF_REG_1),
 			BPF_EXIT_INSN(),
 		},
-		.result = REJECT,
-		.errstr = "unknown opcode cc",
+		.result = ACCEPT,
+		.retval = 0,
+	},
+	{
+		"arsh32 on reg 2",
+		.insns = {
+			BPF_LD_IMM64(BPF_REG_0, 0xffff55667788),
+			BPF_MOV64_IMM(BPF_REG_1, 15),
+			BPF_ALU32_REG(BPF_ARSH, BPF_REG_0, BPF_REG_1),
+			BPF_EXIT_INSN(),
+		},
+		.result = ACCEPT,
+		.retval = 43724,
 	},
 	{
 		"arsh64 on imm",
@@ -1823,6 +1844,7 @@ static struct bpf_test tests[] = {
 		.errstr = "invalid bpf_context access",
 		.result = REJECT,
 		.prog_type = BPF_PROG_TYPE_SK_MSG,
+		.flags = F_NEEDS_EFFICIENT_UNALIGNED_ACCESS,
 	},
 	{
 		"direct packet read for SK_MSG",
@@ -2215,6 +2237,8 @@ static struct bpf_test tests[] = {
 		},
 		.errstr = "invalid bpf_context access",
 		.result = REJECT,
+		.flags = F_NEEDS_EFFICIENT_UNALIGNED_ACCESS,
+		.flags = F_NEEDS_EFFICIENT_UNALIGNED_ACCESS,
 	},
 	{
 		"check cb access: half, wrong type",
@@ -3312,6 +3336,7 @@ static struct bpf_test tests[] = {
 		.result = REJECT,
 		.errstr = "R0 invalid mem access 'inv'",
 		.prog_type = BPF_PROG_TYPE_SCHED_CLS,
+		.flags = F_NEEDS_EFFICIENT_UNALIGNED_ACCESS,
 	},
 	{
 		"raw_stack: skb_load_bytes, spilled regs corruption 2",
@@ -3342,6 +3367,7 @@ static struct bpf_test tests[] = {
 		.result = REJECT,
 		.errstr = "R3 invalid mem access 'inv'",
 		.prog_type = BPF_PROG_TYPE_SCHED_CLS,
+		.flags = F_NEEDS_EFFICIENT_UNALIGNED_ACCESS,
 	},
 	{
 		"raw_stack: skb_load_bytes, spilled regs + data",
@@ -3841,6 +3867,7 @@ static struct bpf_test tests[] = {
 		.errstr = "R2 invalid mem access 'inv'",
 		.result = REJECT,
 		.prog_type = BPF_PROG_TYPE_SCHED_CLS,
+		.flags = F_NEEDS_EFFICIENT_UNALIGNED_ACCESS,
 	},
 	{
 		"direct packet access: test16 (arith on data_end)",
@@ -3943,6 +3970,7 @@ static struct bpf_test tests[] = {
 		},
 		.prog_type = BPF_PROG_TYPE_SCHED_CLS,
 		.result = ACCEPT,
+		.flags = F_NEEDS_EFFICIENT_UNALIGNED_ACCESS,
 	},
 	{
 		"direct packet access: test21 (x += pkt_ptr, 2)",
@@ -3968,6 +3996,7 @@ static struct bpf_test tests[] = {
 		},
 		.prog_type = BPF_PROG_TYPE_SCHED_CLS,
 		.result = ACCEPT,
+		.flags = F_NEEDS_EFFICIENT_UNALIGNED_ACCESS,
 	},
 	{
 		"direct packet access: test22 (x += pkt_ptr, 3)",
@@ -3998,6 +4027,7 @@ static struct bpf_test tests[] = {
 		},
 		.prog_type = BPF_PROG_TYPE_SCHED_CLS,
 		.result = ACCEPT,
+		.flags = F_NEEDS_EFFICIENT_UNALIGNED_ACCESS,
 	},
 	{
 		"direct packet access: test23 (x += pkt_ptr, 4)",
@@ -4024,6 +4054,7 @@ static struct bpf_test tests[] = {
 		.prog_type = BPF_PROG_TYPE_SCHED_CLS,
 		.result = REJECT,
 		.errstr = "invalid access to packet, off=0 size=8, R5(id=1,off=0,r=0)",
+		.flags = F_NEEDS_EFFICIENT_UNALIGNED_ACCESS,
 	},
 	{
 		"direct packet access: test24 (x += pkt_ptr, 5)",
@@ -4049,6 +4080,7 @@ static struct bpf_test tests[] = {
 		},
 		.prog_type = BPF_PROG_TYPE_SCHED_CLS,
 		.result = ACCEPT,
+		.flags = F_NEEDS_EFFICIENT_UNALIGNED_ACCESS,
 	},
 	{
 		"direct packet access: test25 (marking on <, good access)",
@@ -5180,6 +5212,7 @@ static struct bpf_test tests[] = {
 		.result = REJECT,
 		.errstr = "invalid access to map value, value_size=64 off=-2 size=4",
 		.prog_type = BPF_PROG_TYPE_CGROUP_SKB,
+		.flags = F_NEEDS_EFFICIENT_UNALIGNED_ACCESS,
 	},
 	{
 		"invalid cgroup storage access 5",
@@ -5296,6 +5329,7 @@ static struct bpf_test tests[] = {
 		.result = REJECT,
 		.errstr = "invalid access to map value, value_size=64 off=-2 size=4",
 		.prog_type = BPF_PROG_TYPE_CGROUP_SKB,
+		.flags = F_NEEDS_EFFICIENT_UNALIGNED_ACCESS,
 	},
 	{
 		"invalid per-cpu cgroup storage access 5",
@@ -6987,6 +7021,7 @@ static struct bpf_test tests[] = {
 		.errstr = "invalid mem access 'inv'",
 		.result = REJECT,
 		.result_unpriv = REJECT,
+		.flags = F_NEEDS_EFFICIENT_UNALIGNED_ACCESS,
 	},
 	{
 		"map element value illegal alu op, 5",
@@ -7009,6 +7044,7 @@ static struct bpf_test tests[] = {
 		.fixup_map_hash_48b = { 3 },
 		.errstr = "R0 invalid mem access 'inv'",
 		.result = REJECT,
+		.flags = F_NEEDS_EFFICIENT_UNALIGNED_ACCESS,
 	},
 	{
 		"map element value is preserved across register spilling",
@@ -7502,6 +7538,7 @@ static struct bpf_test tests[] = {
 		.result = ACCEPT,
 		.prog_type = BPF_PROG_TYPE_SCHED_CLS,
 		.retval = 0 /* csum_diff of 64-byte packet */,
+		.flags = F_NEEDS_EFFICIENT_UNALIGNED_ACCESS,
 	},
 	{
 		"helper access to variable memory: size = 0 not allowed on NULL (!ARG_PTR_TO_MEM_OR_NULL)",
@@ -9468,6 +9505,7 @@ static struct bpf_test tests[] = {
 		},
 		.result = ACCEPT,
 		.prog_type = BPF_PROG_TYPE_XDP,
+		.flags = F_NEEDS_EFFICIENT_UNALIGNED_ACCESS,
 	},
 	{
 		"XDP pkt read, pkt_data' > pkt_end, bad access 1",
@@ -9505,6 +9543,7 @@ static struct bpf_test tests[] = {
 		.errstr = "R1 offset is outside of the packet",
 		.result = REJECT,
 		.prog_type = BPF_PROG_TYPE_XDP,
+		.flags = F_NEEDS_EFFICIENT_UNALIGNED_ACCESS,
 	},
 	{
 		"XDP pkt read, pkt_end > pkt_data', good access",
@@ -9543,6 +9582,7 @@ static struct bpf_test tests[] = {
 		.errstr = "R1 offset is outside of the packet",
 		.result = REJECT,
 		.prog_type = BPF_PROG_TYPE_XDP,
+		.flags = F_NEEDS_EFFICIENT_UNALIGNED_ACCESS,
 	},
 	{
 		"XDP pkt read, pkt_end > pkt_data', bad access 2",
@@ -9561,6 +9601,7 @@ static struct bpf_test tests[] = {
 		.errstr = "R1 offset is outside of the packet",
 		.result = REJECT,
 		.prog_type = BPF_PROG_TYPE_XDP,
+		.flags = F_NEEDS_EFFICIENT_UNALIGNED_ACCESS,
 	},
 	{
 		"XDP pkt read, pkt_data' < pkt_end, good access",
@@ -9599,6 +9640,7 @@ static struct bpf_test tests[] = {
 		.errstr = "R1 offset is outside of the packet",
 		.result = REJECT,
 		.prog_type = BPF_PROG_TYPE_XDP,
+		.flags = F_NEEDS_EFFICIENT_UNALIGNED_ACCESS,
 	},
 	{
 		"XDP pkt read, pkt_data' < pkt_end, bad access 2",
@@ -9617,6 +9659,7 @@ static struct bpf_test tests[] = {
 		.errstr = "R1 offset is outside of the packet",
 		.result = REJECT,
 		.prog_type = BPF_PROG_TYPE_XDP,
+		.flags = F_NEEDS_EFFICIENT_UNALIGNED_ACCESS,
 	},
 	{
 		"XDP pkt read, pkt_end < pkt_data', good access",
@@ -9634,6 +9677,7 @@ static struct bpf_test tests[] = {
 		},
 		.result = ACCEPT,
 		.prog_type = BPF_PROG_TYPE_XDP,
+		.flags = F_NEEDS_EFFICIENT_UNALIGNED_ACCESS,
 	},
 	{
 		"XDP pkt read, pkt_end < pkt_data', bad access 1",
@@ -9671,6 +9715,7 @@ static struct bpf_test tests[] = {
 		.errstr = "R1 offset is outside of the packet",
 		.result = REJECT,
 		.prog_type = BPF_PROG_TYPE_XDP,
+		.flags = F_NEEDS_EFFICIENT_UNALIGNED_ACCESS,
 	},
 	{
 		"XDP pkt read, pkt_data' >= pkt_end, good access",
@@ -9707,6 +9752,7 @@ static struct bpf_test tests[] = {
 		.errstr = "R1 offset is outside of the packet",
 		.result = REJECT,
 		.prog_type = BPF_PROG_TYPE_XDP,
+		.flags = F_NEEDS_EFFICIENT_UNALIGNED_ACCESS,
 	},
 	{
 		"XDP pkt read, pkt_data' >= pkt_end, bad access 2",
@@ -9744,6 +9790,7 @@ static struct bpf_test tests[] = {
 		},
 		.result = ACCEPT,
 		.prog_type = BPF_PROG_TYPE_XDP,
+		.flags = F_NEEDS_EFFICIENT_UNALIGNED_ACCESS,
 	},
 	{
 		"XDP pkt read, pkt_end >= pkt_data', bad access 1",
@@ -9782,6 +9829,7 @@ static struct bpf_test tests[] = {
 		.errstr = "R1 offset is outside of the packet",
 		.result = REJECT,
 		.prog_type = BPF_PROG_TYPE_XDP,
+		.flags = F_NEEDS_EFFICIENT_UNALIGNED_ACCESS,
 	},
 	{
 		"XDP pkt read, pkt_data' <= pkt_end, good access",
@@ -9800,6 +9848,7 @@ static struct bpf_test tests[] = {
 		},
 		.result = ACCEPT,
 		.prog_type = BPF_PROG_TYPE_XDP,
+		.flags = F_NEEDS_EFFICIENT_UNALIGNED_ACCESS,
 	},
 	{
 		"XDP pkt read, pkt_data' <= pkt_end, bad access 1",
@@ -9838,6 +9887,7 @@ static struct bpf_test tests[] = {
 		.errstr = "R1 offset is outside of the packet",
 		.result = REJECT,
 		.prog_type = BPF_PROG_TYPE_XDP,
+		.flags = F_NEEDS_EFFICIENT_UNALIGNED_ACCESS,
 	},
 	{
 		"XDP pkt read, pkt_end <= pkt_data', good access",
@@ -9874,6 +9924,7 @@ static struct bpf_test tests[] = {
 		.errstr = "R1 offset is outside of the packet",
 		.result = REJECT,
 		.prog_type = BPF_PROG_TYPE_XDP,
+		.flags = F_NEEDS_EFFICIENT_UNALIGNED_ACCESS,
 	},
 	{
 		"XDP pkt read, pkt_end <= pkt_data', bad access 2",
@@ -9910,6 +9961,7 @@ static struct bpf_test tests[] = {
 		},
 		.result = ACCEPT,
 		.prog_type = BPF_PROG_TYPE_XDP,
+		.flags = F_NEEDS_EFFICIENT_UNALIGNED_ACCESS,
 	},
 	{
 		"XDP pkt read, pkt_meta' > pkt_data, bad access 1",
@@ -9947,6 +9999,7 @@ static struct bpf_test tests[] = {
 		.errstr = "R1 offset is outside of the packet",
 		.result = REJECT,
 		.prog_type = BPF_PROG_TYPE_XDP,
+		.flags = F_NEEDS_EFFICIENT_UNALIGNED_ACCESS,
 	},
 	{
 		"XDP pkt read, pkt_data > pkt_meta', good access",
@@ -9985,6 +10038,7 @@ static struct bpf_test tests[] = {
 		.errstr = "R1 offset is outside of the packet",
 		.result = REJECT,
 		.prog_type = BPF_PROG_TYPE_XDP,
+		.flags = F_NEEDS_EFFICIENT_UNALIGNED_ACCESS,
 	},
 	{
 		"XDP pkt read, pkt_data > pkt_meta', bad access 2",
@@ -10003,6 +10057,7 @@ static struct bpf_test tests[] = {
 		.errstr = "R1 offset is outside of the packet",
 		.result = REJECT,
 		.prog_type = BPF_PROG_TYPE_XDP,
+		.flags = F_NEEDS_EFFICIENT_UNALIGNED_ACCESS,
 	},
 	{
 		"XDP pkt read, pkt_meta' < pkt_data, good access",
@@ -10041,6 +10096,7 @@ static struct bpf_test tests[] = {
 		.errstr = "R1 offset is outside of the packet",
 		.result = REJECT,
 		.prog_type = BPF_PROG_TYPE_XDP,
+		.flags = F_NEEDS_EFFICIENT_UNALIGNED_ACCESS,
 	},
 	{
 		"XDP pkt read, pkt_meta' < pkt_data, bad access 2",
@@ -10059,6 +10115,7 @@ static struct bpf_test tests[] = {
 		.errstr = "R1 offset is outside of the packet",
 		.result = REJECT,
 		.prog_type = BPF_PROG_TYPE_XDP,
+		.flags = F_NEEDS_EFFICIENT_UNALIGNED_ACCESS,
 	},
 	{
 		"XDP pkt read, pkt_data < pkt_meta', good access",
@@ -10076,6 +10133,7 @@ static struct bpf_test tests[] = {
 		},
 		.result = ACCEPT,
 		.prog_type = BPF_PROG_TYPE_XDP,
+		.flags = F_NEEDS_EFFICIENT_UNALIGNED_ACCESS,
 	},
 	{
 		"XDP pkt read, pkt_data < pkt_meta', bad access 1",
@@ -10113,6 +10171,7 @@ static struct bpf_test tests[] = {
 		.errstr = "R1 offset is outside of the packet",
 		.result = REJECT,
 		.prog_type = BPF_PROG_TYPE_XDP,
+		.flags = F_NEEDS_EFFICIENT_UNALIGNED_ACCESS,
 	},
 	{
 		"XDP pkt read, pkt_meta' >= pkt_data, good access",
@@ -10149,6 +10208,7 @@ static struct bpf_test tests[] = {
 		.errstr = "R1 offset is outside of the packet",
 		.result = REJECT,
 		.prog_type = BPF_PROG_TYPE_XDP,
+		.flags = F_NEEDS_EFFICIENT_UNALIGNED_ACCESS,
 	},
 	{
 		"XDP pkt read, pkt_meta' >= pkt_data, bad access 2",
@@ -10186,6 +10246,7 @@ static struct bpf_test tests[] = {
 		},
 		.result = ACCEPT,
 		.prog_type = BPF_PROG_TYPE_XDP,
+		.flags = F_NEEDS_EFFICIENT_UNALIGNED_ACCESS,
 	},
 	{
 		"XDP pkt read, pkt_data >= pkt_meta', bad access 1",
@@ -10224,6 +10285,7 @@ static struct bpf_test tests[] = {
 		.errstr = "R1 offset is outside of the packet",
 		.result = REJECT,
 		.prog_type = BPF_PROG_TYPE_XDP,
+		.flags = F_NEEDS_EFFICIENT_UNALIGNED_ACCESS,
 	},
 	{
 		"XDP pkt read, pkt_meta' <= pkt_data, good access",
@@ -10242,6 +10304,7 @@ static struct bpf_test tests[] = {
 		},
 		.result = ACCEPT,
 		.prog_type = BPF_PROG_TYPE_XDP,
+		.flags = F_NEEDS_EFFICIENT_UNALIGNED_ACCESS,
 	},
 	{
 		"XDP pkt read, pkt_meta' <= pkt_data, bad access 1",
@@ -10280,6 +10343,7 @@ static struct bpf_test tests[] = {
 		.errstr = "R1 offset is outside of the packet",
 		.result = REJECT,
 		.prog_type = BPF_PROG_TYPE_XDP,
+		.flags = F_NEEDS_EFFICIENT_UNALIGNED_ACCESS,
 	},
 	{
 		"XDP pkt read, pkt_data <= pkt_meta', good access",
@@ -10316,6 +10380,7 @@ static struct bpf_test tests[] = {
 		.errstr = "R1 offset is outside of the packet",
 		.result = REJECT,
 		.prog_type = BPF_PROG_TYPE_XDP,
+		.flags = F_NEEDS_EFFICIENT_UNALIGNED_ACCESS,
 	},
 	{
 		"XDP pkt read, pkt_data <= pkt_meta', bad access 2",
@@ -10430,6 +10495,7 @@ static struct bpf_test tests[] = {
 		.errstr_unpriv = "R1 has pointer with unsupported alu operation",
 		.errstr = "dereference of modified ctx ptr",
 		.result = REJECT,
+		.flags = F_NEEDS_EFFICIENT_UNALIGNED_ACCESS,
 	},
 	{
 		"check deducing bounds from const, 8",
@@ -10444,6 +10510,7 @@ static struct bpf_test tests[] = {
 		.errstr_unpriv = "R1 has pointer with unsupported alu operation",
 		.errstr = "dereference of modified ctx ptr",
 		.result = REJECT,
+		.flags = F_NEEDS_EFFICIENT_UNALIGNED_ACCESS,
 	},
 	{
 		"check deducing bounds from const, 9",
@@ -10919,6 +10986,7 @@ static struct bpf_test tests[] = {
 		.result = REJECT,
 		.errstr = "R6 invalid mem access 'inv'",
 		.prog_type = BPF_PROG_TYPE_XDP,
+		.flags = F_NEEDS_EFFICIENT_UNALIGNED_ACCESS,
 	},
 	{
 		"calls: two calls with args",
@@ -11784,6 +11852,7 @@ static struct bpf_test tests[] = {
 		.fixup_map_hash_8b = { 12, 22 },
 		.result = REJECT,
 		.errstr = "invalid access to map value, value_size=8 off=2 size=8",
+		.flags = F_NEEDS_EFFICIENT_UNALIGNED_ACCESS,
 	},
 	{
 		"calls: two calls that receive map_value via arg=ptr_stack_of_caller. test2",
@@ -11927,6 +11996,7 @@ static struct bpf_test tests[] = {
 		.fixup_map_hash_8b = { 12, 22 },
 		.result = REJECT,
 		.errstr = "invalid access to map value, value_size=8 off=2 size=8",
+		.flags = F_NEEDS_EFFICIENT_UNALIGNED_ACCESS,
 	},
 	{
 		"calls: two calls that receive map_value_ptr_or_null via arg. test1",
@@ -12098,6 +12168,7 @@ static struct bpf_test tests[] = {
 		.result = ACCEPT,
 		.prog_type = BPF_PROG_TYPE_SCHED_CLS,
 		.retval = POINTER_VALUE,
+		.flags = F_NEEDS_EFFICIENT_UNALIGNED_ACCESS,
 	},
 	{
 		"calls: pkt_ptr spill into caller stack 2",
@@ -12129,6 +12200,7 @@ static struct bpf_test tests[] = {
 		.prog_type = BPF_PROG_TYPE_SCHED_CLS,
 		.errstr = "invalid access to packet",
 		.result = REJECT,
+		.flags = F_NEEDS_EFFICIENT_UNALIGNED_ACCESS,
 	},
 	{
 		"calls: pkt_ptr spill into caller stack 3",
@@ -12164,6 +12236,7 @@ static struct bpf_test tests[] = {
 		.prog_type = BPF_PROG_TYPE_SCHED_CLS,
 		.result = ACCEPT,
 		.retval = 1,
+		.flags = F_NEEDS_EFFICIENT_UNALIGNED_ACCESS,
 	},
 	{
 		"calls: pkt_ptr spill into caller stack 4",
@@ -12198,6 +12271,7 @@ static struct bpf_test tests[] = {
 		.prog_type = BPF_PROG_TYPE_SCHED_CLS,
 		.result = ACCEPT,
 		.retval = 1,
+		.flags = F_NEEDS_EFFICIENT_UNALIGNED_ACCESS,
 	},
 	{
 		"calls: pkt_ptr spill into caller stack 5",
@@ -12231,6 +12305,7 @@ static struct bpf_test tests[] = {
 		.prog_type = BPF_PROG_TYPE_SCHED_CLS,
 		.errstr = "same insn cannot be used with different",
 		.result = REJECT,
+		.flags = F_NEEDS_EFFICIENT_UNALIGNED_ACCESS,
 	},
 	{
 		"calls: pkt_ptr spill into caller stack 6",
@@ -12266,6 +12341,7 @@ static struct bpf_test tests[] = {
 		.prog_type = BPF_PROG_TYPE_SCHED_CLS,
 		.errstr = "R4 invalid mem access",
 		.result = REJECT,
+		.flags = F_NEEDS_EFFICIENT_UNALIGNED_ACCESS,
 	},
 	{
 		"calls: pkt_ptr spill into caller stack 7",
@@ -12300,6 +12376,7 @@ static struct bpf_test tests[] = {
 		.prog_type = BPF_PROG_TYPE_SCHED_CLS,
 		.errstr = "R4 invalid mem access",
 		.result = REJECT,
+		.flags = F_NEEDS_EFFICIENT_UNALIGNED_ACCESS,
 	},
 	{
 		"calls: pkt_ptr spill into caller stack 8",
@@ -12340,6 +12417,7 @@ static struct bpf_test tests[] = {
 		},
 		.prog_type = BPF_PROG_TYPE_SCHED_CLS,
 		.result = ACCEPT,
+		.flags = F_NEEDS_EFFICIENT_UNALIGNED_ACCESS,
 	},
 	{
 		"calls: pkt_ptr spill into caller stack 9",
@@ -12381,6 +12459,7 @@ static struct bpf_test tests[] = {
 		.prog_type = BPF_PROG_TYPE_SCHED_CLS,
 		.errstr = "invalid access to packet",
 		.result = REJECT,
+		.flags = F_NEEDS_EFFICIENT_UNALIGNED_ACCESS,
 	},
 	{
 		"calls: caller stack init to zero or map_value_or_null",
@@ -12746,6 +12825,7 @@ static struct bpf_test tests[] = {
 		.result = REJECT,
 		.errstr = "BPF_XADD stores into R2 pkt is not allowed",
 		.prog_type = BPF_PROG_TYPE_XDP,
+		.flags = F_NEEDS_EFFICIENT_UNALIGNED_ACCESS,
 	},
 	{
 		"xadd/w check whether src/dst got mangled, 1",
@@ -13232,6 +13312,7 @@ static struct bpf_test tests[] = {
 		.prog_type = BPF_PROG_TYPE_SCHED_CLS,
 		.errstr = "Unreleased reference",
 		.result = REJECT,
+		.flags = F_NEEDS_EFFICIENT_UNALIGNED_ACCESS,
 	},
 	{
 		"reference tracking: alloc, check, free in both subbranches",
@@ -13260,6 +13341,7 @@ static struct bpf_test tests[] = {
 		},
 		.prog_type = BPF_PROG_TYPE_SCHED_CLS,
 		.result = ACCEPT,
+		.flags = F_NEEDS_EFFICIENT_UNALIGNED_ACCESS,
 	},
 	{
 		"reference tracking in call: free reference in subprog",
@@ -13769,6 +13851,38 @@ static struct bpf_test tests[] = {
                 .prog_type = BPF_PROG_TYPE_SCHED_CLS,
                 .result = ACCEPT,
         },
+	{
+		"check wire_len is not readable by sockets",
+		.insns = {
+			BPF_LDX_MEM(BPF_W, BPF_REG_0, BPF_REG_1,
+					offsetof(struct __sk_buff, wire_len)),
+			BPF_EXIT_INSN(),
+		},
+		.errstr = "invalid bpf_context access",
+		.result = REJECT,
+	},
+	{
+		"check wire_len is readable by tc classifier",
+		.insns = {
+			BPF_LDX_MEM(BPF_W, BPF_REG_0, BPF_REG_1,
+					offsetof(struct __sk_buff, wire_len)),
+			BPF_EXIT_INSN(),
+		},
+		.prog_type = BPF_PROG_TYPE_SCHED_CLS,
+		.result = ACCEPT,
+	},
+	{
+		"check wire_len is not writable by tc classifier",
+		.insns = {
+			BPF_STX_MEM(BPF_W, BPF_REG_1, BPF_REG_1,
+					offsetof(struct __sk_buff, wire_len)),
+			BPF_EXIT_INSN(),
+		},
+		.prog_type = BPF_PROG_TYPE_SCHED_CLS,
+		.errstr = "invalid bpf_context access",
+		.errstr_unpriv = "R1 leaks addr",
+		.result = REJECT,
+	},
 };
 
 static int probe_filter_length(const struct bpf_insn *fp)
@@ -14054,13 +14168,14 @@ out:
 static void do_test_single(struct bpf_test *test, bool unpriv,
 			   int *passes, int *errors)
 {
-	int fd_prog, expected_ret, reject_from_alignment;
+	int fd_prog, expected_ret, alignment_prevented_execution;
 	int prog_len, prog_type = test->prog_type;
 	struct bpf_insn *prog = test->insns;
 	int map_fds[MAX_NR_MAPS];
 	const char *expected_err;
 	uint32_t expected_val;
 	uint32_t retval;
+	__u32 pflags;
 	int i, err;
 
 	for (i = 0; i < MAX_NR_MAPS; i++)
@@ -14071,8 +14186,12 @@ static void do_test_single(struct bpf_test *test, bool unpriv,
 	do_test_fixup(test, prog_type, prog, map_fds);
 	prog_len = probe_filter_length(prog);
 
-	fd_prog = bpf_verify_program(prog_type, prog, prog_len,
-				     test->flags & F_LOAD_WITH_STRICT_ALIGNMENT,
+	pflags = 0;
+	if (test->flags & F_LOAD_WITH_STRICT_ALIGNMENT)
+		pflags |= BPF_F_STRICT_ALIGNMENT;
+	if (test->flags & F_NEEDS_EFFICIENT_UNALIGNED_ACCESS)
+		pflags |= BPF_F_ANY_ALIGNMENT;
+	fd_prog = bpf_verify_program(prog_type, prog, prog_len, pflags,
 				     "GPL", 0, bpf_vlog, sizeof(bpf_vlog), 1);
 
 	expected_ret = unpriv && test->result_unpriv != UNDEF ?
@@ -14082,28 +14201,27 @@ static void do_test_single(struct bpf_test *test, bool unpriv,
 	expected_val = unpriv && test->retval_unpriv ?
 		       test->retval_unpriv : test->retval;
 
-	reject_from_alignment = fd_prog < 0 &&
-				(test->flags & F_NEEDS_EFFICIENT_UNALIGNED_ACCESS) &&
-				strstr(bpf_vlog, "misaligned");
-#ifdef CONFIG_HAVE_EFFICIENT_UNALIGNED_ACCESS
-	if (reject_from_alignment) {
-		printf("FAIL\nFailed due to alignment despite having efficient unaligned access: '%s'!\n",
-		       strerror(errno));
-		goto fail_log;
-	}
-#endif
+	alignment_prevented_execution = 0;
+
 	if (expected_ret == ACCEPT) {
-		if (fd_prog < 0 && !reject_from_alignment) {
+		if (fd_prog < 0) {
 			printf("FAIL\nFailed to load prog '%s'!\n",
 			       strerror(errno));
 			goto fail_log;
 		}
+#ifndef CONFIG_HAVE_EFFICIENT_UNALIGNED_ACCESS
+		if (fd_prog >= 0 &&
+		    (test->flags & F_NEEDS_EFFICIENT_UNALIGNED_ACCESS)) {
+			alignment_prevented_execution = 1;
+			goto test_ok;
+		}
+#endif
 	} else {
 		if (fd_prog >= 0) {
 			printf("FAIL\nUnexpected success to load!\n");
 			goto fail_log;
 		}
-		if (!strstr(bpf_vlog, expected_err) && !reject_from_alignment) {
+		if (!strstr(bpf_vlog, expected_err)) {
 			printf("FAIL\nUnexpected error message!\n\tEXP: %s\n\tRES: %s\n",
 			      expected_err, bpf_vlog);
 			goto fail_log;
@@ -14131,9 +14249,12 @@ static void do_test_single(struct bpf_test *test, bool unpriv,
 			goto fail_log;
 		}
 	}
+#ifndef CONFIG_HAVE_EFFICIENT_UNALIGNED_ACCESS
+test_ok:
+#endif
 	(*passes)++;
-	printf("OK%s\n", reject_from_alignment ?
-	       " (NOTE: reject due to unknown alignment)" : "");
+	printf("OK%s\n", alignment_prevented_execution ?
+	       " (NOTE: not executed due to unknown alignment)" : "");
 close_fds:
 	close(fd_prog);
 	for (i = 0; i < MAX_NR_MAPS; i++)
