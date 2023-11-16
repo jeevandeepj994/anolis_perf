@@ -1880,6 +1880,7 @@ enum csv_cmd_id {
 	KVM_CSV_SEND_ENCRYPT_CONTEXT,
 	KVM_CSV_RECEIVE_ENCRYPT_DATA,
 	KVM_CSV_RECEIVE_ENCRYPT_CONTEXT,
+	KVM_CSV_HANDLE_MEMORY,
 
 	KVM_CSV_NR_MAX,
 };
@@ -1926,4 +1927,11 @@ struct kvm_csv_receive_encrypt_context {
 	__u32 trans_len;
 };
 
+#define KVM_CSV_RELEASE_SHARED_MEMORY (0x0001)
+
+struct kvm_csv_handle_memory {
+	__u64 gpa;
+	__u32 num_pages;
+	__u32 opcode;
+};
 #endif /* __LINUX_KVM_H */
