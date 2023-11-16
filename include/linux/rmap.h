@@ -215,6 +215,7 @@ void try_to_unmap_zeropage(struct page *page, enum ttu_flags flags);
 #ifdef CONFIG_PAGETABLE_SHARE
 /* Avoid unnecessary page walk for shared pgtable */
 #define PVMW_SHARED_PGTABLE	(1 << 3)
+#define PVMW_SHARED_PGTABLE_CHECK	(1 << 4)
 #endif
 
 struct page_vma_mapped_walk {
