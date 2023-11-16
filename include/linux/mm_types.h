@@ -393,7 +393,12 @@ struct vm_area_struct {
 	struct vm_area_struct *async_fork_vma;
 #endif
 
+#ifdef CONFIG_PAGETABLE_SHARE
+	CK_KABI_USE(1, struct pgtable_share_struct *pgtable_share_data)
+#else
 	CK_KABI_RESERVE(1)
+#endif
+
 	CK_KABI_RESERVE(2)
 	CK_KABI_RESERVE(3)
 	CK_KABI_RESERVE(4)
