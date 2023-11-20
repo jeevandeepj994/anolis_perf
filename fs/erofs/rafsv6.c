@@ -202,7 +202,7 @@ static const struct vm_operations_struct rafs_v6_vm_ops = {
 	.open	= rafs_v6_vm_open,
 };
 
-static int rafs_v6_file_mmap(struct file *file, struct vm_area_struct *vma)
+static int __rafs_v6_file_mmap(struct file *file, struct vm_area_struct *vma)
 {
 	struct inode *inode = file_inode(file);
 	struct erofs_inode *vi = EROFS_I(inode);
@@ -237,6 +237,16 @@ static int rafs_v6_file_mmap(struct file *file, struct vm_area_struct *vma)
 	vma->vm_flags &= ~VM_HUGEPAGE;	/* dont use huge page */
 	vma->vm_ops = &rafs_v6_vm_ops;
 	return 0;
+}
+
+static int rafs_v6_file_mmap(struct file *file, struct vm_area_struct *vma)
+{
+	struct inode *inode = file_inode(file);
+
+	if (test_opt(&EROFS_I_SB(inode)->opt, BLOB_MMAP_PIN))
+		return __rafs_v6_file_mmap(file, vma);
+
+	return -EOPNOTSUPP;
 }
 
 const struct file_operations rafs_v6_file_ro_fops = {
