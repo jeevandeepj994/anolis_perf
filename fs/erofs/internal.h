@@ -627,6 +627,9 @@ static inline void erofs_fscache_unregister_cookie(struct erofs_fscache *fscache
 }
 #endif
 
+void erofs_rafsv6_set_fops(struct inode *inode);
+void erofs_rafsv6_set_aops(struct inode *inode);
+
 #define EFSCORRUPTED    EUCLEAN         /* Filesystem is corrupted */
 
 #endif	/* __EROFS_INTERNAL_H */
