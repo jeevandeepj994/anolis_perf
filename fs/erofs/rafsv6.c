@@ -256,6 +256,7 @@ static int rafs_v6_readpage(struct file *file, struct page *page)
 	struct super_block *sb = inode->i_sb;
 	erofs_off_t pos = page->index << PAGE_SHIFT;
 	struct erofs_map_blocks map = { .m_la = pos };
+	struct erofs_map_dev mdev;
 	struct kiocb kiocb;
 	struct iov_iter iter;
 	int err;
@@ -264,15 +265,34 @@ static int rafs_v6_readpage(struct file *file, struct page *page)
 	if (err)
 		goto err_out;
 
-	iov.iov_len = min_t(u64, PAGE_SIZE, map.m_plen - (pos - map.m_la));
-	init_sync_kiocb(&kiocb, EROFS_SB(sb)->bootstrap);
-	kiocb.ki_pos = map.m_pa + (pos - map.m_la);
-//	if (!(kiocb.ki_pos & ~PAGE_MASK) && iov.iov_len == PAGE_SIZE)
-//		kiocb.ki_flags |= IOCB_DIRECT;
-	iov_iter_kvec(&iter, READ, &iov, 1, iov.iov_len);
-	err = kiocb.ki_filp->f_op->read_iter(&kiocb, &iter);
-	if (err < iov.iov_len)
+	mdev = (struct erofs_map_dev) {
+		.m_deviceid = map.m_deviceid,
+		.m_pa = map.m_pa,
+	};
+	err = erofs_map_dev(sb, &mdev);
+	if (err) {
+		WARN_ON_ONCE(1);
 		goto err_out;
+	}
+
+	/*
+	 * mdev.m_fp should be bootstrap file if m_deviceid == 0, but
+	 * it could change in the future.
+	 */
+	WARN_ON_ONCE(!map.m_deviceid && mdev.m_fp != EROFS_SB(sb)->bootstrap);
+
+	iov.iov_len = min_t(u64, PAGE_SIZE, map.m_plen - (pos - map.m_la));
+	init_sync_kiocb(&kiocb, mdev.m_fp);
+	kiocb.ki_pos = map.m_pa + (pos - map.m_la);
+	iov_iter_kvec(&iter, READ, &iov, 1, iov.iov_len);
+
+	err = call_read_iter(mdev.m_fp, &kiocb, &iter);
+	if (err < iov.iov_len) {
+		if (err < 0)
+			erofs_err(inode->i_sb, "%s: failed to read blob ret %d",
+			       __func__, err);
+		goto err_out;
+	}
 	if (iov.iov_len < PAGE_SIZE)
 		memset(iov.iov_base + iov.iov_len, 0,
 		       PAGE_SIZE - iov.iov_len);
@@ -285,7 +305,7 @@ err_out:
 	return err;
 }
 
-const struct address_space_operations rafs_v6_aops = {
+const struct address_space_operations rafs_v6_access_aops = {
 	.readpage = rafs_v6_readpage,
 };
 
@@ -296,8 +316,8 @@ void erofs_rafsv6_set_fops(struct inode *inode)
 
 void erofs_rafsv6_set_aops(struct inode *inode)
 {
-	if (!S_ISREG(inode->i_mode)) {
+	if (!S_ISREG(inode->i_mode))
 		inode_nohighmem(inode);
-		inode->i_mapping->a_ops = &rafs_v6_aops;
-	}
+
+	inode->i_mapping->a_ops = &rafs_v6_access_aops;
 }
