@@ -1176,6 +1176,8 @@ static void process_init_reply(struct fuse_mount *fm, struct fuse_args *args,
 				fc->handle_killpriv_v2 = 1;
 				fm->sb->s_flags |= SB_NOSEC;
 			}
+			if (flags & FUSE_DIRECT_IO_ALLOW_MMAP)
+				fc->direct_io_allow_mmap = 1;
 			if (flags & FUSE_PASSTHROUGH) {
 				fc->passthrough = 1;
 				fc->passthrough_enabled = true;
@@ -1236,7 +1238,8 @@ static void fuse_prepare_send_init(struct fuse_mount *fm,
 		FUSE_NO_OPENDIR_SUPPORT | FUSE_EXPLICIT_INVAL_DATA |
 		FUSE_HANDLE_KILLPRIV_V2 | FUSE_INIT_EXT | FUSE_PASSTHROUGH |
 		FUSE_INVAL_CACHE_INFAIL | FUSE_CLOSE_TO_OPEN |
-		FUSE_INVALDIR_ALLENTRY | FUSE_DELETE_STALE;
+		FUSE_INVALDIR_ALLENTRY | FUSE_DELETE_STALE |
+		FUSE_DIRECT_IO_ALLOW_MMAP;
 #ifdef CONFIG_FUSE_DAX
 	if (fm->fc->dax)
 		flags |= FUSE_MAP_ALIGNMENT;
