@@ -457,6 +457,7 @@ static int bpf_obj_name_cpy(char *dst, const char *src)
 }
 
 int map_check_no_btf(const struct bpf_map *map,
+		     const struct btf *btf,
 		     const struct btf_type *key_type,
 		     const struct btf_type *value_type)
 {
@@ -479,7 +480,7 @@ static int map_check_btf(const struct bpf_map *map, const struct btf *btf,
 		return -EINVAL;
 
 	if (map->ops->map_check_btf)
-		ret = map->ops->map_check_btf(map, key_type, value_type);
+		ret = map->ops->map_check_btf(map, btf, key_type, value_type);
 
 	return ret;
 }
@@ -1230,6 +1231,7 @@ static void __bpf_prog_put(struct bpf_prog *prog, bool do_idr_lock)
 		bpf_prog_kallsyms_del_all(prog);
 		btf_put(prog->aux->btf);
 		kvfree(prog->aux->func_info);
+		bpf_prog_free_linfo(prog);
 
 		call_rcu(&prog->aux->rcu, __bpf_prog_put_rcu);
 	}
@@ -1456,7 +1458,7 @@ bpf_prog_load_check_attach_type(enum bpf_prog_type prog_type,
 }
 
 /* last field in 'union bpf_attr' used by this command */
-#define	BPF_PROG_LOAD_LAST_FIELD func_info_cnt
+#define	BPF_PROG_LOAD_LAST_FIELD line_info_cnt
 
 static int bpf_prog_load(union bpf_attr *attr, union bpf_attr __user *uattr)
 {
@@ -1584,6 +1586,7 @@ static int bpf_prog_load(union bpf_attr *attr, union bpf_attr __user *uattr)
 	return err;
 
 free_used_maps:
+	bpf_prog_free_linfo(prog);
 	kvfree(prog->aux->func_info);
 	btf_put(prog->aux->btf);
 	bpf_prog_kallsyms_del_subprogs(prog);
@@ -2071,6 +2074,37 @@ static struct bpf_insn *bpf_insn_prepare_dump(const struct bpf_prog *prog)
 	return insns;
 }
 
+static int set_info_rec_size(struct bpf_prog_info *info)
+{
+	/*
+	 * Ensure info.*_rec_size is the same as kernel expected size
+	 *
+	 * or
+	 *
+	 * Only allow zero *_rec_size if both _rec_size and _cnt are
+	 * zero.  In this case, the kernel will set the expected
+	 * _rec_size back to the info.
+	 */
+
+	if ((info->nr_func_info || info->func_info_rec_size) &&
+	    info->func_info_rec_size != sizeof(struct bpf_func_info))
+		return -EINVAL;
+
+	if ((info->nr_line_info || info->line_info_rec_size) &&
+	    info->line_info_rec_size != sizeof(struct bpf_line_info))
+		return -EINVAL;
+
+	if ((info->nr_jited_line_info || info->jited_line_info_rec_size) &&
+	    info->jited_line_info_rec_size != sizeof(__u64))
+		return -EINVAL;
+
+	info->func_info_rec_size = sizeof(struct bpf_func_info);
+	info->line_info_rec_size = sizeof(struct bpf_line_info);
+	info->jited_line_info_rec_size = sizeof(__u64);
+
+	return 0;
+}
+
 static int bpf_prog_get_info_by_fd(struct bpf_prog *prog,
 				   const union bpf_attr *attr,
 				   union bpf_attr __user *uattr)
@@ -2113,18 +2147,18 @@ static int bpf_prog_get_info_by_fd(struct bpf_prog *prog,
 				return -EFAULT;
 	}
 
-	if ((info.func_info_cnt || info.func_info_rec_size) &&
-	    info.func_info_rec_size != sizeof(struct bpf_func_info))
-		return -EINVAL;
-
-	info.func_info_rec_size = sizeof(struct bpf_func_info);
+	err = set_info_rec_size(&info);
+	if (err)
+		return err;
 
 	if (!capable(CAP_SYS_ADMIN)) {
 		info.jited_prog_len = 0;
 		info.xlated_prog_len = 0;
 		info.nr_jited_ksyms = 0;
 		info.nr_jited_func_lens = 0;
-		info.func_info_cnt = 0;
+		info.nr_func_info = 0;
+		info.nr_line_info = 0;
+		info.nr_jited_line_info = 0;
 		goto done;
 	}
 
@@ -2206,7 +2240,7 @@ static int bpf_prog_get_info_by_fd(struct bpf_prog *prog,
 
 	ulen = info.nr_jited_ksyms;
 	info.nr_jited_ksyms = prog->aux->func_cnt ? : 1;
-	if (info.nr_jited_ksyms && ulen) {
+	if (ulen) {
 		if (bpf_dump_raw_ok()) {
 			unsigned long ksym_addr;
 			u64 __user *user_ksyms;
@@ -2237,7 +2271,7 @@ static int bpf_prog_get_info_by_fd(struct bpf_prog *prog,
 
 	ulen = info.nr_jited_func_lens;
 	info.nr_jited_func_lens = prog->aux->func_cnt ? : 1;
-	if (info.nr_jited_func_lens && ulen) {
+	if (ulen) {
 		if (bpf_dump_raw_ok()) {
 			u32 __user *user_lens;
 			u32 func_len, i;
@@ -2265,19 +2299,49 @@ static int bpf_prog_get_info_by_fd(struct bpf_prog *prog,
 	if (prog->aux->btf)
 		info.btf_id = btf_id(prog->aux->btf);
 
-	ulen = info.func_info_cnt;
-	info.func_info_cnt = prog->aux->func_info_cnt;
-	if (info.func_info_cnt && ulen) {
-		if (bpf_dump_raw_ok()) {
-			char __user *user_finfo;
+	ulen = info.nr_func_info;
+	info.nr_func_info = prog->aux->func_info_cnt;
+	if (info.nr_func_info && ulen) {
+		char __user *user_finfo;
 
-			user_finfo = u64_to_user_ptr(info.func_info);
-			ulen = min_t(u32, info.func_info_cnt, ulen);
-			if (copy_to_user(user_finfo, prog->aux->func_info,
-					 info.func_info_rec_size * ulen))
-				return -EFAULT;
+		user_finfo = u64_to_user_ptr(info.func_info);
+		ulen = min_t(u32, info.nr_func_info, ulen);
+		if (copy_to_user(user_finfo, prog->aux->func_info,
+				 info.func_info_rec_size * ulen))
+			return -EFAULT;
+	}
+
+	ulen = info.nr_line_info;
+	info.nr_line_info = prog->aux->nr_linfo;
+	if (info.nr_line_info && ulen) {
+		__u8 __user *user_linfo;
+
+		user_linfo = u64_to_user_ptr(info.line_info);
+		ulen = min_t(u32, info.nr_line_info, ulen);
+		if (copy_to_user(user_linfo, prog->aux->linfo,
+				 info.line_info_rec_size * ulen))
+			return -EFAULT;
+	}
+
+	ulen = info.nr_jited_line_info;
+	if (prog->aux->jited_linfo)
+		info.nr_jited_line_info = prog->aux->nr_linfo;
+	else
+		info.nr_jited_line_info = 0;
+	if (info.nr_jited_line_info && ulen) {
+		if (bpf_dump_raw_ok()) {
+			__u64 __user *user_linfo;
+			u32 i;
+
+			user_linfo = u64_to_user_ptr(info.jited_line_info);
+			ulen = min_t(u32, info.nr_jited_line_info, ulen);
+			for (i = 0; i < ulen; i++) {
+				if (put_user((__u64)(long)prog->aux->jited_linfo[i],
+					     &user_linfo[i]))
+					return -EFAULT;
+			}
 		} else {
-			info.func_info = 0;
+			info.jited_line_info = 0;
 		}
 	}
 

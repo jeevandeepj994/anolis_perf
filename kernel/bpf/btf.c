@@ -444,7 +444,7 @@ static const struct btf_kind_operations *btf_type_ops(const struct btf_type *t)
 	return kind_ops[BTF_INFO_KIND(t->info)];
 }
 
-static bool btf_name_offset_valid(const struct btf *btf, u32 offset)
+bool btf_name_offset_valid(const struct btf *btf, u32 offset)
 {
 	return BTF_STR_OFFSET_VALID(offset) &&
 		offset < btf->hdr.str_len;
@@ -510,6 +510,28 @@ static bool btf_type_int_is_regular(const struct btf_type *t)
 	     nr_bytes != sizeof(u32) && nr_bytes != sizeof(u64))) {
 		return false;
 	}
+
+	return true;
+}
+
+/*
+ * Check that given type is a regular int and has the expected size.
+ */
+bool btf_type_is_reg_int(const struct btf_type *t, u32 expected_size)
+{
+	u8 nr_bits, nr_bytes;
+	u32 int_data;
+
+	if (!btf_type_is_int(t))
+		return false;
+
+	int_data = btf_type_int(t);
+	nr_bits = BTF_INT_BITS(int_data);
+	nr_bytes = BITS_ROUNDUP_BYTES(nr_bits);
+	if (BITS_PER_BYTE_MASKED(nr_bits) ||
+	    BTF_INT_OFFSET(int_data) ||
+	    nr_bytes != expected_size)
+		return false;
 
 	return true;
 }
