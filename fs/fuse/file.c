@@ -1399,7 +1399,8 @@ ssize_t fuse_direct_io(struct fuse_io_priv *io, struct iov_iter *iter,
 	int write = flags & FUSE_DIO_WRITE;
 	int cuse = flags & FUSE_DIO_CUSE;
 	struct file *file = io->iocb->ki_filp;
-	struct inode *inode = file->f_mapping->host;
+	struct address_space *mapping = file->f_mapping;
+	struct inode *inode = mapping->host;
 	struct fuse_file *ff = file->private_data;
 	struct fuse_conn *fc = ff->fc;
 	size_t nmax = write ? fc->max_write : fc->max_read;
@@ -1410,6 +1411,7 @@ ssize_t fuse_direct_io(struct fuse_io_priv *io, struct iov_iter *iter,
 	ssize_t res = 0;
 	struct fuse_req *req;
 	int err = 0;
+	bool fopen_direct_io = ff->open_flags & FOPEN_DIRECT_IO;
 
 	if (io->async)
 		req = fuse_get_req_for_background(fc, iov_iter_npages(iter,
@@ -1419,12 +1421,28 @@ ssize_t fuse_direct_io(struct fuse_io_priv *io, struct iov_iter *iter,
 	if (IS_ERR(req))
 		return PTR_ERR(req);
 
+	if (fopen_direct_io && fc->direct_io_allow_mmap) {
+		res = filemap_write_and_wait_range(mapping, pos, pos + count - 1);
+		if (res) {
+			fuse_put_request(fc, req);
+			return res;
+		}
+	}
+
 	if (!cuse && fuse_range_is_writeback(inode, idx_from, idx_to)) {
 		if (!write)
 			inode_lock(inode);
 		fuse_sync_writes(inode);
 		if (!write)
 			inode_unlock(inode);
+	}
+
+	if (fopen_direct_io && write) {
+		res = invalidate_inode_pages2_range(mapping, idx_from, idx_to);
+		if (res) {
+			fuse_put_request(fc, req);
+			return res;
+		}
 	}
 
 	io->should_dirty = !write && iter_is_iovec(iter);
@@ -2202,14 +2220,17 @@ static const struct vm_operations_struct fuse_file_vm_ops = {
 static int fuse_file_mmap(struct file *file, struct vm_area_struct *vma)
 {
 	struct fuse_file *ff = file->private_data;
+	struct fuse_conn *fc = ff->fc;
 
 	/* DAX mmap is superior to direct_io mmap */
 	if (FUSE_IS_DAX(file_inode(file)))
 		return fuse_dax_mmap(file, vma);
 
 	if (ff->open_flags & FOPEN_DIRECT_IO) {
-		/* Can't provide the coherency needed for MAP_SHARED */
-		if (vma->vm_flags & VM_MAYSHARE)
+		/* Can't provide the coherency needed for MAP_SHARED
+		 * if FUSE_DIRECT_IO_ALLOW_MMAP isn't set.
+		 */
+		if ((vma->vm_flags & VM_MAYSHARE) && !fc->direct_io_allow_mmap)
 			return -ENODEV;
 
 		invalidate_inode_pages2(file->f_mapping);
