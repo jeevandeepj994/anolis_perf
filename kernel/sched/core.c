@@ -9495,6 +9495,18 @@ static int cpu_idle_write_s64(struct cgroup_subsys_state *css,
 {
 	return sched_group_set_idle(css_tg(css), idle);
 }
+
+static s64 cpu_priority_read_s64(struct cgroup_subsys_state *css,
+				 struct cftype *cft)
+{
+	return css_tg(css)->priority;
+}
+
+static int cpu_priority_write_s64(struct cgroup_subsys_state *css,
+				  struct cftype *cft, s64 priority)
+{
+	return sched_group_set_priority(css_tg(css), priority);
+}
 #endif
 
 #ifdef CONFIG_GROUP_IDENTITY
@@ -9574,6 +9586,11 @@ static struct cftype cpu_legacy_files[] = {
 		.name = "idle",
 		.read_s64 = cpu_idle_read_s64,
 		.write_s64 = cpu_idle_write_s64,
+	},
+	{
+		.name = "priority",
+		.read_s64 = cpu_priority_read_s64,
+		.write_s64 = cpu_priority_write_s64,
 	},
 #endif
 #ifdef CONFIG_CFS_BANDWIDTH
@@ -10143,6 +10160,12 @@ static struct cftype cpu_files[] = {
 		.flags = CFTYPE_NOT_ON_ROOT,
 		.read_s64 = cpu_idle_read_s64,
 		.write_s64 = cpu_idle_write_s64,
+	},
+	{
+		.name = "priority",
+		.flags = CFTYPE_NOT_ON_ROOT,
+		.read_s64 = cpu_priority_read_s64,
+		.write_s64 = cpu_priority_write_s64,
 	},
 #endif
 #ifdef CONFIG_CFS_BANDWIDTH

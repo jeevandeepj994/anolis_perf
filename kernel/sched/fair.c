@@ -506,6 +506,24 @@ static int se_is_idle(struct sched_entity *se)
 	return cfs_rq_is_idle(group_cfs_rq(se));
 }
 
+static u64 cfs_prio_relative_gran(u64 delta, struct sched_entity *curr, struct sched_entity *se)
+{
+	s64 prio_delta = curr->priority - se->priority;
+
+	if (!prio_delta)
+		return delta;
+
+	if (prio_delta > 0) {
+		u64 res;
+
+		if (check_mul_overflow(delta, (u64)(1 + prio_delta), &res))
+			return ULLONG_MAX;
+		return res;
+	} else {
+		return delta / (1 - prio_delta);
+	}
+}
+
 #else	/* !CONFIG_FAIR_GROUP_SCHED */
 
 #define for_each_sched_entity(se) \
@@ -556,6 +574,11 @@ static int cfs_rq_is_idle(struct cfs_rq *cfs_rq)
 static int se_is_idle(struct sched_entity *se)
 {
 	return 0;
+}
+
+static u64 cfs_prio_relative_gran(u64 delta, struct sched_entity *curr, struct sched_entity *se)
+{
+	return delta;
 }
 
 #endif	/* CONFIG_FAIR_GROUP_SCHED */
@@ -6369,7 +6392,8 @@ check_preempt_tick(struct cfs_rq *cfs_rq, struct sched_entity *curr)
 	if (delta < 0)
 		return;
 
-	if (delta > ideal_runtime || id_preempt_all(curr, se) == 1)
+	if (delta > cfs_prio_relative_gran(ideal_runtime, curr, se) ||
+	    id_preempt_all(curr, se) == 1)
 		resched_curr(rq_of(cfs_rq));
 }
 
@@ -9034,8 +9058,9 @@ static unsigned long wakeup_gran(struct sched_entity *se)
 static int
 wakeup_preempt_entity(struct sched_entity *curr, struct sched_entity *se)
 {
+	s64 vdiff = curr->vruntime - se->vruntime;
+	u64 gran;
 	int ret;
-	s64 gran, vdiff = curr->vruntime - se->vruntime;
 
 	/*
 	 * Others always preempt underclass on wakeup, no
@@ -9057,7 +9082,7 @@ wakeup_preempt_entity(struct sched_entity *curr, struct sched_entity *se)
 	}
 
 	gran = wakeup_gran(se);
-	if (vdiff > gran)
+	if (vdiff > cfs_prio_relative_gran(gran, curr, se))
 		return 1;
 
 	return 0;
@@ -13678,6 +13703,7 @@ void init_tg_cfs_entry(struct task_group *tg, struct cfs_rq *cfs_rq,
 	seqlock_init(&se->idle_seqlock);
 	spin_lock_init(&se->iowait_lock);
 	se->cg_idle_start = se->cg_init_time = cpu_clock(cpu);
+	se->priority = tg->priority;
 }
 
 static DEFINE_MUTEX(shares_mutex);
@@ -13802,6 +13828,31 @@ next_cpu:
 		__sched_group_set_shares(tg, NICE_0_LOAD);
 
 	mutex_unlock(&shares_mutex);
+	return 0;
+}
+
+#define TG_PRIO_MIN -99
+#define TG_PRIO_MAX 100
+int sched_group_set_priority(struct task_group *tg, s64 priority)
+{
+	int i;
+
+	if (priority > TG_PRIO_MAX || priority < TG_PRIO_MIN)
+		return -EINVAL;
+
+	if (tg == &root_task_group)
+		return -EINVAL;
+
+	if (tg->priority == priority)
+		return 0;
+
+	tg->priority = priority;
+	for_each_possible_cpu(i) {
+		struct sched_entity *se = tg->se[i];
+
+		se->priority = priority;
+	}
+
 	return 0;
 }
 
