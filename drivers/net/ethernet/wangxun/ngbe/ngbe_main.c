@@ -4267,9 +4267,12 @@ int ngbe_del_mac_filter(struct ngbe_adapter *adapter, u8 *addr, u16 pool)
 		if (ether_addr_equal(addr, adapter->mac_table[i].addr) &&
 		    adapter->mac_table[i].pools | (1ULL << pool)) {
 			adapter->mac_table[i].state |= NGBE_MAC_STATE_MODIFIED;
-			adapter->mac_table[i].state &= ~NGBE_MAC_STATE_IN_USE;
-			memset(adapter->mac_table[i].addr, 0, ETH_ALEN);
-			adapter->mac_table[i].pools = 0;
+			adapter->mac_table[i].pools &= ~(1ULL << pool);
+			if (!adapter->mac_table[i].pools) {
+				adapter->mac_table[i].state &= ~NGBE_MAC_STATE_IN_USE;
+				memset(adapter->mac_table[i].addr, 0, ETH_ALEN);
+			}
+
 			ngbe_sync_mac_table(adapter);
 			return 0;
 		}
@@ -4284,6 +4287,19 @@ int ngbe_add_mac_filter(struct ngbe_adapter *adapter, u8 *addr, u16 pool)
 
 	if (is_zero_ether_addr(addr))
 		return -EINVAL;
+
+	for (i = 0; i < hw->mac.num_rar_entries; i++) {
+		if (adapter->mac_table[i].state & NGBE_MAC_STATE_IN_USE) {
+			if (ether_addr_equal(addr, adapter->mac_table[i].addr)) {
+				if (adapter->mac_table[i].pools != (1ULL << pool)) {
+					adapter->mac_table[i].pools |= (1ULL << pool);
+					adapter->mac_table[i].state |= NGBE_MAC_STATE_MODIFIED;
+					ngbe_sync_mac_table(adapter);
+					return i;
+				}
+			}
+		}
+	}
 
 	for (i = 0; i < hw->mac.num_rar_entries; i++) {
 		if (adapter->mac_table[i].state & NGBE_MAC_STATE_IN_USE)
