@@ -19,6 +19,8 @@
 
 char ngbe_driver_name[] = "ngbe";
 
+const char ngbe_driver_version[] = "1.2.5-k";
+
 static struct workqueue_struct *ngbe_wq;
 
 static const char ngbe_underheat_msg[] =
