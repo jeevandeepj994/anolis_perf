@@ -1013,6 +1013,8 @@ static void ngbe_get_drvinfo(struct net_device *netdev,
 
 	strncpy(drvinfo->driver, ngbe_driver_name,
 		sizeof(drvinfo->driver) - 1);
+	strlcpy(drvinfo->version, ngbe_driver_version,
+		sizeof(drvinfo->version));
 	strncpy(drvinfo->fw_version, adapter->eeprom_id,
 		sizeof(drvinfo->fw_version));
 	strncpy(drvinfo->bus_info, pci_name(adapter->pdev),
