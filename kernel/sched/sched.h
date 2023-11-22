@@ -548,6 +548,7 @@ struct task_group {
 #ifdef CONFIG_SCHED_CORE
 	unsigned int		ht_ratio;
 #endif
+	unsigned int		intel_kabi_test;
 	CK_KABI_RESERVE(1)
 	CK_KABI_RESERVE(2)
 	CK_KABI_RESERVE(3)
