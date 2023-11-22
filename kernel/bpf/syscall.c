@@ -2062,13 +2062,6 @@ static struct bpf_insn *bpf_insn_prepare_dump(const struct bpf_prog *prog)
 			insns[i + 1].imm = 0;
 			continue;
 		}
-
-		if (!bpf_dump_raw_ok() &&
-		    imm == (unsigned long)prog->aux) {
-			insns[i].imm = 0;
-			insns[i + 1].imm = 0;
-			continue;
-		}
 	}
 
 	return insns;
@@ -2342,6 +2335,28 @@ static int bpf_prog_get_info_by_fd(struct bpf_prog *prog,
 			}
 		} else {
 			info.jited_line_info = 0;
+		}
+	}
+
+	ulen = info.nr_prog_tags;
+	info.nr_prog_tags = prog->aux->func_cnt ? : 1;
+	if (ulen) {
+		__u8 __user (*user_prog_tags)[BPF_TAG_SIZE];
+		u32 i;
+
+		user_prog_tags = u64_to_user_ptr(info.prog_tags);
+		ulen = min_t(u32, info.nr_prog_tags, ulen);
+		if (prog->aux->func_cnt) {
+			for (i = 0; i < ulen; i++) {
+				if (copy_to_user(user_prog_tags[i],
+						 prog->aux->func[i]->tag,
+						 BPF_TAG_SIZE))
+					return -EFAULT;
+			}
+		} else {
+			if (copy_to_user(user_prog_tags[0],
+					 prog->tag, BPF_TAG_SIZE))
+				return -EFAULT;
 		}
 	}
 
