@@ -174,6 +174,7 @@ struct erofs_sb_info {
 /* Mount flags set via mount options or defaults */
 #define EROFS_MOUNT_XATTR_USER		0x00000010
 #define EROFS_MOUNT_POSIX_ACL		0x00000020
+#define EROFS_MOUNT_BLOB_MMAP_PIN	0x80000000
 
 #define clear_opt(opt, option)	((opt)->mount_opt &= ~EROFS_MOUNT_##option)
 #define set_opt(opt, option)	((opt)->mount_opt |= EROFS_MOUNT_##option)
@@ -626,6 +627,9 @@ static inline void erofs_fscache_unregister_cookie(struct erofs_fscache *fscache
 {
 }
 #endif
+
+void erofs_rafsv6_set_fops(struct inode *inode);
+void erofs_rafsv6_set_aops(struct inode *inode);
 
 #define EFSCORRUPTED    EUCLEAN         /* Filesystem is corrupted */
 

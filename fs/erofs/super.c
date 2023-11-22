@@ -458,6 +458,7 @@ enum {
 	Opt_domain_id,
 	Opt_bootstrap_path,
 	Opt_blob_dir_path,
+	Opt_blob_mmap_pin,
 	Opt_err
 };
 
@@ -478,6 +479,7 @@ static const struct fs_parameter_spec erofs_fs_parameters[] = {
 	fsparam_string("domain_id",		Opt_domain_id),
 	fsparam_string("bootstrap_path",	Opt_bootstrap_path),
 	fsparam_string("blob_dir_path",		Opt_blob_dir_path),
+	fsparam_flag_no("blob_mmap_pin",	Opt_blob_mmap_pin),
 	{}
 };
 
@@ -572,6 +574,12 @@ static int erofs_fc_parse_param(struct fs_context *fc,
 		ctx->blob_dir_path = kstrdup(param->string, GFP_KERNEL);
 		if (!ctx->blob_dir_path)
 			return -ENOMEM;
+		break;
+	case Opt_blob_mmap_pin:
+		if (result.boolean)
+			set_opt(&ctx->opt, BLOB_MMAP_PIN);
+		else
+			clear_opt(&ctx->opt, BLOB_MMAP_PIN);
 		break;
 	default:
 		return -ENOPARAM;
@@ -881,6 +889,17 @@ static int erofs_fc_reconfigure(struct fs_context *fc)
 	if (ctx->fsid || ctx->domain_id)
 		erofs_info(sb, "ignoring reconfiguration for fsid|domain_id.");
 
+	if (test_opt(&ctx->opt, BLOB_MMAP_PIN) !=
+	    test_opt(&sbi->opt, BLOB_MMAP_PIN)) {
+		erofs_info(sb,
+		       "ignoring reconfiguration for rafsv6's blob_mmap_pin.");
+
+		if (test_opt(&sbi->opt, BLOB_MMAP_PIN))
+			set_opt(&ctx->opt, BLOB_MMAP_PIN);
+		else
+			clear_opt(&ctx->opt, BLOB_MMAP_PIN);
+	}
+
 	if (test_opt(&ctx->opt, POSIX_ACL))
 		fc->sb_flags |= SB_POSIXACL;
 	else
@@ -1158,6 +1177,12 @@ static int erofs_show_options(struct seq_file *seq, struct dentry *root)
 	if (sbi->domain_id)
 		seq_printf(seq, ",domain_id=%s", sbi->domain_id);
 #endif
+	if (erofs_is_rafsv6_mode(root->d_sb)) {
+		if (test_opt(opt, BLOB_MMAP_PIN))
+			seq_puts(seq, ",rafsv6_mmap_pin");
+		else
+			seq_puts(seq, ",rafsv6");
+	}
 	return 0;
 }
 
