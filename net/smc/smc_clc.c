@@ -861,6 +861,7 @@ int smc_clc_send_proposal(struct smc_sock *smc, struct smc_init_info *ini)
 	struct smc_clc_smcd_gid_chid *gidchids;
 	struct smc_clc_msg_proposal_area *pclc;
 	struct smc_clc_ipv6_prefix *ipv6_prfx;
+	struct net *net = sock_net(&smc->sk);
 	struct smc_clc_v2_extension *v2_ext;
 	struct smc_clc_msg_smcd *pclc_smcd;
 	struct smc_clc_msg_trail *trl;
@@ -992,8 +993,8 @@ int smc_clc_send_proposal(struct smc_sock *smc, struct smc_init_info *ini)
 	}
 	if (smcr_indicated(ini->smc_type_v2)) {
 		memcpy(v2_ext->roce, ini->smcrv2.ib_gid_v2, SMC_GID_SIZE);
-		v2_ext->max_conns = SMC_CONN_PER_LGR_MAX;
-		v2_ext->max_links = SMC_LINKS_PER_LGR_PREFER;
+		v2_ext->max_conns = net->smc.sysctl_max_conns_per_lgr;
+		v2_ext->max_links = net->smc.sysctl_max_links_per_lgr;
 	}
 
 	pclc_base->hdr.length = htons(plen);
@@ -1261,6 +1262,7 @@ int smc_clc_srv_v2x_features_validate(struct smc_sock *smc,
 				      struct smc_init_info *ini)
 {
 	struct smc_clc_v2_extension *pclc_v2_ext;
+	struct net *net = sock_net(&smc->sk);
 
 	/* default max conn is SMC_RMBS_PER_LGR_MAX(255),
 	 * which is the default value in smc v1 and v2.0.
@@ -1278,11 +1280,13 @@ int smc_clc_srv_v2x_features_validate(struct smc_sock *smc,
 		return SMC_CLC_DECL_NOV2EXT;
 
 	if (ini->smcr_version & SMC_V2) {
-		ini->max_conns = min_t(u8, pclc_v2_ext->max_conns, SMC_CONN_PER_LGR_MAX);
-		if (!ini->max_conns)
+		ini->max_conns = min_t(u8, pclc_v2_ext->max_conns,
+				       net->smc.sysctl_max_conns_per_lgr);
+		if (ini->max_conns < SMC_CONN_PER_LGR_MIN)
 			return SMC_CLC_DECL_MAXCONNERR;
 
-		ini->max_links = min_t(u8, pclc_v2_ext->max_links, SMC_LINKS_PER_LGR_PREFER);
+		ini->max_links = min_t(u8, pclc_v2_ext->max_links,
+				       net->smc.sysctl_max_links_per_lgr);
 		if (!ini->max_links)
 			return SMC_CLC_DECL_MAXLINKERR;
 	}
