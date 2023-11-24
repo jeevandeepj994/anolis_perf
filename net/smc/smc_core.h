@@ -22,12 +22,20 @@
 #include "smc_ib.h"
 
 #define SMC_RMBS_PER_LGR_MAX	255	/* max. # of RMBs per link group */
-#define SMC_CONN_PER_LGR_MAX	32	/* max. # of connections per link group.
-					 * Correspondingly, SMC_WR_BUF_CNT should not be less than
-					 * 2 * SMC_CONN_PER_LGR_MAX, since every connection at
-					 * least has two rq/sq credits in average, otherwise
-					 * may result in waiting for credits in sending process.
+#define SMC_CONN_PER_LGR_MIN	16	/* min. # of connections per link group */
+#define SMC_CONN_PER_LGR_MAX	255	/* max. # of connections per link group,
+					 * also is the default value for SMC-R v1 and v2.0
 					 */
+#define SMC_CONN_PER_LGR_PREFER	32	/* Preferred connections per link group used for
+					 * SMC-R v2.1 and later negotiation, vendors or
+					 * distrubutions may modify it to a value between
+					 * 16-255 as needed. For better performance SMC_WR_BUF_CNT
+					 * should not be less than 2 * SMC_CONN_PER_LGR_PREFER,
+					 * since every connection at least has two rq/sq credits
+					 * in average, otherwise may result in waiting for credits
+					 * in sending process.
+					 */
+
 #define SMC_MAX_TOKEN_LOCAL		255
 struct smc_lgr_list {			/* list of link group definition */
 	struct list_head	list;
