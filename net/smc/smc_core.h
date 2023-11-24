@@ -190,8 +190,13 @@ struct smc_link {
  */
 #define SMC_LINKS_PER_LGR_MAX	3
 #define SMC_SINGLE_LINK		0
-#define SMC_LINKS_PER_LGR_PREFER	1	/* prefer 1 link per lgr */
+#define SMC_LINKS_ADD_LNK_MIN	1	/* min. # of links per link group */
 #define SMC_LINKS_ADD_LNK_MAX	2
+#define SMC_LINKS_PER_LGR_MAX_PREFER	1	/* Preferred max links per link group used for
+						 * SMC-R v2.1 and later negotiation, vendors or
+						 * distrubutions may modify it to a value between
+						 * 1-2 as needed.
+						 */
 
 /* tx/rx buffer list element for sndbufs list and rmbs list of a lgr */
 struct smc_buf_desc {
