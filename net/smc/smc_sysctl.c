@@ -22,6 +22,8 @@
 static int two = 2;
 static int min_sndbuf = SMC_BUF_MIN_SIZE;
 static int min_rcvbuf = SMC_BUF_MIN_SIZE;
+static int links_per_lgr_min = SMC_LINKS_ADD_LNK_MIN;
+static int links_per_lgr_max = SMC_LINKS_ADD_LNK_MAX;
 
 static struct ctl_table smc_table[] = {
 	{
@@ -77,6 +79,15 @@ static struct ctl_table smc_table[] = {
 		.mode		= 0644,
 		.proc_handler	= proc_douintvec,
 	},
+	{
+		.procname	= "smcr_max_links_per_lgr",
+		.data		= &init_net.smc.sysctl_max_links_per_lgr,
+		.maxlen		= sizeof(int),
+		.mode		= 0644,
+		.proc_handler	= proc_dointvec_minmax,
+		.extra1		= &links_per_lgr_min,
+		.extra2		= &links_per_lgr_max,
+	},
 	{  }
 };
 
@@ -109,6 +120,7 @@ int __net_init smc_sysctl_net_init(struct net *net)
 	net->smc.sysctl_tcp2smc = 0;
 	/* enable handshake limitation by default */
 	net->smc.limit_smc_hs = 1;
+	net->smc.sysctl_max_links_per_lgr = SMC_LINKS_PER_LGR_MAX_PREFER;
 	return 0;
 
 err_reg:
