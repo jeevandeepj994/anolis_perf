@@ -73,6 +73,15 @@ config EROFS_FS_SECURITY
 
 	  If you are not using a security module, say N.
 
+config EROFS_FS_RAFS_V6
+	bool "EROFS RAFSv6 kangaroo support (EROFS over virtiofs)"
+	depends on VIRTIO_FS
+	help
+	  This permits EROFS to use Virtiofs to read blobs. Please don't use
+	  this without Alibaba kangaroo secure containers.
+
+	  If unsure, say N.
+
 config EROFS_FS_ZIP
 	bool "EROFS Data Compression Support"
 	depends on EROFS_FS

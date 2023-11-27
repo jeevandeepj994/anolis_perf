@@ -157,6 +157,7 @@ static int erofs_init_device(struct erofs_buf *buf, struct super_block *sb,
 		if (IS_ERR(fscache))
 			return PTR_ERR(fscache);
 		dif->fscache = fscache;
+#ifdef CONFIG_EROFS_FS_RAFS_V6
 	} else if (sbi->blob_dir_path) {
 		struct file *f;
 
@@ -167,6 +168,7 @@ static int erofs_init_device(struct erofs_buf *buf, struct super_block *sb,
 			return PTR_ERR(f);
 		}
 		dif->blobfile = f;
+#endif
 	} else if (!sbi->devs->flatdev) {
 		bdev = blkdev_get_by_path(dif->path, FMODE_READ | FMODE_EXCL,
 					  sb->s_type);
@@ -456,9 +458,11 @@ enum {
 	Opt_device,
 	Opt_fsid,
 	Opt_domain_id,
+#ifdef CONFIG_EROFS_FS_RAFS_V6
 	Opt_bootstrap_path,
 	Opt_blob_dir_path,
 	Opt_blob_mmap_pin,
+#endif
 	Opt_err
 };
 
@@ -477,9 +481,11 @@ static const struct fs_parameter_spec erofs_fs_parameters[] = {
 	fsparam_string("device",		Opt_device),
 	fsparam_string("fsid",			Opt_fsid),
 	fsparam_string("domain_id",		Opt_domain_id),
+#ifdef CONFIG_EROFS_FS_RAFS_V6
 	fsparam_string("bootstrap_path",	Opt_bootstrap_path),
 	fsparam_string("blob_dir_path",		Opt_blob_dir_path),
 	fsparam_flag_no("blob_mmap_pin",	Opt_blob_mmap_pin),
+#endif
 	{}
 };
 
@@ -563,6 +569,7 @@ static int erofs_fc_parse_param(struct fs_context *fc,
 		errorfc(fc, "domain_id option not supported");
 #endif
 		break;
+#ifdef CONFIG_EROFS_FS_RAFS_V6
 	case Opt_bootstrap_path:
 		kfree(ctx->bootstrap_path);
 		ctx->bootstrap_path = kstrdup(param->string, GFP_KERNEL);
@@ -581,6 +588,7 @@ static int erofs_fc_parse_param(struct fs_context *fc,
 		else
 			clear_opt(&ctx->opt, BLOB_MMAP_PIN);
 		break;
+#endif
 	default:
 		return -ENOPARAM;
 	}
@@ -699,6 +707,7 @@ static int erofs_fc_fill_pseudo_super(struct super_block *sb, struct fs_context 
 
 static int rafs_v6_fill_super(struct super_block *sb)
 {
+#ifdef CONFIG_EROFS_FS_RAFS_V6
 	struct erofs_sb_info *sbi = EROFS_SB(sb);
 
 	if (sbi->bootstrap_path) {
@@ -725,6 +734,7 @@ static int rafs_v6_fill_super(struct super_block *sb)
 			return ret;
 		}
 	}
+#endif
 	return 0;
 }
 
@@ -752,10 +762,12 @@ static int erofs_fc_fill_super(struct super_block *sb, struct fs_context *fc)
 	ctx->fsid = NULL;
 	sbi->domain_id = ctx->domain_id;
 	ctx->domain_id = NULL;
+#ifdef CONFIG_EROFS_FS_RAFS_V6
 	sbi->bootstrap_path = ctx->bootstrap_path;
 	ctx->bootstrap_path = NULL;
 	sbi->blob_dir_path = ctx->blob_dir_path;
 	ctx->blob_dir_path = NULL;
+#endif
 
 	sbi->blkszbits = PAGE_SHIFT;
 	if (!sb->s_bdev) {
@@ -859,6 +871,7 @@ static int erofs_fc_get_tree(struct fs_context *fc)
 {
 	struct erofs_fs_context *ctx = fc->fs_private;
 
+#ifdef CONFIG_EROFS_FS_RAFS_V6
 	if (ctx->blob_dir_path && !ctx->bootstrap_path) {
 		errorfc(fc, "bootstrap_path required in RAFS mode");
 		return -EINVAL;
@@ -868,13 +881,15 @@ static int erofs_fc_get_tree(struct fs_context *fc)
 		errorfc(fc, "fscache/RAFS modes are mutually exclusive");
 		return -EINVAL;
 	}
+#endif
 
 	if (IS_ENABLED(CONFIG_EROFS_FS_ONDEMAND) && ctx->fsid)
 		return get_tree_nodev(fc, erofs_fc_fill_super);
 
+#ifdef CONFIG_EROFS_FS_RAFS_V6
 	if (ctx->bootstrap_path && ctx->blob_dir_path)
 		return get_tree_nodev(fc, erofs_fc_fill_super);
-
+#endif
 	return get_tree_bdev(fc, erofs_fc_fill_super);
 }
 
@@ -889,6 +904,7 @@ static int erofs_fc_reconfigure(struct fs_context *fc)
 	if (ctx->fsid || ctx->domain_id)
 		erofs_info(sb, "ignoring reconfiguration for fsid|domain_id.");
 
+#ifdef CONFIG_EROFS_FS_RAFS_V6
 	if (test_opt(&ctx->opt, BLOB_MMAP_PIN) !=
 	    test_opt(&sbi->opt, BLOB_MMAP_PIN)) {
 		erofs_info(sb,
@@ -899,6 +915,7 @@ static int erofs_fc_reconfigure(struct fs_context *fc)
 		else
 			clear_opt(&ctx->opt, BLOB_MMAP_PIN);
 	}
+#endif
 
 	if (test_opt(&ctx->opt, POSIX_ACL))
 		fc->sb_flags |= SB_POSIXACL;
@@ -917,8 +934,10 @@ static int erofs_release_device_info(int id, void *ptr, void *data)
 
 	if (dif->bdev)
 		blkdev_put(dif->bdev, FMODE_READ | FMODE_EXCL);
+#ifdef CONFIG_EROFS_FS_RAFS_V6
 	if (dif->blobfile)
 		filp_close(dif->blobfile, NULL);
+#endif
 	erofs_fscache_unregister_cookie(dif->fscache);
 	dif->fscache = NULL;
 	kfree(dif->path);
@@ -1008,12 +1027,14 @@ static void erofs_kill_sb(struct super_block *sb)
 	if (!sbi)
 		return;
 	erofs_free_dev_context(sbi->devs);
+#ifdef CONFIG_EROFS_FS_RAFS_V6
 	if (sbi->bootstrap)
 		filp_close(sbi->bootstrap, NULL);
 	if (sbi->blob_dir_path)
 		path_put(&sbi->blob_dir);
 	kfree(sbi->bootstrap_path);
 	kfree(sbi->blob_dir_path);
+#endif
 	erofs_fscache_unregister_fs(sb);
 	kfree(sbi->fsid);
 	kfree(sbi->domain_id);
