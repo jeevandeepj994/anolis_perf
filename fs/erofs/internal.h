@@ -52,8 +52,9 @@ struct erofs_device_info {
 	char *path;
 	struct erofs_fscache *fscache;
 	struct block_device *bdev;
+#ifdef CONFIG_EROFS_FS_RAFS_V6
 	struct file *blobfile;
-
+#endif
 	u32 blocks;
 	u32 mapped_blkaddr;
 };
@@ -82,8 +83,10 @@ struct erofs_fs_context {
 	struct erofs_dev_context *devs;
 	char *fsid;
 	char *domain_id;
+#ifdef CONFIG_EROFS_FS_RAFS_V6
 	char *bootstrap_path;
 	char *blob_dir_path;
+#endif
 };
 
 /* all filesystem-wide lz4 configurations */
@@ -128,10 +131,12 @@ struct erofs_sb_info {
 	struct erofs_sb_lz4_info lz4;
 	struct inode *packed_inode;
 #endif	/* CONFIG_EROFS_FS_ZIP */
+#ifdef CONFIG_EROFS_FS_RAFS_V6
 	struct path blob_dir;
 	struct file *bootstrap;
 	char *bootstrap_path;
 	char *blob_dir_path;
+#endif
 	struct erofs_dev_context *devs;
 	u64 total_blocks;
 	u32 primarydevice_blocks;
@@ -182,7 +187,11 @@ struct erofs_sb_info {
 
 static inline bool erofs_is_rafsv6_mode(struct super_block *sb)
 {
+#ifdef CONFIG_EROFS_FS_RAFS_V6
 	return !sb->s_bdev && EROFS_SB(sb)->bootstrap_path;
+#else
+	return false;
+#endif
 }
 
 static inline bool erofs_is_fscache_mode(struct super_block *sb)
@@ -439,8 +448,9 @@ static inline int z_erofs_map_blocks_iter(struct inode *inode,
 struct erofs_map_dev {
 	struct erofs_fscache *m_fscache;
 	struct block_device *m_bdev;
+#ifdef CONFIG_EROFS_FS_RAFS_V6
 	struct file *m_fp;
-
+#endif
 	erofs_off_t m_pa;
 	unsigned int m_deviceid;
 };
@@ -628,8 +638,13 @@ static inline void erofs_fscache_unregister_cookie(struct erofs_fscache *fscache
 }
 #endif
 
+#ifdef CONFIG_EROFS_FS_RAFS_V6
 void erofs_rafsv6_set_fops(struct inode *inode);
 void erofs_rafsv6_set_aops(struct inode *inode);
+#else
+static inline void erofs_rafsv6_set_fops(struct inode *inode) {}
+static inline void erofs_rafsv6_set_aops(struct inode *inode) {}
+#endif
 
 #define EFSCORRUPTED    EUCLEAN         /* Filesystem is corrupted */
 

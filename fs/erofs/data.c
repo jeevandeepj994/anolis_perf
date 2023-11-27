@@ -56,6 +56,7 @@ void *__erofs_bread(struct super_block *sb, struct erofs_buf *buf,
 
 	if (!page || page->index != index) {
 		erofs_put_metabuf(buf);
+#ifdef CONFIG_EROFS_FS_RAFS_V6
 		if (sb && erofs_is_rafsv6_mode(sb)) {
 			unsigned int nofs_flag;
 
@@ -71,10 +72,13 @@ void *__erofs_bread(struct super_block *sb, struct erofs_buf *buf,
 					       EROFS_SB(sb)->bootstrap);
 			}
 			memalloc_nofs_restore(nofs_flag);
-		} else {
+		} else
+#endif
+		{
 			page = read_cache_page_gfp(mapping, index,
 				   mapping_gfp_constraint(mapping, ~__GFP_FS));
 		}
+
 		if (IS_ERR(page))
 			return page;
 		/* should already be PageUptodate, no need to lock page */
@@ -104,10 +108,11 @@ void *erofs_bread(struct erofs_buf *buf, struct inode *inode,
 void *erofs_read_metabuf(struct erofs_buf *buf, struct super_block *sb,
 			 erofs_blk_t blkaddr, enum erofs_kmap_type type)
 {
+#ifdef CONFIG_EROFS_FS_RAFS_V6
 	if (erofs_is_rafsv6_mode(sb))
 		return __erofs_bread(sb, buf, EROFS_SB(sb)->bootstrap->f_inode,
 				     blkaddr, type);
-
+#endif
 	if (erofs_is_fscache_mode(sb))
 		return erofs_bread(buf, EROFS_SB(sb)->s_fscache->inode,
 				   blkaddr, type);
@@ -238,7 +243,9 @@ int erofs_map_dev(struct super_block *sb, struct erofs_map_dev *map)
 	int id;
 
 	map->m_bdev = sb->s_bdev;
+#ifdef CONFIG_EROFS_FS_RAFS_V6
 	map->m_fp = EROFS_SB(sb)->bootstrap;
+#endif
 	map->m_fscache = EROFS_SB(sb)->s_fscache;
 
 	if (map->m_deviceid) {
@@ -254,7 +261,9 @@ int erofs_map_dev(struct super_block *sb, struct erofs_map_dev *map)
 			return 0;
 		}
 		map->m_bdev = dif->bdev;
+#ifdef CONFIG_EROFS_FS_RAFS_V6
 		map->m_fp = dif->blobfile;
+#endif
 		map->m_fscache = dif->fscache;
 		up_read(&devs->rwsem);
 	} else if (devs->extra_devices && !devs->flatdev) {
@@ -271,7 +280,9 @@ int erofs_map_dev(struct super_block *sb, struct erofs_map_dev *map)
 			    map->m_pa < startoff + length) {
 				map->m_pa -= startoff;
 				map->m_bdev = dif->bdev;
+#ifdef CONFIG_EROFS_FS_RAFS_V6
 				map->m_fp = dif->blobfile;
+#endif
 				map->m_fscache = dif->fscache;
 				break;
 			}
