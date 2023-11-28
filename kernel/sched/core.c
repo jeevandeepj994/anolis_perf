@@ -2933,6 +2933,9 @@ ttwu_do_activate(struct rq *rq, struct task_struct *p, int wake_flags,
 		update_nr_iowait(p, -1);
 	}
 
+	/* update force idle time for cgroup wait time accounting. */
+	sched_core_tick(rq);
+
 	activate_task(rq, p, en_flags);
 	ttwu_do_wakeup(rq, p, wake_flags, rf);
 }
