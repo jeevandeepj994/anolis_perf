@@ -13172,8 +13172,13 @@ void account_ht_aware_quota(struct task_struct *p, u64 delta)
 
 			}
 
-			if (ht_ratio != 100)
-				account_cfs_rq_runtime(cfs_rq, delta * (ht_ratio - 100) / 100);
+			if (ht_ratio != 100) {
+				for_each_sched_entity(se) {
+					cfs_rq = cfs_rq_of(se);
+					account_cfs_rq_runtime(cfs_rq,
+						delta * (ht_ratio - 100) / 100);
+				}
+			}
 		}
 	}
 }
