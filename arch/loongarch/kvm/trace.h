@@ -82,6 +82,7 @@ DEFINE_EVENT(kvm_transition, kvm_out,
 #define KVM_TRACE_EXIT_CACHE	65
 #define KVM_TRACE_EXIT_SIGNAL	66
 
+/* Tracepoints for VM exits */
 #define kvm_trace_symbol_exit_types				\
 	{ KVM_TRACE_EXIT_INT,		"Interrupt" },		\
 	{ KVM_TRACE_EXIT_TLBLD,		"TLB (LD)" },		\
