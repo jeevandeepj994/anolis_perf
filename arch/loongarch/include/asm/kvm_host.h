@@ -160,7 +160,6 @@ enum emulation_result {
 	EMULATE_DO_IOCSR,	/* handle IOCSR request */
 };
 
-
 #define KVM_LARCH_FPU		(0x1 << 0)
 #define KVM_LARCH_LSX		(0x1 << 1)
 #define KVM_LARCH_LASX		(0x1 << 2)
@@ -221,16 +220,9 @@ struct kvm_vcpu_arch {
 	/* vcpu's vpid is different on each host cpu in an smp system */
 	u64 vpid[NR_CPUS];
 
-	/* Period of stable timer tick in ns */
-	u64 timer_period;
 	/* Frequency of stable timer in Hz */
 	u64 timer_mhz;
-	/* Stable bias from the raw time */
-	u64 timer_bias;
-	/* Dynamic nanosecond bias (multiple of timer_period) to avoid overflow */
-	s64 timer_dyn_bias;
-	/* Save ktime */
-	ktime_t stable_ktime_saved;
+	ktime_t expire;
 
 	u64 core_ext_ioisr[4];
 
@@ -252,6 +244,7 @@ struct kvm_vcpu_arch {
 	u64 perf_ctrl[4];
 	u64 perf_cntr[4];
 
+	int blocking;
 };
 
 static inline unsigned long readl_sw_gcsr(struct loongarch_csrs *csr, int reg)
@@ -333,8 +326,6 @@ static inline void kvm_arch_free_memslot(struct kvm *kvm,
 		struct kvm_memory_slot *slot) {}
 static inline void kvm_arch_memslots_updated(struct kvm *kvm, u64 gen) {}
 static inline void kvm_arch_sched_in(struct kvm_vcpu *vcpu, int cpu) {}
-static inline void kvm_arch_vcpu_blocking(struct kvm_vcpu *vcpu) {}
-static inline void kvm_arch_vcpu_unblocking(struct kvm_vcpu *vcpu) {}
 static inline void kvm_arch_vcpu_block_finish(struct kvm_vcpu *vcpu) {}
 
 extern int kvm_enter_guest(struct kvm_run *run, struct kvm_vcpu *vcpu);

@@ -9,6 +9,7 @@
 
 extern int  _kvm_set_spte_hva(struct kvm *kvm, unsigned long hva, pte_t pte);
 
+
 int kvm_arch_check_processor_compat(void *opaque)
 {
 	return 0;
