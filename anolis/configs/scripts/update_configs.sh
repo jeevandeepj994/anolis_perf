@@ -142,7 +142,11 @@ function check_configs() {
 }
 
 prepare_env
-prepare_old_configs
+if [ -z "$DO_IMPORT_CONFIGS" ]; then
+    prepare_old_configs
+else
+    import_old_configs
+fi
 refresh_old_configs
 split_new_configs
 replace_with_new_configs

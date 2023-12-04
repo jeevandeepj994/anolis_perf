@@ -26,7 +26,7 @@ dist-genrpmtree: dist-check
 dist-rpms: dist-genrpmtree dist-check
 	sh buildpkg.sh
 
-DIST_CONFIG_TARGETS := dist-defconfig dist-debug-defconfig dist-configs dist-configs-update dist-configs-move dist-configs-help
+DIST_CONFIG_TARGETS := dist-defconfig dist-debug-defconfig dist-configs dist-configs-update dist-configs-move dist-configs-import dist-configs-help
 
 $(DIST_CONFIG_TARGETS):
 	make -C configs/ $@
