@@ -78,3 +78,10 @@ DIST_ANOLIS_VERSION = $(DIST_KERNELVERSION)-$(DIST_PKGRELEASEVERION)
 #   for unofficial build, we compress tarball from git HEAD
 DIST_PKG_COMMIT_ID = $(if $(DIST_OFFICIAL_BUILD),$(DIST_ANOLIS_VERSION),$(DIST_GIT_HEAD_FULL_COMMIT_ID))
 
+DIST_ARCH ?= $(shell uname -m)
+ifeq ($(DIST_ARCH),x86_64)
+    DIST_ARCH := x86
+endif
+ifeq ($(DIST_ARCH),aarch64)
+	DIST_ARCH := arm64
+endif
