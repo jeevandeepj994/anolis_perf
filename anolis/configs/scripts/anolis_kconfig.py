@@ -392,6 +392,113 @@ class Generator():
         configs = Merger.from_path(input_dir, dist)
         Generator.generate(configs, output_dir, dist, arch_list)
 
+class Spliter():
+    """split config files into splited files"""
+    @staticmethod
+    def __parse_configs(config_files: List[str], arch_list: List[str], dist: str, old_configs: Configs) -> Configs:
+        configs = Configs(dist)
+        for i, file in enumerate(config_files):
+            values = ConfigValues.from_config_file(file)
+            for value in values.values:
+                configs.add_value(value, old_configs.level_of(value.name), arch_list[i])
+
+        configs.set_default_values()
+        return configs
+
+    @staticmethod
+    def split(config_files: List[str], arch_list: List[str], old_top_dir: str, output_top_dir: str, dist: str):
+        base_dist = ConfigRule.dist_dependencies(dist)
+        old_dist_configs = Merger.from_path(old_top_dir, dist)
+        configs = Spliter.__parse_configs(config_files, arch_list, dist, old_dist_configs)
+
+        if len(base_dist) != 0:
+            base_configs = Merger.from_path(old_top_dir, base_dist[-1])
+            configs.diff_to_base(base_configs)
+
+        configs.set_default_values()
+        configs.collapse_values()
+        configs.write_split_files(output_top_dir)
+
+    @staticmethod
+    def do_split(args):
+        old_top_dir = args.old_top_dir
+        output_top_dir = args.output_top_dir
+        config_files = args.config_files
+        dist = ConfigRule.default_dist()
+        kernel_version = ConfigRule.kernel_version()
+
+        archs = []
+        for file in config_files:
+            file = os.path.basename(file)
+            pattern=f'^kernel-{kernel_version}-(.*)-{dist}.config$'
+            if not re.match(pattern, file):
+                print(f"config file name is illegal: {file}")
+                exit(1)
+            obj = re.match(pattern, file)
+            archs.append(obj.group(1))
+        Spliter.split(config_files, archs, old_top_dir, output_top_dir, dist)
+
+class Mover():
+    """move configs from old level to new level"""
+    @staticmethod
+    def get_level(level: str) -> str:
+        target_level = ""
+        for l in ConfigRule.levels():
+            if l.startswith(level):
+                if target_level != "":
+                    die(f"the level {level} is ambiguous")
+                target_level = l
+
+        if target_level == "":
+            die(f"unkonw level {level}")
+        return target_level
+
+    def conf_name_of(path: str) -> str:
+        return os.path.basename(path)
+
+    def conf_arch_of(path: str) -> str:
+        return os.path.basename(os.path.dirname(path))
+
+    def is_empty_dir(path: str) -> bool:
+        for path in glob.glob(f"{path}/**/*", recursive=True):
+            if os.path.isfile(path):
+                return False
+        return True
+
+    @staticmethod
+    def move(old_level: str, new_level: str, conf_patterns: List[str]):
+        dist = ConfigRule.default_dist()
+        old_level = Mover.get_level(old_level)
+        new_level = Mover.get_level(new_level)
+        if old_level == new_level:
+            exit(0)
+        if new_level == "UNKNOWN":
+            die("move configs into UNKONWN level is prohibited")
+
+        config_dir = os.path.realpath(os.path.join(os.path.dirname(__file__), ".."))
+        if ConfigRule.is_override(dist):
+            config_dir = os.path.join(config_dir, "OVERRIDE", dist)
+
+        level_dir = os.path.join(config_dir, old_level)
+        for conf_pattern in conf_patterns:
+            config_files = glob.glob(f"{level_dir}/**/{conf_pattern}", recursive=True)
+            for conf in config_files:
+                if not os.path.isfile(conf):
+                    continue
+                conf_name = Mover.conf_name_of(conf)
+                conf_arch = Mover.conf_arch_of(conf)
+                new_path = os.path.join(config_dir, new_level, conf_arch, conf_name)
+                print(f"{conf} -> {new_path}")
+                shutil.move(conf, new_path)
+                if old_level == "UNKNOWN":
+                    specific_conf_dir = os.path.join(level_dir, conf_name)
+                    if Mover.is_empty_dir(specific_conf_dir):
+                        shutil.rmtree(specific_conf_dir)
+
+    @staticmethod
+    def do_move(args):
+        Mover.move(args.old, args.new_level, args.config_name)
+
 def default_args_func(args):
     pass
 
@@ -405,6 +512,18 @@ if __name__ == '__main__':
     generator.add_argument("--output_dir", required=True, help="the output dir to store config files")
     generator.add_argument("archs", nargs="+", help="the archs, eg: x86/x86-debug/arm64/arm64-debug")
     generator.set_defaults(func=Generator.do_generate)
+
+    spliter = subparsers.add_parser('split', description="split configs files into different small files")
+    spliter.add_argument("--old_top_dir", required=True, help="the old splited files top dir")
+    spliter.add_argument("--output_top_dir", required=True, help="the output new splited files top dir")
+    spliter.add_argument("config_files", nargs="+", help="the config files generated by generate cmd")
+    spliter.set_defaults(func=Spliter.do_split)
+
+    mover = subparsers.add_parser("move", description="move configs to new level")
+    mover.add_argument("--old", default="UNKNOWN", help="the config's old level dir, default is UNKNOWN")
+    mover.add_argument("config_name", nargs="+", help="the config name")
+    mover.add_argument("new_level", help="the new level")
+    mover.set_defaults(func=Mover.do_move)
 
     args = parser.parse_args()
     args.func(args)
