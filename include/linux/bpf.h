@@ -464,6 +464,8 @@ enum bpf_reg_type {
 	PTR_TO_MEM,		 /* reg points to valid memory region */
 	PTR_TO_BUF,		 /* reg points to a read/write buffer */
 	PTR_TO_PERCPU_BTF_ID,	 /* reg points to a percpu kernel variable */
+	CK_KABI_BROKEN_INSERT_ENUM(PTR_TO_ZIYI_1)
+	CK_KABI_BROKEN_INSERT_ENUM(PTR_TO_ZIYI_2)
 	__BPF_REG_TYPE_MAX,
 
 	/* Extended reg_types. */
