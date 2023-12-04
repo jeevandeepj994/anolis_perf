@@ -19,6 +19,9 @@ dist-configs-update:
 dist-configs-move:
 	@sh scripts/move_configs.sh
 
+dist-configs-import:
+	@DO_IMPORT_CONFIGS=Y sh scripts/update_configs.sh
+
 dist-configs-help:
 	@echo ''
 	@echo '--------------------------------'
@@ -28,5 +31,6 @@ dist-configs-help:
 	@echo '    dist-configs:          - generate anolis config files to all arch, output to $${DIST_OUTPUT}'
 	@echo '    dist-configs-update:   - refresh configs'
 	@echo '    dist-configs-move:     - adjust the level of kconfig'
+	@echo '    dist-configs-import:   - import legacy kconfig files, and split them into independent small files'
 
 export
