@@ -84,6 +84,14 @@ else
 	$(Q)$(MAKE) -f $(srctree)/Makefile $(KBUILD_DEFCONFIG)
 endif
 
+anolis_defconfig: $(obj)/conf
+	$(Q)DIST_DO_GENERATE_DOT_CONFIG=Y $(MAKE) -C $(srctree)/anolis/ dist-defconfig
+	$(Q)$(MAKE) -C $(srctree) olddefconfig
+
+anolis-debug_defconfig: $(obj)/conf
+	$(Q)DIST_DO_GENERATE_DOT_CONFIG=Y $(MAKE) -C $(srctree)/anolis/ dist-debug-defconfig
+	$(Q)$(MAKE) -C $(srctree) olddefconfig
+
 %_defconfig: $(obj)/conf
 	$(Q)$< $(silent) --defconfig=arch/$(SRCARCH)/configs/$@ $(Kconfig)
 
