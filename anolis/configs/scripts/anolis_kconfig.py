@@ -9,6 +9,7 @@
 import argparse, re, os, glob, shutil, copy
 from typing import List, Dict, Type
 import json
+import functools
 
 def die(*args, **kwargs):
     print(*args, **kwargs)
@@ -109,6 +110,32 @@ class ConfigValues():
                     continue
                 configs.add_value(value)
         return configs
+
+class SortRefs():
+    order: Dict[str, int]
+
+    def __init__(self, path_list: List[str]) -> None:
+        self.order = {}
+        for path in path_list:
+            self.__add(path)
+
+    def __add(self, path: str):
+        values = ConfigValues.from_config_file(path)
+
+        for value in values.values:
+            if value.name not in self.order:
+                self.order[value.name] = len(self.order) + 1
+
+    def compare(self, a: str, b: str):
+        #try compare config name with order
+        if a in self.order and b in self.order:
+            return (self.order[a] > self.order[b]) - (self.order[a] < self.order[b])
+        if a in self.order:
+            return -1
+        if b in self.order:
+            return 1
+        #fallback to string compare
+        return (a > b) - (a < b)
 
 class Config():
     name: str
@@ -316,10 +343,13 @@ class Configs():
         for config in same_configs:
             del self.configs[config.name]
 
-    def as_json(self):
+    def as_json(self, sort_refs: List[str]):
         data_list = []
         for config in self.configs.values():
             data_list.append(config.as_json())
+
+        sort_ref = SortRefs(sort_refs)
+        data_list.sort(key=functools.cmp_to_key(lambda a,b: sort_ref.compare(a["name"], b["name"])))
         return data_list
 
 class Merger():
@@ -499,6 +529,23 @@ class Mover():
     def do_move(args):
         Mover.move(args.old, args.new_level, args.config_name)
 
+class Exporter():
+    @staticmethod
+    def __save_as_xlsx(output: str, data):
+        import pandas
+        writer = pandas.ExcelWriter(output, engine="openpyxl")
+        data = pandas.DataFrame(data)
+        data.to_excel(writer)
+        writer.save()
+
+    @staticmethod
+    def do_export(args):
+        dist = ConfigRule.default_dist()
+        configs = Merger.from_path(args.input_dir, dist)
+        configs.expand_values()
+        data = configs.as_json(args.sort_refs)
+        Exporter.__save_as_xlsx(args.output, data)
+
 def default_args_func(args):
     pass
 
@@ -524,6 +571,12 @@ if __name__ == '__main__':
     mover.add_argument("config_name", nargs="+", help="the config name")
     mover.add_argument("new_level", help="the new level")
     mover.set_defaults(func=Mover.do_move)
+
+    generator = subparsers.add_parser('export', description="export to excel format")
+    generator.add_argument("--input_dir", required=True, help="the top dir of splited configs")
+    generator.add_argument("--output", required=True, help="the output name")
+    generator.add_argument("sort_refs", nargs="+", help="the config file used for sorting reference")
+    generator.set_defaults(func=Exporter.do_export)
 
     args = parser.parse_args()
     args.func(args)

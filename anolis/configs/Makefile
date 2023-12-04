@@ -22,6 +22,9 @@ dist-configs-move:
 dist-configs-import:
 	@DO_IMPORT_CONFIGS=Y sh scripts/update_configs.sh
 
+dist-configs-export:
+	@sh scripts/export_configs.sh
+
 dist-configs-help:
 	@echo ''
 	@echo '--------------------------------'
@@ -32,5 +35,6 @@ dist-configs-help:
 	@echo '    dist-configs-update:   - refresh configs'
 	@echo '    dist-configs-move:     - adjust the level of kconfig'
 	@echo '    dist-configs-import:   - import legacy kconfig files, and split them into independent small files'
+	@echo '    dist-configs-export:   - export all configs into a xlsx file'
 
 export
