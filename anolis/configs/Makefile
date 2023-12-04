@@ -13,6 +13,12 @@ dist-debug-defconfig:
 dist-configs:
 	@sh scripts/generate_configs.sh ${DIST_CONFIG_KERNEL_ARCHS}
 
+dist-configs-update:
+	@sh scripts/update_configs.sh
+
+dist-configs-move:
+	@sh scripts/move_configs.sh
+
 dist-configs-help:
 	@echo ''
 	@echo '--------------------------------'
@@ -20,5 +26,7 @@ dist-configs-help:
 	@echo '    dist-defconfig:        - generate anolis default config file of current ARCH, output to $${DIST_OUTPUT}'
 	@echo '    dist-debug-defconfig:  - generate anolis debug default config file of current ARCH, output to $${DIST_OUTPUT}'
 	@echo '    dist-configs:          - generate anolis config files to all arch, output to $${DIST_OUTPUT}'
+	@echo '    dist-configs-update:   - refresh configs'
+	@echo '    dist-configs-move:     - adjust the level of kconfig'
 
 export
