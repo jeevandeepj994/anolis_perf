@@ -511,6 +511,23 @@ class Mover():
     def do_move(args):
         Mover.move(args.old, args.new_level, args.config_name)
 
+class Exporter():
+    @staticmethod
+    def __save_as_xlsx(output: str, data):
+        import pandas
+        writer = pandas.ExcelWriter(output, engine="openpyxl")
+        data = pandas.DataFrame(data)
+        data.to_excel(writer)
+        writer.save()
+
+    @staticmethod
+    def do_export(args):
+        dist = ConfigRule.default_dist()
+        configs = Merger.from_path(args.input_dir, dist)
+        configs.expand_values()
+        data = configs.as_json()
+        Exporter.__save_as_xlsx(args.output, data)
+
 def default_args_func(args):
     pass
 
@@ -536,6 +553,11 @@ if __name__ == '__main__':
     mover.add_argument("config_name", nargs="+", help="the config name")
     mover.add_argument("new_level", help="the new level")
     mover.set_defaults(func=Mover.do_move)
+
+    generator = subparsers.add_parser('export', description="export to excel format")
+    generator.add_argument("--input_dir", required=True, help="the top dir of splited configs")
+    generator.add_argument("--output", required=True, help="the output name")
+    generator.set_defaults(func=Exporter.do_export)
 
     args = parser.parse_args()
     args.func(args)
