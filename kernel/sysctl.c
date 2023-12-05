@@ -2932,6 +2932,11 @@ static struct ctl_table kern_table[] = {
 		.extra1		= SYSCTL_ZERO,
 		.extra2		= SYSCTL_ONE,
 	},
+	{
+		.procname	= "rich_container_feature_control",
+		.mode		= 0600,
+		.proc_handler	= rich_container_feature_control_handler,
+	},
 #ifndef CONFIG_RICH_CONTAINER_CG_SWITCH
 	{
 		.procname	= "rich_container_source",
