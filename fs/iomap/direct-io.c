@@ -427,7 +427,7 @@ __iomap_dio_rw(struct kiocb *iocb, struct iov_iter *iter,
 	size_t count = iov_iter_count(iter);
 	loff_t pos = iocb->ki_pos;
 	loff_t end = iocb->ki_pos + count - 1, ret = 0;
-	unsigned int flags = IOMAP_DIRECT;
+	unsigned int iomap_flags = IOMAP_DIRECT;
 	struct blk_plug plug;
 	struct iomap_dio *dio;
 
@@ -463,13 +463,13 @@ __iomap_dio_rw(struct kiocb *iocb, struct iov_iter *iter,
 				ret = -EAGAIN;
 				goto out_free_dio;
 			}
-			flags |= IOMAP_NOWAIT;
+			iomap_flags |= IOMAP_NOWAIT;
 		}
 
 		if (iter_is_iovec(iter))
 			dio->flags |= IOMAP_DIO_DIRTY;
 	} else {
-		flags |= IOMAP_WRITE;
+		iomap_flags |= IOMAP_WRITE;
 		dio->flags |= IOMAP_DIO_WRITE;
 
 		if (iocb->ki_flags & IOCB_NOWAIT) {
@@ -477,7 +477,7 @@ __iomap_dio_rw(struct kiocb *iocb, struct iov_iter *iter,
 				ret = -EAGAIN;
 				goto out_free_dio;
 			}
-			flags |= IOMAP_NOWAIT;
+			iomap_flags |= IOMAP_NOWAIT;
 		}
 
 		/* for data sync or sync, we need sync completion processing */
@@ -522,7 +522,7 @@ __iomap_dio_rw(struct kiocb *iocb, struct iov_iter *iter,
 
 	blk_start_plug(&plug);
 	do {
-		ret = iomap_apply(inode, pos, count, flags, ops, dio,
+		ret = iomap_apply(inode, pos, count, iomap_flags, ops, dio,
 				iomap_dio_actor);
 		if (ret <= 0) {
 			/* magic error code to fall back to buffered I/O */
