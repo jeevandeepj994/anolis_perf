@@ -6896,8 +6896,19 @@ void unthrottle_cfs_rq(struct cfs_rq *cfs_rq)
 	/* update hierarchical throttle state */
 	walk_tg_tree_from(tg, tg_nop, tg_unthrottle_up, (void *)rq);
 
-	if (!cfs_rq->load.weight)
+	if (!cfs_rq->load.weight) {
+		/*
+		 * dequeue_task_fair(ex. task cpuset changed) would
+		 * make load.weight becomes 0 and call cgroup_idle_start()
+		 * so we must check cg_idle_start here
+		 *
+		 * rq is locked, cg_idle_start would not be changed
+		 * it's safe to get value directly
+		 */
+		if (!schedstat_val(se->cg_idle_start))
+			cgroup_idle_start(se);
 		return;
+	}
 
 	task_delta = cfs_rq->h_nr_running;
 	idle_task_delta = cfs_rq->idle_h_nr_running;
