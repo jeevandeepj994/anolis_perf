@@ -4210,6 +4210,12 @@ static int is_branch_taken(struct bpf_reg_state *reg, u64 val, u8 opcode)
 		if (tnum_is_const(reg->var_off))
 			return !tnum_equals_const(reg->var_off, val);
 		break;
+	case BPF_JSET:
+		if ((~reg->var_off.mask & reg->var_off.value) & val)
+			return 1;
+		if (!((reg->var_off.mask | reg->var_off.value) & val))
+			return 0;
+		break;
 	case BPF_JGT:
 		if (reg->umin_value > val)
 			return 1;
@@ -4294,6 +4300,13 @@ static void reg_set_min_max(struct bpf_reg_state *true_reg,
 		 */
 		__mark_reg_known(false_reg, val);
 		break;
+	case BPF_JSET:
+		false_reg->var_off = tnum_and(false_reg->var_off,
+					      tnum_const(~val));
+		if (is_power_of_2(val))
+			true_reg->var_off = tnum_or(true_reg->var_off,
+						    tnum_const(val));
+		break;
 	case BPF_JGT:
 		false_reg->umax_value = min(false_reg->umax_value, val);
 		true_reg->umin_value = max(true_reg->umin_value, val + 1);
@@ -4365,6 +4378,13 @@ static void reg_set_min_max_inv(struct bpf_reg_state *true_reg,
 		 * we know the value for sure;
 		 */
 		__mark_reg_known(false_reg, val);
+		break;
+	case BPF_JSET:
+		false_reg->var_off = tnum_and(false_reg->var_off,
+					      tnum_const(~val));
+		if (is_power_of_2(val))
+			true_reg->var_off = tnum_or(true_reg->var_off,
+						    tnum_const(val));
 		break;
 	case BPF_JGT:
 		true_reg->umax_value = min(true_reg->umax_value, val - 1);
@@ -5164,13 +5184,14 @@ static int check_btf_func(struct bpf_verifier_env *env,
 			  const union bpf_attr *attr,
 			  union bpf_attr __user *uattr)
 {
-	u32 i, nfuncs, urec_size, min_size, prev_offset;
+	u32 i, nfuncs, urec_size, min_size;
 	u32 krec_size = sizeof(struct bpf_func_info);
 	struct bpf_func_info *krecord;
 	const struct btf_type *type;
 	struct bpf_prog *prog;
 	const struct btf *btf;
 	void __user *urecord;
+	u32 prev_offset = 0;
 	int ret = 0;
 
 	nfuncs = attr->func_info_cnt;
@@ -5350,6 +5371,14 @@ static int check_btf_line(struct bpf_verifier_env *env,
 			verbose(env, "Invalid line_info[%u].insn_off:%u (prev_offset:%u prog->len:%u)\n",
 				i, linfo[i].insn_off, prev_offset,
 				prog->len);
+			err = -EINVAL;
+			goto err_free;
+		}
+
+		if (!prog->insnsi[linfo[i].insn_off].code) {
+			verbose(env,
+				"Invalid insn code at line_info[%u].insn_off\n",
+				i);
 			err = -EINVAL;
 			goto err_free;
 		}
@@ -7404,10 +7433,11 @@ skip_full_check:
 	free_states(env);
 
 	if (ret == 0)
-		sanitize_dead_code(env);
-
-	if (ret == 0)
 		ret = check_max_stack_depth(env);
+
+	/* instruction rewrites happen after this point */
+	if (ret == 0)
+		sanitize_dead_code(env);
 
 	if (ret == 0)
 		/* program is valid, convert *(u32*)(ctx + off) accesses */
