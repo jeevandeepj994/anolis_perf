@@ -487,7 +487,9 @@ struct address_space {
 	spinlock_t		private_lock;
 	struct list_head	private_list;
 	void			*private_data;
+#ifdef CONFIG_PAGETABLE_SHARE
 	void			*ptshare_data;
+#endif
 
 	CK_KABI_RESERVE(1)
 	CK_KABI_RESERVE(2)

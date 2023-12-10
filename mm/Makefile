@@ -38,7 +38,7 @@ mmu-y			:= nommu.o
 mmu-$(CONFIG_MMU)	:= highmem.o memory.o mincore.o \
 			   mlock.o mmap.o mmu_gather.o mprotect.o mremap.o \
 			   msync.o page_vma_mapped.o pagewalk.o \
-			   pgtable-generic.o rmap.o vmalloc.o ioremap.o pgtable_share.o
+			   pgtable-generic.o rmap.o vmalloc.o ioremap.o
 
 
 ifdef CONFIG_CROSS_MEMORY_ATTACH
@@ -137,3 +137,4 @@ obj-$(CONFIG_PAGE_PREZERO) += prezero.o
 obj-$(CONFIG_PAGECACHE_LIMIT) += pagecache_limit.o
 obj-$(CONFIG_HAVE_BOOTMEM_INFO_NODE) += bootmem_info.o
 obj-$(CONFIG_PGTABLE_BIND) += pgtable_bind.o
+obj-$(CONFIG_PAGETABLE_SHARE) += pgtable_share.o
