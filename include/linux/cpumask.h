@@ -922,6 +922,45 @@ cpumap_print_to_pagebuf(bool list, char *buf, const struct cpumask *mask)
 				      nr_cpu_ids);
 }
 
+/**
+ * cpumap_print_bitmask_to_buf  - copies the cpumask into the buffer as
+ *	hex values of cpumask
+ *
+ * @buf: the buffer to copy into
+ * @mask: the cpumask to copy
+ * @off: in the string from which we are copying, we copy to @buf
+ * @count: the maximum number of bytes to print
+ *
+ * The function prints the cpumask into the buffer as hex values of
+ * cpumask; Typically used by bin_attribute to export cpumask bitmask
+ * ABI.
+ *
+ * Returns the length of how many bytes have been copied, excluding
+ * terminating '\0'.
+ */
+static inline ssize_t
+cpumap_print_bitmask_to_buf(char *buf, const struct cpumask *mask,
+			    loff_t off, size_t count)
+{
+	return bitmap_print_bitmask_to_buf(buf, cpumask_bits(mask),
+					   nr_cpu_ids, off, count) - 1;
+}
+
+/**
+ * cpumap_print_list_to_buf  - copies the cpumask into the buffer as
+ *	comma-separated list of cpus
+ *
+ * Everything is same with the above cpumap_print_bitmask_to_buf()
+ * except the print format.
+ */
+static inline ssize_t
+cpumap_print_list_to_buf(char *buf, const struct cpumask *mask,
+			 loff_t off, size_t count)
+{
+	return bitmap_print_list_to_buf(buf, cpumask_bits(mask),
+					nr_cpu_ids, off, count) - 1;
+}
+
 #if NR_CPUS <= BITS_PER_LONG
 #define CPU_MASK_ALL							\
 (cpumask_t) { {								\
@@ -944,5 +983,23 @@ cpumap_print_to_pagebuf(bool list, char *buf, const struct cpumask *mask)
 (cpumask_t) { {								\
 	[0] =  1UL							\
 } }
+
+/*
+ * Provide a valid theoretical max size for cpumap and cpulist sysfs files
+ * to avoid breaking userspace which may allocate a buffer based on the size
+ * reported by e.g. fstat.
+ *
+ * for cpumap NR_CPUS * 9/32 - 1 should be an exact length.
+ *
+ * For cpulist 7 is (ceil(log10(NR_CPUS)) + 1) allowing for NR_CPUS to be up
+ * to 2 orders of magnitude larger than 8192. And then we divide by 2 to
+ * cover a worst-case of every other cpu being on one of two nodes for a
+ * very large NR_CPUS.
+ *
+ *  Use PAGE_SIZE as a minimum for smaller configurations.
+ */
+#define CPUMAP_FILE_MAX_BYTES  ((((NR_CPUS * 9)/32 - 1) > PAGE_SIZE) \
+				? (NR_CPUS * 9)/32 - 1 : PAGE_SIZE)
+#define CPULIST_FILE_MAX_BYTES  (((NR_CPUS * 7)/2 > PAGE_SIZE) ? (NR_CPUS * 7)/2 : PAGE_SIZE)
 
 #endif /* __LINUX_CPUMASK_H */
