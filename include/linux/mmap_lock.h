@@ -46,6 +46,11 @@ static inline void mmap_read_lock(struct mm_struct *mm)
 	down_read(&mm->mmap_lock);
 }
 
+static inline void mmap_read_lock_nested(struct mm_struct *mm, int subclass)
+{
+	down_read_nested(&mm->mmap_lock, subclass);
+}
+
 static inline int mmap_read_lock_killable(struct mm_struct *mm)
 {
 	return down_read_killable(&mm->mmap_lock);

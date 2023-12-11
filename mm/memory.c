@@ -222,6 +222,7 @@ static void free_pte_range(struct mmu_gather *tlb, pmd_t *pmd,
 	if (shared_pte) {
 		tlb_flush_pmd_range(tlb, addr, PAGE_SIZE);
 		tlb->freed_tables = 1;
+		put_page(token);
 		return;
 	}
 	pte_free_tlb(tlb, token, addr);
@@ -4886,6 +4887,90 @@ unlock:
 	return 0;
 }
 
+#ifdef CONFIG_PAGETABLE_SHARE
+static vm_fault_t pgtable_share_fault(struct vm_area_struct *vma,
+		unsigned long address, unsigned int flags)
+{
+	struct vm_fault vmf = {
+		.vma = vma,
+		.address = address & PAGE_MASK,
+		.flags = flags,
+		.pgoff = linear_page_index(vma, address),
+		.gfp_mask = __get_fault_gfp_mask(vma),
+	};
+	struct pgtable_share_struct *info;
+	struct mm_struct *orig_mm, *shadow_mm;
+	struct vm_area_struct *shadow_vma;
+	pgd_t *pgd;
+	p4d_t *p4d;
+	vm_fault_t ret;
+
+	if ((!vma->vm_file) || (!vma->vm_file->f_mapping))
+		return VM_FAULT_ERROR;
+
+	info = vma_get_pgtable_share_data(vma);
+	if (!info) {
+		pr_warn("VM_SHARED_PT vma with NULL pgtable_share_data");
+		dump_stack_print_info(KERN_WARNING);
+		return VM_FAULT_ERROR;
+	}
+	orig_mm = vma->vm_mm;
+	shadow_mm = info->mm;
+	/*
+	 * lock_nested() called to avoid possible warning
+	 * of recursive locking.
+	 */
+	mmap_read_lock_nested(shadow_mm, SINGLE_DEPTH_NESTING);
+
+	shadow_vma = find_vma(shadow_mm, address);
+	if (!shadow_vma) {
+		ret = VM_FAULT_SIGSEGV;
+		goto out;
+	}
+
+	/* Share the same pmd entry with shadow_mm. */
+	ret = pgtable_share_copy_pmd(vma, shadow_vma, address);
+	if (ret)
+		goto out;
+
+	/* Switch to shadow vma and shadow mm. */
+	vmf.vma = shadow_vma;
+
+	ret = VM_FAULT_OOM;
+	pgd = pgd_offset(shadow_mm, address);
+	p4d = p4d_alloc(shadow_mm, pgd, address);
+	if (!p4d)
+		goto out;
+
+	vmf.pud = pud_alloc(shadow_mm, p4d, address);
+	if (!vmf.pud)
+		goto out;
+
+	vmf.pmd = pmd_alloc(shadow_mm, vmf.pud, address);
+	if (!vmf.pmd)
+		goto out;
+
+	ret = handle_pte_fault(&vmf);
+
+out:
+	orig_mm = vma->vm_mm;
+	/*
+	 * Release the read lock on shared VMA's parent mm unless
+	 * handle_pte_fault released the lock already.
+	 * handle_pte_fault sets VM_FAULT_RETRY in return value if
+	 * it released mmap lock. Here, that means shadow mmap lock
+	 * has been released, meantime, we need to unlock original
+	 * mmap lock.
+	 */
+	if ((ret & VM_FAULT_RETRY) && (flags & FAULT_FLAG_ALLOW_RETRY))
+		mmap_read_unlock(orig_mm);
+	else
+		mmap_read_unlock(shadow_mm);
+
+	return ret;
+}
+#endif
+
 /*
  * By the time we get here, we already hold the mm semaphore
  *
@@ -5100,6 +5185,10 @@ vm_fault_t handle_mm_fault(struct vm_area_struct *vma, unsigned long address,
 
 	if (unlikely(is_vm_hugetlb_page(vma)))
 		ret = hugetlb_fault(vma->vm_mm, vma, address, flags);
+#ifdef CONFIG_PAGETABLE_SHARE
+	else if  (unlikely(vma_is_pgtable_shared(vma)))
+		ret = pgtable_share_fault(vma, address, flags);
+#endif
 	else
 		ret = __handle_mm_fault(vma, address, flags);
 
