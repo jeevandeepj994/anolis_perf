@@ -21,6 +21,9 @@ extern unsigned long pgtable_share_get_unmapped_area(struct file *filp,
 						     unsigned long len,
 						     unsigned long pgoff,
 						     unsigned long flags);
+extern vm_fault_t pgtable_share_copy_pmd(struct vm_area_struct *orig_vma,
+				  struct vm_area_struct *shadow_vma,
+				  unsigned long addr);
 
 static inline bool vma_is_pgtable_shared(const struct vm_area_struct *vma)
 {
@@ -62,6 +65,13 @@ static unsigned long pgtable_share_get_unmapped_area(struct file *filp,
 						     unsigned long flags)
 {
 	BUILD_BUG();
+	return 0;
+}
+
+static inline vm_fault_t pgtable_share_copy_pmd(struct vm_area_struct *orig_vma,
+				  struct vm_area_struct *shadow_vma,
+				  unsigned long addr)
+{
 	return 0;
 }
 #endif
