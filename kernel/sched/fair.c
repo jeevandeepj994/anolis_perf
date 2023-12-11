@@ -1734,16 +1734,25 @@ id_rb_first_cached(struct cfs_rq *cfs_rq)
 	 */
 	update_expel_spread(cfs_rq);
 
-	if (cfs_rq->min_under_vruntime + get_expel_spread(cfs_rq) <
-	    cfs_rq->min_vruntime) {
-		roots[0] = &cfs_rq->under_timeline;
-		roots[1] = &cfs_rq->tasks_timeline;
+	if (!sched_feat(ID_ABSOLUTE_EXPEL)) {
+		if (cfs_rq->min_under_vruntime + get_expel_spread(cfs_rq) <
+		    cfs_rq->min_vruntime) {
+			roots[0] = &cfs_rq->under_timeline;
+			roots[1] = &cfs_rq->tasks_timeline;
+		}
 	}
 
 	for (i = 0; i < 2; i++) {
 		left = rb_first_cached(roots[i]);
-		if (left)
+		if (left) {
+			/* To prevent priority inversion once ID_ABSOLUTE_EXPEL
+			 * is turned off.
+			 */
+			if (sched_feat(ID_ABSOLUTE_EXPEL) &&
+			    !is_underclass(rb_entry(left, struct sched_entity, run_node)))
+				update_expel_start(cfs_rq, NULL);
 			return left;
+		}
 	}
 
 	return NULL;
