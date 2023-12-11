@@ -1319,19 +1319,34 @@ static vm_fault_t dax_pmd_load_hole(struct xa_state *xas, struct vm_fault *vmf,
 }
 #endif /* CONFIG_FS_DAX_PMD */
 
+static int dax_memzero(const struct iomap *iomap, loff_t pos, size_t size,
+		       pgoff_t pgoff, const struct iomap *srcmap)
+{
+	unsigned offset = offset_in_page(pos);
+	void *kaddr;
+	long ret;
+
+	ret = dax_direct_access(iomap->dax_dev, pgoff, 1, &kaddr, NULL);
+	if (ret < 0)
+		return ret;
+
+	memset(kaddr + offset, 0, size);
+	if (iomap->flags & IOMAP_F_SHARED)
+		ret = dax_iomap_copy_around(pos, size, PAGE_SIZE, srcmap,
+					    kaddr);
+	else
+		dax_flush(iomap->dax_dev, kaddr + offset, size);
+	return ret;
+}
+
 s64 dax_iomap_zero(loff_t pos, u64 length, struct iomap *iomap,
 		   const struct iomap *srcmap)
 {
 	sector_t sector = iomap_sector(iomap, pos & PAGE_MASK);
 	pgoff_t pgoff;
 	long rc, id;
-	void *kaddr;
-	bool page_aligned = false;
 	unsigned offset = offset_in_page(pos);
 	unsigned size = min_t(u64, PAGE_SIZE - offset, length);
-
-	if (IS_ALIGNED(pos, PAGE_SIZE) && size == PAGE_SIZE)
-		page_aligned = true;
 
 	rc = bdev_dax_pgoff(iomap->bdev, sector, PAGE_SIZE, &pgoff);
 	if (rc)
@@ -1339,27 +1354,13 @@ s64 dax_iomap_zero(loff_t pos, u64 length, struct iomap *iomap,
 
 	id = dax_read_lock();
 
-	if (page_aligned)
+	if (IS_ALIGNED(pos, PAGE_SIZE) && size == PAGE_SIZE)
 		rc = dax_zero_page_range(iomap->dax_dev, pgoff, 1);
 	else
-		rc = dax_direct_access(iomap->dax_dev, pgoff, 1, &kaddr, NULL);
-	if (rc < 0) {
-		dax_read_unlock(id);
-		return rc;
-	}
-
-	if (!page_aligned) {
-		memset(kaddr + offset, 0, size);
-		if (iomap->flags & IOMAP_F_SHARED) {
-			rc = dax_iomap_copy_around(pos, size, PAGE_SIZE, srcmap, kaddr);
-			if (rc < 0) {
-				dax_read_unlock(id);
-				return rc;
-			}
-		}
-		dax_flush(iomap->dax_dev, kaddr + offset, size);
-	}
+		rc = dax_memzero(iomap, pos, size, pgoff, srcmap);
 	dax_read_unlock(id);
+	if (rc < 0)
+		return rc;
 	return size;
 }
 
