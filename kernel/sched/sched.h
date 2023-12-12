@@ -575,9 +575,9 @@ struct cfs_rq {
 #ifdef CONFIG_SCHED_SMT
 	u64			expel_spread;
 	u64			expel_start;
-	unsigned int		h_nr_expel_immune;
 	struct list_head	expel_list;
 #endif
+	unsigned int		h_nr_expel_immune;
 	struct rb_root_cached	under_timeline;
 #endif
 
