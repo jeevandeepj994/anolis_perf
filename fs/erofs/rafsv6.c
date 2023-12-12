@@ -2,6 +2,7 @@
 /*
  * Copyright (C) 2021-2023, Alibaba Cloud
  */
+#include <linux/cred.h>
 #include <linux/uio.h>
 #include <linux/file.h>
 #include <linux/printk.h>
@@ -263,6 +264,7 @@ static int __rafs_v6_file_direct_mmap(struct file *file, struct vm_area_struct *
 	struct inode *inode = file_inode(file);
 	struct erofs_map_blocks map = { 0 };
 	struct erofs_map_dev mdev;
+	struct file *blobfile;
 	int err;
 
 	if (file != vma->vm_file) {
@@ -294,15 +296,26 @@ static int __rafs_v6_file_direct_mmap(struct file *file, struct vm_area_struct *
 		return -EOPNOTSUPP;
 	}
 
-	vma->vm_file = get_file(mdev.m_fp);
+	blobfile = open_with_fake_path(&file->f_path, mdev.m_fp->f_flags,
+					mdev.m_fp->f_inode, current_cred());
+	if (IS_ERR(blobfile)) {
+		erofs_err(inode->i_sb, "failed to open the blobfile: %s deviceid: %u nid: %llu, err %ld",
+			  mdev.m_fp->f_path.dentry->d_name.name, mdev.m_deviceid,
+			  EROFS_I(inode)->nid, PTR_ERR(blobfile));
+		return PTR_ERR(blobfile);
+	}
+
+	vma->vm_file = blobfile;
 	vma->vm_pgoff += mdev.m_pa >> PAGE_SHIFT;
 	err = call_mmap(vma->vm_file, vma);
 	if (err) {
-		printk_ratelimited(KERN_ERR "direct_mmap: call_mmap failed with err %d\n",
-				   err);
+		erofs_err(inode->i_sb,
+			  "direct_mmap: call_mmap failed with err %d, deviceid: %u, nid: %llu, name: %s\n",
+			  err, mdev.m_deviceid, EROFS_I(inode)->nid,
+			  mdev.m_fp->f_path.dentry->d_name.name);
 		vma->vm_file = file;
 		vma->vm_pgoff -= mdev.m_pa >> PAGE_SHIFT;
-		fput(mdev.m_fp);
+		fput(blobfile);
 	} else {
 		fput(file);
 	}
@@ -402,7 +415,7 @@ const struct address_space_operations rafs_v6_access_aops = {
 };
 
 void erofs_rafsv6_set_fops(struct inode *inode)
-	{
+{
 	struct erofs_inode *vi = EROFS_I(inode);
 
 	if (vi->datalayout == EROFS_INODE_FLAT_PLAIN) {
