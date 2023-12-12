@@ -695,14 +695,16 @@ static inline bool is_idle_seeker(struct sched_entity *se)
 	return test_identity(se, ID_IDLE_SEEKER);
 }
 
-static inline bool underclass_only(int cpu)
+static inline bool underclass_only(struct rq *rq)
 {
-	struct rq *rq = cpu_rq(cpu);
-
 	return rq->cfs.h_nr_running &&
 	       rq->cfs.h_nr_running == rq->nr_under_running;
 }
 
+static inline bool id_load_balance(void)
+{
+	return sched_feat(ID_LOAD_BALANCE);
+}
 #ifdef CONFIG_SCHED_SMT
 static inline bool need_expel(int this_cpu)
 {
@@ -798,6 +800,13 @@ static inline bool expellee_only(struct rq *rq)
 
 static inline bool expel_ib_disallow(struct rq *rq)
 {
+	/*
+	 * For ID_LOAD_BALANCE, underclass only cpu should be treated as idle cpu, trying
+	 * to pull highclass or normal tasks.
+	 */
+	if (id_load_balance())
+		return false;
+
 	if (sysctl_sched_expel_idle_balance_delay < 0)
 		return true;
 
@@ -1063,6 +1072,14 @@ id_wake_affine(struct task_struct *p, int this_cpu, int prev_cpu)
 	return true;
 }
 
+static inline u64 get_avg_idle(struct rq *rq)
+{
+	if (id_load_balance())
+		return rq->avg_id_idle;
+	else
+		return rq->avg_idle;
+}
+
 static noinline bool
 id_idle_cpu(struct task_struct *p, int cpu, bool expellee, bool *idle)
 {
@@ -1110,8 +1127,16 @@ id_idle_cpu(struct task_struct *p, int cpu, bool expellee, bool *idle)
 		return false;
 
 	/* CPU full of underclass is idle for highclass */
-	if (!is_idle)
-		return __is_highclass_task(p) && underclass_only(cpu);
+	if (!is_idle) {
+		/*
+		 * For ID_LOAD_BALANCE, CPU full of underclass is also idle
+		 * for normal.
+		 */
+		if (id_load_balance())
+			return !is_underclass_task(p) && underclass_only(rq);
+		else
+			return __is_highclass_task(p) && underclass_only(rq);
+	}
 
 	if (!is_saver)
 		return true;
@@ -1178,10 +1203,20 @@ id_update_nr_running(struct task_group *tg, struct rq *rq, long delta)
 		rq->nr_under_running += delta;
 }
 
-#ifdef CONFIG_SCHED_SMT
-static inline u64 get_expel_spread(struct cfs_rq *cfs_rq)
+static inline bool id_regard_as_idle(struct rq *rq)
 {
-	return cfs_rq->expel_spread;
+	if (group_identity_disabled())
+		return false;
+
+	/*
+	 * If ID_LOAD_BALANCE is true, underclass only cpu is regarded as idle
+	 * cpu, and we will pull highclass or normal tasks to this cpu. otherwise
+	 * expellee only cpu is regarded as idle cpu.
+	 */
+	if (id_load_balance())
+		return !rq->nr_expel_immune && rq->cfs.h_nr_running;
+	else
+		return expellee_only(rq);
 }
 
 static inline unsigned int __get_h_nr_expel_immune(struct sched_entity *se)
@@ -1236,33 +1271,15 @@ hierarchy_update_nr_expel_immune(struct sched_entity *se, long delta)
 	}
 }
 
+#ifdef CONFIG_SCHED_SMT
+static inline u64 get_expel_spread(struct cfs_rq *cfs_rq)
+{
+	return cfs_rq->expel_spread;
+}
 #else
 static inline u64 get_expel_spread(struct cfs_rq *cfs_rq)
 {
 	return 0;
-}
-
-static inline unsigned int __get_h_nr_expel_immune(struct sched_entity *se)
-{
-	return 0;
-}
-
-static inline unsigned int get_h_nr_expel_immune(struct sched_entity *se)
-{
-	return 0;
-}
-
-static inline void
-update_nr_expel_immune(struct cfs_rq *cfs_rq, struct sched_entity *se,
-		       bool *immune, long delta)
-{
-}
-
-static inline int cfs_rq_throttled(struct cfs_rq *cfs_rq);
-
-static inline void
-hierarchy_update_nr_expel_immune(struct sched_entity *se, long delta)
-{
 }
 #endif
 
@@ -1950,7 +1967,7 @@ static inline void update_under_min_vruntime(struct cfs_rq *cfs_rq)
 void update_id_idle_avg(struct rq *rq, u64 delta)
 {
 	s64 diff;
-	u64 max = sysctl_sched_idle_saver_wmark;
+	u64 max;
 
 	if (group_identity_disabled())
 		return;
@@ -1958,6 +1975,12 @@ void update_id_idle_avg(struct rq *rq, u64 delta)
 	delta += rq->under_exec_sum - rq->under_exec_stamp;
 	diff = delta - rq->avg_id_idle;
 	rq->avg_id_idle += diff >> 3;
+
+	if (id_load_balance())
+		/* The same max value as rq->avg_idle. */
+		max = 2 * rq->max_idle_balance_cost;
+	else
+		max = sysctl_sched_idle_saver_wmark;
 
 	if (rq->avg_id_idle > max)
 		rq->avg_id_idle = max;
@@ -2083,7 +2106,7 @@ static inline bool is_highclass(struct sched_entity *se)
 	return true;
 }
 
-static inline bool underclass_only(int cpu)
+static inline bool underclass_only(struct rq *rq)
 {
 	return false;
 }
@@ -2109,6 +2132,11 @@ static inline bool should_expel_se(struct rq *rq, struct sched_entity *se)
 }
 
 static inline bool expellee_only(struct rq *rq)
+{
+	return false;
+}
+
+static inline bool id_regard_as_idle(struct rq *rq)
 {
 	return false;
 }
@@ -2141,11 +2169,20 @@ static inline unsigned long expel_score(struct rq *rq)
 	return 0;
 }
 
+static inline bool id_load_balance(void)
+{
+	return false;
+}
 #ifdef CONFIG_SMP
 static int
 id_can_migrate_task(struct task_struct *p, struct rq *src_rq, struct rq *dst_rq)
 {
 	return -1;
+}
+
+static inline u64 get_avg_idle(struct rq *rq)
+{
+	return rq->avg_idle;
 }
 #endif
 
@@ -8439,7 +8476,7 @@ static int select_idle_cpu(struct task_struct *p, struct sched_domain *sd, int t
 	 * Due to large variance we need a large fuzz factor; hackbench in
 	 * particularly is sensitive here.
 	 */
-	avg_idle = this_rq()->avg_idle / 512;
+	avg_idle = get_avg_idle(this_rq()) / 512;
 	avg_cost = this_sd->avg_scan_cost + 1;
 
 	if (sched_feat(SIS_AVG_CPU) && avg_idle < avg_cost)
@@ -9415,7 +9452,9 @@ again:
 
 	update_rq_on_expel(rq);
 
-	if (expellee_only(rq)) {
+	if (id_regard_as_idle(rq)) {
+		if (id_load_balance() && !__rq_on_expel(rq) && expel_pulled)
+			goto pick;
 		/*
 		 * In order to mark CPU as IDLE, we need to call
 		 * idle_balance(), while since we still have
@@ -9429,6 +9468,7 @@ again:
 		goto idle;
 	}
 
+pick:
 #ifdef CONFIG_FAIR_GROUP_SCHED
 	if (!prev || prev->sched_class != &fair_sched_class)
 		goto simple;
@@ -9468,7 +9508,7 @@ again:
 				if (!cfs_rq->nr_running)
 					goto idle;
 
-				if (expellee_only(rq)) {
+				if (id_regard_as_idle(rq)) {
 					if (expel_ib_disallow(rq))
 						return NULL;
 
@@ -9560,6 +9600,8 @@ idle:
 	if (new_tasks > 0)
 		goto again;
 
+	if ((id_load_balance() && id_regard_as_idle(rq) && !__rq_on_expel(rq)))
+		goto again;
 	/*
 	 * rq is about to be idle, check if we need to update the
 	 * lost_idle_time of clock_pelt
@@ -9805,7 +9847,10 @@ enum migration_type {
 	migrate_load = 0,
 	migrate_util,
 	migrate_task,
-	migrate_misfit
+	migrate_misfit,
+#ifdef CONFIG_GROUP_IDENTITY
+	migrate_identity
+#endif
 };
 
 #define LBF_ALL_PINNED	0x01
@@ -10129,6 +10174,15 @@ static int detach_tasks(struct lb_env *env)
 			goto next;
 
 		switch (env->migration_type) {
+#ifdef CONFIG_GROUP_IDENTITY
+		/* For migrate_identity, we wanna pull highclass or normal tasks. */
+		case migrate_identity:
+			if (id_regard_as_idle(env->src_rq))
+				break;
+			if (is_underclass_task(p))
+				goto next;
+		/* If there is highclass or normal tasks, we pull tasks as migrate_load. */
+#endif
 		case migrate_load:
 			/*
 			 * Depending of the number of CPUs and tasks and the
@@ -12023,6 +12077,10 @@ static int load_balance(int this_cpu, struct rq *this_rq,
 	struct rq *busiest;
 	struct rq_flags rf;
 	struct cpumask *cpus = this_cpu_cpumask_var_ptr(load_balance_mask);
+#ifdef CONFIG_GROUP_IDENTITY
+	int type = id_load_balance() && id_regard_as_idle(this_rq) ?
+		   migrate_identity : migrate_load;
+#endif
 
 	struct lb_env env = {
 		.sd		= sd,
@@ -12034,6 +12092,9 @@ static int load_balance(int this_cpu, struct rq *this_rq,
 		.cpus		= cpus,
 		.fbq_type	= all,
 		.tasks		= LIST_HEAD_INIT(env.tasks),
+#ifdef CONFIG_GROUP_IDENTTIY
+		.migration_type = type;
+#endif
 	};
 
 	cpumask_and(cpus, sched_domain_span(sd), cpu_active_mask);
@@ -12557,7 +12618,7 @@ static inline int find_new_ilb(void)
 		 * The expellee only cpu is also some kind of idle,
 		 * pick it if no other choice.
 		 */
-		if (expellee_only(cpu_rq(ilb)))
+		if (id_regard_as_idle(cpu_rq(ilb)))
 			ret = ilb;
 	}
 
@@ -12863,7 +12924,7 @@ static bool _nohz_idle_balance(struct rq *this_rq, unsigned int flags,
 		rq = cpu_rq(balance_cpu);
 
 		if (balance_cpu == this_cpu ||
-		   (!idle_cpu(balance_cpu) && !expellee_only(rq)))
+		   (!idle_cpu(balance_cpu) && !id_regard_as_idle(rq)))
 			continue;
 
 		/*
@@ -12943,7 +13004,7 @@ static bool nohz_idle_balance(struct rq *this_rq, enum cpu_idle_type idle)
 
 	this_rq->nohz_idle_balance = 0;
 
-	if (idle != CPU_IDLE && !expellee_only(this_rq))
+	if (idle != CPU_IDLE && !id_regard_as_idle(this_rq))
 		return false;
 
 	_nohz_idle_balance(this_rq, flags, idle);
@@ -12963,7 +13024,7 @@ static void nohz_newidle_balance(struct rq *this_rq)
 		return;
 
 	/* Will wake up very soon. No time for doing anything else*/
-	if (this_rq->avg_idle < sysctl_sched_migration_cost)
+	if (get_avg_idle(this_rq) < sysctl_sched_migration_cost)
 		return;
 
 	/* Don't need to update blocked load of idle CPUs*/
@@ -13032,7 +13093,7 @@ static int newidle_balance(struct rq *this_rq, struct rq_flags *rf)
 	 */
 	rq_unpin_lock(this_rq, rf);
 
-	if (this_rq->avg_idle < sysctl_sched_migration_cost ||
+	if (get_avg_idle(this_rq) < sysctl_sched_migration_cost ||
 	    !READ_ONCE(this_rq->rd->overload)) {
 
 		rcu_read_lock();
@@ -13054,7 +13115,7 @@ static int newidle_balance(struct rq *this_rq, struct rq_flags *rf)
 		int continue_balancing = 1;
 		u64 t0, domain_cost;
 
-		if (this_rq->avg_idle < curr_cost + sd->max_newidle_lb_cost) {
+		if (get_avg_idle(this_rq) < curr_cost + sd->max_newidle_lb_cost) {
 			update_next_balance(sd, &next_balance);
 			break;
 		}
@@ -13075,6 +13136,9 @@ static int newidle_balance(struct rq *this_rq, struct rq_flags *rf)
 
 		update_next_balance(sd, &next_balance);
 
+		/* We wanna pull highclass or normal tasks to underclass only cpu. */
+		if (id_load_balance() && id_regard_as_idle(this_rq))
+			continue;
 		/*
 		 * Stop searching for tasks to pull if there are
 		 * now runnable tasks on this rq.
