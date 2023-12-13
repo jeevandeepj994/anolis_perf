@@ -624,17 +624,27 @@ static phys_addr_t __init arm64_kfence_alloc_pool(void)
 	if (!kfence_early_init)
 		return 0;
 
+	if (update_kfence_booting_max()) {
+		if (!kfence_num_objects)
+			goto nokfence;
+
+		kfence_pool_size = (kfence_num_objects + 1) * 2 * PAGE_SIZE;
+	}
+
 	kfence_pool = memblock_phys_alloc(kfence_pool_size, PAGE_SIZE);
 	if (!kfence_pool) {
 		pr_err("failed to allocate kfence pool\n");
-		kfence_early_init = false;
-		return 0;
+		goto nokfence;
 	}
 
 	/* Temporarily mark as NOMAP. */
 	memblock_mark_nomap(kfence_pool, kfence_pool_size);
 
 	return kfence_pool;
+
+nokfence:
+	kfence_early_init = false;
+	return 0;
 }
 
 static void __init arm64_kfence_map_pool(phys_addr_t kfence_pool, pgd_t *pgdp)

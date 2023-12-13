@@ -112,6 +112,31 @@ be recovered to the origin PUD.
 An exception is the user input less than 131071 in boot cmdline. See mode 1
 of the following examples.
 
+Set a pool limit on various memory
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Like crashkernel, the user can limit the size of kfence pool by setting
+``kfence.booting_max`` in boot command line. A reasonable config can be::
+
+    kfence.booting_max=0-128M:0,128M-256M:1M,256M-:2M
+
+So that:
+   On machines with memory of [0, 128M), kfence will not be enabled.
+
+   On machines with memory of [128M, 256M), kfence will allocate at most 1MB
+   for kfence pool. (which means num_objects = 127 on page_size = 4KB)
+
+   On machines with memory larger than 256M, kfence will allocate at most 2MB
+   for kfence pool. (which means num_objects = 255 on page_size = 4KB)
+
+Notes:
+   This config only sets the upper limit, so if the user sets num_objects = 127
+   and ``kfence.booting_max=0-:2M``, kfence will still allocate 1MB for pool.
+
+   This config only works for upstream mode. (pool_size < 1GB and
+   sample_interval > 0) Because if the user want to use debug mode, he must
+   focus on the specific machine and not need this general setting.
+
 Examples
 ~~~~~~~~
 

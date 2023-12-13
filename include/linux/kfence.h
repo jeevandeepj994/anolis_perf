@@ -107,6 +107,17 @@ void __init kfence_alloc_pool(void);
 void __init kfence_init(void);
 
 /**
+ * update_kfence_booting_max() - analyse the max num_objects from cmdline
+ *
+ * Read the config from boot cmdline and limit kfence pool size.
+ * This function is called by kfence itself (e.g., kfence_alloc_pool()), or,
+ * by specific arch alloc (e.g., arm64_kfence_alloc_pool()).
+ *
+ * Return: 1 if kfence_num_objects is changed, otherwise 0.
+ */
+int __init update_kfence_booting_max(void);
+
+/**
  * kfence_shutdown_cache() - handle shutdown_cache() for KFENCE objects
  * @s: cache being shut down
  *
