@@ -346,6 +346,7 @@ struct nvme_ctrl {
 	int nr_reconnects;
 	unsigned long flags;
 #define NVME_CTRL_FAILFAST_EXPIRED	0
+#define NVME_CTRL_FROZEN		1
 	struct nvmf_ctrl_options *opts;
 
 	struct page *discard_page;
