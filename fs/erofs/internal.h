@@ -260,10 +260,10 @@ struct erofs_buf {
 	void *base;
 	enum erofs_kmap_type kmap_type;
 	unsigned char blkbits;
-	bool dax;
+	struct super_block *sb;
 };
 #define __EROFS_BUF_INITIALIZER	\
-	((struct erofs_buf){ .page = NULL, .mapping = NULL, .blkbits = 0, .dax = false })
+	((struct erofs_buf){ .page = NULL, .mapping = NULL, .blkbits = 0 })
 
 #define ROOT_NID(sb)		((sb)->root_nid)
 
