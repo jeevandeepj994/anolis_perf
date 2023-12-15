@@ -1050,28 +1050,28 @@ out:
 enum {
 	PAGE_WAS_MAPPED = BIT(0),
 	PAGE_WAS_MLOCKED = BIT(1),
+	PAGE_OLD_STATES = PAGE_WAS_MAPPED | PAGE_WAS_MLOCKED,
 };
 
 /*
- * To record some information during migration, we use some unused
- * fields (mapping and private) of struct page of the newly allocated
- * destination page.
+ * To record some information during migration, we use unused private
+ * field of struct page of the newly allocated destination page.
  */
 static void __migrate_page_record(struct page *dst,
-				  unsigned long old_page_state,
+				  int old_page_state,
 				  struct anon_vma *anon_vma)
 {
-	dst->mapping = (void *)anon_vma;
-	dst->private = old_page_state;
+	dst->private = (unsigned long)((void *)anon_vma + old_page_state);
 }
 
 static void __migrate_page_extract(struct page *dst,
 				   int *old_page_state,
 				   struct anon_vma **anon_vmap)
 {
-	*anon_vmap = (void *)dst->mapping;
-	*old_page_state = (unsigned long)dst->private;
-	dst->mapping = NULL;
+	unsigned long private = (unsigned long)dst->private;
+
+	*anon_vmap = (struct anon_vma *)(private & ~PAGE_OLD_STATES);
+	*old_page_state = private & PAGE_OLD_STATES;
 	dst->private = 0;
 }
 
