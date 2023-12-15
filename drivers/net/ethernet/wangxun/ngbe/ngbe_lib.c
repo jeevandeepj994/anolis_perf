@@ -2,6 +2,7 @@
 /* Copyright (c) 2019 - 2022 Beijing WangXun Technology Co., Ltd. */
 
 #include "ngbe.h"
+#include "ngbe_sriov.h"
 
 #define NGBE_RSS_8Q_MASK       0x7
 
@@ -27,6 +28,53 @@ static bool ngbe_set_rss_queues(struct ngbe_adapter *adapter)
 }
 
 /**
+ * ngbe_set_vmdq_queues: Allocate queues for VMDq devices
+ * @adapter: board private structure to initialize
+ *
+ * When VMDq (Virtual Machine Devices queue) is enabled, allocate queues
+ * and VM pools where appropriate.  If RSS is available, then also try and
+ * enable RSS and map accordingly.
+ *
+ **/
+static bool ngbe_set_vmdq_queues(struct ngbe_adapter *adapter)
+{
+	u16 vmdq_i = adapter->ring_feature[RING_F_VMDQ].limit;
+	u16 vmdq_m = 0;
+	u16 rss_i = adapter->ring_feature[RING_F_RSS].limit;
+	u16 rss_m = NGBE_RSS_DISABLED_MASK;
+
+	/* only proceed if VMDq is enabled */
+	if (!(adapter->flags & NGBE_FLAG_VMDQ_ENABLED))
+		return false;
+
+	/* Add starting offset to total pool count */
+	vmdq_i += adapter->ring_feature[RING_F_VMDQ].offset;
+
+	/* double check we are limited to maximum pools */
+	vmdq_i = min_t(u16, NGBE_MAX_VMDQ_INDICES, vmdq_i);
+
+	/* when VMDQ on, disable RSS */
+	rss_i = 1;
+
+	/* remove the starting offset from the pool count */
+	vmdq_i -= adapter->ring_feature[RING_F_VMDQ].offset;
+
+	/* save features for later use */
+	adapter->ring_feature[RING_F_VMDQ].indices = vmdq_i;
+	adapter->ring_feature[RING_F_VMDQ].mask = vmdq_m;
+
+	/* limit RSS based on user input and save for later use */
+	adapter->ring_feature[RING_F_RSS].indices = rss_i;
+	adapter->ring_feature[RING_F_RSS].mask = rss_m;
+
+	adapter->queues_per_pool = rss_i;
+	adapter->num_rx_queues = vmdq_i * rss_i;
+	adapter->num_tx_queues = vmdq_i * rss_i;
+
+	return true;
+}
+
+/**
  * ngbe_set_num_queues: Allocate queues for device, feature dependent
  * @adapter: board private structure to initialize
  **/
@@ -36,6 +84,9 @@ static void ngbe_set_num_queues(struct ngbe_adapter *adapter)
 	adapter->num_rx_queues = 1;
 	adapter->num_tx_queues = 1;
 	adapter->queues_per_pool = 1;
+
+	if (ngbe_set_vmdq_queues(adapter))
+		return;
 
 	ngbe_set_rss_queues(adapter);
 }
@@ -81,6 +132,10 @@ static int ngbe_acquire_msix_vectors(struct ngbe_adapter *adapter)
 	 * handler, and (2) an Other (Link Status Change, etc.) handler.
 	 */
 	vector_threshold = MIN_MSIX_COUNT;
+
+	/* we need to alloc (7vfs+1pf+1misc) or (8vfs+1misc) msix entries */
+	if (adapter->flags2 & NGBE_FLAG2_SRIOV_MISC_IRQ_REMAP)
+		vectors += adapter->ring_feature[RING_F_VMDQ].offset;
 
 	adapter->msix_entries = kcalloc(vectors,
 					sizeof(struct msix_entry),
@@ -394,6 +449,14 @@ void ngbe_set_interrupt_capability(struct ngbe_adapter *adapter)
 	e_dev_warn("Disabling VMQd support\n");
 	adapter->flags &= ~NGBE_FLAG_VMDQ_ENABLED;
 
+#ifdef CONFIG_PCI_IOV
+	/* Disable SR-IOV support */
+	e_dev_warn("Disabling SR-IOV support\n");
+	ngbe_disable_sriov(adapter);
+	if (adapter->flags2 & NGBE_FLAG2_SRIOV_MISC_IRQ_REMAP)
+		adapter->flags2 &= ~NGBE_FLAG2_SRIOV_MISC_IRQ_REMAP;
+#endif /* CONFIG_PCI_IOV */
+
 	/* Disable RSS */
 	e_dev_warn("Disabling RSS support\n");
 	adapter->ring_feature[RING_F_RSS].limit = 1;
@@ -501,8 +564,10 @@ int ngbe_init_interrupt_scheme(struct ngbe_adapter *adapter)
 	/* if assigned vfs >= 7, the PF queue irq remain seq 0 and misc irq move from
 	 * seq 1 to seq 8. it needs extra processions.
 	 */
-	if (adapter->num_vfs >= NGBE_MAX_VF_FUNCTIONS - 1)
+	if (adapter->num_vfs >= NGBE_MAX_VF_FUNCTIONS - 1) {
 		adapter->flags2 |= NGBE_FLAG2_SRIOV_MISC_IRQ_REMAP;
+		adapter->irq_remap_offset = adapter->num_vfs;
+	}
 
 	/* Number of supported queues */
 	ngbe_set_num_queues(adapter);

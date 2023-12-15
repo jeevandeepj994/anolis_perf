@@ -29,17 +29,17 @@
 #define NGBE_DEV_ID_EM_WX1860A1L				0x010b
 
 /* Subsystem ID */
-#define NGBE_SUBID_M88E1512_SFP					0x0003
-#define NGBE_SUBID_OCP_CARD						0x0040
-#define NGBE_SUBID_LY_M88E1512_SFP				0x0050
-#define NGBE_SUBID_M88E1512_RJ45				0x0051
-#define NGBE_SUBID_M88E1512_MIX					0x0052
-#define NGBE_SUBID_YT8521S_SFP					0x0060
-#define NGBE_SUBID_INTERNAL_YT8521S_SFP			0x0061
-#define NGBE_SUBID_YT8521S_SFP_GPIO				0x0062
-#define NGBE_SUBID_INTERNAL_YT8521S_SFP_GPIO	0x0064
-#define NGBE_SUBID_LY_YT8521S_SFP				0x0070
-#define NGBE_SUBID_RGMII_FPGA					0x0080
+#define M88E1512_SFP                          0x0003
+#define OCP_CARD                              0x0040
+#define LY_M88E1512_SFP                       0x0050
+#define M88E1512_RJ45                         0x0051
+#define M88E1512_MIX                          0x0052
+#define YT8521S_SFP                           0x0060
+#define LY_YT8521S_SFP                        0x0070
+#define INTERNAL_YT8521S_SFP                  0x0061
+#define YT8521S_SFP_GPIO                      0x0062
+#define INTERNAL_YT8521S_SFP_GPIO             0x0064
+#define RGMII_FPGA                            0x0080
 
 #define NGBE_OEM_MASK				0x00FF
 
@@ -280,6 +280,9 @@ typedef u32 ngbe_physical_layer;
 #define NGBE_MAC_RX_CFG_JE             0x00000100U
 #define NGBE_MAC_RX_CFG_LM             0x00000400U
 #define NGBE_MAC_RX_FLOW_CTRL_RFE      0x00000001U /* receive fc enable */
+#define NGBE_MAC_WDG_TIMEOUT_PWE       0x00000100U
+#define NGBE_MAC_WDG_TIMEOUT_WTO_MASK  0x0000000FU
+#define NGBE_MAC_WDG_TIMEOUT_WTO_DELTA 2
 
 /* statistic */
 #define NGBE_MDIO_CLAUSE_SELECT        0x11220
@@ -426,6 +429,9 @@ typedef u32 ngbe_physical_layer;
 
 /* TDM CTL BIT */
 #define NGBE_TDM_CTL_TE        0x1 /* Transmit Enable */
+
+#define NGBE_TDM_VLAN_INS_VLANA_DEFAULT 0x40000000U /*Always use default VLAN*/
+#define NGBE_TDM_VLAN_INS_VLANA_NEVER   0x80000000U /* Never insert VLAN tag */
 
 /* Transmit Config masks */
 #define NGBE_PX_TR_CFG_ENABLE          (1)  /* Ena specific Tx Queue */
@@ -738,6 +744,7 @@ typedef u32 ngbe_physical_layer;
 /* VLAN pool filtering masks */
 #define NGBE_PSR_VLAN_SWC_ENTRIES      32
 #define NGBE_PSR_VLAN_SWC_VIEN         0x80000000U  /* filter is valid */
+#define NGBE_PSR_VLAN_SWC_VLANID_MASK  0x00000FFFU
 
 /* Header split receive */
 #define NGBE_PSR_CTL_UPE               0x00000200U
@@ -755,6 +762,12 @@ typedef u32 ngbe_physical_layer;
 #define NGBE_PSR_VLAN_CTL_CFI          0x10000000U  /* bit 28 */
 #define NGBE_PSR_VLAN_CTL_CFIEN        0x20000000U  /* bit 29 */
 #define NGBE_PSR_VLAN_CTL_VFE          0x40000000U  /* bit 30 */
+
+/* VT_CTL bitmasks */
+#define NGBE_PSR_VM_CTL_DIS_DEFPL      0x20000000U /* disable default pool */
+#define NGBE_PSR_VM_CTL_REPLEN         0x40000000U /* replication enabled */
+#define NGBE_PSR_VM_CTL_POOL_SHIFT     7
+#define NGBE_PSR_VM_CTL_POOL_MASK      (0x7 << NGBE_PSR_VM_CTL_POOL_SHIFT)
 
 /* vm L2 contorl */
 #define NGBE_PSR_VM_L2CTL(_i)          (0x15600 + ((_i) * 4))
@@ -1285,6 +1298,9 @@ enum ngbe_l2_ptypes {
 /* Calculate PCI Bus delay for low thresholds */
 #define NGBE_PCI_DELAY 10000
 
+#define NGBE_LLDP_REG         0xf1000
+#define NGBE_LLDP_ON          0x0000000f
+
 /* Calculate delay value in bit times */
 #define NGBE_DV(_max_frame_link, _max_frame_tc) \
 			((36 * \
@@ -1464,6 +1480,8 @@ struct ngbe_phy_operations {
 	s32 (*get_lp_adv_pause)(struct ngbe_hw *hw, u8 *pause_bit);
 	s32 (*set_adv_pause)(struct ngbe_hw *hw, u16 pause_bit);
 	s32 (*setup_once)(struct ngbe_hw *hw);
+	int (*phy_suspend)(struct ngbe_hw *hw);
+	int (*phy_resume)(struct ngbe_hw *hw);
 };
 
 struct ngbe_mac_operations {
@@ -1671,6 +1689,43 @@ struct ngbe_flash_info {
 	u16 address_bits;
 };
 
+enum em_mac_type {
+	em_mac_type_unknown = 0,
+	em_mac_type_mdi,
+	em_mac_type_rgmii
+};
+
+#include "ngbe_mbx.h"
+
+struct ngbe_mbx_operations {
+	void (*init_params)(struct ngbe_hw *hw);
+	int  (*read)(struct ngbe_hw *hw, u32 *msg, u16 size, u16 mbx_id);
+	int  (*write)(struct ngbe_hw *hw, u32 *msg, u16 size, u16 mbx_id);
+	int  (*read_posted)(struct ngbe_hw *hw, u32 *msg, u16 size, u16 mbx_id);
+	int  (*write_posted)(struct ngbe_hw *hw, u32 *msg, u16 size, u16 mbx_id);
+	int  (*check_for_msg)(struct ngbe_hw *hw, u16 mbx_id);
+	int  (*check_for_ack)(struct ngbe_hw *hw, u16 mbx_id);
+	int  (*check_for_rst)(struct ngbe_hw *hw, u16 mbx_id);
+};
+
+struct ngbe_mbx_stats {
+	u32 msgs_tx;
+	u32 msgs_rx;
+
+	u32 acks;
+	u32 reqs;
+	u32 rsts;
+};
+
+struct ngbe_mbx_info {
+	struct ngbe_mbx_operations ops;
+	struct ngbe_mbx_stats stats;
+	u32 timeout;
+	u32 udelay;
+	u32 v2p_mailbox;
+	u16 size;
+};
+
 struct ngbe_hw {
 	u8 __iomem *hw_addr;
 	void *back;
@@ -1681,6 +1736,7 @@ struct ngbe_hw {
 	struct ngbe_addr_filter_info addr_ctrl;
 	struct ngbe_fc_info fc;
 	struct ngbe_flash_info flash;
+	struct ngbe_mbx_info mbx;
 
 	u16 device_id;
 	u16 vendor_id;
@@ -1695,12 +1751,14 @@ struct ngbe_hw {
 	bool force_full_reset;
 	bool adapter_stopped;
 	bool wol_enabled;
+	bool ncsi_enabled;
 
 	ngbe_physical_layer link_mode;
 	enum ngbe_reset_type reset_type;
 	u16 tpid[8];
 
 	spinlock_t phy_lock;	/* Used to protect phy registers. */
+	enum em_mac_type mac_type;
 };
 
 /* Host Interface Command Structures */
@@ -1921,6 +1979,13 @@ enum ngbe_upg_flag {
 struct ngbe_hic_upg_verify {
 	struct ngbe_hic_hdr hdr;
 	u32 action_flag;
+};
+
+struct ngbe_hic_write_lldp {
+	struct ngbe_hic_hdr hdr;
+	u8 func;
+	u8 pad2;
+	u16 pad3;
 };
 
 static inline u32

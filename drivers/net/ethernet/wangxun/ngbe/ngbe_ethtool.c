@@ -64,7 +64,10 @@ static struct ngbe_stats ngbe_gstrings_stats[] = {
 	NGBE_STAT("lsc_int", lsc_int),
 	NGBE_STAT("tx_busy", tx_busy),
 	NGBE_STAT("non_eop_descs", non_eop_descs),
-	NGBE_STAT("broadcast", stats.bprc),
+	NGBE_STAT("rx_multicast", stats.mprc),
+	NGBE_STAT("rx_broadcast", stats.bprc),
+	NGBE_STAT("tx_broadcast", stats.bptc),
+	NGBE_STAT("tx_multicast", stats.mptc),
 	NGBE_STAT("rx_no_buffer_count", stats.rnbc[0]),
 	NGBE_STAT("tx_timeout_count", tx_timeout_count),
 	NGBE_STAT("tx_restart_queue", restart_queue),
@@ -165,8 +168,26 @@ static struct ngbe_reg_test reg_test_sapphire[] = {
 	{ .reg = 0 }
 };
 
-int ngbe_get_link_ksettings(struct net_device *netdev,
-			    struct ethtool_link_ksettings *cmd)
+struct ngbe_priv_flags {
+	char flag_string[ETH_GSTRING_LEN];
+	u64 flag;
+	bool read_only;
+};
+
+#define NGBE_PRIV_FLAG(_name, _flag, _read_only) { \
+	.flag_string = _name, \
+	.flag = _flag, \
+	.read_only = _read_only, \
+}
+
+static const struct ngbe_priv_flags ngbe_gstrings_priv_flags[] = {
+	NGBE_PRIV_FLAG("lldp", NGBE_ETH_PRIV_FLAG_LLDP, 0),
+};
+
+#define NGBE_PRIV_FLAGS_STR_LEN ARRAY_SIZE(ngbe_gstrings_priv_flags)
+
+static int ngbe_get_link_ksettings(struct net_device *netdev,
+		    struct ethtool_link_ksettings *cmd)
 {
 	struct ngbe_adapter *adapter = netdev_priv(netdev);
 	struct ngbe_hw *hw = &adapter->hw;
@@ -174,58 +195,147 @@ int ngbe_get_link_ksettings(struct net_device *netdev,
 	u32 link_speed = 0;
 	bool autoneg = false;
 	bool link_up = 0;
-	u16 value = 0;
+	u16 yt_mode = 0;
 	unsigned long flags;
 
 	ethtool_link_ksettings_zero_link_mode(cmd, supported);
 	ethtool_link_ksettings_zero_link_mode(cmd, advertising);
 
-	TCALL(hw, mac.ops.get_link_capabilities, &supported_link, &autoneg);
+	hw->mac.ops.get_link_capabilities(hw, &supported_link, &autoneg);
 
 	/* set the supported link speeds */
 	if (hw->phy.type == ngbe_phy_m88e1512_sfi ||
-	    hw->phy.type == ngbe_phy_yt8521s_sfi ||
-		hw->phy.type == ngbe_phy_internal_yt8521s_sfi) {
-		ethtool_link_ksettings_add_link_mode(cmd, supported,
-						     1000baseX_Full);
-	} else if (hw->phy.type == ngbe_phy_internal ||
-				hw->phy.type == ngbe_phy_m88e1512 ||
-				hw->phy.type == ngbe_phy_yt8521s ||
-			((hw->subsystem_device_id & NGBE_OEM_MASK) == NGBE_SUBID_RGMII_FPGA)) {
+	    hw->phy.type == ngbe_phy_internal_yt8521s_sfi) {
 		if (supported_link & NGBE_LINK_SPEED_1GB_FULL)
-			ethtool_link_ksettings_add_link_mode(cmd, supported, 1000baseT_Full);
+			ethtool_link_ksettings_add_link_mode(cmd, supported, 1000baseX_Full);
+
 		if (supported_link & NGBE_LINK_SPEED_100_FULL)
 			ethtool_link_ksettings_add_link_mode(cmd, supported, 100baseT_Full);
+	} else if (hw->phy.type == ngbe_phy_yt8521s_sfi) {
+		spin_lock_irqsave(&hw->phy_lock, flags);
+		ngbe_phy_read_reg_ext_yt(hw, 0xA001, 0, &yt_mode);
+		spin_unlock_irqrestore(&hw->phy_lock, flags);
+		if ((yt_mode & 7) == 0) {//utp_to_rgmii
+			if (supported_link & NGBE_LINK_SPEED_1GB_FULL)
+				ethtool_link_ksettings_add_link_mode(cmd, supported,
+				1000baseT_Full);
+
+			if (supported_link & NGBE_LINK_SPEED_100_FULL)
+				ethtool_link_ksettings_add_link_mode(cmd, supported, 100baseT_Full);
+
+			if (supported_link & NGBE_LINK_SPEED_10_FULL)
+				ethtool_link_ksettings_add_link_mode(cmd, supported, 10baseT_Full);
+		} else {
+			if (supported_link & NGBE_LINK_SPEED_1GB_FULL)
+				ethtool_link_ksettings_add_link_mode(cmd,
+				supported, 1000baseX_Full);
+
+			if (supported_link & NGBE_LINK_SPEED_100_FULL)
+				ethtool_link_ksettings_add_link_mode(cmd, supported, 100baseT_Full);
+		}
+	} else if ((hw->phy.type == ngbe_phy_internal) ||
+		    (hw->phy.type == ngbe_phy_m88e1512)) {
+		if (supported_link & NGBE_LINK_SPEED_1GB_FULL)
+			ethtool_link_ksettings_add_link_mode(cmd, supported, 1000baseT_Full);
+
+		if (supported_link & NGBE_LINK_SPEED_100_FULL)
+			ethtool_link_ksettings_add_link_mode(cmd, supported, 100baseT_Full);
+
 		if (supported_link & NGBE_LINK_SPEED_10_FULL)
 			ethtool_link_ksettings_add_link_mode(cmd, supported, 10baseT_Full);
+	} else {
+		if (supported_link & NGBE_LINK_SPEED_1GB_FULL)
+			ethtool_link_ksettings_add_link_mode(cmd, supported, 1000baseT_Full);
 	}
 
 	/* set the advertised speeds */
 	if (hw->phy.type == ngbe_phy_m88e1512_sfi ||
-	    hw->phy.type == ngbe_phy_yt8521s_sfi ||
-		hw->phy.type == ngbe_phy_internal_yt8521s_sfi) {
-		ethtool_link_ksettings_add_link_mode(cmd, advertising, 1000baseX_Full);
-	} else {
+	    hw->phy.type == ngbe_phy_internal_yt8521s_sfi) {
 		if (hw->phy.autoneg_advertised) {
-			if (hw->phy.autoneg_advertised & NGBE_LINK_SPEED_1GB_FULL) {
-				if (ethtool_link_ksettings_test_link_mode(cmd, supported,
-									  1000baseKX_Full))
-					ethtool_link_ksettings_add_link_mode(cmd, advertising,
-									     1000baseKX_Full);
-				else if (ethtool_link_ksettings_test_link_mode(cmd, supported,
-									       1000baseT_Full))
-					ethtool_link_ksettings_add_link_mode(cmd, advertising,
-									     1000baseT_Full);
-				else
-					ethtool_link_ksettings_add_link_mode(cmd, advertising,
-									     1000baseX_Full);
-			}
 			if (hw->phy.autoneg_advertised & NGBE_LINK_SPEED_100_FULL)
 				ethtool_link_ksettings_add_link_mode(cmd, advertising,
-								     100baseT_Full);
+				100baseT_Full);
+			if (hw->phy.autoneg_advertised & NGBE_LINK_SPEED_1GB_FULL)
+				ethtool_link_ksettings_add_link_mode(cmd, advertising,
+				1000baseX_Full);
+		} else {
+			if (hw->phy.force_speed & NGBE_LINK_SPEED_1GB_FULL)
+				ethtool_link_ksettings_add_link_mode(cmd, advertising,
+				1000baseX_Full);
+			if (hw->phy.force_speed & NGBE_LINK_SPEED_100_FULL)
+				ethtool_link_ksettings_add_link_mode(cmd, advertising,
+				100baseT_Full);
+			if (hw->phy.force_speed & NGBE_LINK_SPEED_10_FULL)
+				ethtool_link_ksettings_add_link_mode(cmd, advertising,
+				10baseT_Full);
+		}
+	} else if (hw->phy.type == ngbe_phy_yt8521s_sfi) {
+		if ((yt_mode & 7) == 0) {
+			if (hw->phy.autoneg_advertised) {
+				if (hw->phy.autoneg_advertised & NGBE_LINK_SPEED_10_FULL)
+					ethtool_link_ksettings_add_link_mode(cmd, advertising,
+					10baseT_Full);
+				if (hw->phy.autoneg_advertised & NGBE_LINK_SPEED_100_FULL)
+					ethtool_link_ksettings_add_link_mode(cmd, advertising,
+					100baseT_Full);
+				if (hw->phy.autoneg_advertised & NGBE_LINK_SPEED_1GB_FULL)
+					ethtool_link_ksettings_add_link_mode(cmd, advertising,
+					1000baseT_Full);
+			} else {
+				if (hw->phy.force_speed & NGBE_LINK_SPEED_10_FULL)
+					ethtool_link_ksettings_add_link_mode(cmd, advertising,
+					10baseT_Full);
+				if (hw->phy.force_speed & NGBE_LINK_SPEED_100_FULL)
+					ethtool_link_ksettings_add_link_mode(cmd, advertising,
+					100baseT_Full);
+				if (hw->phy.force_speed & NGBE_LINK_SPEED_1GB_FULL)
+					ethtool_link_ksettings_add_link_mode(cmd, advertising,
+					1000baseT_Full);
+			}
+		} else {
+			if (hw->phy.autoneg_advertised) {
+				if (hw->phy.autoneg_advertised & NGBE_LINK_SPEED_1GB_FULL)
+					ethtool_link_ksettings_add_link_mode(cmd, advertising,
+					1000baseX_Full);
+				if (hw->phy.autoneg_advertised & NGBE_LINK_SPEED_100_FULL)
+					ethtool_link_ksettings_add_link_mode(cmd, advertising,
+					100baseT_Full);
+				if (hw->phy.autoneg_advertised & NGBE_LINK_SPEED_10_FULL)
+					ethtool_link_ksettings_add_link_mode(cmd, advertising,
+					10baseT_Full);
+			} else {
+				if (hw->phy.force_speed & NGBE_LINK_SPEED_1GB_FULL)
+					ethtool_link_ksettings_add_link_mode(cmd, advertising,
+					1000baseX_Full);
+				if (hw->phy.force_speed & NGBE_LINK_SPEED_100_FULL)
+					ethtool_link_ksettings_add_link_mode(cmd, advertising,
+					100baseT_Full);
+				if (hw->phy.force_speed & NGBE_LINK_SPEED_10_FULL)
+					ethtool_link_ksettings_add_link_mode(cmd, advertising,
+					10baseT_Full);
+			}
+		}
+	} else {
+		if (hw->phy.autoneg_advertised) {
+			if (hw->phy.autoneg_advertised & NGBE_LINK_SPEED_1GB_FULL)
+				ethtool_link_ksettings_add_link_mode(cmd, advertising,
+				1000baseT_Full);
+			if (hw->phy.autoneg_advertised & NGBE_LINK_SPEED_100_FULL)
+				ethtool_link_ksettings_add_link_mode(cmd, advertising,
+				100baseT_Full);
 			if (hw->phy.autoneg_advertised & NGBE_LINK_SPEED_10_FULL)
 				ethtool_link_ksettings_add_link_mode(cmd, advertising,
-								     10baseT_Full);
+				10baseT_Full);
+		} else {
+			if (hw->phy.force_speed & NGBE_LINK_SPEED_1GB_FULL)
+				ethtool_link_ksettings_add_link_mode(cmd, advertising,
+				1000baseT_Full);
+			if (hw->phy.force_speed & NGBE_LINK_SPEED_100_FULL)
+				ethtool_link_ksettings_add_link_mode(cmd, advertising,
+				100baseT_Full);
+			if (hw->phy.force_speed & NGBE_LINK_SPEED_10_FULL)
+				ethtool_link_ksettings_add_link_mode(cmd, advertising,
+				10baseT_Full);
 		}
 	}
 
@@ -237,7 +347,6 @@ int ngbe_get_link_ksettings(struct net_device *netdev,
 	} else {
 		cmd->base.autoneg = AUTONEG_DISABLE;
 	}
-
 	/* Determine the remaining settings based on the PHY type. */
 	switch (adapter->hw.phy.type) {
 	case ngbe_phy_internal:
@@ -246,57 +355,8 @@ int ngbe_get_link_ksettings(struct net_device *netdev,
 		ethtool_link_ksettings_add_link_mode(cmd, advertising, TP);
 		cmd->base.port = PORT_TP;
 		break;
-	case ngbe_phy_sfp_passive_tyco:
-	case ngbe_phy_sfp_passive_unknown:
-	case ngbe_phy_sfp_ftl:
-	case ngbe_phy_sfp_avago:
-	case ngbe_phy_sfp_intel:
-	case ngbe_phy_sfp_unknown:
-		switch (adapter->hw.phy.sfp_type) {
-			/* SFP+ devices, further checking needed */
-		case ngbe_sfp_type_da_cu:
-		case ngbe_sfp_type_da_cu_core0:
-		case ngbe_sfp_type_da_cu_core1:
-			ethtool_link_ksettings_add_link_mode(cmd, supported, FIBRE);
-			ethtool_link_ksettings_add_link_mode(cmd, advertising, FIBRE);
-			cmd->base.port = PORT_DA;
-			break;
-		case ngbe_sfp_type_sr:
-		case ngbe_sfp_type_lr:
-		case ngbe_sfp_type_srlr_core0:
-		case ngbe_sfp_type_srlr_core1:
-		case ngbe_sfp_type_1g_sx_core0:
-		case ngbe_sfp_type_1g_sx_core1:
-		case ngbe_sfp_type_1g_lx_core0:
-		case ngbe_sfp_type_1g_lx_core1:
-			ethtool_link_ksettings_add_link_mode(cmd, supported, FIBRE);
-			ethtool_link_ksettings_add_link_mode(cmd, advertising, FIBRE);
-			cmd->base.port = PORT_FIBRE;
-			break;
-		case ngbe_sfp_type_not_present:
-			ethtool_link_ksettings_add_link_mode(cmd, supported, FIBRE);
-			ethtool_link_ksettings_add_link_mode(cmd, advertising, FIBRE);
-			cmd->base.port = PORT_NONE;
-			break;
-		case ngbe_sfp_type_1g_cu_core0:
-		case ngbe_sfp_type_1g_cu_core1:
-			ethtool_link_ksettings_add_link_mode(cmd, supported, TP);
-			ethtool_link_ksettings_add_link_mode(cmd, advertising, TP);
-			cmd->base.port = PORT_TP;
-			break;
-		case ngbe_sfp_type_unknown:
-		default:
-			ethtool_link_ksettings_add_link_mode(cmd, supported, FIBRE);
-			ethtool_link_ksettings_add_link_mode(cmd, advertising, FIBRE);
-			cmd->base.port = PORT_OTHER;
-			break;
-		}
-		break;
 	case ngbe_phy_yt8521s_sfi:
-		spin_lock_irqsave(&hw->phy_lock, flags);
-		ngbe_phy_read_reg_ext_yt(hw, 0xA001, 0, &value);
-		spin_unlock_irqrestore(&hw->phy_lock, flags);
-		if ((value & 7) == 0) {//utp_to_rgmii
+		if ((yt_mode & 7) == 0) {//utp_to_rgmii
 			ethtool_link_ksettings_add_link_mode(cmd, supported, TP);
 			ethtool_link_ksettings_add_link_mode(cmd, advertising, TP);
 			cmd->base.port = PORT_TP;
@@ -307,13 +367,11 @@ int ngbe_get_link_ksettings(struct net_device *netdev,
 		}
 		break;
 	case ngbe_phy_internal_yt8521s_sfi:
+	case ngbe_phy_m88e1512_sfi:
 		ethtool_link_ksettings_add_link_mode(cmd, supported, FIBRE);
 		ethtool_link_ksettings_add_link_mode(cmd, advertising, FIBRE);
 		cmd->base.port = PORT_FIBRE;
 		break;
-	case ngbe_phy_unknown:
-	case ngbe_phy_generic:
-	case ngbe_phy_sfp_unsupported:
 	default:
 		ethtool_link_ksettings_add_link_mode(cmd, supported, FIBRE);
 		ethtool_link_ksettings_add_link_mode(cmd, advertising, FIBRE);
@@ -322,8 +380,11 @@ int ngbe_get_link_ksettings(struct net_device *netdev,
 	}
 
 	if (!in_interrupt()) {
-		TCALL(hw, mac.ops.check_link, &link_speed, &link_up, false);
+		hw->mac.ops.check_link(hw, &link_speed, &link_up, false);
 	} else {
+		/* this case is a special workaround for RHEL5 bonding
+		 * that calls this routine from interrupt context
+		 */
 		link_speed = adapter->link_speed;
 		link_up = adapter->link_up;
 	}
@@ -336,17 +397,14 @@ int ngbe_get_link_ksettings(struct net_device *netdev,
 		break;
 	case ngbe_fc_rx_pause:
 		ethtool_link_ksettings_add_link_mode(cmd, advertising, Pause);
-		ethtool_link_ksettings_add_link_mode(cmd, advertising,
-						     Asym_Pause);
+		ethtool_link_ksettings_add_link_mode(cmd, advertising, Asym_Pause);
 		break;
 	case ngbe_fc_tx_pause:
-		ethtool_link_ksettings_add_link_mode(cmd, advertising,
-						     Asym_Pause);
+		ethtool_link_ksettings_add_link_mode(cmd, advertising, Asym_Pause);
 		break;
 	default:
 		ethtool_link_ksettings_del_link_mode(cmd, advertising, Pause);
-		ethtool_link_ksettings_del_link_mode(cmd, advertising,
-						     Asym_Pause);
+		ethtool_link_ksettings_del_link_mode(cmd, advertising, Asym_Pause);
 	}
 
 	if (link_up) {
@@ -377,22 +435,26 @@ static int ngbe_set_link_ksettings(struct net_device *netdev,
 {
 	struct ngbe_adapter *adapter = netdev_priv(netdev);
 	struct ngbe_hw *hw = &adapter->hw;
-	u32 advertised, old;
-	s32 err = 0;
+	u32 advertised;
+	int err = 0;
 	struct ethtool_link_ksettings temp_ks;
+
+	if (!netif_running(netdev))
+		return -EINVAL;
 
 	if (hw->phy.media_type == ngbe_media_type_copper || hw->phy.multispeed_fiber) {
 		memcpy(&temp_ks, cmd, sizeof(struct ethtool_link_ksettings));
-		/* To be compatible with test cases */
+
+	    /* To be compatible with test cases */
 		if (hw->phy.type == ngbe_phy_m88e1512_sfi ||
-		    hw->phy.type == ngbe_phy_yt8521s_sfi ||
-			hw->phy.type == ngbe_phy_internal_yt8521s_sfi) {
+		    hw->phy.type == ngbe_phy_yt8521s_sfi  ||
+		    hw->phy.type == ngbe_phy_internal_yt8521s_sfi) {
 			if (ethtool_link_ksettings_test_link_mode(cmd, advertising,
-								  1000baseT_Full)) {
+							  1000baseT_Full)) {
 				ethtool_link_ksettings_add_link_mode(&temp_ks, supported,
-								     1000baseT_Full);
+								 1000baseT_Full);
 				ethtool_link_ksettings_del_link_mode(&temp_ks, supported,
-								     1000baseX_Full);
+								 1000baseX_Full);
 			}
 		}
 
@@ -400,24 +462,27 @@ static int ngbe_set_link_ksettings(struct net_device *netdev,
 		 * limit the advertising of the adapter to the specified speed
 		 */
 		if (!bitmap_subset(cmd->link_modes.advertising,
-				   temp_ks.link_modes.supported,
+			   temp_ks.link_modes.supported,
 			   __ETHTOOL_LINK_MODE_MASK_NBITS))
 			return -EINVAL;
 
-		old = hw->phy.autoneg_advertised;
 		advertised = 0;
 
 		if (cmd->base.autoneg == AUTONEG_ENABLE) {
 			hw->mac.autoneg = true;
 			if (ethtool_link_ksettings_test_link_mode(cmd, advertising,
-								  1000baseT_Full) ||
-			    ethtool_link_ksettings_test_link_mode(cmd, advertising, 1000baseX_Full))
+							  1000baseT_Full) ||
+				ethtool_link_ksettings_test_link_mode(cmd, advertising,
+							  1000baseX_Full))
+
 				advertised |= NGBE_LINK_SPEED_1GB_FULL;
 
-			if (ethtool_link_ksettings_test_link_mode(cmd, advertising, 100baseT_Full))
+			if (ethtool_link_ksettings_test_link_mode(cmd, advertising,
+							  100baseT_Full))
 				advertised |= NGBE_LINK_SPEED_100_FULL;
 
-			if (ethtool_link_ksettings_test_link_mode(cmd, advertising, 10baseT_Full))
+			if (ethtool_link_ksettings_test_link_mode(cmd, advertising,
+							  10baseT_Full))
 				advertised |= NGBE_LINK_SPEED_10_FULL;
 		} else {
 			if (cmd->base.duplex == DUPLEX_HALF) {
@@ -439,30 +504,24 @@ static int ngbe_set_link_ksettings(struct net_device *netdev,
 				e_err(probe, "unsupported speed\n");
 				return -EINVAL;
 			}
-
 			hw->mac.autoneg = false;
 		}
 
 		hw->mac.autotry_restart = true;
-
+		hw->phy.ops.setup_link(hw, advertised, true);
 		if (cmd->base.autoneg == AUTONEG_ENABLE) {
 			hw->phy.autoneg_advertised = advertised;
 		} else {
 			hw->phy.autoneg_advertised = NGBE_LINK_SPEED_UNKNOWN;
 			hw->phy.force_speed = advertised;
 		}
-
-		if (netif_running(adapter->netdev))
-			TCALL(hw, mac.ops.setup_link, advertised, true);
-		else
-			ngbe_reset(adapter);
 	} else {
 		/* in this case we currently only support 1Gb/FULL */
 		u32 speed = cmd->base.speed;
-
 		if (cmd->base.autoneg == AUTONEG_ENABLE ||
-		    (!ethtool_link_ksettings_test_link_mode(cmd, advertising, 1000baseT_Full)) ||
-			(speed + cmd->base.duplex != SPEED_1000 + DUPLEX_FULL))
+		    !ethtool_link_ksettings_test_link_mode(cmd, advertising,
+							  1000baseT_Full) ||
+		    speed + cmd->base.duplex != SPEED_1000 + DUPLEX_FULL)
 			return -EINVAL;
 	}
 
@@ -957,8 +1016,6 @@ static void ngbe_get_drvinfo(struct net_device *netdev,
 
 	strncpy(drvinfo->driver, ngbe_driver_name,
 		sizeof(drvinfo->driver) - 1);
-	strncpy(drvinfo->version, ngbe_driver_version,
-		sizeof(drvinfo->version) - 1);
 	strncpy(drvinfo->fw_version, adapter->eeprom_id,
 		sizeof(drvinfo->fw_version));
 	strncpy(drvinfo->bus_info, pci_name(adapter->pdev),
@@ -1114,8 +1171,98 @@ static int ngbe_get_sset_count(struct net_device *netdev, int sset)
 		} else {
 			return NGBE_STATS_LEN;
 		}
+	case ETH_SS_PRIV_FLAGS:
+		return NGBE_PRIV_FLAGS_STR_LEN;
 	default:
 		return -EOPNOTSUPP;
+	}
+}
+
+/**
+ * ngbe_get_priv_flags - report device private flags
+ * @dev: network interface device structure
+ *
+ * The get string set count and the string set should be matched for each
+ * flag returned.  Add new strings for each flag to the ngbe_gstrings_priv_flags
+ * array.
+ *
+ * Returns a u32 bitmap of flags.
+ **/
+static u32 ngbe_get_priv_flags(struct net_device *dev)
+{
+	struct ngbe_adapter *adapter = netdev_priv(dev);
+	u32 i = 0;
+	u32 ret_flags = 0;
+
+	for (i = 0; i < NGBE_PRIV_FLAGS_STR_LEN; i++) {
+		const struct ngbe_priv_flags *priv_flags;
+
+		priv_flags = &ngbe_gstrings_priv_flags[i];
+
+		if (priv_flags->flag & adapter->eth_priv_flags)
+			ret_flags |= BIT(i);
+	}
+	return ret_flags;
+}
+
+/**
+ * ngbe_set_priv_flags - set private flags
+ * @dev: network interface device structure
+ * @flags: bit flags to be set
+ **/
+static int ngbe_set_priv_flags(struct net_device *dev, u32 flags)
+{
+	struct ngbe_adapter *adapter = netdev_priv(dev);
+	u32 orig_flags, new_flags, changed_flags;
+	u32 i;
+	int status = 0;
+
+	orig_flags = adapter->eth_priv_flags;
+	new_flags = orig_flags;
+
+	if (!netif_running(dev))
+		return -EINVAL;
+
+	for (i = 0; i < NGBE_PRIV_FLAGS_STR_LEN; i++) {
+		const struct ngbe_priv_flags *priv_flags;
+
+		priv_flags = &ngbe_gstrings_priv_flags[i];
+
+		if (flags & BIT(i))
+			new_flags |= priv_flags->flag;
+		else
+			new_flags &= ~(priv_flags->flag);
+
+		/* If this is a read-only flag, it can't be changed */
+		if (priv_flags->read_only &&
+		    ((orig_flags ^ new_flags) & ~BIT(i)))
+			return -EOPNOTSUPP;
+	}
+
+	changed_flags = orig_flags ^ new_flags;
+
+	if (!changed_flags)
+		return 0;
+
+	if (changed_flags & NGBE_ETH_PRIV_FLAG_LLDP) {
+		status = ngbe_hic_write_lldp(&adapter->hw,
+					     (u32)(new_flags & NGBE_ETH_PRIV_FLAG_LLDP));
+		if (!status)
+			adapter->eth_priv_flags = new_flags;
+	}
+
+	return status;
+}
+
+static void ngbe_get_priv_flag_strings(struct net_device *netdev, u8 *data)
+{
+	char *p = (char *)data;
+	unsigned int i;
+
+	for (i = 0; i < NGBE_PRIV_FLAGS_STR_LEN; i++) {
+		snprintf(p, ETH_GSTRING_LEN, "%s",
+			 ngbe_gstrings_priv_flags[i].flag_string);
+		p += ETH_GSTRING_LEN;
 	}
 }
 
@@ -1245,6 +1392,9 @@ static void ngbe_get_strings(struct net_device *netdev, u32 stringset, u8 *data)
 			sprintf(p, "VF %d MC Packets", i);
 			p += ETH_GSTRING_LEN;
 		}
+		break;
+	case ETH_SS_PRIV_FLAGS:
+		ngbe_get_priv_flag_strings(netdev, data);
 		break;
 	}
 }
@@ -1825,6 +1975,25 @@ static void ngbe_diag_test(struct net_device *netdev,
 	}
 	set_bit(__NGBE_TESTING, &adapter->state);
 	if (eth_test->flags == ETH_TEST_FL_OFFLINE) {
+		if (adapter->flags & NGBE_FLAG_SRIOV_ENABLED) {
+			int i;
+
+			for (i = 0; i < adapter->num_vfs; i++) {
+				if (adapter->vfinfo[i].clear_to_send) {
+					e_warn(drv, "Please take active VFS offline\n");
+					data[0] = 1;
+					data[1] = 1;
+					data[2] = 1;
+					data[3] = 1;
+					data[4] = 1;
+					eth_test->flags |= ETH_TEST_FL_FAILED;
+					clear_bit(__NGBE_TESTING,
+						  &adapter->state);
+					goto skip_ol_tests;
+				}
+			}
+		}
+
 		/* Offline tests */
 		e_info(hw, "offline testing starting\n");
 
@@ -1859,8 +2028,7 @@ static void ngbe_diag_test(struct net_device *netdev,
 		if (ngbe_intr_test(adapter, &data[2]))
 			eth_test->flags |= ETH_TEST_FL_FAILED;
 
-		if (!(((hw->subsystem_device_id & NGBE_OEM_MASK) == NGBE_SUBID_OCP_CARD) ||
-		      ((hw->subsystem_device_id & NGBE_NCSI_MASK) == NGBE_NCSI_SUP))) {
+		if (!hw->ncsi_enabled) {
 			/* If SRIOV or VMDq is enabled then skip MAC
 			 * loopback diagnostic.
 			 */
@@ -1900,6 +2068,8 @@ skip_loopback:
 
 		clear_bit(__NGBE_TESTING, &adapter->state);
 	}
+skip_ol_tests:
+	msleep_interruptible(4 * 1000);
 }
 
 static int ngbe_wol_exclusion(struct ngbe_adapter *adapter,
@@ -2665,7 +2835,7 @@ static int ngbe_set_flash(struct net_device *netdev, struct ethtool_flash *ef)
 }
 
 static const struct ethtool_ops ngbe_ethtool_ops = {
-	.supported_coalesce_params = ETHTOOL_COALESCE_RX_USECS,
+	.supported_coalesce_params = ETHTOOL_COALESCE_RX_USECS | ETHTOOL_COALESCE_TX_MAX_FRAMES_IRQ,
 	.get_link_ksettings = ngbe_get_link_ksettings,
 	.set_link_ksettings = ngbe_set_link_ksettings,
 	.get_drvinfo            = ngbe_get_drvinfo,
@@ -2687,6 +2857,8 @@ static const struct ethtool_ops ngbe_ethtool_ops = {
 	.self_test              = ngbe_diag_test,
 	.get_strings            = ngbe_get_strings,
 	.set_phys_id            = ngbe_set_phys_id,
+	.get_priv_flags		= ngbe_get_priv_flags,
+	.set_priv_flags		= ngbe_set_priv_flags,
 	.get_sset_count         = ngbe_get_sset_count,
 	.get_ethtool_stats      = ngbe_get_ethtool_stats,
 	.get_coalesce           = ngbe_get_coalesce,
