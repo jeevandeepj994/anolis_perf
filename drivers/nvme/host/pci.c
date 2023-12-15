@@ -3381,6 +3381,8 @@ static const struct pci_device_id nvme_id_table[] = {
 				NVME_QUIRK_128_BYTES_SQES |
 				NVME_QUIRK_SHARED_TAGS |
 				NVME_QUIRK_SKIP_CID_GEN },
+	{ PCI_DEVICE(PCI_VENDOR_ID_ALIBABA, 0x500e), /* ALIBABA Elastic SSD(ESSD) */
+		.driver_data = NVME_QUIRK_ACTIVATE_NS},
 	{ PCI_DEVICE_CLASS(PCI_CLASS_STORAGE_EXPRESS, 0xffffff) },
 	{ 0, }
 };

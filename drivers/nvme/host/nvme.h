@@ -155,6 +155,13 @@ enum nvme_quirks {
 	 * Reports garbage in the namespace identifiers (eui64, nguid, uuid).
 	 */
 	NVME_QUIRK_BOGUS_NID			= (1 << 18),
+
+	/*
+	 * In terms of security, certain NVMe controllers deactivate the NVMe
+	 * namespace after initialization, requiring it to be reactivated
+	 * once the reset is completed.
+	 */
+	NVME_QUIRK_ACTIVATE_NS			= (1 << 19),
 };
 
 /*
@@ -395,6 +402,19 @@ struct nvme_ns_ids {
 	u8	csi;
 };
 
+enum nvme_activation_check_mode {
+	NVME_ACTIVATION_CHECK_MODE_CRC32 = 1 << 0,
+};
+
+struct nvme_activation_info {
+	u8	user_id[64];
+	u8	cluster_id[64];
+	u8	pod_id[64];
+	u8	disk_id[64];
+	u8	token[128];
+	u8	rsvd[3712];
+};
+
 /*
  * Anchor structure for namespaces.  There is one for each namespace in a
  * NVMe subsystem that any of our controllers can see, and the namespace
@@ -418,6 +438,10 @@ struct nvme_ns_head {
 	struct device		cdev_device;
 
 	struct gendisk		*disk;
+	struct nvme_activation_info activation_info;
+	u32			activation_check_crc32;
+	int			activation_result;
+	u64			activation_count;
 #ifdef CONFIG_NVME_MULTIPATH
 	struct bio_list		requeue_list;
 	spinlock_t		requeue_lock;
