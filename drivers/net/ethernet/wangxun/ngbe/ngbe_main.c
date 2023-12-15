@@ -15,15 +15,11 @@
 #include "ngbe.h"
 #include "ngbe_phy.h"
 #include "ngbe_hw.h"
+#include "ngbe_sriov.h"
 
 char ngbe_driver_name[] = "ngbe";
-static const char ngbe_driver_string[] =
-			"WangXun Gigabit PCI Express Network Driver";
-static const char ngbe_copyright[] =
-		"Copyright (c) 2018 -2022 Beijing WangXun Technology Co., Ltd";
 
-#define DRV_VERSION     __stringify(1.2.3anolis)
-const char ngbe_driver_version[32] = DRV_VERSION;
+const char ngbe_driver_version[] = "1.2.5-k";
 
 static struct workqueue_struct *ngbe_wq;
 
@@ -384,36 +380,70 @@ s32 ngbe_init_ops(struct ngbe_hw *hw)
  *  ngbe_init_shared_code - Initialize the shared code
  *  @hw: pointer to hardware structure
  **/
-s32 ngbe_init_shared_code(struct ngbe_hw *hw)
+static int ngbe_init_shared_code(struct ngbe_hw *hw)
 {
-	if ((hw->subsystem_device_id & NGBE_OEM_MASK) == NGBE_SUBID_M88E1512_SFP ||
-	    (hw->subsystem_device_id & NGBE_OEM_MASK) == NGBE_SUBID_LY_M88E1512_SFP)
-		hw->phy.type = ngbe_phy_m88e1512_sfi;
-	else if ((hw->subsystem_device_id & NGBE_OEM_MASK) == NGBE_SUBID_M88E1512_RJ45 ||
-		 (hw->subsystem_device_id & NGBE_OEM_MASK) == NGBE_SUBID_M88E1512_RJ45)
-		hw->phy.type = ngbe_phy_m88e1512;
-	else if ((hw->subsystem_device_id & NGBE_OEM_MASK) == NGBE_SUBID_M88E1512_MIX)
-		hw->phy.type = ngbe_phy_m88e1512_unknown;
-	else if ((hw->subsystem_device_id & NGBE_OEM_MASK) == NGBE_SUBID_YT8521S_SFP ||
-		 (hw->subsystem_device_id & NGBE_OEM_MASK) == NGBE_SUBID_YT8521S_SFP_GPIO ||
-		(hw->subsystem_device_id & NGBE_OEM_MASK) == NGBE_SUBID_LY_YT8521S_SFP)
-		hw->phy.type = ngbe_phy_yt8521s_sfi;
-	else if ((hw->subsystem_device_id & NGBE_OEM_MASK) == NGBE_SUBID_INTERNAL_YT8521S_SFP ||
-		 (hw->subsystem_device_id & NGBE_OEM_MASK) == NGBE_SUBID_INTERNAL_YT8521S_SFP_GPIO)
-		hw->phy.type = ngbe_phy_internal_yt8521s_sfi;
-	else
-		hw->phy.type = ngbe_phy_internal;
+	int wol_mask = 0, ncsi_mask = 0;
+	u16 type_mask = 0, val;
+	u32 lan_en;
 
-	if ((hw->subsystem_device_id & NGBE_OEM_MASK) == NGBE_SUBID_LY_M88E1512_SFP ||
-	    (hw->subsystem_device_id & NGBE_OEM_MASK) == NGBE_SUBID_LY_YT8521S_SFP ||
-		(hw->subsystem_device_id & NGBE_OEM_MASK) == NGBE_SUBID_YT8521S_SFP_GPIO ||
-		(hw->subsystem_device_id & NGBE_OEM_MASK) == NGBE_SUBID_INTERNAL_YT8521S_SFP_GPIO)
+	lan_en = rd32(hw, NGBE_MIS_PWR);
+	if (!(lan_en & BIT(hw->bus.lan_id + 28)))
+		return -EIO;
+	type_mask = (u16)(hw->subsystem_device_id & NGBE_OEM_MASK);
+	ncsi_mask = hw->subsystem_device_id & NGBE_NCSI_MASK;
+	wol_mask = hw->subsystem_device_id & NGBE_WOL_MASK;
+
+	val = rd32(hw, NGBE_CFG_PORT_ST);
+	hw->mac_type = (val & BIT(7)) >> 7 ?
+		       em_mac_type_rgmii :
+		       em_mac_type_mdi;
+
+	hw->wol_enabled = (wol_mask == NGBE_WOL_SUP) ? 1 : 0;
+	hw->ncsi_enabled = (ncsi_mask == NGBE_NCSI_SUP ||
+			   type_mask == OCP_CARD) ? 1 : 0;
+
+	switch (type_mask) {
+	case LY_YT8521S_SFP:
+	case LY_M88E1512_SFP:
+	case YT8521S_SFP_GPIO:
+	case INTERNAL_YT8521S_SFP_GPIO:
 		hw->gpio_ctl = 1;
+		break;
+	default:
+		hw->gpio_ctl = 0;
+		break;
+	}
+
+	switch (type_mask) {
+	case M88E1512_SFP:
+	case LY_M88E1512_SFP:
+		hw->phy.type = ngbe_phy_m88e1512_sfi;
+		break;
+	case M88E1512_RJ45:
+		hw->phy.type = ngbe_phy_m88e1512;
+		break;
+	case M88E1512_MIX:
+		hw->phy.type = ngbe_phy_m88e1512_unknown;
+		break;
+	case YT8521S_SFP:
+	case YT8521S_SFP_GPIO:
+	case LY_YT8521S_SFP:
+		hw->phy.type = ngbe_phy_yt8521s_sfi;
+		break;
+	case INTERNAL_YT8521S_SFP:
+	case INTERNAL_YT8521S_SFP_GPIO:
+		hw->phy.type = ngbe_phy_internal_yt8521s_sfi;
+		break;
+	default:
+		hw->phy.type = ngbe_phy_internal;
+		break;
+	}
 
 	/* select claus22 */
 	wr32(hw, NGBE_MDIO_CLAUSE_SELECT, 0xF);
+	ngbe_init_ops(hw);
 
-	return ngbe_init_ops(hw);
+	return 0;
 }
 
 /**
@@ -444,8 +474,8 @@ static int ngbe_sw_init(struct ngbe_adapter *adapter)
 		hw->subsystem_vendor_id = pdev->subsystem_vendor;
 		hw->subsystem_device_id = pdev->subsystem_device;
 	} else {
-		ssid = ngbe_flash_read_dword(hw, 0xfffdc);
-		if (ssid == 0x1) {
+		err = ngbe_flash_read_dword(hw, 0xfffdc, &ssid);
+		if (err) {
 			e_err(probe, "read of internal subsystem device id failed\n");
 			err = -ENODEV;
 			goto out;
@@ -479,6 +509,8 @@ static int ngbe_sw_init(struct ngbe_adapter *adapter)
 	adapter->flags2 |= NGBE_FLAG2_TEMP_SENSOR_CAPABLE;
 	adapter->flags2 |= NGBE_FLAG2_EEE_CAPABLE;
 
+	hw->mbx.ops.init_params(hw);
+
 	/* default flow control settings */
 	hw->fc.requested_mode = ngbe_fc_full;
 	hw->fc.current_mode = ngbe_fc_full; /* init for ethtool output */
@@ -496,8 +528,16 @@ static int ngbe_sw_init(struct ngbe_adapter *adapter)
 	adapter->tx_work_limit = NGBE_DEFAULT_TX_WORK;
 	adapter->rx_work_limit = NGBE_DEFAULT_RX_WORK;
 
-	adapter->tx_timeout_recovery_level = 0;
+	/* enable itr by default in dynamic mode */
+	adapter->rx_itr_setting = 1;
+	adapter->tx_itr_setting = 1;
 
+	adapter->tx_timeout_recovery_level = 0;
+	/* PF holds first pool slot */
+	adapter->num_vmdqs = 1;
+
+	adapter->ring_feature[RING_F_VMDQ].limit = 0;
+	set_bit(0, &adapter->fwd_bitmask);
 	set_bit(__NGBE_DOWN, &adapter->state);
 out:
 	return err;
@@ -801,7 +841,7 @@ static void ngbe_handle_phy_event(struct ngbe_hw *hw)
 	reg = rd32(hw, NGBE_GPIO_INTSTATUS);
 	wr32(hw, NGBE_GPIO_EOI, reg);
 
-	if (!((hw->subsystem_device_id & NGBE_OEM_MASK) == NGBE_SUBID_RGMII_FPGA))
+	if (!((hw->subsystem_device_id & NGBE_OEM_MASK) == RGMII_FPGA))
 		TCALL(hw, phy.ops.check_event);
 
 	adapter->lsc_int++;
@@ -857,10 +897,14 @@ void ngbe_irq_enable(struct ngbe_adapter *adapter, bool queues, bool flush)
 	wr32(hw, NGBE_PX_MISC_IEN, mask);
 
 	/* unmask interrupt */
-	if (queues)
+	if (queues) {
 		ngbe_intr_enable(&adapter->hw, NGBE_INTR_ALL);
-	else
-		ngbe_intr_enable(&adapter->hw, NGBE_INTR_MISC(adapter));
+	} else {
+		if (!(adapter->flags2 & NGBE_FLAG2_SRIOV_MISC_IRQ_REMAP))
+			ngbe_intr_enable(&adapter->hw, NGBE_INTR_MISC(adapter));
+		else
+			ngbe_intr_enable(&adapter->hw, NGBE_INTR_MISC_VMDQ(adapter));
+	}
 
 	/* flush configuration */
 	if (flush)
@@ -877,6 +921,9 @@ static irqreturn_t ngbe_msix_other(int __always_unused irq, void *data)
 	eicr = ngbe_misc_isb(adapter, NGBE_ISB_MISC);
 	if (eicr & (NGBE_PX_MISC_IC_PHY | NGBE_PX_MISC_IC_GPIO))
 		ngbe_handle_phy_event(hw);
+
+	if (eicr & NGBE_PX_MISC_IC_VF_MBOX)
+		ngbe_msg_task(adapter);
 
 	if (eicr & NGBE_PX_MISC_IC_INT_ERR) {
 		e_info(link, "Received unrecoverable ECC Err, initiating reset.\n");
@@ -1033,8 +1080,14 @@ static int ngbe_request_msix_irqs(struct ngbe_adapter *adapter)
 		}
 	}
 
+	if (adapter->flags2 & NGBE_FLAG2_SRIOV_MISC_IRQ_REMAP)
+		vector += adapter->irq_remap_offset;
+
 	err = request_irq(adapter->msix_entries[vector].vector,
 			  ngbe_msix_other, 0, netdev->name, adapter);
+
+	if (adapter->flags2 & NGBE_FLAG2_SRIOV_MISC_IRQ_REMAP)
+		vector -= adapter->irq_remap_offset;
 
 	if (err) {
 		e_err(probe, "request_irq for msix_other failed: %d\n", err);
@@ -1147,9 +1200,14 @@ static int ngbe_request_irq(struct ngbe_adapter *adapter)
 
 static void ngbe_get_hw_control(struct ngbe_adapter *adapter)
 {
+	struct ngbe_hw *hw = &adapter->hw;
+
 	/* Let firmware know the driver has taken over */
 	wr32m(&adapter->hw, NGBE_CFG_PORT_CTL,
 	      NGBE_CFG_PORT_CTL_DRV_LOAD, NGBE_CFG_PORT_CTL_DRV_LOAD);
+
+	if (hw->phy.type == ngbe_phy_yt8521s_sfi)
+		wr32(&adapter->hw, NGBE_CFG_LED_CTL, BIT(18));
 }
 
 static void ngbe_setup_gpie(struct ngbe_adapter *adapter)
@@ -1253,6 +1311,10 @@ static void ngbe_configure_msix(struct ngbe_adapter *adapter)
 		ngbe_write_eitr(q_vector);
 	}
 
+	/* misc ivar from seq 1 to seq 8 */
+	if (adapter->flags2 & NGBE_FLAG2_SRIOV_MISC_IRQ_REMAP)
+		v_idx += adapter->ring_feature[RING_F_VMDQ].offset;
+
 	ngbe_set_ivar(adapter, -1, 0, v_idx);
 	wr32(&adapter->hw, NGBE_PX_ITR(v_idx), 1950);
 }
@@ -1288,19 +1350,22 @@ static int ngbe_non_sfp_link_config(struct ngbe_hw *hw)
 {
 	u32 speed;
 	u32 ret = NGBE_ERR_LINK_SETUP;
+	struct ngbe_adapter *adapter = hw->back;
 
 	if (hw->mac.autoneg)
 		speed = hw->phy.autoneg_advertised;
 	else
 		speed = hw->phy.force_speed;
 
-	if (!((hw->subsystem_device_id & NGBE_OEM_MASK) == NGBE_SUBID_OCP_CARD ||
-	      ((hw->subsystem_device_id & NGBE_NCSI_MASK) == NGBE_NCSI_SUP) ||
-		((hw->subsystem_device_id & NGBE_OEM_MASK) == NGBE_SUBID_RGMII_FPGA))) {
-		mdelay(50);
-		if (hw->phy.type == ngbe_phy_internal ||
-		    hw->phy.type == ngbe_phy_internal_yt8521s_sfi)
-			TCALL(hw, phy.ops.setup_once);
+	if (hw->ncsi_enabled ||
+	    (hw->subsystem_device_id & NGBE_OEM_MASK) == RGMII_FPGA ||
+		adapter->eth_priv_flags & NGBE_ETH_PRIV_FLAG_LLDP)
+		return 0;
+
+	if (hw->phy.type == ngbe_phy_internal ||
+	    hw->phy.type == ngbe_phy_internal_yt8521s_sfi) {
+		hw->phy.ops.phy_resume(hw);
+		TCALL(hw, phy.ops.setup_once);
 	}
 
 	ret = TCALL(hw, mac.ops.setup_link, speed, false);
@@ -1394,8 +1459,13 @@ static void ngbe_free_irq(struct ngbe_adapter *adapter)
 
 		free_irq(entry->vector, q_vector);
 	}
+	if (adapter->flags2 & NGBE_FLAG2_SRIOV_MISC_IRQ_REMAP) {
+		int offset = vector + adapter->irq_remap_offset;
 
-	free_irq(adapter->msix_entries[vector++].vector, adapter);
+		free_irq(adapter->msix_entries[offset].vector, adapter);
+	} else {
+		free_irq(adapter->msix_entries[vector++].vector, adapter);
+	}
 }
 
 /**
@@ -1434,7 +1504,7 @@ static void ngbe_mac_set_default_filter(struct ngbe_adapter *adapter,
 	struct ngbe_hw *hw = &adapter->hw;
 
 	memcpy(&adapter->mac_table[0].addr, addr, ETH_ALEN);
-	adapter->mac_table[0].pools = 1ULL << 0;
+	adapter->mac_table[0].pools = 1ULL << VMDQ_P(0);
 	adapter->mac_table[0].state = (NGBE_MAC_STATE_DEFAULT |
 				       NGBE_MAC_STATE_IN_USE);
 	TCALL(hw, mac.ops.set_rar, 0, adapter->mac_table[0].addr,
@@ -1519,9 +1589,14 @@ void ngbe_down(struct ngbe_adapter *adapter)
 
 static void ngbe_release_hw_control(struct ngbe_adapter *adapter)
 {
+	struct ngbe_hw *hw = &adapter->hw;
+
 	/* Let firmware take over control of h/w */
 	wr32m(&adapter->hw, NGBE_CFG_PORT_CTL,
 	      NGBE_CFG_PORT_CTL_DRV_LOAD, 0);
+
+	if (hw->phy.type == ngbe_phy_yt8521s_sfi)
+		wr32(&adapter->hw, NGBE_CFG_LED_CTL, 0x0);
 }
 
 /**
@@ -3336,7 +3411,7 @@ static int ngbe_set_mac(struct net_device *netdev, void *p)
 	if (!is_valid_ether_addr(addr->sa_data))
 		return -EADDRNOTAVAIL;
 
-	ngbe_del_mac_filter(adapter, hw->mac.addr, 0);
+	ngbe_del_mac_filter(adapter, hw->mac.addr, VMDQ_P(0));
 	memcpy(netdev->dev_addr, addr->sa_data, netdev->addr_len);
 	memcpy(hw->mac.addr, addr->sa_data, netdev->addr_len);
 
@@ -3457,16 +3532,24 @@ static int ngbe_vlan_rx_kill_vid(struct net_device *netdev,
 {
 	struct ngbe_adapter *adapter = netdev_priv(netdev);
 	struct ngbe_hw *hw = &adapter->hw;
-	int pool_ndx = 0;
+	int pool_ndx = VMDQ_P(0);
 
 	/* User is not allowed to remove vlan ID 0 */
 	if (!vid)
 		return 0;
 
 	/* remove VID from filter table */
-	if (hw->mac.ops.set_vfta)
+	if (hw->mac.ops.set_vfta) {
 		TCALL(hw, mac.ops.set_vfta, vid, pool_ndx, false);
-
+		if (adapter->flags & NGBE_FLAG_VMDQ_ENABLED) {
+			int i;
+			/* remove vlan id from all pools */
+			for_each_set_bit(i, &adapter->fwd_bitmask,
+					 NGBE_MAX_MACVLANS)
+				hw->mac.ops.set_vfta(hw, vid,
+						VMDQ_P(i), false);
+		}
+	}
 	clear_bit(vid, adapter->active_vlans);
 	return 0;
 }
@@ -3683,6 +3766,15 @@ static netdev_features_t ngbe_features_check(struct sk_buff *skb,
 	return features;
 }
 
+void ngbe_sriov_reinit(struct ngbe_adapter *adapter)
+{
+	struct net_device *netdev = adapter->netdev;
+
+	rtnl_lock();
+	ngbe_setup_tc(netdev, netdev_get_num_tc(netdev));
+	rtnl_unlock();
+}
+
 void ngbe_do_reset(struct net_device *netdev)
 {
 	struct ngbe_adapter *adapter = netdev_priv(netdev);
@@ -3763,6 +3855,12 @@ static const struct net_device_ops ngbe_netdev_ops = {
 	.ndo_features_check     = ngbe_features_check,
 	.ndo_set_features       = ngbe_set_features,
 	.ndo_fix_features       = ngbe_fix_features,
+	.ndo_set_vf_mac         = ngbe_ndo_set_vf_mac,
+	.ndo_set_vf_rate        = ngbe_ndo_set_vf_bw,
+	.ndo_set_vf_spoofchk    = ngbe_ndo_set_vf_spoofchk,
+	.ndo_set_vf_vlan        = ngbe_ndo_set_vf_vlan,
+	.ndo_get_vf_config      = ngbe_ndo_get_vf_config,
+	.ndo_set_vf_trust	= ngbe_ndo_set_vf_trust,
 };
 
 void ngbe_assign_netdev_ops(struct net_device *dev)
@@ -3832,6 +3930,24 @@ static void ngbe_napi_disable_all(struct ngbe_adapter *adapter)
 	}
 }
 
+void ngbe_full_sync_mac_table(struct ngbe_adapter *adapter)
+{
+	struct ngbe_hw *hw = &adapter->hw;
+	int i;
+
+	for (i = 0; i < hw->mac.num_rar_entries; i++) {
+		if (adapter->mac_table[i].state & NGBE_MAC_STATE_IN_USE) {
+			hw->mac.ops.set_rar(hw, i,
+				adapter->mac_table[i].addr,
+				adapter->mac_table[i].pools,
+				NGBE_PSR_MAC_SWC_AD_H_AV);
+		} else {
+			hw->mac.ops.clear_rar(hw, i);
+		}
+		adapter->mac_table[i].state &= ~(NGBE_MAC_STATE_MODIFIED);
+	}
+}
+
 static void ngbe_sync_mac_table(struct ngbe_adapter *adapter)
 {
 	struct ngbe_hw *hw = &adapter->hw;
@@ -3895,9 +4011,9 @@ void ngbe_disable_device(struct ngbe_adapter *adapter)
 	del_timer_sync(&adapter->service_timer);
 
 	/*OCP NCSI need it*/
-	if (!(((hw->subsystem_device_id & NGBE_OEM_MASK) == NGBE_SUBID_OCP_CARD) ||
-	      ((hw->subsystem_device_id & NGBE_WOL_MASK) == NGBE_WOL_SUP) ||
-		((hw->subsystem_device_id & NGBE_NCSI_MASK) == NGBE_NCSI_SUP)))
+	if (!(hw->ncsi_enabled ||
+	      (hw->subsystem_device_id & NGBE_WOL_MASK) == NGBE_WOL_SUP ||
+		    adapter->eth_priv_flags & NGBE_ETH_PRIV_FLAG_LLDP))
 		wr32m(hw, NGBE_MAC_TX_CFG, NGBE_MAC_TX_CFG_TE, 0);
 
 	/* disable transmits in the hardware now that interrupts are off */
@@ -4032,12 +4148,93 @@ static void ngbe_configure_pb(struct ngbe_adapter *adapter)
 	ngbe_pbthresh_setup(adapter);
 }
 
+/**
+ * ngbe_configure_bridge_mode - common settings for configuring bridge mode
+ * @adapter - the private structure
+ *
+ * This function's purpose is to remove code duplication and configure some
+ * settings require to switch bridge modes.
+ **/
+static void ngbe_configure_bridge_mode(struct ngbe_adapter *adapter)
+{
+	struct ngbe_hw *hw = &adapter->hw;
+
+	if (adapter->flags & NGBE_FLAG_SRIOV_VEPA_BRIDGE_MODE) {
+		/* disable Tx loopback, rely on switch hairpin mode */
+		wr32m(hw, NGBE_PSR_CTL,
+		      NGBE_PSR_CTL_SW_EN, 0);
+	} else {
+		/* enable Tx loopback for internal VF/PF communication */
+		wr32m(hw, NGBE_PSR_CTL,
+		      NGBE_PSR_CTL_SW_EN, NGBE_PSR_CTL_SW_EN);
+	}
+}
+
+static void ngbe_configure_virtualization(struct ngbe_adapter *adapter)
+{
+	struct ngbe_hw *hw = &adapter->hw;
+	u32 i;
+	u8 vfe = 0;
+
+	if (!(adapter->flags & NGBE_FLAG_VMDQ_ENABLED))
+		return;
+
+	wr32m(hw, NGBE_PSR_VM_CTL,
+	      NGBE_PSR_VM_CTL_POOL_MASK |
+		NGBE_PSR_VM_CTL_REPLEN,
+		VMDQ_P(0) << NGBE_PSR_VM_CTL_POOL_SHIFT |
+		NGBE_PSR_VM_CTL_REPLEN);
+
+	for_each_set_bit(i, &adapter->fwd_bitmask, NGBE_MAX_MACVLANS) {
+		/* accept untagged packets until a vlan tag is
+		 * specifically set for the VMDQ queue/pool
+		 */
+		wr32m(hw, NGBE_PSR_VM_L2CTL(i),
+		      NGBE_PSR_VM_L2CTL_AUPE, NGBE_PSR_VM_L2CTL_AUPE);
+	}
+
+	vfe = 1 << (VMDQ_P(0));
+	/* Enable only the PF pools for Tx/Rx */
+	wr32(hw, NGBE_RDM_POOL_RE, vfe);
+	wr32(hw, NGBE_TDM_POOL_TE, vfe);
+
+	if (!(adapter->flags & NGBE_FLAG_SRIOV_ENABLED))
+		return;
+
+	/* configure default bridge settings */
+	ngbe_configure_bridge_mode(adapter);
+
+	/* Ensure LLDP and FC is set for Ethertype Antispoofing if we will be
+	 * calling set_ethertype_anti_spoofing for each VF in loop below.
+	 */
+	if (hw->mac.ops.set_ethertype_anti_spoofing) {
+		wr32(hw,
+		     NGBE_PSR_ETYPE_SWC(NGBE_PSR_ETYPE_SWC_FILTER_LLDP),
+			(NGBE_PSR_ETYPE_SWC_FILTER_EN    | /* enable filter */
+			 NGBE_PSR_ETYPE_SWC_TX_ANTISPOOF |
+			 NGBE_ETH_P_LLDP));       /* LLDP eth procotol type */
+
+		wr32(hw,
+		     NGBE_PSR_ETYPE_SWC(NGBE_PSR_ETYPE_SWC_FILTER_FC),
+			(NGBE_PSR_ETYPE_SWC_FILTER_EN    |
+			 NGBE_PSR_ETYPE_SWC_TX_ANTISPOOF |
+			 ETH_P_PAUSE));
+	}
+
+	for (i = 0; i < adapter->num_vfs; i++) {
+		/* enable ethertype anti spoofing if hw supports it */
+		hw->mac.ops.set_ethertype_anti_spoofing(hw, true, i);
+	}
+}
+
 void ngbe_configure_port(struct ngbe_adapter *adapter)
 {
 	struct ngbe_hw *hw = &adapter->hw;
 	u32 value, i;
 
-	value = NGBE_CFG_PORT_CTL_NUM_VT_NONE;
+	value = (adapter->num_vfs == 0) ?
+		NGBE_CFG_PORT_CTL_NUM_VT_NONE :
+		NGBE_CFG_PORT_CTL_NUM_VT_8;
 
 	/* enable double vlan and qinq, NONE VT at default */
 	value |= NGBE_CFG_PORT_CTL_D_VLAN |
@@ -4072,9 +4269,12 @@ int ngbe_del_mac_filter(struct ngbe_adapter *adapter, u8 *addr, u16 pool)
 		if (ether_addr_equal(addr, adapter->mac_table[i].addr) &&
 		    adapter->mac_table[i].pools | (1ULL << pool)) {
 			adapter->mac_table[i].state |= NGBE_MAC_STATE_MODIFIED;
-			adapter->mac_table[i].state &= ~NGBE_MAC_STATE_IN_USE;
-			memset(adapter->mac_table[i].addr, 0, ETH_ALEN);
-			adapter->mac_table[i].pools = 0;
+			adapter->mac_table[i].pools &= ~(1ULL << pool);
+			if (!adapter->mac_table[i].pools) {
+				adapter->mac_table[i].state &= ~NGBE_MAC_STATE_IN_USE;
+				memset(adapter->mac_table[i].addr, 0, ETH_ALEN);
+			}
+
 			ngbe_sync_mac_table(adapter);
 			return 0;
 		}
@@ -4089,6 +4289,19 @@ int ngbe_add_mac_filter(struct ngbe_adapter *adapter, u8 *addr, u16 pool)
 
 	if (is_zero_ether_addr(addr))
 		return -EINVAL;
+
+	for (i = 0; i < hw->mac.num_rar_entries; i++) {
+		if (adapter->mac_table[i].state & NGBE_MAC_STATE_IN_USE) {
+			if (ether_addr_equal(addr, adapter->mac_table[i].addr)) {
+				if (adapter->mac_table[i].pools != (1ULL << pool)) {
+					adapter->mac_table[i].pools |= (1ULL << pool);
+					adapter->mac_table[i].state |= NGBE_MAC_STATE_MODIFIED;
+					ngbe_sync_mac_table(adapter);
+					return i;
+				}
+			}
+		}
+	}
 
 	for (i = 0; i < hw->mac.num_rar_entries; i++) {
 		if (adapter->mac_table[i].state & NGBE_MAC_STATE_IN_USE)
@@ -4121,8 +4334,9 @@ static u8 *ngbe_addr_list_itr(struct ngbe_hw __maybe_unused *hw,
 {
 	struct netdev_hw_addr *mc_ptr;
 	u8 *addr = *mc_addr_ptr;
+	struct ngbe_adapter *adapter = hw->back;
 
-	*vmdq = 0;
+	*vmdq = VMDQ_P(0);
 
 	mc_ptr = container_of(addr, struct netdev_hw_addr, addr[0]);
 	if (mc_ptr->list.next) {
@@ -4299,7 +4513,7 @@ void ngbe_set_rx_mode(struct net_device *netdev)
 	 * sufficient space to store all the addresses then enable
 	 * unicast promiscuous mode
 	 */
-	count = ngbe_write_uc_addr_list(netdev, 0);
+	count = ngbe_write_uc_addr_list(netdev, VMDQ_P(0));
 	if (count < 0) {
 		vmolr &= ~NGBE_PSR_VM_L2CTL_ROPE;
 		vmolr |= NGBE_PSR_VM_L2CTL_UPE;
@@ -4317,7 +4531,7 @@ void ngbe_set_rx_mode(struct net_device *netdev)
 
 	wr32(hw, NGBE_PSR_VLAN_CTL, vlnctrl);
 	wr32(hw, NGBE_PSR_CTL, fctrl);
-	wr32(hw, NGBE_PSR_VM_L2CTL(0), vmolr);
+	wr32(hw, NGBE_PSR_VM_L2CTL(VMDQ_P(0)), vmolr);
 
 	if ((netdev->features & NETIF_F_HW_VLAN_CTAG_RX) &&
 	    (netdev->features & NETIF_F_HW_VLAN_STAG_RX))
@@ -4346,12 +4560,21 @@ static int ngbe_vlan_rx_add_vid(struct net_device *netdev,
 {
 	struct ngbe_adapter *adapter = netdev_priv(netdev);
 	struct ngbe_hw *hw = &adapter->hw;
+	int pool_ndx = VMDQ_P(0);
 
 	/* add VID to filter table */
 	if (hw->mac.ops.set_vfta) {
 		if (vid < VLAN_N_VID)
 			set_bit(vid, adapter->active_vlans);
-		TCALL(hw, mac.ops.set_vfta, vid, 0, true);
+		TCALL(hw, mac.ops.set_vfta, vid, pool_ndx, true);
+		if (adapter->flags & NGBE_FLAG_VMDQ_ENABLED) {
+			int i;
+			/* enable vlan id for all pools */
+			for_each_set_bit(i, &adapter->fwd_bitmask,
+					 NGBE_MAX_MACVLANS)
+				hw->mac.ops.set_vfta(hw, vid,
+					   VMDQ_P(i), true);
+		}
 	}
 
 	return 0;
@@ -4469,7 +4692,7 @@ static void ngbe_setup_psrtype(struct ngbe_adapter *adapter)
 				NGBE_RDB_PL_CFG_TUN_TUNHDR;
 
 	for_each_set_bit(pool, &adapter->fwd_bitmask, NGBE_MAX_MACVLANS) {
-		wr32(hw, NGBE_RDB_PL_CFG(0), psrtype);
+		wr32(hw, NGBE_RDB_PL_CFG(VMDQ_P(0)), psrtype);
 	}
 }
 
@@ -4935,6 +5158,8 @@ static void ngbe_configure_rx(struct ngbe_adapter *adapter)
 static void ngbe_configure(struct ngbe_adapter *adapter)
 {
 	ngbe_configure_pb(adapter);
+
+	ngbe_configure_virtualization(adapter);
 
 	/* configure Double Vlan */
 	ngbe_configure_port(adapter);
@@ -5524,7 +5749,7 @@ void ngbe_update_stats(struct ngbe_adapter *adapter)
 	net_stats->rx_length_errors = hwstats->rlec;
 	net_stats->rx_crc_errors = hwstats->crcerrs;
 	total_mpc = rd32(hw, NGBE_RDB_MPCNT);
-	net_stats->rx_missed_errors = total_mpc;
+	net_stats->rx_missed_errors += total_mpc;
 }
 
 static bool ngbe_ring_tx_pending(struct ngbe_adapter *adapter)
@@ -5759,6 +5984,7 @@ static int ngbe_probe(struct pci_dev *pdev,
 	u32 devcap = 0;
 	netdev_features_t hw_features;
 	struct ngbe_ring_feature *feature;
+	u16 pvalue = 0;
 
 	err = pci_enable_device_mem(pdev);
 	if (err)
@@ -5841,6 +6067,9 @@ static int ngbe_probe(struct pci_dev *pdev,
 	if (err)
 		goto err_sw_init;
 
+	if (ngbe_is_lldp(hw))
+		e_dev_err("Can not get lldp flags from flash\n");
+
 	hw->phy.reset_if_overtemp = true;
 	err = TCALL(hw, mac.ops.reset_hw);
 	hw->phy.reset_if_overtemp = false;
@@ -5848,6 +6077,10 @@ static int ngbe_probe(struct pci_dev *pdev,
 		e_dev_err("HW reset failed: %d\n", err);
 		goto err_sw_init;
 	}
+
+	err = hw->phy.ops.init(hw);
+	if (err)
+		goto err_sw_init;
 
 	netdev->features |= NETIF_F_SG | NETIF_F_IP_CSUM;
 	netdev->features |= NETIF_F_IPV6_CSUM;
@@ -5938,6 +6171,19 @@ static int ngbe_probe(struct pci_dev *pdev,
 	if (err)
 		goto err_sw_init;
 
+	if (adapter->num_vfs > 0) {
+		e_dev_warn("Please use the pci sysfs interface instead. Ex:\n");
+		e_dev_warn("echo '%d' > /sys/bus/pci/devices/%04x:%02x:%02x.%1x/sriov_numvfs\n",
+			   adapter->num_vfs,
+				pci_domain_nr(pdev->bus),
+				pdev->bus->number,
+				PCI_SLOT(pdev->devfn),
+				PCI_FUNC(pdev->devfn));
+	}
+
+	pci_sriov_set_totalvfs(pdev, NGBE_MAX_VFS_DRV_LIMIT);
+	ngbe_enable_sriov(adapter);
+
 	/* WOL not supported for all devices */
 	adapter->wol = 0;
 	if (hw->bus.lan_id == 0 || eeprom_cksum_devcap == 0) {
@@ -6026,8 +6272,7 @@ static int ngbe_probe(struct pci_dev *pdev,
 
 	TCALL(hw, mac.ops.set_fw_drv_ver, 0xFF, 0xFF, 0xFF, 0xFF);
 
-	if (((hw->subsystem_device_id & NGBE_NCSI_MASK) == NGBE_NCSI_SUP) ||
-	    ((hw->subsystem_device_id & NGBE_OEM_MASK) == NGBE_SUBID_OCP_CARD))
+	if (hw->ncsi_enabled)
 		e_info(probe, "NCSI : support");
 	else
 		e_info(probe, "NCSI : unsupported");
@@ -6057,14 +6302,33 @@ static int ngbe_probe(struct pci_dev *pdev,
 	kfree(info_string);
 
 no_info_string:
+	if (adapter->flags & NGBE_FLAG_SRIOV_ENABLED) {
+		int i;
+
+		for (i = 0; i < adapter->num_vfs; i++)
+			ngbe_vf_configuration(pdev, (i | 0x10000000));
+	}
 	e_info(probe, "WangXun(R) Gigabit Network Connection\n");
 	cards_found++;
+
+#ifdef CONFIG_SYSFS
+	if (ngbe_sysfs_init(adapter))
+		netif_err(adapter, probe, netdev,
+			  "failed to allocate sysfs resources\n");
+#endif
+
+	ngbe_dbg_adapter_init(adapter);
+
+	pcie_capability_read_word(pdev, PCI_EXP_DEVCTL2, &pvalue);
+	pvalue = pvalue | 0x10;
+	pcie_capability_write_word(pdev, PCI_EXP_DEVCTL2, pvalue);
 
 	return 0;
 err_register:
 	ngbe_clear_interrupt_scheme(adapter);
 	ngbe_release_hw_control(adapter);
 err_sw_init:
+	ngbe_disable_sriov(adapter);
 	adapter->flags2 &= ~NGBE_FLAG2_SEARCH_FOR_SFP;
 	kfree(adapter->mac_table);
 	iounmap(adapter->io_addr);
@@ -6101,10 +6365,15 @@ static void ngbe_remove(struct pci_dev *pdev)
 	set_bit(__NGBE_REMOVING, &adapter->state);
 	cancel_work_sync(&adapter->service_task);
 
+	ngbe_dbg_adapter_exit(adapter);
+	ngbe_sysfs_exit(adapter);
+
 	if (adapter->netdev_registered) {
 		unregister_netdev(netdev);
 		adapter->netdev_registered = false;
 	}
+
+	ngbe_disable_sriov(adapter);
 
 	ngbe_clear_interrupt_scheme(adapter);
 	ngbe_release_hw_control(adapter);
@@ -6343,6 +6612,7 @@ static struct pci_driver ngbe_driver = {
 	.probe    = ngbe_probe,
 	.remove   = ngbe_remove,
 	.shutdown = ngbe_shutdown,
+	.sriov_configure = ngbe_pci_sriov_configure,
 };
 
 /**
@@ -6354,14 +6624,13 @@ static int __init ngbe_init_module(void)
 {
 	int ret;
 
-	pr_info("%s - version %s\n", ngbe_driver_string, ngbe_driver_version);
-	pr_info("%s\n", ngbe_copyright);
-
 	ngbe_wq = create_singlethread_workqueue(ngbe_driver_name);
 	if (!ngbe_wq) {
 		pr_err("%s: Failed to create workqueue\n", ngbe_driver_name);
 		return -ENOMEM;
 	}
+
+	ngbe_dbg_init();
 
 	ret = pci_register_driver(&ngbe_driver);
 	return ret;
@@ -6377,6 +6646,7 @@ static void __exit ngbe_exit_module(void)
 {
 	pci_unregister_driver(&ngbe_driver);
 	destroy_workqueue(ngbe_wq);
+	ngbe_dbg_exit();
 }
 
 module_exit(ngbe_exit_module);

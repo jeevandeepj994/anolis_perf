@@ -160,6 +160,7 @@ static ssize_t ngbe_dbg_data_ops_read(struct file *filp, char __user *buffer,
 		if (queue >= adapter->num_rx_queues)
 			return 0;
 
+		queue += VMDQ_P(0) * adapter->queues_per_pool;
 		ring = adapter->rx_ring[queue];
 
 		return simple_read_from_buffer(buffer, size, ppos,
@@ -172,6 +173,7 @@ static ssize_t ngbe_dbg_data_ops_read(struct file *filp, char __user *buffer,
 		if (queue >= adapter->num_tx_queues)
 			return 0;
 
+		queue += VMDQ_P(0) * adapter->queues_per_pool;
 		ring = adapter->tx_ring[queue];
 
 		return simple_read_from_buffer(buffer, size, ppos,
@@ -679,4 +681,12 @@ void ngbe_dbg_init(void)
 	ngbe_dbg_root = debugfs_create_dir(ngbe_driver_name, NULL);
 	if (!ngbe_dbg_root)
 		pr_err("init of debugfs failed\n");
+}
+
+/**
+ * ngbe_dbg_exit - clean out debugfs for the driver
+ **/
+void ngbe_dbg_exit(void)
+{
+	debugfs_remove_recursive(ngbe_dbg_root);
 }

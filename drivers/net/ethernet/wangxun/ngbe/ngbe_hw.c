@@ -37,15 +37,17 @@ u8 ngbe_fmgr_cmd_op(struct ngbe_hw *hw, u32 cmd, u32 cmd_addr)
 	return 0;
 }
 
-u32 ngbe_flash_read_dword(struct ngbe_hw *hw, u32 addr)
+int ngbe_flash_read_dword(struct ngbe_hw *hw, u32 addr, u32 *data)
 {
-	u8 status;
+	int ret = 0;
 
-	status = ngbe_fmgr_cmd_op(hw, SPI_CMD_READ_DWORD, addr);
-	if (status)
-		return (u32)status;
+	ret = ngbe_fmgr_cmd_op(hw, SPI_CMD_READ_DWORD, addr);
+	if (ret < 0)
+		return ret;
 
-	return rd32(hw, SPI_H_DAT_REG_ADDR);
+	*data = rd32(hw, SPI_H_DAT_REG_ADDR);
+
+	return ret;
 }
 
 /**
@@ -75,7 +77,7 @@ static s32 ngbe_setup_copper_link(struct ngbe_hw *hw,
 	struct ngbe_adapter *adapter = hw->back;
 
 	/* Setup the PHY according to input speed */
-	if (!((hw->subsystem_device_id & NGBE_OEM_MASK) == NGBE_SUBID_RGMII_FPGA))
+	if (!((hw->subsystem_device_id & NGBE_OEM_MASK) == RGMII_FPGA))
 		status = TCALL(hw, phy.ops.setup_link, speed, need_restart_AN);
 
 	adapter->flags |= NGBE_FLAG_NEED_ANC_CHECK;
@@ -110,7 +112,7 @@ s32 ngbe_get_copper_link_capabilities(struct ngbe_hw *hw,
 		  NGBE_LINK_SPEED_1GB_FULL;
 	}
 
-	if ((hw->subsystem_device_id & NGBE_OEM_MASK) == NGBE_SUBID_RGMII_FPGA) {
+	if ((hw->subsystem_device_id & NGBE_OEM_MASK) == RGMII_FPGA) {
 		*speed = NGBE_LINK_SPEED_1GB_FULL;
 		hw->phy.link_mode = NGBE_PHYSICAL_LAYER_1000BASE_T;
 		*autoneg = false;
@@ -126,7 +128,8 @@ s32 ngbe_get_copper_link_capabilities(struct ngbe_hw *hw,
 		ngbe_phy_read_reg_ext_yt(hw, 0xA001, 0, &value);
 		spin_unlock_irqrestore(&hw->phy_lock, flags);
 		if ((value & 7) == 1) {
-			*speed = NGBE_LINK_SPEED_1GB_FULL;
+			*speed = NGBE_LINK_SPEED_1GB_FULL |
+				 NGBE_LINK_SPEED_100_FULL;
 			hw->phy.link_mode = NGBE_PHYSICAL_LAYER_1000BASE_T;
 		}
 	}
@@ -269,16 +272,6 @@ s32 ngbe_reset_hw(struct ngbe_hw *hw)
 	u32 reset = 0;
 	u32 i;
 	struct ngbe_mac_info *mac = &hw->mac;
-	u32 sr_pcs_ctl = 0;
-	u32 sr_pma_mmd_ctl1 = 0;
-	u32 sr_an_mmd_ctl = 0;
-	u32 sr_an_mmd_adv_reg2 = 0;
-	u32 vr_xs_or_pcs_mmd_digi_ctl1 = 0;
-	u32 curr_vr_xs_or_pcs_mmd_digi_ctl1 = 0;
-	u32 curr_sr_pcs_ctl = 0;
-	u32 curr_sr_pma_mmd_ctl1 = 0;
-	u32 curr_sr_an_mmd_ctl = 0;
-	u32 curr_sr_an_mmd_adv_reg2 = 0;
 	u32 reset_status = 0;
 	u32 rst_delay = 0;
 	struct ngbe_adapter *adapter = NULL;
@@ -287,13 +280,6 @@ s32 ngbe_reset_hw(struct ngbe_hw *hw)
 	status = TCALL(hw, mac.ops.stop_adapter);
 	if (status != 0)
 		goto reset_hw_out;
-
-	/* Identify PHY and related function pointers */
-	if (!((hw->subsystem_device_id & NGBE_OEM_MASK) == NGBE_SUBID_RGMII_FPGA)) {
-		status = TCALL(hw, phy.ops.init);
-		if (status)
-			goto reset_hw_out;
-	}
 
 	if (ngbe_get_media_type(hw) == ngbe_media_type_copper) {
 		mac->ops.setup_link = ngbe_setup_copper_link;
@@ -358,30 +344,6 @@ s32 ngbe_reset_hw(struct ngbe_hw *hw)
 	status = ngbe_reset_misc(hw);
 	if (status != 0)
 		goto reset_hw_out;
-
-	if (!hw->mac.orig_link_settings_stored) {
-		hw->mac.orig_sr_pcs_ctl2 = sr_pcs_ctl;
-		hw->mac.orig_sr_pma_mmd_ctl1 = sr_pma_mmd_ctl1;
-		hw->mac.orig_sr_an_mmd_ctl = sr_an_mmd_ctl;
-		hw->mac.orig_sr_an_mmd_adv_reg2 = sr_an_mmd_adv_reg2;
-		hw->mac.orig_vr_xs_or_pcs_mmd_digi_ctl1 =
-						vr_xs_or_pcs_mmd_digi_ctl1;
-		hw->mac.orig_link_settings_stored = true;
-	} else {
-		/* If MNG FW is running on a multi-speed device that
-		 * doesn't autoneg with out driver support we need to
-		 * leave LMS in the state it was before we MAC reset.
-		 * Likewise if we support WoL we don't want change the
-		 * LMS state.
-		 */
-		hw->mac.orig_sr_pcs_ctl2 = curr_sr_pcs_ctl;
-		hw->mac.orig_sr_pma_mmd_ctl1 = curr_sr_pma_mmd_ctl1;
-		hw->mac.orig_sr_an_mmd_ctl = curr_sr_an_mmd_ctl;
-		hw->mac.orig_sr_an_mmd_adv_reg2 =
-					curr_sr_an_mmd_adv_reg2;
-		hw->mac.orig_vr_xs_or_pcs_mmd_digi_ctl1 =
-					curr_vr_xs_or_pcs_mmd_digi_ctl1;
-	}
 
 	/* Store the permanent mac address */
 	TCALL(hw, mac.ops.get_mac_addr, hw->mac.perm_addr);
@@ -1283,6 +1245,7 @@ void ngbe_disable_rx(struct ngbe_hw *hw)
 {
 	u32 pfdtxgswc;
 	u32 rxctrl;
+	struct ngbe_adapter *adapter = hw->back;
 
 	rxctrl = rd32(hw, NGBE_RDB_PB_CTL);
 
@@ -1299,9 +1262,9 @@ void ngbe_disable_rx(struct ngbe_hw *hw)
 		wr32(hw, NGBE_RDB_PB_CTL, rxctrl);
 
 		/* OCP NCSI BMC need it */
-		if (!(((hw->subsystem_device_id & NGBE_OEM_MASK) == NGBE_SUBID_OCP_CARD) ||
-		      ((hw->subsystem_device_id & NGBE_WOL_MASK) == NGBE_WOL_SUP) ||
-			   ((hw->subsystem_device_id & NGBE_NCSI_MASK) == NGBE_NCSI_SUP))) {
+		if (!(hw->ncsi_enabled ||
+		      (hw->subsystem_device_id & NGBE_WOL_MASK) == NGBE_WOL_SUP ||
+			    adapter->eth_priv_flags & NGBE_ETH_PRIV_FLAG_LLDP)) {
 		/* disable mac receiver */
 			wr32m(hw, NGBE_MAC_RX_CFG,
 			      NGBE_MAC_RX_CFG_RE, 0);
@@ -1696,7 +1659,7 @@ s32 ngbe_get_link_capabilities(struct ngbe_hw *hw,
 							NGBE_PHYSICAL_LAYER_100BASE_TX;
 	}
 
-	if ((hw->subsystem_device_id & NGBE_OEM_MASK) == NGBE_SUBID_RGMII_FPGA) {
+	if ((hw->subsystem_device_id & NGBE_OEM_MASK) == RGMII_FPGA) {
 		*speed = NGBE_LINK_SPEED_1GB_FULL;
 		hw->phy.link_mode = NGBE_PHYSICAL_LAYER_1000BASE_T;
 		*autoneg = false;
@@ -1722,7 +1685,7 @@ s32 ngbe_check_mac_link(struct ngbe_hw *hw,
 	s32 status = 0;
 	u16 speed_sta = 0;
 
-	if ((hw->subsystem_device_id & NGBE_OEM_MASK) == NGBE_SUBID_RGMII_FPGA) {
+	if ((hw->subsystem_device_id & NGBE_OEM_MASK) == RGMII_FPGA) {
 		*link_up = true;
 		*speed = NGBE_LINK_SPEED_1GB_FULL;
 		return status;
@@ -1855,14 +1818,19 @@ s32 ngbe_check_mac_link_yt(struct ngbe_hw *hw, u32 *speed, bool *link_up, bool w
 
 	speed_sta = value & 0xC000;
 	if (*link_up) {
-		if (speed_sta == 0x8000)
+		if (speed_sta == 0x8000) {
 			*speed = NGBE_LINK_SPEED_1GB_FULL;
-		else if (speed_sta == 0x4000)
+			wr32m(hw, NGBE_CFG_LED_CTL, 0xE | BIT(17), BIT(1) | BIT(17));
+		} else if (speed_sta == 0x4000) {
 			*speed = NGBE_LINK_SPEED_100_FULL;
-		else if (speed_sta == 0x0000)
+			wr32m(hw, NGBE_CFG_LED_CTL, 0xE | BIT(17), BIT(2) | BIT(17));
+		} else if (speed_sta == 0x0000) {
 			*speed = NGBE_LINK_SPEED_10_FULL;
+			wr32m(hw, NGBE_CFG_LED_CTL, 0xE | BIT(17), BIT(3) | BIT(17));
+		}
 	} else {
 		*speed = NGBE_LINK_SPEED_UNKNOWN;
+		wr32m(hw, NGBE_CFG_LED_CTL, 0xE | BIT(17), 0);
 	}
 
 	return status;
@@ -2684,7 +2652,7 @@ static s32 ngbe_fc_autoneg_copper(struct ngbe_hw *hw)
 	u8 technology_ability_reg = 0;
 	u8 lp_technology_ability_reg = 0;
 
-	if (!((hw->subsystem_device_id & NGBE_OEM_MASK) == NGBE_SUBID_RGMII_FPGA)) {
+	if (!((hw->subsystem_device_id & NGBE_OEM_MASK) == RGMII_FPGA)) {
 		TCALL(hw, phy.ops.get_adv_pause, &technology_ability_reg);
 		TCALL(hw, phy.ops.get_lp_adv_pause, &lp_technology_ability_reg);
 	}
@@ -2936,7 +2904,7 @@ s32 ngbe_setup_fc(struct ngbe_hw *hw)
 	 * and copper.
 	 */
 	if (hw->phy.media_type == ngbe_media_type_copper &&
-	    !((hw->subsystem_device_id & NGBE_OEM_MASK) == NGBE_SUBID_RGMII_FPGA))
+	    !((hw->subsystem_device_id & NGBE_OEM_MASK) == RGMII_FPGA))
 		ret_val = TCALL(hw, phy.ops.set_adv_pause, pcap_backplane);
 
 out:
@@ -3041,6 +3009,7 @@ u8 flash_erase_chip(struct ngbe_hw *hw)
 u8 flash_write_dword(struct ngbe_hw *hw, u32 addr, u32 dword)
 {
 	u8 status = 0;
+	u32 data;
 
 	wr32(hw, SPI_H_DAT_REG_ADDR, dword);
 	status = ngbe_fmgr_cmd_op(hw, SPI_CMD_WRITE_DWORD, addr);
@@ -3048,8 +3017,9 @@ u8 flash_write_dword(struct ngbe_hw *hw, u32 addr, u32 dword)
 	if (status)
 		return status;
 
-	if (dword != ngbe_flash_read_dword(hw, addr))
-		return 1;
+	ngbe_flash_read_dword(hw, addr, &data);
+	if (dword != data)
+		return -EIO;
 
 	return 0;
 }
@@ -3124,25 +3094,29 @@ int ngbe_upgrade_flash(struct ngbe_hw *hw, u32 region,
 
 	mdelay(1000);
 
-	mac_addr0_dword0_t = ngbe_flash_read_dword(hw, MAC_ADDR0_WORD0_OFFSET_1G);
-	mac_addr0_dword1_t = ngbe_flash_read_dword(hw, MAC_ADDR0_WORD1_OFFSET_1G) & 0xffff;
-	mac_addr1_dword0_t = ngbe_flash_read_dword(hw, MAC_ADDR1_WORD0_OFFSET_1G);
-	mac_addr1_dword1_t = ngbe_flash_read_dword(hw, MAC_ADDR1_WORD1_OFFSET_1G) & 0xffff;
-	mac_addr2_dword0_t = ngbe_flash_read_dword(hw, MAC_ADDR2_WORD0_OFFSET_1G);
-	mac_addr2_dword1_t = ngbe_flash_read_dword(hw, MAC_ADDR2_WORD1_OFFSET_1G) & 0xffff;
-	mac_addr3_dword0_t = ngbe_flash_read_dword(hw, MAC_ADDR3_WORD0_OFFSET_1G);
-	mac_addr3_dword1_t = ngbe_flash_read_dword(hw, MAC_ADDR3_WORD1_OFFSET_1G) & 0xffff;
+	ngbe_flash_read_dword(hw, MAC_ADDR0_WORD0_OFFSET_1G, &mac_addr0_dword0_t);
+	ngbe_flash_read_dword(hw, MAC_ADDR0_WORD1_OFFSET_1G, &mac_addr0_dword1_t);
+	mac_addr0_dword1_t = mac_addr0_dword1_t & U16_MAX;
+	ngbe_flash_read_dword(hw, MAC_ADDR1_WORD0_OFFSET_1G, &mac_addr1_dword0_t);
+	ngbe_flash_read_dword(hw, MAC_ADDR1_WORD1_OFFSET_1G, &mac_addr1_dword1_t);
+	mac_addr1_dword1_t = mac_addr1_dword1_t & U16_MAX;
+	ngbe_flash_read_dword(hw, MAC_ADDR2_WORD0_OFFSET_1G, &mac_addr2_dword0_t);
+	ngbe_flash_read_dword(hw, MAC_ADDR2_WORD1_OFFSET_1G, &mac_addr2_dword1_t);
+	mac_addr2_dword1_t = mac_addr2_dword1_t & U16_MAX;
+	ngbe_flash_read_dword(hw, MAC_ADDR3_WORD0_OFFSET_1G, &mac_addr3_dword0_t);
+	ngbe_flash_read_dword(hw, MAC_ADDR3_WORD1_OFFSET_1G, &mac_addr3_dword1_t);
+	mac_addr3_dword1_t = mac_addr3_dword1_t & U16_MAX;
 
-	serial_num_dword0_t = ngbe_flash_read_dword(hw, PRODUCT_SERIAL_NUM_OFFSET_1G);
-	serial_num_dword1_t = ngbe_flash_read_dword(hw, PRODUCT_SERIAL_NUM_OFFSET_1G + 4);
-	serial_num_dword2_t = ngbe_flash_read_dword(hw, PRODUCT_SERIAL_NUM_OFFSET_1G + 8);
+	ngbe_flash_read_dword(hw, PRODUCT_SERIAL_NUM_OFFSET_1G, &serial_num_dword0_t);
+	ngbe_flash_read_dword(hw, PRODUCT_SERIAL_NUM_OFFSET_1G + 4, &serial_num_dword1_t);
+	ngbe_flash_read_dword(hw, PRODUCT_SERIAL_NUM_OFFSET_1G + 8, &serial_num_dword2_t);
 	hw_dbg(hw, "Old: MAC Address0 is: 0x%04x%08x\n", mac_addr0_dword1_t, mac_addr0_dword0_t);
 	hw_dbg(hw, "MAC Address1 is: 0x%04x%08x\n", mac_addr1_dword1_t, mac_addr1_dword0_t);
 	hw_dbg(hw, "MAC Address2 is: 0x%04x%08x\n", mac_addr2_dword1_t, mac_addr2_dword0_t);
 	hw_dbg(hw, "MAC Address3 is: 0x%04x%08x\n", mac_addr3_dword1_t, mac_addr3_dword0_t);
 
 	for (k = 0; k < 128; k++)
-		num[k] = ngbe_flash_read_dword(hw, 0xfe000 + (k << 2));
+		ngbe_flash_read_dword(hw, 0xfe000 + k * 4, &num[k]);
 
 	status = fmgr_usr_cmd_op(hw, 0x6);  /* write enable */
 	status = fmgr_usr_cmd_op(hw, 0x98); /* global protection un-lock */
@@ -3195,7 +3169,7 @@ int ngbe_upgrade_flash(struct ngbe_hw *hw, u32 region,
 			if (status) {
 				hw_dbg(hw, "ERROR: Program 0x%08x @addr: 0x%08x is failed !!\n",
 				       read_data, i);
-				read_data = ngbe_flash_read_dword(hw, i);
+				ngbe_flash_read_dword(hw, i * 4, &read_data);
 				hw_dbg(hw, "Read data from Flash is: 0x%08x\n", read_data);
 				return 1;
 			}
@@ -3510,6 +3484,57 @@ s32 ngbe_get_thermal_sensor_data(struct ngbe_hw *hw)
 	return 0;
 }
 
+int ngbe_hic_write_lldp(struct ngbe_hw *hw, u32 open)
+{
+	u32 tmp = 0, i = 0, lldp_flash_data = 0;
+	int status;
+	struct ngbe_adapter *adapter = hw->back;
+	struct pci_dev *pdev = adapter->pdev;
+	struct ngbe_hic_write_lldp buffer;
+
+	buffer.hdr.cmd = 0xf3 - open;
+	buffer.hdr.buf_len = 0x1;
+	buffer.hdr.cmd_or_resp.cmd_resv = FW_CEM_CMD_RESERVED;
+	buffer.hdr.checksum = FW_DEFAULT_CHECKSUM;
+	buffer.func = PCI_FUNC(pdev->devfn);
+	status = ngbe_host_if_command(hw, (u32 *)&buffer,
+				      sizeof(buffer), 5000, false);
+
+	for (; i < 0x1000 / sizeof(u32); i++) {
+		status = ngbe_flash_read_dword(hw, NGBE_LLDP_REG + i * 4, &tmp);
+		if (status)
+			return status;
+		if (tmp == U32_MAX)
+			break;
+		lldp_flash_data = tmp;
+	}
+	if (!!(lldp_flash_data & BIT(hw->bus.lan_id)) != open)
+		status = -EINVAL;
+	return status;
+}
+
+int ngbe_is_lldp(struct ngbe_hw *hw)
+{
+	u32 tmp = 0, lldp_flash_data = 0, i = 0;
+	struct ngbe_adapter *adapter = hw->back;
+	int status = 0;
+
+	for (; i < 0x1000 / sizeof(u32); i++) {
+		status = ngbe_flash_read_dword(hw, NGBE_LLDP_REG + i * 4, &tmp);
+		if (status)
+			return status;
+		if (tmp == U32_MAX)
+			break;
+		lldp_flash_data = tmp;
+	}
+	if (lldp_flash_data & BIT(hw->bus.lan_id))
+		adapter->eth_priv_flags |= NGBE_ETH_PRIV_FLAG_LLDP;
+	else
+		adapter->eth_priv_flags &= ~NGBE_ETH_PRIV_FLAG_LLDP;
+
+	return 0;
+}
+
 s32 ngbe_init_ops_common(struct ngbe_hw *hw)
 {
 	struct ngbe_mac_info *mac = &hw->mac;
@@ -3557,6 +3582,8 @@ s32 ngbe_init_ops_common(struct ngbe_hw *hw)
 	mac->ops.get_link_capabilities = ngbe_get_link_capabilities;
 	mac->ops.check_link = ngbe_check_mac_link;
 	mac->ops.setup_rxpba = ngbe_set_rxpba;
+
+	hw->mbx.ops.init_params = ngbe_init_mbx_params_pf;
 
 	/* EEPROM */
 	eeprom->ops.init_params = ngbe_init_eeprom_params;
