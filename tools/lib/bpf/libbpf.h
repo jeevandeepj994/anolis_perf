@@ -10,6 +10,7 @@
 #ifndef __LIBBPF_LIBBPF_H
 #define __LIBBPF_LIBBPF_H
 
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdint.h>
 #include <stdbool.h>
@@ -47,17 +48,16 @@ enum libbpf_errno {
 
 LIBBPF_API int libbpf_strerror(int err, char *buf, size_t size);
 
-/*
- * __printf is defined in include/linux/compiler-gcc.h. However,
- * it would be better if libbpf.h didn't depend on Linux header files.
- * So instead of __printf, here we use gcc attribute directly.
- */
-typedef int (*libbpf_print_fn_t)(const char *, ...)
-	__attribute__((format(printf, 1, 2)));
+enum libbpf_print_level {
+        LIBBPF_WARN,
+        LIBBPF_INFO,
+        LIBBPF_DEBUG,
+};
 
-LIBBPF_API void libbpf_set_print(libbpf_print_fn_t warn,
-				 libbpf_print_fn_t info,
-				 libbpf_print_fn_t debug);
+typedef int (*libbpf_print_fn_t)(enum libbpf_print_level level,
+				 const char *, va_list ap);
+
+LIBBPF_API void libbpf_set_print(libbpf_print_fn_t fn);
 
 /* Hide internal to user */
 struct bpf_object;
@@ -264,6 +264,9 @@ struct bpf_map;
 LIBBPF_API struct bpf_map *
 bpf_object__find_map_by_name(struct bpf_object *obj, const char *name);
 
+LIBBPF_API int
+bpf_object__find_map_fd_by_name(struct bpf_object *obj, const char *name);
+
 /*
  * Get bpf_map through the offset of corresponding struct bpf_map_def
  * in the BPF object file.
@@ -314,6 +317,7 @@ LIBBPF_API int bpf_prog_load(const char *file, enum bpf_prog_type type,
 			     struct bpf_object **pobj, int *prog_fd);
 
 LIBBPF_API int bpf_set_link_xdp_fd(int ifindex, int fd, __u32 flags);
+LIBBPF_API int bpf_get_link_xdp_id(int ifindex, __u32 *prog_id, __u32 flags);
 
 enum bpf_perf_event_ret {
 	LIBBPF_PERF_EVENT_DONE	= 0,
