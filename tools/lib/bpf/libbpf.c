@@ -840,6 +840,15 @@ static int bpf_object__elf_collect(struct bpf_object *obj, int flags)
 				pr_warning("Error loading ELF section %s: %ld. Ignored and continue.\n",
 					   BTF_ELF_SEC, PTR_ERR(obj->btf));
 				obj->btf = NULL;
+				continue;
+			}
+			err = btf__load(obj->btf);
+			if (err) {
+				pr_warning("Error loading %s into kernel: %d. Ignored and continue.\n",
+					   BTF_ELF_SEC, err);
+				btf__free(obj->btf);
+				obj->btf = NULL;
+				err = 0;
 			}
 		} else if (strcmp(name, BTF_EXT_ELF_SEC) == 0) {
 			btf_ext_data = data;

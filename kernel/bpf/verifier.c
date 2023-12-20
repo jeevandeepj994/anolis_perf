@@ -210,7 +210,7 @@ struct bpf_call_arg_meta {
 	int regno;
 	int access_size;
 	u64 msize_max_value;
-	int ptr_id;
+	int ref_obj_id;
 	int func_id;
 };
 
@@ -329,25 +329,19 @@ static bool type_is_pkt_pointer(enum bpf_reg_type type)
 	       type == PTR_TO_PACKET_META;
 }
 
+static bool type_is_sk_pointer(enum bpf_reg_type type)
+{
+	return type == PTR_TO_SOCKET ||
+		type == PTR_TO_SOCK_COMMON ||
+		type == PTR_TO_TCP_SOCK;
+}
+
 static bool reg_type_may_be_null(enum bpf_reg_type type)
 {
 	return type == PTR_TO_MAP_VALUE_OR_NULL ||
-	       type == PTR_TO_SOCKET_OR_NULL;
-}
-
-static bool type_is_refcounted(enum bpf_reg_type type)
-{
-	return type == PTR_TO_SOCKET;
-}
-
-static bool type_is_refcounted_or_null(enum bpf_reg_type type)
-{
-	return type == PTR_TO_SOCKET || type == PTR_TO_SOCKET_OR_NULL;
-}
-
-static bool reg_is_refcounted(const struct bpf_reg_state *reg)
-{
-	return type_is_refcounted(reg->type);
+	       type == PTR_TO_SOCKET_OR_NULL ||
+	       type == PTR_TO_SOCK_COMMON_OR_NULL ||
+	       type == PTR_TO_TCP_SOCK_OR_NULL;
 }
 
 static bool reg_may_point_to_spin_lock(const struct bpf_reg_state *reg)
@@ -356,14 +350,17 @@ static bool reg_may_point_to_spin_lock(const struct bpf_reg_state *reg)
 		map_value_has_spin_lock(reg->map_ptr);
 }
 
-static bool reg_is_refcounted_or_null(const struct bpf_reg_state *reg)
+static bool reg_type_may_be_refcounted_or_null(enum bpf_reg_type type)
 {
-	return type_is_refcounted_or_null(reg->type);
+	return type == PTR_TO_SOCKET ||
+		type == PTR_TO_SOCKET_OR_NULL ||
+		type == PTR_TO_TCP_SOCK ||
+		type == PTR_TO_TCP_SOCK_OR_NULL;
 }
 
-static bool arg_type_is_refcounted(enum bpf_arg_type type)
+static bool arg_type_may_be_refcounted(enum bpf_arg_type type)
 {
-	return type == ARG_PTR_TO_SOCKET;
+	return type == ARG_PTR_TO_SOCK_COMMON;
 }
 
 /* Determine whether the function releases some resources allocated by another
@@ -373,6 +370,18 @@ static bool arg_type_is_refcounted(enum bpf_arg_type type)
 static bool is_release_function(enum bpf_func_id func_id)
 {
 	return func_id == BPF_FUNC_sk_release;
+}
+
+static bool is_acquire_function(enum bpf_func_id func_id)
+{
+	return func_id == BPF_FUNC_sk_lookup_tcp ||
+		func_id == BPF_FUNC_sk_lookup_udp;
+}
+
+static bool is_ptr_cast_function(enum bpf_func_id func_id)
+{
+	return func_id == BPF_FUNC_tcp_sock ||
+		func_id == BPF_FUNC_sk_fullsock;
 }
 
 /* string representation of 'enum bpf_reg_type' */
@@ -390,6 +399,10 @@ static const char * const reg_type_str[] = {
 	[PTR_TO_FLOW_KEYS]	= "flow_keys",
 	[PTR_TO_SOCKET]		= "sock",
 	[PTR_TO_SOCKET_OR_NULL] = "sock_or_null",
+	[PTR_TO_SOCK_COMMON]	= "sock_common",
+	[PTR_TO_SOCK_COMMON_OR_NULL] = "sock_common_or_null",
+	[PTR_TO_TCP_SOCK]	= "tcp_sock",
+	[PTR_TO_TCP_SOCK_OR_NULL] = "tcp_sock_or_null",
 };
 
 static char slot_type_char[] = {
@@ -445,6 +458,8 @@ static void print_verifier_state(struct bpf_verifier_env *env,
 				verbose(env, ",call_%d", func(env, reg)->callsite);
 		} else {
 			verbose(env, "(id=%d", reg->id);
+			if (reg_type_may_be_refcounted_or_null(t))
+				verbose(env, ",ref_obj_id=%d", reg->ref_obj_id);
 			if (t != SCALAR_VALUE)
 				verbose(env, ",off=%d", reg->off);
 			if (type_is_pkt_pointer(t))
@@ -616,12 +631,9 @@ static int acquire_reference_state(struct bpf_verifier_env *env, int insn_idx)
 }
 
 /* release function corresponding to acquire_reference_state(). Idempotent. */
-static int __release_reference_state(struct bpf_func_state *state, int ptr_id)
+static int release_reference_state(struct bpf_func_state *state, int ptr_id)
 {
 	int i, last_idx;
-
-	if (!ptr_id)
-		return -EFAULT;
 
 	last_idx = state->acquired_refs - 1;
 	for (i = 0; i < state->acquired_refs; i++) {
@@ -634,21 +646,7 @@ static int __release_reference_state(struct bpf_func_state *state, int ptr_id)
 			return 0;
 		}
 	}
-	return -EFAULT;
-}
-
-/* variation on the above for cases where we expect that there must be an
- * outstanding reference for the specified ptr_id.
- */
-static int release_reference_state(struct bpf_verifier_env *env, int ptr_id)
-{
-	struct bpf_func_state *state = cur_func(env);
-	int err;
-
-	err = __release_reference_state(state, ptr_id);
-	if (WARN_ON_ONCE(err != 0))
-		verbose(env, "verifier internal error: can't release reference\n");
-	return err;
+	return -EINVAL;
 }
 
 static int transfer_reference_state(struct bpf_func_state *dst,
@@ -1207,6 +1205,10 @@ static bool is_spillable_regtype(enum bpf_reg_type type)
 	case CONST_PTR_TO_MAP:
 	case PTR_TO_SOCKET:
 	case PTR_TO_SOCKET_OR_NULL:
+	case PTR_TO_SOCK_COMMON:
+	case PTR_TO_SOCK_COMMON_OR_NULL:
+	case PTR_TO_TCP_SOCK:
+	case PTR_TO_TCP_SOCK_OR_NULL:
 		return true;
 	default:
 		return false;
@@ -1640,6 +1642,7 @@ static int check_sock_access(struct bpf_verifier_env *env, int insn_idx,
 	struct bpf_reg_state *regs = cur_regs(env);
 	struct bpf_reg_state *reg = &regs[regno];
 	struct bpf_insn_access_aux info = {};
+	bool valid;
 
 	if (reg->smin_value < 0) {
 		verbose(env, "R%d min value is negative, either use unsigned index or do a if (index >=0) check.\n",
@@ -1647,15 +1650,31 @@ static int check_sock_access(struct bpf_verifier_env *env, int insn_idx,
 		return -EACCES;
 	}
 
-	if (!bpf_sock_is_valid_access(off, size, t, &info)) {
-		verbose(env, "invalid bpf_sock access off=%d size=%d\n",
-			off, size);
-		return -EACCES;
+	switch (reg->type) {
+	case PTR_TO_SOCK_COMMON:
+		valid = bpf_sock_common_is_valid_access(off, size, t, &info);
+		break;
+	case PTR_TO_SOCKET:
+		valid = bpf_sock_is_valid_access(off, size, t, &info);
+		break;
+	case PTR_TO_TCP_SOCK:
+		valid = bpf_tcp_sock_is_valid_access(off, size, t, &info);
+		break;
+	default:
+		valid = false;
 	}
 
-	env->insn_aux_data[insn_idx].ctx_field_size = info.ctx_field_size;
 
-	return 0;
+	if (valid) {
+		env->insn_aux_data[insn_idx].ctx_field_size =
+			info.ctx_field_size;
+		return 0;
+	}
+
+	verbose(env, "R%d invalid %s access off=%d size=%d\n",
+		regno, reg_type_str[reg->type], off, size);
+
+	return -EACCES;
 }
 
 static bool __is_pointer_value(bool allow_ptr_leaks,
@@ -1681,8 +1700,14 @@ static bool is_ctx_reg(struct bpf_verifier_env *env, int regno)
 {
 	const struct bpf_reg_state *reg = reg_state(env, regno);
 
-	return reg->type == PTR_TO_CTX ||
-	       reg->type == PTR_TO_SOCKET;
+	return reg->type == PTR_TO_CTX;
+}
+
+static bool is_sk_reg(struct bpf_verifier_env *env, int regno)
+{
+	const struct bpf_reg_state *reg = reg_state(env, regno);
+
+	return type_is_sk_pointer(reg->type);
 }
 
 static bool is_pkt_reg(struct bpf_verifier_env *env, int regno)
@@ -1792,6 +1817,12 @@ static int check_ptr_alignment(struct bpf_verifier_env *env,
 		break;
 	case PTR_TO_SOCKET:
 		pointer_desc = "sock ";
+		break;
+	case PTR_TO_SOCK_COMMON:
+		pointer_desc = "sock_common ";
+		break;
+	case PTR_TO_TCP_SOCK:
+		pointer_desc = "tcp_sock ";
 		break;
 	default:
 		break;
@@ -1996,11 +2027,14 @@ static int check_mem_access(struct bpf_verifier_env *env, int insn_idx, u32 regn
 			 * PTR_TO_PACKET[_META,_END]. In the latter
 			 * case, we know the offset is zero.
 			 */
-			if (reg_type == SCALAR_VALUE)
+			if (reg_type == SCALAR_VALUE) {
 				mark_reg_unknown(env, regs, value_regno);
-			else
+			} else {
 				mark_reg_known_zero(env, regs,
 						    value_regno);
+				if (reg_type_may_be_null(reg_type))
+					regs[value_regno].id = ++env->id_gen;
+			}
 			regs[value_regno].type = reg_type;
 		}
 
@@ -2046,9 +2080,10 @@ static int check_mem_access(struct bpf_verifier_env *env, int insn_idx, u32 regn
 		err = check_flow_keys_access(env, off, size);
 		if (!err && t == BPF_READ && value_regno >= 0)
 			mark_reg_unknown(env, regs, value_regno);
-	} else if (reg->type == PTR_TO_SOCKET) {
+	} else if (type_is_sk_pointer(reg->type)) {
 		if (t == BPF_WRITE) {
-			verbose(env, "cannot write into socket\n");
+			verbose(env, "R%d cannot write into %s\n",
+				regno, reg_type_str[reg->type]);
 			return -EACCES;
 		}
 		err = check_sock_access(env, insn_idx, regno, off, size, t);
@@ -2095,7 +2130,8 @@ static int check_xadd(struct bpf_verifier_env *env, int insn_idx, struct bpf_ins
 
 	if (is_ctx_reg(env, insn->dst_reg) ||
 	    is_pkt_reg(env, insn->dst_reg) ||
-	    is_flow_key_reg(env, insn->dst_reg)) {
+	    is_flow_key_reg(env, insn->dst_reg) ||
+	    is_sk_reg(env, insn->dst_reg)) {
 		verbose(env, "BPF_XADD stores into R%d %s is not allowed\n",
 			insn->dst_reg,
 			reg_type_str[reg_state(env, insn->dst_reg)->type]);
@@ -2362,16 +2398,20 @@ static int check_func_arg(struct bpf_verifier_env *env, u32 regno,
 		err = check_ctx_reg(env, reg, regno);
 		if (err < 0)
 			return err;
-	} else if (arg_type == ARG_PTR_TO_SOCKET) {
-		expected_type = PTR_TO_SOCKET;
-		if (type != expected_type)
+	} else if (arg_type == ARG_PTR_TO_SOCK_COMMON) {
+		expected_type = PTR_TO_SOCK_COMMON;
+		/* Any sk pointer can be ARG_PTR_TO_SOCK_COMMON */
+		if (!type_is_sk_pointer(type))
 			goto err_type;
-		if (meta->ptr_id || !reg->id) {
-			verbose(env, "verifier internal error: mismatched references meta=%d, reg=%d\n",
-				meta->ptr_id, reg->id);
-			return -EFAULT;
+		if (reg->ref_obj_id) {
+			if (meta->ref_obj_id) {
+				verbose(env, "verifier internal error: more than one arg with ref_obj_id R%d %u %u\n",
+					regno, reg->ref_obj_id,
+					meta->ref_obj_id);
+				return -EFAULT;
+			}
+			meta->ref_obj_id = reg->ref_obj_id;
 		}
-		meta->ptr_id = reg->id;
 	} else if (arg_type == ARG_PTR_TO_SPIN_LOCK) {
 		if (meta->func_id == BPF_FUNC_spin_lock) {
 			if (process_spin_lock(env, regno, true))
@@ -2687,20 +2727,26 @@ static bool check_arg_pair_ok(const struct bpf_func_proto *fn)
 	return true;
 }
 
-static bool check_refcount_ok(const struct bpf_func_proto *fn)
+static bool check_refcount_ok(const struct bpf_func_proto *fn, int func_id)
 {
 	int count = 0;
 
-	if (arg_type_is_refcounted(fn->arg1_type))
+	if (arg_type_may_be_refcounted(fn->arg1_type))
 		count++;
-	if (arg_type_is_refcounted(fn->arg2_type))
+	if (arg_type_may_be_refcounted(fn->arg2_type))
 		count++;
-	if (arg_type_is_refcounted(fn->arg3_type))
+	if (arg_type_may_be_refcounted(fn->arg3_type))
 		count++;
-	if (arg_type_is_refcounted(fn->arg4_type))
+	if (arg_type_may_be_refcounted(fn->arg4_type))
 		count++;
-	if (arg_type_is_refcounted(fn->arg5_type))
+	if (arg_type_may_be_refcounted(fn->arg5_type))
 		count++;
+
+	/* A reference acquiring function cannot acquire
+	 * another refcounted ptr.
+	 */
+	if (is_acquire_function(func_id) && count)
+		return false;
 
 	/* We only support one arg being unreferenced at the moment,
 	 * which is sufficient for the helper functions we have right now.
@@ -2708,11 +2754,11 @@ static bool check_refcount_ok(const struct bpf_func_proto *fn)
 	return count <= 1;
 }
 
-static int check_func_proto(const struct bpf_func_proto *fn)
+static int check_func_proto(const struct bpf_func_proto *fn, int func_id)
 {
 	return check_raw_mode_ok(fn) &&
 	       check_arg_pair_ok(fn) &&
-	       check_refcount_ok(fn) ? 0 : -EINVAL;
+	       check_refcount_ok(fn, func_id) ? 0 : -EINVAL;
 }
 
 /* Packet data might have moved, any old PTR_TO_PACKET[_META,_END]
@@ -2746,19 +2792,20 @@ static void clear_all_pkt_pointers(struct bpf_verifier_env *env)
 }
 
 static void release_reg_references(struct bpf_verifier_env *env,
-				   struct bpf_func_state *state, int id)
+				   struct bpf_func_state *state,
+				   int ref_obj_id)
 {
 	struct bpf_reg_state *regs = state->regs, *reg;
 	int i;
 
 	for (i = 0; i < MAX_BPF_REG; i++)
-		if (regs[i].id == id)
+		if (regs[i].ref_obj_id == ref_obj_id)
 			mark_reg_unknown(env, regs, i);
 
 	bpf_for_each_spilled_reg(i, state, reg) {
 		if (!reg)
 			continue;
-		if (reg_is_refcounted(reg) && reg->id == id)
+		if (reg->ref_obj_id == ref_obj_id)
 			__mark_reg_unknown(reg);
 	}
 }
@@ -2767,15 +2814,20 @@ static void release_reg_references(struct bpf_verifier_env *env,
  * resources. Identify all copies of the same pointer and clear the reference.
  */
 static int release_reference(struct bpf_verifier_env *env,
-			     struct bpf_call_arg_meta *meta)
+			     int ref_obj_id)
 {
 	struct bpf_verifier_state *vstate = env->cur_state;
+	int err;
 	int i;
 
-	for (i = 0; i <= vstate->curframe; i++)
-		release_reg_references(env, vstate->frame[i], meta->ptr_id);
+	err = release_reference_state(cur_func(env), ref_obj_id);
+	if (err)
+		return err;
 
-	return release_reference_state(env, meta->ptr_id);
+	for (i = 0; i <= vstate->curframe; i++)
+		release_reg_references(env, vstate->frame[i], ref_obj_id);
+
+	return 0;
 }
 
 static int check_func_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
@@ -3017,7 +3069,7 @@ static int check_helper_call(struct bpf_verifier_env *env, int func_id, int insn
 	memset(&meta, 0, sizeof(meta));
 	meta.pkt_access = fn->pkt_access;
 
-	err = check_func_proto(fn);
+	err = check_func_proto(fn, func_id);
 	if (err) {
 		verbose(env, "kernel subsystem misconfigured func %s#%d\n",
 			func_id_name(func_id), func_id);
@@ -3063,9 +3115,12 @@ static int check_helper_call(struct bpf_verifier_env *env, int func_id, int insn
 			return err;
 		}
 	} else if (is_release_function(func_id)) {
-		err = release_reference(env, &meta);
-		if (err)
+		err = release_reference(env, meta.ref_obj_id);
+		if (err) {
+			verbose(env, "func %s#%d reference has not been acquired before\n",
+				func_id_name(func_id), func_id);
 			return err;
+		}
 	}
 
 	regs = cur_regs(env);
@@ -3114,17 +3169,34 @@ static int check_helper_call(struct bpf_verifier_env *env, int func_id, int insn
 			regs[BPF_REG_0].id = ++env->id_gen;
 		}
 	} else if (fn->ret_type == RET_PTR_TO_SOCKET_OR_NULL) {
-		int id = acquire_reference_state(env, insn_idx);
-		if (id < 0)
-			return id;
 		mark_reg_known_zero(env, regs, BPF_REG_0);
 		regs[BPF_REG_0].type = PTR_TO_SOCKET_OR_NULL;
-		regs[BPF_REG_0].id = id;
+		if (is_acquire_function(func_id)) {
+			int id = acquire_reference_state(env, insn_idx);
+
+			if (id < 0)
+				return id;
+			/* For mark_ptr_or_null_reg() */
+			regs[BPF_REG_0].id = id;
+			/* For release_reference() */
+			regs[BPF_REG_0].ref_obj_id = id;
+		} else {
+			/* For mark_ptr_or_null_reg() */
+			regs[BPF_REG_0].id = ++env->id_gen;
+		}
+	} else if (fn->ret_type == RET_PTR_TO_TCP_SOCK_OR_NULL) {
+		mark_reg_known_zero(env, regs, BPF_REG_0);
+		regs[BPF_REG_0].type = PTR_TO_TCP_SOCK_OR_NULL;
+		regs[BPF_REG_0].id = ++env->id_gen;
 	} else {
 		verbose(env, "unknown return type %d of func %s#%d\n",
 			fn->ret_type, func_id_name(func_id), func_id);
 		return -EINVAL;
 	}
+
+	if (is_ptr_cast_function(func_id))
+		/* For release_reference() */
+		regs[BPF_REG_0].ref_obj_id = meta.ref_obj_id;
 
 	err = do_refine_retval_range(env, regs, fn->ret_type, func_id, &meta);
 	if (err)
@@ -3549,6 +3621,10 @@ static int adjust_ptr_min_max_vals(struct bpf_verifier_env *env,
 	case PTR_TO_PACKET_END:
 	case PTR_TO_SOCKET:
 	case PTR_TO_SOCKET_OR_NULL:
+	case PTR_TO_SOCK_COMMON:
+	case PTR_TO_SOCK_COMMON_OR_NULL:
+	case PTR_TO_TCP_SOCK:
+	case PTR_TO_TCP_SOCK_OR_NULL:
 		verbose(env, "R%d pointer arithmetic on %s prohibited\n",
 			dst, reg_type_str[ptr_reg->type]);
 		return -EACCES;
@@ -4759,12 +4835,24 @@ static void mark_ptr_or_null_reg(struct bpf_func_state *state,
 			}
 		} else if (reg->type == PTR_TO_SOCKET_OR_NULL) {
 			reg->type = PTR_TO_SOCKET;
+		} else if (reg->type == PTR_TO_SOCK_COMMON_OR_NULL) {
+			reg->type = PTR_TO_SOCK_COMMON;
+		} else if (reg->type == PTR_TO_TCP_SOCK_OR_NULL) {
+			reg->type = PTR_TO_TCP_SOCK;
 		}
-		if (is_null || !(reg_is_refcounted(reg) ||
-				 reg_may_point_to_spin_lock(reg))) {
-			/* We don't need id from this point onwards anymore,
-			 * thus we should better reset it, so that state
-			 * pruning has chances to take effect.
+		if (is_null) {
+			/* We don't need id and ref_obj_id from this point
+			 * onwards anymore, thus we should better reset it,
+			 * so that state pruning has chances to take effect.
+			 */
+			reg->id = 0;
+			reg->ref_obj_id = 0;
+		} else if (!reg_may_point_to_spin_lock(reg)) {
+			/* For not-NULL ptr, reg->ref_obj_id will be reset
+			 * in release_reg_references().
+			 *
+			 * reg->id is still used by spin_lock ptr. Other
+			 * than spin_lock ptr type, reg->id can be reset.
 			 */
 			reg->id = 0;
 		}
@@ -4779,11 +4867,16 @@ static void mark_ptr_or_null_regs(struct bpf_verifier_state *vstate, u32 regno,
 {
 	struct bpf_func_state *state = vstate->frame[vstate->curframe];
 	struct bpf_reg_state *reg, *regs = state->regs;
+	u32 ref_obj_id = regs[regno].ref_obj_id;
 	u32 id = regs[regno].id;
 	int i, j;
 
-	if (reg_is_refcounted_or_null(&regs[regno]) && is_null)
-		__release_reference_state(state, id);
+	if (ref_obj_id && ref_obj_id == id && is_null)
+		/* regs[regno] is in the " == NULL" branch.
+		 * No one could have freed the reference state before
+		 * doing the NULL check.
+		 */
+		WARN_ON_ONCE(release_reference_state(state, id));
 
 	for (i = 0; i < MAX_BPF_REG; i++)
 		mark_ptr_or_null_reg(state, &regs[i], id, is_null);
@@ -5973,6 +6066,10 @@ static bool regsafe(struct bpf_reg_state *rold, struct bpf_reg_state *rcur,
 	case PTR_TO_FLOW_KEYS:
 	case PTR_TO_SOCKET:
 	case PTR_TO_SOCKET_OR_NULL:
+	case PTR_TO_SOCK_COMMON:
+	case PTR_TO_SOCK_COMMON_OR_NULL:
+	case PTR_TO_TCP_SOCK:
+	case PTR_TO_TCP_SOCK_OR_NULL:
 		/* Only valid matches are exact, which memcmp() above
 		 * would have accepted
 		 */
@@ -6293,6 +6390,10 @@ static bool reg_type_mismatch_ok(enum bpf_reg_type type)
 	case PTR_TO_CTX:
 	case PTR_TO_SOCKET:
 	case PTR_TO_SOCKET_OR_NULL:
+	case PTR_TO_SOCK_COMMON:
+	case PTR_TO_SOCK_COMMON_OR_NULL:
+	case PTR_TO_TCP_SOCK:
+	case PTR_TO_TCP_SOCK_OR_NULL:
 		return false;
 	default:
 		return true;
@@ -7298,7 +7399,11 @@ static int convert_ctx_accesses(struct bpf_verifier_env *env)
 			convert_ctx_access = ops->convert_ctx_access;
 			break;
 		case PTR_TO_SOCKET:
+		case PTR_TO_SOCK_COMMON:
 			convert_ctx_access = bpf_sock_convert_ctx_access;
+			break;
+		case PTR_TO_TCP_SOCK:
+			convert_ctx_access = bpf_tcp_sock_convert_ctx_access;
 			break;
 		default:
 			continue;
