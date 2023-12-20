@@ -159,12 +159,12 @@ static void __delete_from_dup_pages(struct page *dup_page, struct page *page)
 			       PageTransHuge(page) ? -HPAGE_PMD_NR : -1);
 }
 
-static void delete_from_dup_pages(struct page *page, bool locked)
+static bool delete_from_dup_pages(struct page *page, bool locked, bool ignore_mlock)
 {
 	struct page *tmp_page, *next_page;
 	struct list_head *list;
 	unsigned long flags;
-	enum ttu_flags ttu_flags = TTU_IGNORE_MLOCK | TTU_SYNC | TTU_BATCH_FLUSH;
+	enum ttu_flags ttu_flags = TTU_SYNC | TTU_BATCH_FLUSH;
 	int nid = page_to_nid(page);
 
 	XA_STATE(xas, &dup_pages[nid], page_to_pfn(page));
@@ -180,16 +180,23 @@ static void delete_from_dup_pages(struct page *page, bool locked)
 
 	if (locked)
 		ttu_flags |= TTU_RMAP_LOCKED;
+	if (ignore_mlock)
+		ttu_flags |= TTU_IGNORE_MLOCK;
+	if (unlikely(PageTransHuge(page)))
+		ttu_flags |= TTU_SPLIT_HUGE_PMD;
+
 	list_for_each_entry_safe(tmp_page, next_page, list, lru) {
 		VM_BUG_ON_PAGE(!page_dup_slave(tmp_page), tmp_page);
 
 		/* Unmap before delete */
 		if (page_mapped(tmp_page)) {
 			lock_page(tmp_page);
-			if (unlikely(PageTransHuge(tmp_page)))
-				try_to_unmap(tmp_page, ttu_flags | TTU_SPLIT_HUGE_PMD);
-			else
-				try_to_unmap(tmp_page, ttu_flags);
+
+			if (!try_to_unmap(tmp_page, ttu_flags)) {
+				unlock_page(tmp_page);
+				goto error;
+			}
+
 			unlock_page(tmp_page);
 		}
 
@@ -200,6 +207,14 @@ static void delete_from_dup_pages(struct page *page, bool locked)
 	kfree(list);
 out:
 	ClearPageDup(page);
+	return true;
+
+error:
+	xas_lock_irqsave(&xas, flags);
+	xas_store(&xas, list);
+	xas_unlock_irqrestore(&xas, flags);
+
+	return false;
 }
 
 #ifdef CONFIG_MEMCG
@@ -446,14 +461,14 @@ struct page *__dup_page(struct page *page, struct vm_area_struct *vma)
 					: dup_hpage;
 }
 
-void __dedup_page(struct page *page, bool locked)
+bool __dedup_page(struct page *page, bool locked, bool ignore_mlock)
 {
 	page = compound_head(page);
 	VM_BUG_ON_PAGE(!PageLocked(page), page);
 
 	if (!page_dup_master(page))
-		return;
-	delete_from_dup_pages(page, locked);
+		return true;
+	return delete_from_dup_pages(page, locked, ignore_mlock);
 }
 
 static unsigned int find_get_master_pages(struct pagevec *pvec, int nid,
@@ -498,7 +513,7 @@ static void truncate_dup_pages(void)
 				page = pvec.pages[i];
 
 				lock_page(page);
-				__dedup_page(page, false);
+				__dedup_page(page, false, true);
 				unlock_page(page);
 				put_page(page);
 
