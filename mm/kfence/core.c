@@ -1484,6 +1484,103 @@ static bool update_kfence_node_map(void)
 	return true;
 }
 
+/*
+ * Get the last kfence.booting_max= from boot cmdline.
+ * Mainly copied from get_last_crashkernel().
+ */
+static __init char *get_last_kfence_booting_max(char *name)
+{
+	char *p = boot_command_line, *ck_cmdline = NULL;
+
+	/* find kfence.booting_max and use the last one if there are more */
+	p = strstr(p, name);
+	while (p) {
+		char *end_p = strchr(p, ' ');
+
+		if (!end_p)
+			end_p = p + strlen(p);
+		ck_cmdline = p;
+		p = strstr(p+1, name);
+	}
+
+	if (!ck_cmdline)
+		return NULL;
+
+	ck_cmdline += strlen(name);
+	return ck_cmdline;
+}
+
+/*
+ * This function parses command lines in the format
+ *
+ *   kfence.booting_max=ramsize-range:size[,...]
+ *
+ * The function returns 0 on success and -EINVAL on failure.
+ * Mainly copied from parse_crashkernel_mem().
+ */
+static int __init parse_kfence_booting_max(char *cmdline,
+					   unsigned long long system_ram,
+					   unsigned long long *reserve_max)
+{
+	char *cur = cmdline, *tmp;
+
+	/* for each entry of the comma-separated list */
+	do {
+		unsigned long long start, end = ULLONG_MAX, size;
+
+		/* get the start of the range */
+		start = memparse(cur, &tmp);
+		if (cur == tmp) {
+			pr_warn("kfence.booting_max: Memory value expected\n");
+			return -EINVAL;
+		}
+		cur = tmp;
+		if (*cur != '-') {
+			pr_warn("kfence.booting_max: '-' expected\n");
+			return -EINVAL;
+		}
+		cur++;
+
+		/* if no ':' is here, than we read the end */
+		if (*cur != ':') {
+			end = memparse(cur, &tmp);
+			if (cur == tmp) {
+				pr_warn("kfence.booting_max: Memory value expected\n");
+				return -EINVAL;
+			}
+			cur = tmp;
+			if (end <= start) {
+				pr_warn("kfence.booting_max: end <= start\n");
+				return -EINVAL;
+			}
+		}
+
+		if (*cur != ':') {
+			pr_warn("kfence.booting_max: ':' expected\n");
+			return -EINVAL;
+		}
+		cur++;
+
+		size = memparse(cur, &tmp);
+		if (cur == tmp) {
+			pr_warn("kfence.booting_max: Memory value expected\n");
+			return -EINVAL;
+		}
+		cur = tmp;
+
+		/* match ? */
+		if (system_ram >= start && system_ram < end) {
+			*reserve_max = size;
+			break;
+		}
+	} while (*cur++ == ',');
+
+	if (!*reserve_max)
+		pr_info("kfence.booting_max size resulted in zero bytes, disabled\n");
+
+	return 0;
+}
+
 /* === DebugFS Interface ==================================================== */
 
 static inline void print_pool_size(struct seq_file *seq, unsigned long byte)
@@ -1699,6 +1796,51 @@ static DECLARE_DELAYED_WORK(kfence_timer, toggle_allocation_gate);
 
 /* === Public interface ===================================================== */
 
+int __init update_kfence_booting_max(void)
+{
+	static bool done __initdata;
+
+	unsigned long long parse_mem = PUD_SIZE;
+	unsigned long nr_pages, nr_obj_max;
+	char *cmdline;
+	int ret;
+
+	/*
+	 * We may reach here twice because some arch like aarch64
+	 * will call this function first.
+	 */
+	if (done)
+		return 0;
+	done = true;
+
+	/* Boot cmdline is not set. Just leave. */
+	cmdline = get_last_kfence_booting_max("kfence.booting_max=");
+	if (!cmdline)
+		return 0;
+
+	ret = parse_kfence_booting_max(cmdline, memblock_phys_mem_size(), &parse_mem);
+	/* disable booting kfence on parsing fail. */
+	if (ret)
+		goto nokfence;
+
+	nr_pages = min_t(unsigned long, parse_mem, PUD_SIZE) / PAGE_SIZE;
+	/* We need at least 4 pages to enable KFENCE. */
+	if (nr_pages < 4)
+		goto nokfence;
+
+	nr_obj_max = nr_pages / 2 - 1;
+	if (kfence_num_objects > nr_obj_max) {
+		kfence_num_objects = nr_obj_max;
+		return 1;
+	}
+
+	return 0;
+
+nokfence:
+	kfence_num_objects = 0;
+	return 1;
+}
+
 void __init kfence_alloc_pool(void)
 {
 	int node;
@@ -1707,13 +1849,22 @@ void __init kfence_alloc_pool(void)
 	if (!READ_ONCE(kfence_sample_interval))
 		return;
 
-	/*
-	 * Not allow both pool size < 1GiB and enabling node mode.
-	 * Not allow both pool size < 1GiB and non-interval alloc.
-	 */
-	if (kfence_num_objects < KFENCE_MAX_OBJECTS_PER_AREA &&
-	    (kfence_pool_node_mode || kfence_sample_interval < 0))
-		goto fail;
+	if (kfence_num_objects < KFENCE_MAX_OBJECTS_PER_AREA) {
+		/*
+		 * Not allow both pool size < 1GiB and enabling node mode.
+		 * Not allow both pool size < 1GiB and non-interval alloc.
+		 */
+		if (kfence_pool_node_mode || kfence_sample_interval < 0)
+			goto fail;
+
+		/*
+		 * Only limit upstream mode for online environment,
+		 * as it makes no sense for limiting debug setup.
+		 */
+		update_kfence_booting_max();
+		if (!kfence_num_objects)
+			goto fail;
+	}
 
 	kfence_num_objects_stat = memblock_alloc(sizeof(struct kfence_alloc_node_cond) *
 						 nr_node_ids, PAGE_SIZE);
