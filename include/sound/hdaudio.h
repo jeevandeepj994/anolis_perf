@@ -354,6 +354,7 @@ struct hdac_bus {
 	bool align_bdle_4k:1;		/* BDLE align 4K boundary */
 	bool reverse_assign:1;		/* assign devices in reverse order */
 	bool corbrp_self_clear:1;	/* CORBRP clears itself after reset */
+	bool hygon_dword_access:1;
 
 	int bdl_pos_adj;		/* BDL position adjustment */
 
