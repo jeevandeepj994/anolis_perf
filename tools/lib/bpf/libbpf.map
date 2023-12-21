@@ -130,7 +130,9 @@ LIBBPF_0.0.2 {
 		bpf_probe_helper;
 		bpf_probe_map_type;
 		bpf_probe_prog_type;
+		bpf_map__resize;
 		bpf_map_lookup_elem_flags;
+		bpf_object__btf;
 		bpf_object__find_map_fd_by_name;
 		bpf_get_link_xdp_id;
 		btf__dedup;
@@ -145,4 +147,10 @@ LIBBPF_0.0.2 {
 		btf_ext__new;
 		btf_ext__reloc_func_info;
 		btf_ext__reloc_line_info;
+		xsk_umem__create;
+		xsk_socket__create;
+		xsk_umem__delete;
+		xsk_socket__delete;
+		xsk_umem__fd;
+		xsk_socket__fd;
 } LIBBPF_0.0.1;
