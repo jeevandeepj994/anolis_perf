@@ -272,6 +272,11 @@ static int virtfuse_get_mounts(struct file *file, unsigned long arg)
 
 	lock_mount_hash();
 	list_for_each_entry(mnt, &sb->s_mounts, mnt_instance) {
+		struct path path = {
+			.dentry = mnt->mnt.mnt_root,
+			.mnt = &mnt->mnt
+		};
+
 		/* skip slave mounts */
 		if (mnt->mnt_master)
 			continue;
@@ -281,7 +286,7 @@ static int virtfuse_get_mounts(struct file *file, unsigned long arg)
 			continue;
 
 		/* mountpoint */
-		p = dentry_path_raw(mnt->mnt_mountpoint, name, PATH_MAX);
+		p = prepend_path_locked(&path, name, PATH_MAX);
 		if (IS_ERR(p)) {
 			ret = PTR_ERR(p);
 			break;
