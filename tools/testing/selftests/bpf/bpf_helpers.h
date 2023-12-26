@@ -180,6 +180,25 @@ static int (*bpf_skb_ecn_set_ce)(void *ctx) =
 	(void *) BPF_FUNC_skb_ecn_set_ce;
 static struct bpf_sock *(*bpf_get_listener_sock)(struct bpf_sock *sk) =
 	(void *) BPF_FUNC_get_listener_sock;
+static int (*bpf_sysctl_get_name)(void *ctx, char *buf,
+				  unsigned long long buf_len,
+				  unsigned long long flags) =
+	(void *) BPF_FUNC_sysctl_get_name;
+static int (*bpf_sysctl_get_current_value)(void *ctx, char *buf,
+					   unsigned long long buf_len) =
+	(void *) BPF_FUNC_sysctl_get_current_value;
+static int (*bpf_sysctl_get_new_value)(void *ctx, char *buf,
+				       unsigned long long buf_len) =
+	(void *) BPF_FUNC_sysctl_get_new_value;
+static int (*bpf_sysctl_set_new_value)(void *ctx, const char *buf,
+				       unsigned long long buf_len) =
+	(void *) BPF_FUNC_sysctl_set_new_value;
+static int (*bpf_strtol)(const char *buf, unsigned long long buf_len,
+			 unsigned long long flags, long *res) =
+	(void *) BPF_FUNC_strtol;
+static int (*bpf_strtoul)(const char *buf, unsigned long long buf_len,
+			  unsigned long long flags, unsigned long *res) =
+	(void *) BPF_FUNC_strtoul;
 
 /* llvm builtin functions that eBPF C program may use to
  * emit BPF_LD_ABS and BPF_LD_IND instructions
