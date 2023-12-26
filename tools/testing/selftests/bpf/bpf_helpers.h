@@ -159,6 +159,11 @@ static struct bpf_sock *(*bpf_sk_lookup_tcp)(void *ctx,
 					     int size, unsigned long long netns_id,
 					     unsigned long long flags) =
 	(void *) BPF_FUNC_sk_lookup_tcp;
+static struct bpf_sock *(*bpf_skc_lookup_tcp)(void *ctx,
+					     struct bpf_sock_tuple *tuple,
+					     int size, unsigned long long netns_id,
+					     unsigned long long flags) =
+	(void *) BPF_FUNC_skc_lookup_tcp;
 static struct bpf_sock *(*bpf_sk_lookup_udp)(void *ctx,
 					     struct bpf_sock_tuple *tuple,
 					     int size, unsigned long long netns_id,
@@ -199,6 +204,9 @@ static int (*bpf_strtol)(const char *buf, unsigned long long buf_len,
 static int (*bpf_strtoul)(const char *buf, unsigned long long buf_len,
 			  unsigned long long flags, unsigned long *res) =
 	(void *) BPF_FUNC_strtoul;
+static int (*bpf_tcp_check_syncookie)(struct bpf_sock *sk,
+	    void *ip, int ip_len, void *tcp, int tcp_len) =
+	(void *) BPF_FUNC_tcp_check_syncookie;
 
 /* llvm builtin functions that eBPF C program may use to
  * emit BPF_LD_ABS and BPF_LD_IND instructions

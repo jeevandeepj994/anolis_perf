@@ -197,7 +197,7 @@ static void bpf_fill_rand_ld_dw(struct bpf_test *self)
 }
 
 /* BPF_SK_LOOKUP contains 13 instructions, if you need to fix up maps */
-#define BPF_SK_LOOKUP							\
+#define BPF_SK_LOOKUP(func)						\
 	/* struct bpf_sock_tuple tuple = {} */				\
 	BPF_MOV64_IMM(BPF_REG_2, 0),					\
 	BPF_STX_MEM(BPF_W, BPF_REG_10, BPF_REG_2, -8),			\
@@ -206,13 +206,13 @@ static void bpf_fill_rand_ld_dw(struct bpf_test *self)
 	BPF_STX_MEM(BPF_DW, BPF_REG_10, BPF_REG_2, -32),		\
 	BPF_STX_MEM(BPF_DW, BPF_REG_10, BPF_REG_2, -40),		\
 	BPF_STX_MEM(BPF_DW, BPF_REG_10, BPF_REG_2, -48),		\
-	/* sk = sk_lookup_tcp(ctx, &tuple, sizeof tuple, 0, 0) */	\
+	/* sk = func(ctx, &tuple, sizeof tuple, 0, 0) */		\
 	BPF_MOV64_REG(BPF_REG_2, BPF_REG_10),				\
 	BPF_ALU64_IMM(BPF_ADD, BPF_REG_2, -48),				\
 	BPF_MOV64_IMM(BPF_REG_3, sizeof(struct bpf_sock_tuple)),	\
 	BPF_MOV64_IMM(BPF_REG_4, 0),					\
 	BPF_MOV64_IMM(BPF_REG_5, 0),					\
-	BPF_EMIT_CALL(BPF_FUNC_sk_lookup_tcp)
+	BPF_EMIT_CALL(BPF_FUNC_ ## func)
 
 /* BPF_DIRECT_PKT_R2 contains 7 instructions, it initializes default return
  * value into 0 and does necessary preparation for direct packet access
@@ -2865,7 +2865,7 @@ static struct bpf_test tests[] = {
 		.insns = {
 			BPF_MOV64_REG(BPF_REG_8, BPF_REG_1),
 			/* struct bpf_sock *sock = bpf_sock_lookup(...); */
-			BPF_SK_LOOKUP,
+			BPF_SK_LOOKUP(sk_lookup_tcp),
 			BPF_MOV64_REG(BPF_REG_2, BPF_REG_0),
 			/* u64 foo; */
 			/* void *target = &foo; */
@@ -2899,7 +2899,7 @@ static struct bpf_test tests[] = {
 		.insns = {
 			BPF_MOV64_REG(BPF_REG_8, BPF_REG_1),
 			/* struct bpf_sock *sock = bpf_sock_lookup(...); */
-			BPF_SK_LOOKUP,
+			BPF_SK_LOOKUP(sk_lookup_tcp),
 			BPF_MOV64_REG(BPF_REG_2, BPF_REG_0),
 			/* u64 foo; */
 			/* void *target = &foo; */
@@ -2930,7 +2930,7 @@ static struct bpf_test tests[] = {
 		.insns = {
 			BPF_MOV64_REG(BPF_REG_8, BPF_REG_1),
 			/* struct bpf_sock *sock = bpf_sock_lookup(...); */
-			BPF_SK_LOOKUP,
+			BPF_SK_LOOKUP(sk_lookup_tcp),
 			BPF_MOV64_REG(BPF_REG_2, BPF_REG_0),
 			/* u64 foo; */
 			/* void *target = &foo; */
@@ -2962,7 +2962,7 @@ static struct bpf_test tests[] = {
 		.insns = {
 			BPF_MOV64_REG(BPF_REG_8, BPF_REG_1),
 			/* struct bpf_sock *sock = bpf_sock_lookup(...); */
-			BPF_SK_LOOKUP,
+			BPF_SK_LOOKUP(sk_lookup_tcp),
 			BPF_MOV64_REG(BPF_REG_2, BPF_REG_0),
 			/* u64 foo; */
 			/* void *target = &foo; */
@@ -9146,7 +9146,62 @@ static struct bpf_test tests[] = {
 		.prog_type = BPF_PROG_TYPE_LWT_IN,
 	},
 	{
-		"indirect variable-offset stack access, out of bound",
+		"indirect variable-offset stack access, uninitialized",
+		.insns = {
+		BPF_MOV64_IMM(BPF_REG_2, 6),
+		BPF_MOV64_IMM(BPF_REG_3, 28),
+		/* Fill the top 16 bytes of the stack. */
+		BPF_ST_MEM(BPF_W, BPF_REG_10, -16, 0),
+		BPF_ST_MEM(BPF_DW, BPF_REG_10, -8, 0),
+		/* Get an unknown value. */
+		BPF_LDX_MEM(BPF_W, BPF_REG_4, BPF_REG_1, 0),
+		/* Make it small and 4-byte aligned. */
+		BPF_ALU64_IMM(BPF_AND, BPF_REG_4, 4),
+		BPF_ALU64_IMM(BPF_SUB, BPF_REG_4, 16),
+		/* Add it to fp.  We now have either fp-12 or fp-16, we don't know
+		* which, but either way it points to initialized stack.
+		*/
+		BPF_ALU64_REG(BPF_ADD, BPF_REG_4, BPF_REG_10),
+		BPF_MOV64_IMM(BPF_REG_5, 8),
+		/* Dereference it indirectly. */
+		BPF_EMIT_CALL(BPF_FUNC_getsockopt),
+		BPF_MOV64_IMM(BPF_REG_0, 0),
+		BPF_EXIT_INSN(),
+		},
+		.errstr = "invalid indirect read from stack var_off",
+		.result = REJECT,
+		.prog_type = BPF_PROG_TYPE_SOCK_OPS,
+	},
+	{
+		"indirect variable-offset stack access, unbounded",
+		.insns = {
+		BPF_MOV64_IMM(BPF_REG_2, 6),
+		BPF_MOV64_IMM(BPF_REG_3, 28),
+		/* Fill the top 16 bytes of the stack. */
+		BPF_ST_MEM(BPF_DW, BPF_REG_10, -16, 0),
+		BPF_ST_MEM(BPF_DW, BPF_REG_10, -8, 0),
+		/* Get an unknown value. */
+		BPF_LDX_MEM(BPF_DW, BPF_REG_4, BPF_REG_1, offsetof(struct bpf_sock_ops,
+								bytes_received)),
+		/* Check the lower bound but don't check the upper one. */
+		BPF_JMP_IMM(BPF_JSLT, BPF_REG_4, 0, 4),
+		/* Point the lower bound to initialized stack. Offset is now in range
+		* from fp-16 to fp+0x7fffffffffffffef, i.e. max value is unbounded.
+		*/
+		BPF_ALU64_IMM(BPF_SUB, BPF_REG_4, 16),
+		BPF_ALU64_REG(BPF_ADD, BPF_REG_4, BPF_REG_10),
+		BPF_MOV64_IMM(BPF_REG_5, 8),
+		/* Dereference it indirectly. */
+		BPF_EMIT_CALL(BPF_FUNC_getsockopt),
+		BPF_MOV64_IMM(BPF_REG_0, 0),
+		BPF_EXIT_INSN(),
+		},
+		.errstr = "R4 unbounded indirect variable offset stack access",
+		.result = REJECT,
+		.prog_type = BPF_PROG_TYPE_SOCK_OPS,
+	},
+	{
+		"indirect variable-offset stack access, max out of bound",
 		.insns = {
 			/* Fill the top 8 bytes of the stack */
 			BPF_ST_MEM(BPF_DW, BPF_REG_10, -8, 0),
@@ -9167,7 +9222,32 @@ static struct bpf_test tests[] = {
 			BPF_EXIT_INSN(),
 		},
 		.fixup_map_hash_8b = { 5 },
-		.errstr = "invalid stack type R2 var_off",
+		.errstr = "R2 max value is outside of stack bound",
+		.result = REJECT,
+		.prog_type = BPF_PROG_TYPE_LWT_IN,
+	},
+	{
+		"indirect variable-offset stack access, min out of bound",
+		.insns = {
+		/* Fill the top 8 bytes of the stack */
+		BPF_ST_MEM(BPF_DW, BPF_REG_10, -8, 0),
+		/* Get an unknown value */
+		BPF_LDX_MEM(BPF_W, BPF_REG_2, BPF_REG_1, 0),
+		/* Make it small and 4-byte aligned */
+		BPF_ALU64_IMM(BPF_AND, BPF_REG_2, 4),
+		BPF_ALU64_IMM(BPF_SUB, BPF_REG_2, 516),
+		/* add it to fp.  We now have either fp-516 or fp-512, but
+		* we don't know which
+		*/
+		BPF_ALU64_REG(BPF_ADD, BPF_REG_2, BPF_REG_10),
+		/* dereference it indirectly */
+		BPF_LD_MAP_FD(BPF_REG_1, 0),
+		BPF_RAW_INSN(BPF_JMP | BPF_CALL, 0, 0, 0, BPF_FUNC_map_lookup_elem),
+		BPF_MOV64_IMM(BPF_REG_0, 0),
+		BPF_EXIT_INSN(),
+		},
+		.fixup_map_hash_8b = { 5 },
+		.errstr = "R2 min value is outside of stack bound",
 		.result = REJECT,
 		.prog_type = BPF_PROG_TYPE_LWT_IN,
 	},
@@ -11707,6 +11787,44 @@ static struct bpf_test tests[] = {
 		.result = REJECT,
 	},
 	{
+		"calls: stack depth check in dead code",
+		.insns = {
+		/* main */
+		BPF_MOV64_IMM(BPF_REG_1, 0),
+		BPF_RAW_INSN(BPF_JMP|BPF_CALL, 0, 1, 0, 1), /* call A */
+		BPF_EXIT_INSN(),
+		/* A */
+		BPF_JMP_IMM(BPF_JEQ, BPF_REG_1, 0, 1),
+		BPF_RAW_INSN(BPF_JMP|BPF_CALL, 0, 1, 0, 2), /* call B */
+		BPF_MOV64_IMM(BPF_REG_0, 0),
+		BPF_EXIT_INSN(),
+		/* B */
+		BPF_RAW_INSN(BPF_JMP|BPF_CALL, 0, 1, 0, 1), /* call C */
+		BPF_EXIT_INSN(),
+		/* C */
+		BPF_RAW_INSN(BPF_JMP|BPF_CALL, 0, 1, 0, 1), /* call D */
+		BPF_EXIT_INSN(),
+		/* D */
+		BPF_RAW_INSN(BPF_JMP|BPF_CALL, 0, 1, 0, 1), /* call E */
+		BPF_EXIT_INSN(),
+		/* E */
+		BPF_RAW_INSN(BPF_JMP|BPF_CALL, 0, 1, 0, 1), /* call F */
+		BPF_EXIT_INSN(),
+		/* F */
+		BPF_RAW_INSN(BPF_JMP|BPF_CALL, 0, 1, 0, 1), /* call G */
+		BPF_EXIT_INSN(),
+		/* G */
+		BPF_RAW_INSN(BPF_JMP|BPF_CALL, 0, 1, 0, 1), /* call H */
+		BPF_EXIT_INSN(),
+		/* H */
+		BPF_MOV64_IMM(BPF_REG_0, 0),
+		BPF_EXIT_INSN(),
+		},
+		.prog_type = BPF_PROG_TYPE_XDP,
+		.errstr = "call stack",
+		.result = REJECT,
+	},
+	{
 		"calls: spill into caller stack frame",
 		.insns = {
 			BPF_ST_MEM(BPF_DW, BPF_REG_10, -8, 0),
@@ -13338,7 +13456,7 @@ static struct bpf_test tests[] = {
 	{
 		"reference tracking: leak potential reference",
 		.insns = {
-			BPF_SK_LOOKUP,
+			BPF_SK_LOOKUP(sk_lookup_tcp),
 			BPF_MOV64_REG(BPF_REG_6, BPF_REG_0), /* leak reference */
 			BPF_EXIT_INSN(),
 		},
@@ -13347,9 +13465,20 @@ static struct bpf_test tests[] = {
 		.result = REJECT,
 	},
 	{
+		"reference tracking: leak potential reference to sock_common",
+		.insns = {
+		BPF_SK_LOOKUP(skc_lookup_tcp),
+		BPF_MOV64_REG(BPF_REG_6, BPF_REG_0), /* leak reference */
+		BPF_EXIT_INSN(),
+		},
+		.prog_type = BPF_PROG_TYPE_SCHED_CLS,
+		.errstr = "Unreleased reference",
+		.result = REJECT,
+	},
+	{
 		"reference tracking: leak potential reference on stack",
 		.insns = {
-			BPF_SK_LOOKUP,
+			BPF_SK_LOOKUP(sk_lookup_tcp),
 			BPF_MOV64_REG(BPF_REG_4, BPF_REG_10),
 			BPF_ALU64_IMM(BPF_ADD, BPF_REG_4, -8),
 			BPF_STX_MEM(BPF_DW, BPF_REG_4, BPF_REG_0, 0),
@@ -13363,7 +13492,7 @@ static struct bpf_test tests[] = {
 	{
 		"reference tracking: leak potential reference on stack 2",
 		.insns = {
-			BPF_SK_LOOKUP,
+			BPF_SK_LOOKUP(sk_lookup_tcp),
 			BPF_MOV64_REG(BPF_REG_4, BPF_REG_10),
 			BPF_ALU64_IMM(BPF_ADD, BPF_REG_4, -8),
 			BPF_STX_MEM(BPF_DW, BPF_REG_4, BPF_REG_0, 0),
@@ -13378,7 +13507,7 @@ static struct bpf_test tests[] = {
 	{
 		"reference tracking: zero potential reference",
 		.insns = {
-			BPF_SK_LOOKUP,
+			BPF_SK_LOOKUP(sk_lookup_tcp),
 			BPF_MOV64_IMM(BPF_REG_0, 0), /* leak reference */
 			BPF_EXIT_INSN(),
 		},
@@ -13387,9 +13516,20 @@ static struct bpf_test tests[] = {
 		.result = REJECT,
 	},
 	{
+		"reference tracking: zero potential reference to sock_common",
+		.insns = {
+		BPF_SK_LOOKUP(skc_lookup_tcp),
+		BPF_MOV64_IMM(BPF_REG_0, 0), /* leak reference */
+		BPF_EXIT_INSN(),
+		},
+		.prog_type = BPF_PROG_TYPE_SCHED_CLS,
+		.errstr = "Unreleased reference",
+		.result = REJECT,
+	},
+	{
 		"reference tracking: copy and zero potential references",
 		.insns = {
-			BPF_SK_LOOKUP,
+			BPF_SK_LOOKUP(sk_lookup_tcp),
 			BPF_MOV64_REG(BPF_REG_7, BPF_REG_0),
 			BPF_MOV64_IMM(BPF_REG_0, 0),
 			BPF_MOV64_IMM(BPF_REG_7, 0), /* leak reference */
@@ -13402,7 +13542,7 @@ static struct bpf_test tests[] = {
 	{
 		"reference tracking: release reference without check",
 		.insns = {
-			BPF_SK_LOOKUP,
+			BPF_SK_LOOKUP(sk_lookup_tcp),
 			/* reference in r0 may be NULL */
 			BPF_MOV64_REG(BPF_REG_1, BPF_REG_0),
 			BPF_MOV64_IMM(BPF_REG_2, 0),
@@ -13414,9 +13554,23 @@ static struct bpf_test tests[] = {
 		.result = REJECT,
 	},
 	{
+		"reference tracking: release reference to sock_common without check",
+		.insns = {
+		BPF_SK_LOOKUP(skc_lookup_tcp),
+		/* reference in r0 may be NULL */
+		BPF_MOV64_REG(BPF_REG_1, BPF_REG_0),
+		BPF_MOV64_IMM(BPF_REG_2, 0),
+		BPF_EMIT_CALL(BPF_FUNC_sk_release),
+		BPF_EXIT_INSN(),
+		},
+		.prog_type = BPF_PROG_TYPE_SCHED_CLS,
+		.errstr = "type=sock_common_or_null expected=sock",
+		.result = REJECT,
+	},
+	{
 		"reference tracking: release reference",
 		.insns = {
-			BPF_SK_LOOKUP,
+			BPF_SK_LOOKUP(sk_lookup_tcp),
 			BPF_MOV64_REG(BPF_REG_1, BPF_REG_0),
 			BPF_JMP_IMM(BPF_JEQ, BPF_REG_0, 0, 1),
 			BPF_EMIT_CALL(BPF_FUNC_sk_release),
@@ -13426,9 +13580,21 @@ static struct bpf_test tests[] = {
 		.result = ACCEPT,
 	},
 	{
+		"reference tracking: release reference to sock_common",
+		.insns = {
+		BPF_SK_LOOKUP(skc_lookup_tcp),
+		BPF_MOV64_REG(BPF_REG_1, BPF_REG_0),
+		BPF_JMP_IMM(BPF_JEQ, BPF_REG_0, 0, 1),
+		BPF_EMIT_CALL(BPF_FUNC_sk_release),
+		BPF_EXIT_INSN(),
+		},
+		.prog_type = BPF_PROG_TYPE_SCHED_CLS,
+		.result = ACCEPT,
+	},
+	{
 		"reference tracking: release reference 2",
 		.insns = {
-			BPF_SK_LOOKUP,
+			BPF_SK_LOOKUP(sk_lookup_tcp),
 			BPF_MOV64_REG(BPF_REG_1, BPF_REG_0),
 			BPF_JMP_IMM(BPF_JNE, BPF_REG_0, 0, 1),
 			BPF_EXIT_INSN(),
@@ -13441,7 +13607,7 @@ static struct bpf_test tests[] = {
 	{
 		"reference tracking: release reference twice",
 		.insns = {
-			BPF_SK_LOOKUP,
+			BPF_SK_LOOKUP(sk_lookup_tcp),
 			BPF_MOV64_REG(BPF_REG_1, BPF_REG_0),
 			BPF_MOV64_REG(BPF_REG_6, BPF_REG_0),
 			BPF_JMP_IMM(BPF_JEQ, BPF_REG_0, 0, 1),
@@ -13457,7 +13623,7 @@ static struct bpf_test tests[] = {
 	{
 		"reference tracking: release reference twice inside branch",
 		.insns = {
-			BPF_SK_LOOKUP,
+			BPF_SK_LOOKUP(sk_lookup_tcp),
 			BPF_MOV64_REG(BPF_REG_1, BPF_REG_0),
 			BPF_MOV64_REG(BPF_REG_6, BPF_REG_0),
 			BPF_JMP_IMM(BPF_JEQ, BPF_REG_0, 0, 3), /* goto end */
@@ -13484,7 +13650,7 @@ static struct bpf_test tests[] = {
 			BPF_EXIT_INSN(),
 			BPF_LDX_MEM(BPF_W, BPF_REG_6, BPF_REG_2,
 				    offsetof(struct __sk_buff, mark)),
-			BPF_SK_LOOKUP,
+			BPF_SK_LOOKUP(sk_lookup_tcp),
 			BPF_JMP_IMM(BPF_JEQ, BPF_REG_6, 0, 1), /* mark == 0? */
 			/* Leak reference in R0 */
 			BPF_EXIT_INSN(),
@@ -13512,7 +13678,7 @@ static struct bpf_test tests[] = {
 			BPF_EXIT_INSN(),
 			BPF_LDX_MEM(BPF_W, BPF_REG_6, BPF_REG_2,
 				    offsetof(struct __sk_buff, mark)),
-			BPF_SK_LOOKUP,
+			BPF_SK_LOOKUP(sk_lookup_tcp),
 			BPF_JMP_IMM(BPF_JEQ, BPF_REG_6, 0, 4), /* mark == 0? */
 			BPF_JMP_IMM(BPF_JEQ, BPF_REG_0, 0, 2), /* sk NULL? */
 			BPF_MOV64_REG(BPF_REG_1, BPF_REG_0),
@@ -13530,7 +13696,7 @@ static struct bpf_test tests[] = {
 	{
 		"reference tracking in call: free reference in subprog",
 		.insns = {
-			BPF_SK_LOOKUP,
+			BPF_SK_LOOKUP(sk_lookup_tcp),
 			BPF_MOV64_REG(BPF_REG_1, BPF_REG_0), /* unchecked reference */
 			BPF_RAW_INSN(BPF_JMP | BPF_CALL, 0, 1, 0, 2),
 			BPF_MOV64_IMM(BPF_REG_0, 0),
@@ -13635,6 +13801,31 @@ static struct bpf_test tests[] = {
 		.result = ACCEPT,
 	},
 	{
+		"calls: cross frame pruning - liveness propagation",
+		.insns = {
+		BPF_RAW_INSN(BPF_JMP | BPF_CALL, 0, 0, 0, BPF_FUNC_get_prandom_u32),
+		BPF_MOV64_IMM(BPF_REG_8, 0),
+		BPF_JMP_IMM(BPF_JNE, BPF_REG_0, 0, 1),
+		BPF_MOV64_IMM(BPF_REG_8, 1),
+		BPF_RAW_INSN(BPF_JMP | BPF_CALL, 0, 0, 0, BPF_FUNC_get_prandom_u32),
+		BPF_MOV64_IMM(BPF_REG_9, 0),
+		BPF_JMP_IMM(BPF_JNE, BPF_REG_0, 0, 1),
+		BPF_MOV64_IMM(BPF_REG_9, 1),
+		BPF_MOV64_REG(BPF_REG_1, BPF_REG_0),
+		BPF_RAW_INSN(BPF_JMP | BPF_CALL, 0, 1, 0, 4),
+		BPF_JMP_IMM(BPF_JEQ, BPF_REG_8, 1, 1),
+		BPF_LDX_MEM(BPF_B, BPF_REG_1, BPF_REG_2, 0),
+		BPF_MOV64_IMM(BPF_REG_0, 0),
+		BPF_EXIT_INSN(),
+		BPF_JMP_IMM(BPF_JEQ, BPF_REG_1, 0, 0),
+		BPF_EXIT_INSN(),
+		},
+		.prog_type = BPF_PROG_TYPE_SOCKET_FILTER,
+		.errstr_unpriv = "function calls to other bpf functions are allowed for root only",
+		.errstr = "!read_ok",
+		.result = REJECT,
+	},
+	{
 		"allocated_stack",
 		.insns = {
 			BPF_ALU64_REG(BPF_MOV, BPF_REG_6, BPF_REG_1),
@@ -13659,7 +13850,7 @@ static struct bpf_test tests[] = {
         {
                 "reference tracking in call: free reference in subprog and outside",
                 .insns = {
-                        BPF_SK_LOOKUP,
+                        BPF_SK_LOOKUP(sk_lookup_tcp),
                         BPF_MOV64_REG(BPF_REG_1, BPF_REG_0), /* unchecked reference */
                         BPF_MOV64_REG(BPF_REG_6, BPF_REG_0),
                         BPF_RAW_INSN(BPF_JMP | BPF_CALL, 0, 1, 0, 3),
@@ -13689,7 +13880,7 @@ static struct bpf_test tests[] = {
 
                         /* subprog 1 */
                         BPF_MOV64_REG(BPF_REG_6, BPF_REG_4),
-                        BPF_SK_LOOKUP,
+                        BPF_SK_LOOKUP(sk_lookup_tcp),
                         /* spill unchecked sk_ptr into stack of caller */
                         BPF_STX_MEM(BPF_DW, BPF_REG_6, BPF_REG_0, 0),
                         BPF_MOV64_REG(BPF_REG_1, BPF_REG_0),
@@ -13710,7 +13901,7 @@ static struct bpf_test tests[] = {
                         BPF_EXIT_INSN(),
 
                         /* subprog 1 */
-                        BPF_SK_LOOKUP,
+                        BPF_SK_LOOKUP(sk_lookup_tcp),
                         BPF_EXIT_INSN(), /* return sk */
                 },
                 .prog_type = BPF_PROG_TYPE_SCHED_CLS,
@@ -13739,7 +13930,7 @@ static struct bpf_test tests[] = {
                         BPF_EXIT_INSN(),
 
                         /* subprog 2 */
-                        BPF_SK_LOOKUP,
+                        BPF_SK_LOOKUP(sk_lookup_tcp),
                         BPF_EXIT_INSN(),
                 },
                 .prog_type = BPF_PROG_TYPE_SCHED_CLS,
@@ -13772,7 +13963,7 @@ static struct bpf_test tests[] = {
                         BPF_EXIT_INSN(),
 
                         /* subprog 2 */
-                        BPF_SK_LOOKUP,
+                        BPF_SK_LOOKUP(sk_lookup_tcp),
                         BPF_EXIT_INSN(),
                 },
                 .prog_type = BPF_PROG_TYPE_SCHED_CLS,
@@ -13782,7 +13973,7 @@ static struct bpf_test tests[] = {
                 "reference tracking: allow LD_ABS",
                 .insns = {
                         BPF_MOV64_REG(BPF_REG_6, BPF_REG_1),
-                        BPF_SK_LOOKUP,
+                        BPF_SK_LOOKUP(sk_lookup_tcp),
                         BPF_MOV64_REG(BPF_REG_1, BPF_REG_0),
                         BPF_JMP_IMM(BPF_JEQ, BPF_REG_0, 0, 1),
                         BPF_EMIT_CALL(BPF_FUNC_sk_release),
@@ -13798,7 +13989,7 @@ static struct bpf_test tests[] = {
                 "reference tracking: forbid LD_ABS while holding reference",
                 .insns = {
                         BPF_MOV64_REG(BPF_REG_6, BPF_REG_1),
-                        BPF_SK_LOOKUP,
+                        BPF_SK_LOOKUP(sk_lookup_tcp),
                         BPF_LD_ABS(BPF_B, 0),
                         BPF_LD_ABS(BPF_H, 0),
                         BPF_LD_ABS(BPF_W, 0),
@@ -13815,7 +14006,7 @@ static struct bpf_test tests[] = {
                 "reference tracking: allow LD_IND",
                 .insns = {
                         BPF_MOV64_REG(BPF_REG_6, BPF_REG_1),
-                        BPF_SK_LOOKUP,
+                        BPF_SK_LOOKUP(sk_lookup_tcp),
                         BPF_MOV64_REG(BPF_REG_1, BPF_REG_0),
                         BPF_JMP_IMM(BPF_JEQ, BPF_REG_0, 0, 1),
                         BPF_EMIT_CALL(BPF_FUNC_sk_release),
@@ -13832,7 +14023,7 @@ static struct bpf_test tests[] = {
                 "reference tracking: forbid LD_IND while holding reference",
                 .insns = {
                         BPF_MOV64_REG(BPF_REG_6, BPF_REG_1),
-                        BPF_SK_LOOKUP,
+                        BPF_SK_LOOKUP(sk_lookup_tcp),
                         BPF_MOV64_REG(BPF_REG_4, BPF_REG_0),
                         BPF_MOV64_IMM(BPF_REG_7, 1),
                         BPF_LD_IND(BPF_W, BPF_REG_7, -0x200000),
@@ -13850,7 +14041,7 @@ static struct bpf_test tests[] = {
                 "reference tracking: check reference or tail call",
                 .insns = {
                         BPF_MOV64_REG(BPF_REG_7, BPF_REG_1),
-                        BPF_SK_LOOKUP,
+                        BPF_SK_LOOKUP(sk_lookup_tcp),
                         /* if (sk) bpf_sk_release() */
                         BPF_MOV64_REG(BPF_REG_1, BPF_REG_0),
                         BPF_JMP_IMM(BPF_JNE, BPF_REG_1, 0, 7),
@@ -13873,7 +14064,7 @@ static struct bpf_test tests[] = {
                 "reference tracking: release reference then tail call",
                 .insns = {
                         BPF_MOV64_REG(BPF_REG_7, BPF_REG_1),
-                        BPF_SK_LOOKUP,
+                        BPF_SK_LOOKUP(sk_lookup_tcp),
                         /* if (sk) bpf_sk_release() */
                         BPF_MOV64_REG(BPF_REG_1, BPF_REG_0),
                         BPF_JMP_IMM(BPF_JEQ, BPF_REG_1, 0, 1),
@@ -13896,7 +14087,7 @@ static struct bpf_test tests[] = {
                 .insns = {
                         BPF_MOV64_REG(BPF_REG_7, BPF_REG_1),
                         /* Look up socket and store in REG_6 */
-                        BPF_SK_LOOKUP,
+                        BPF_SK_LOOKUP(sk_lookup_tcp),
                         /* bpf_tail_call() */
                         BPF_MOV64_REG(BPF_REG_6, BPF_REG_0),
                         BPF_MOV64_IMM(BPF_REG_3, 2),
@@ -13921,7 +14112,7 @@ static struct bpf_test tests[] = {
                 .insns = {
                         BPF_MOV64_REG(BPF_REG_7, BPF_REG_1),
                         /* Look up socket and store in REG_6 */
-                        BPF_SK_LOOKUP,
+                        BPF_SK_LOOKUP(sk_lookup_tcp),
                         BPF_MOV64_REG(BPF_REG_6, BPF_REG_0),
                         /* if (!sk) goto end */
                         BPF_JMP_IMM(BPF_JEQ, BPF_REG_0, 0, 7),
@@ -13944,7 +14135,7 @@ static struct bpf_test tests[] = {
         {
                 "reference tracking: mangle and release sock_or_null",
                 .insns = {
-                        BPF_SK_LOOKUP,
+                        BPF_SK_LOOKUP(sk_lookup_tcp),
                         BPF_MOV64_REG(BPF_REG_1, BPF_REG_0),
                         BPF_ALU64_IMM(BPF_ADD, BPF_REG_1, 5),
                         BPF_JMP_IMM(BPF_JEQ, BPF_REG_0, 0, 1),
@@ -13958,7 +14149,7 @@ static struct bpf_test tests[] = {
         {
                 "reference tracking: mangle and release sock",
                 .insns = {
-                        BPF_SK_LOOKUP,
+                        BPF_SK_LOOKUP(sk_lookup_tcp),
                         BPF_MOV64_REG(BPF_REG_1, BPF_REG_0),
                         BPF_JMP_IMM(BPF_JEQ, BPF_REG_0, 0, 2),
                         BPF_ALU64_IMM(BPF_ADD, BPF_REG_1, 5),
@@ -13972,7 +14163,7 @@ static struct bpf_test tests[] = {
         {
                 "reference tracking: access member",
                 .insns = {
-                        BPF_SK_LOOKUP,
+                        BPF_SK_LOOKUP(sk_lookup_tcp),
                         BPF_MOV64_REG(BPF_REG_6, BPF_REG_0),
                         BPF_JMP_IMM(BPF_JEQ, BPF_REG_0, 0, 3),
                         BPF_LDX_MEM(BPF_W, BPF_REG_2, BPF_REG_0, 4),
@@ -13986,7 +14177,7 @@ static struct bpf_test tests[] = {
         {
                 "reference tracking: write to member",
                 .insns = {
-                        BPF_SK_LOOKUP,
+                        BPF_SK_LOOKUP(sk_lookup_tcp),
                         BPF_MOV64_REG(BPF_REG_6, BPF_REG_0),
                         BPF_JMP_IMM(BPF_JEQ, BPF_REG_0, 0, 5),
                         BPF_MOV64_REG(BPF_REG_1, BPF_REG_6),
@@ -14005,7 +14196,7 @@ static struct bpf_test tests[] = {
         {
                 "reference tracking: invalid 64-bit access of member",
                 .insns = {
-                        BPF_SK_LOOKUP,
+                        BPF_SK_LOOKUP(sk_lookup_tcp),
                         BPF_MOV64_REG(BPF_REG_6, BPF_REG_0),
                         BPF_JMP_IMM(BPF_JEQ, BPF_REG_0, 0, 3),
                         BPF_LDX_MEM(BPF_DW, BPF_REG_2, BPF_REG_0, 0),
@@ -14020,7 +14211,7 @@ static struct bpf_test tests[] = {
         {
                 "reference tracking: access after release",
                 .insns = {
-                        BPF_SK_LOOKUP,
+                        BPF_SK_LOOKUP(sk_lookup_tcp),
                         BPF_MOV64_REG(BPF_REG_1, BPF_REG_0),
                         BPF_JMP_IMM(BPF_JEQ, BPF_REG_0, 0, 2),
                         BPF_EMIT_CALL(BPF_FUNC_sk_release),
@@ -14060,7 +14251,7 @@ static struct bpf_test tests[] = {
 	{
 		"reference tracking: use ptr from bpf_tcp_sock() after release",
 		.insns = {
-		BPF_SK_LOOKUP,
+		BPF_SK_LOOKUP(sk_lookup_tcp),
 		BPF_JMP_IMM(BPF_JNE, BPF_REG_0, 0, 1),
 		BPF_EXIT_INSN(),
 		BPF_MOV64_REG(BPF_REG_6, BPF_REG_0),
@@ -14083,7 +14274,7 @@ static struct bpf_test tests[] = {
 	{
 		"reference tracking: use ptr from bpf_sk_fullsock() after release",
 		.insns = {
-		BPF_SK_LOOKUP,
+		BPF_SK_LOOKUP(sk_lookup_tcp),
 		BPF_JMP_IMM(BPF_JNE, BPF_REG_0, 0, 1),
 		BPF_EXIT_INSN(),
 		BPF_MOV64_REG(BPF_REG_6, BPF_REG_0),
@@ -14106,7 +14297,7 @@ static struct bpf_test tests[] = {
 	{
 		"reference tracking: use ptr from bpf_sk_fullsock(tp) after release",
 		.insns = {
-		BPF_SK_LOOKUP,
+		BPF_SK_LOOKUP(sk_lookup_tcp),
 		BPF_JMP_IMM(BPF_JNE, BPF_REG_0, 0, 1),
 		BPF_EXIT_INSN(),
 		BPF_MOV64_REG(BPF_REG_6, BPF_REG_0),
@@ -14133,7 +14324,7 @@ static struct bpf_test tests[] = {
 	{
 		"reference tracking: use sk after bpf_sk_release(tp)",
 		.insns = {
-		BPF_SK_LOOKUP,
+		BPF_SK_LOOKUP(sk_lookup_tcp),
 		BPF_JMP_IMM(BPF_JNE, BPF_REG_0, 0, 1),
 		BPF_EXIT_INSN(),
 		BPF_MOV64_REG(BPF_REG_6, BPF_REG_0),
@@ -14155,7 +14346,7 @@ static struct bpf_test tests[] = {
 	{
 		"reference tracking: use ptr from bpf_get_listener_sock() after bpf_sk_release(sk)",
 		.insns = {
-		BPF_SK_LOOKUP,
+		BPF_SK_LOOKUP(sk_lookup_tcp),
 		BPF_JMP_IMM(BPF_JNE, BPF_REG_0, 0, 1),
 		BPF_EXIT_INSN(),
 		BPF_MOV64_REG(BPF_REG_6, BPF_REG_0),
@@ -14177,7 +14368,7 @@ static struct bpf_test tests[] = {
 	{
 		"reference tracking: bpf_sk_release(listen_sk)",
 		.insns = {
-		BPF_SK_LOOKUP,
+		BPF_SK_LOOKUP(sk_lookup_tcp),
 		BPF_JMP_IMM(BPF_JNE, BPF_REG_0, 0, 1),
 		BPF_EXIT_INSN(),
 		BPF_MOV64_REG(BPF_REG_6, BPF_REG_0),
@@ -14202,7 +14393,7 @@ static struct bpf_test tests[] = {
 		/* !bpf_sk_fullsock(sk) is checked but !bpf_tcp_sock(sk) is not checked */
 		"reference tracking: tp->snd_cwnd after bpf_sk_fullsock(sk) and bpf_tcp_sock(sk)",
 		.insns = {
-		BPF_SK_LOOKUP,
+		BPF_SK_LOOKUP(sk_lookup_tcp),
 		BPF_JMP_IMM(BPF_JNE, BPF_REG_0, 0, 1),
 		BPF_EXIT_INSN(),
 		BPF_MOV64_REG(BPF_REG_6, BPF_REG_0),
