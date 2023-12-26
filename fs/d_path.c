@@ -155,6 +155,73 @@ restart:
 	return error;
 }
 
+/*
+ * prepend_path_locked - return the path of a dentry
+ *
+ * @path: path to report
+ * @buf: buffer to return value in
+ * @buflen: buffer length
+ *
+ * Returns a pointer into the buffer or an error code if the path was too long.
+ *
+ * Write full pathname like __dentry_path(), while it writes the full absolute
+ * path from the top root mount like prepend_path() except with mount_lock held.
+ */
+char *prepend_path_locked(const struct path *path, char *buf, int buflen)
+{
+	struct dentry *dentry;
+	struct vfsmount *vfsmnt;
+	struct mount *mnt, *root;
+	int error = 0;
+	unsigned seq = 0;
+	char *end, *retval;
+	int len;
+
+	rcu_read_lock();
+restart:
+	end = buf + buflen;
+	len = buflen;
+	dentry = path->dentry;
+	vfsmnt = path->mnt;
+	mnt = real_mount(vfsmnt);
+	root = mnt->mnt_ns->root;
+
+	prepend(&end, &len, "\0", 1);
+	retval = end-1;
+	*retval = '/';
+	read_seqbegin_or_lock(&rename_lock, &seq);
+	while (mnt != root) {
+		struct dentry *parent;
+
+		if (dentry == vfsmnt->mnt_root) {
+			dentry = READ_ONCE(mnt->mnt_mountpoint);
+			mnt = READ_ONCE(mnt->mnt_parent);
+			vfsmnt = &mnt->mnt;
+			continue;
+		}
+		parent = dentry->d_parent;
+		prefetch(parent);
+		error = prepend_name(&end, &len, &dentry->d_name);
+		if (error)
+			break;
+
+		retval = end;
+		dentry = parent;
+	}
+	if (!(seq & 1))
+		rcu_read_unlock();
+	if (need_seqretry(&rename_lock, seq)) {
+		seq = 1;
+		goto restart;
+	}
+	done_seqretry(&rename_lock, seq);
+
+	if (error)
+		return ERR_PTR(-ENAMETOOLONG);
+	return retval;
+}
+EXPORT_SYMBOL(prepend_path_locked);
+
 /**
  * __d_path - return the path of a dentry
  * @path: the dentry/vfsmount to report
