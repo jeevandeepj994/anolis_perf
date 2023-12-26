@@ -5,6 +5,7 @@
  */
 #include "xfs.h"
 #include <linux/backing-dev.h>
+#include <linux/dax.h>
 
 #include "xfs_shared.h"
 #include "xfs_format.h"
@@ -1949,6 +1950,7 @@ xfs_free_buftarg(
 	list_lru_destroy(&btp->bt_lru);
 
 	xfs_blkdev_issue_flush(btp);
+	fs_put_dax(btp->bt_daxdev, btp->bt_mount);
 
 	kmem_free(btp);
 }
@@ -1989,20 +1991,23 @@ xfs_setsize_buftarg_early(
 	return xfs_setsize_buftarg(btp, bdev_logical_block_size(bdev));
 }
 
-xfs_buftarg_t *
+struct xfs_buftarg *
 xfs_alloc_buftarg(
 	struct xfs_mount	*mp,
-	struct block_device	*bdev,
-	struct dax_device	*dax_dev)
+	struct block_device	*bdev)
 {
 	xfs_buftarg_t		*btp;
+	const struct dax_holder_operations *ops = NULL;
 
+#if defined(CONFIG_FS_DAX) && defined(CONFIG_MEMORY_FAILURE)
+	ops = &xfs_dax_holder_operations;
+#endif
 	btp = kmem_zalloc(sizeof(*btp), KM_NOFS);
 
 	btp->bt_mount = mp;
 	btp->bt_dev =  bdev->bd_dev;
 	btp->bt_bdev = bdev;
-	btp->bt_daxdev = dax_dev;
+	btp->bt_daxdev = fs_dax_get_by_bdev(bdev, mp, ops);
 
 	/*
 	 * Buffer IO error rate limiting. Limit it to no more than 10 messages
