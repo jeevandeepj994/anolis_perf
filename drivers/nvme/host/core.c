@@ -3154,7 +3154,7 @@ static umode_t nvme_ns_id_attrs_are_visible(struct kobject *kobj,
 {
 	struct device *dev = container_of(kobj, struct device, kobj);
 	struct nvme_ns_ids *ids = &dev_to_ns_head(dev)->ids;
-	struct nvme_ctrl *ctrl = nvme_get_ns_from_dev(dev)->ctrl;
+	struct nvme_ctrl *ctrl;
 
 	if (a == &dev_attr_uuid.attr) {
 		if (uuid_is_null(&ids->uuid) &&
@@ -3171,6 +3171,9 @@ static umode_t nvme_ns_id_attrs_are_visible(struct kobject *kobj,
 	}
 	if (a == &dev_attr_activation_info.attr ||
 	    a == &dev_attr_activation_status.attr) {
+		if (dev_to_disk(dev)->fops != &nvme_bdev_ops)
+			return 0;
+		ctrl = nvme_get_ns_from_dev(dev)->ctrl;
 		if (!(ctrl->quirks & NVME_QUIRK_ACTIVATE_NS))
 			return 0;
 	}
