@@ -46,6 +46,7 @@ typedef __u16 __sum16;
 
 static int error_cnt, pass_cnt;
 static bool jit_enabled;
+bool verifier_stats = false;
 
 #define MAGIC_BYTES 123
 
@@ -2218,11 +2219,61 @@ static void test_signal_pending(enum bpf_prog_type prog_type)
 	signal(SIGALRM, SIG_DFL);
 }
 
-int main(void)
+static int libbpf_debug_print_verifier_scale(enum libbpf_print_level level,
+			      const char *format, va_list args)
+{
+	if (level != LIBBPF_DEBUG)
+		return 0;
+
+	if (!strstr(format, "verifier log"))
+		return 0;
+	return vfprintf(stderr, "%s", args);
+}
+
+static int check_load(const char *file)
+{
+	struct bpf_prog_load_attr attr;
+	struct bpf_object *obj;
+	int err, prog_fd;
+
+	memset(&attr, 0, sizeof(struct bpf_prog_load_attr));
+	attr.file = file;
+	attr.prog_type = BPF_PROG_TYPE_SCHED_CLS;
+	attr.log_level = 4;
+	err = bpf_prog_load_xattr(&attr, &obj, &prog_fd);
+	bpf_object__close(obj);
+	if (err)
+		error_cnt++;
+	return err;
+}
+
+void test_bpf_verif_scale(void)
+{
+	const char *file1 = "./test_verif_scale1.o";
+	const char *file2 = "./test_verif_scale2.o";
+	const char *file3 = "./test_verif_scale3.o";
+	int err;
+
+	if (verifier_stats)
+		libbpf_set_print(libbpf_debug_print_verifier_scale);
+
+	err = check_load(file1);
+	err |= check_load(file2);
+	err |= check_load(file3);
+	if (!err)
+		printf("test_verif_scale:OK\n");
+	else
+		printf("test_verif_scale:FAIL\n");
+}
+
+int main(int ac, char **av)
 {
 	srand(time(NULL));
 
 	jit_enabled = is_jit_enabled();
+
+	if (ac == 2 && strcmp(av[1], "-s") == 0)
+		verifier_stats = true;
 
 	test_pkt_access();
 	test_prog_run_xattr();
@@ -2250,6 +2301,7 @@ int main(void)
 	test_map_lock();
 	test_signal_pending(BPF_PROG_TYPE_SOCKET_FILTER);
 	test_signal_pending(BPF_PROG_TYPE_FLOW_DISSECTOR);
+	test_bpf_verif_scale();
 
 	printf("Summary: %d PASSED, %d FAILED\n", pass_cnt, error_cnt);
 	return error_cnt ? EXIT_FAILURE : EXIT_SUCCESS;
