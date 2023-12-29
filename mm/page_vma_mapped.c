@@ -4,6 +4,7 @@
 #include <linux/hugetlb.h>
 #include <linux/swap.h>
 #include <linux/swapops.h>
+#include <linux/pgtable_share.h>
 
 #include "internal.h"
 
@@ -163,6 +164,12 @@ bool page_vma_mapped_walk(struct page_vma_mapped_walk *pvmw)
 	if (pvmw->pmd && !pvmw->pte)
 		return not_found(pvmw);
 
+#ifdef CONFIG_PAGETABLE_SHARE
+	if ((vma_is_pgtable_shared(pvmw->vma) || vma_is_pgtable_shadow(pvmw->vma)) &&
+	    !(pvmw->flags & (PVMW_SHARED_PGTABLE | PVMW_SHARED_PGTABLE_CHECK)))
+		return not_found(pvmw);
+#endif
+
 	if (unlikely(PageHuge(page))) {
 		/* The only possible mapping was handled on last iteration */
 		if (pvmw->pte)
@@ -217,6 +224,33 @@ restart:
 		 */
 		pmde = READ_ONCE(*pvmw->pmd);
 
+#ifdef CONFIG_PAGETABLE_SHARE
+		if (vma_is_pgtable_shared(pvmw->vma)) {
+			pvmw->ptl = pmd_lock(mm, pvmw->pmd);
+			if (!pmd_none(pmde)) {
+				if (pvmw->flags & PVMW_SHARED_PGTABLE_CHECK) {
+					pte_t *ptep, pte;
+
+					ptep = pte_offset_map(pvmw->pmd, pvmw->address);
+					pte = READ_ONCE(*ptep);
+					if (!pte_present(pte) ||
+					    !pfn_is_match(pvmw->page, pte_pfn(pte))) {
+						pte_unmap(ptep);
+						return false;
+					}
+					pte_unmap(ptep);
+				}
+
+				pvmw->pte = (pte_t *)pvmw->pmd;
+				pvmw->pmd = NULL;
+				return true;
+			}
+			spin_unlock(pvmw->ptl);
+			pvmw->ptl = NULL;
+			step_forward(pvmw, PMD_SIZE);
+			continue;
+		}
+#endif
 		if (pmd_trans_huge(pmde) || is_pmd_migration_entry(pmde)) {
 			pvmw->ptl = pmd_lock(mm, pvmw->pmd);
 			pmde = *pvmw->pmd;
@@ -314,6 +348,12 @@ int page_mapped_in_vma(struct page *page, struct vm_area_struct *vma)
 	pvmw.address = vma_address(page, vma);
 	if (pvmw.address == -EFAULT)
 		return 0;
+
+#ifdef CONFIG_PAGETABLE_SHARE
+	if (vma_is_pgtable_shared(vma) || vma_is_pgtable_shadow(vma))
+		pvmw.flags |= PVMW_SHARED_PGTABLE_CHECK;
+#endif
+
 	if (!page_vma_mapped_walk(&pvmw))
 		return 0;
 	page_vma_mapped_walk_done(&pvmw);

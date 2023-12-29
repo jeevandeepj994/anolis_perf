@@ -152,6 +152,12 @@ IF_HAVE_PG_KFENCE(PG_kfence,		"kfence"	)
 #define IF_HAVE_VM_SOFTDIRTY(flag,name)
 #endif
 
+#ifdef CONFIG_PAGETABLE_SHARE
+#define IF_HAVE_VM_SHARED_PT(flag, name) {flag, name },
+#else
+#define IF_HAVE_VM_SHARED_PT(flag, name)
+#endif
+
 #define __def_vmaflag_names						\
 	{VM_READ,			"read"		},		\
 	{VM_WRITE,			"write"		},		\
@@ -184,6 +190,7 @@ IF_HAVE_VM_SOFTDIRTY(VM_SOFTDIRTY,	"softdirty"	)		\
 	{VM_MIXEDMAP,			"mixedmap"	},		\
 	{VM_HUGEPAGE,			"hugepage"	},		\
 	{VM_NOHUGEPAGE,			"nohugepage"	},		\
+IF_HAVE_VM_SHARED_PT(VM_SHARED_PT,	"sharedpt")		\
 	{VM_MERGEABLE,			"mergeable"	}		\
 
 #define show_vma_flags(flags)						\

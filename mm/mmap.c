@@ -47,6 +47,7 @@
 #include <linux/pkeys.h>
 #include <linux/oom.h>
 #include <linux/sched/mm.h>
+#include <linux/pgtable_share.h>
 
 #include <linux/uaccess.h>
 #include <asm/cacheflush.h>
@@ -1050,6 +1051,10 @@ static inline int is_mergeable_vma(struct vm_area_struct *vma,
 		return 0;
 	if (!is_mergeable_vm_userfaultfd_ctx(vma, vm_userfaultfd_ctx))
 		return 0;
+#ifdef CONFIG_PAGETABLE_SHARE
+	if (vma_is_pgtable_shared(vma))
+		return 0;
+#endif
 	return 1;
 }
 
@@ -1452,6 +1457,17 @@ unsigned long do_mmap(struct file *file, unsigned long addr,
 	if (mm->map_count > sysctl_max_map_count)
 		return -ENOMEM;
 
+#ifdef CONFIG_PAGETABLE_SHARE
+	/*
+	 * If MAP_SHARED_PT is set, MAP_SHARED or MAP_SHARED_VALIDATE must
+	 * be set as well
+	 */
+	if (flags & MAP_SHARED_PT) {
+		if (!(flags & (MAP_SHARED | MAP_SHARED_VALIDATE)))
+			return -EINVAL;
+	}
+#endif
+
 	/* Obtain the address to map to. we verify (or select) it and ensure
 	 * that it represents a valid section of the address space.
 	 */
@@ -1504,7 +1520,15 @@ unsigned long do_mmap(struct file *file, unsigned long addr,
 			 * you will get. We silently ignore unsupported flags
 			 * with MAP_SHARED to preserve backward compatibility.
 			 */
+#ifdef CONFIG_PAGETABLE_SHARE
+			/* tmpfs's identified files support MAP_SHARED_PT. */
+			if ((flags & MAP_SHARED_PT) && (flags_mask & MAP_SHARED_PT))
+				flags &= flags_mask;
+			else
+				flags &= LEGACY_MAP_MASK;
+#else
 			flags &= LEGACY_MAP_MASK;
+#endif
 			fallthrough;
 		case MAP_SHARED_VALIDATE:
 			if (flags & ~flags_mask)
@@ -1592,6 +1616,29 @@ unsigned long do_mmap(struct file *file, unsigned long addr,
 	    ((vm_flags & VM_LOCKED) ||
 	     (flags & (MAP_POPULATE | MAP_NONBLOCK)) == MAP_POPULATE))
 		*populate = len;
+
+#ifdef CONFIG_PAGETABLE_SHARE
+	/*
+	 * Check if this mapping is a candidate for page table sharing
+	 * at PMD level. It is if following conditions hold:
+	 *	- It is not anonymous mapping
+	 *	- It is not hugetlbfs mapping (for now)
+	 *	- flags conatins MAP_SHARED or MAP_SHARED_VALIDATE and
+	 *	  MAP_SHARED_PT
+	 *	- Start address is aligned to PMD size
+	 *	- Mapping size is a multiple of PMD size
+	 * Here this new vma must can be found when mmap_write_lock
+	 * always be held.
+	 */
+	if (!IS_ERR_VALUE(addr) && (flags & MAP_SHARED_PT) &&
+	   pgtable_share_enable()) {
+		struct vm_area_struct *vma = find_vma(mm, addr);
+
+		BUG_ON(!vma || addr < vma->vm_start);
+		pgtable_share_create(vma);
+	}
+#endif
+
 	return addr;
 }
 
@@ -2297,6 +2344,14 @@ get_unmapped_area(struct file *file, unsigned long addr, unsigned long len,
 		pgoff = 0;
 		get_area = shmem_get_unmapped_area;
 	}
+#ifdef CONFIG_PAGETABLE_SHARE
+	/*
+	 * PMD alignment for pgtable shared memory. The identified
+	 * shared memory will be support later.
+	 */
+	if (flags & MAP_SHARED_PT)
+		get_area = pgtable_share_get_unmapped_area;
+#endif
 
 	addr = get_area(file, addr, len, pgoff, flags);
 	if (IS_ERR_VALUE(addr))
@@ -2893,7 +2948,14 @@ int __do_munmap(struct mm_struct *mm, unsigned long start, size_t len,
 		 */
 		if (end < vma->vm_end && mm->map_count >= sysctl_max_map_count)
 			return -ENOMEM;
-
+#ifdef CONFIG_PAGETABLE_SHARE
+		if (vma_is_pgtable_shared(vma)) {
+			/* Don't munmap partial pgtable shared vma */
+			pr_warn("unmap partial pgtable shared vma: %lx > %lx)",
+				vma->vm_end, end);
+			return -EINVAL;
+		}
+#endif
 		error = __split_vma(mm, vma, start, 0);
 		if (error)
 			return error;
@@ -2903,7 +2965,16 @@ int __do_munmap(struct mm_struct *mm, unsigned long start, size_t len,
 	/* Does it split the last one? */
 	last = find_vma(mm, end);
 	if (last && end > last->vm_start) {
-		int error = __split_vma(mm, last, end, 1);
+		int error;
+
+#ifdef CONFIG_PAGETABLE_SHARE
+		if (vma_is_pgtable_shared(last)) {
+			pr_warn("unmap partial pgtable shared vma: %lx > %lx)",
+				last->vm_end, end);
+			return -EINVAL;
+		}
+#endif
+		error = __split_vma(mm, last, end, 1);
 		if (error)
 			return error;
 	}

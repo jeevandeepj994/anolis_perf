@@ -29,6 +29,7 @@
 #include <linux/swapops.h>
 #include <linux/shmem_fs.h>
 #include <linux/mmu_notifier.h>
+#include <linux/pgtable_share.h>
 
 #include <asm/tlb.h>
 
@@ -759,6 +760,8 @@ static int madvise_free_single_vma(struct vm_area_struct *vma,
 static long madvise_dontneed_single_vma(struct vm_area_struct *vma,
 					unsigned long start, unsigned long end)
 {
+	if (unlikely(vma_is_pgtable_shared(vma)))
+		return pgtable_share_dontneed_single_vma(vma, start, end);
 	zap_page_range(vma, start, end - start);
 	return 0;
 }
@@ -928,6 +931,32 @@ madvise_vma(struct vm_area_struct *vma, struct vm_area_struct **prev,
 		unsigned long start, unsigned long end, int behavior)
 {
 	async_fork_fixup_vma(vma);
+#ifdef CONFIG_PAGETABLE_SHARE
+	if (unlikely(vma_is_pgtable_shared(vma))) {
+		/*
+		 * Only support MADV_DODUMP, MADV_DONTDUMP and
+		 * MADV_DONTNEED for pgtable shared vma.
+		 */
+		switch (behavior) {
+		case MADV_DODUMP:
+		case MADV_DONTDUMP:
+			if (vma->vm_start != start || vma->vm_end != end) {
+				pr_warn("pgtable share vma: cann't operate a part");
+				return -EINVAL;
+			}
+			break;
+		case MADV_DONTNEED:
+			if ((start | end) & (PMD_SIZE - 1)) {
+				pr_warn("pgtable share vma: %lx - %lx not aligned with PMD SIZE",
+					start, end);
+				return -EINVAL;
+			}
+			break;
+		default:
+			return -EINVAL;
+		}
+	}
+#endif
 
 	switch (behavior) {
 	case MADV_REMOVE:
