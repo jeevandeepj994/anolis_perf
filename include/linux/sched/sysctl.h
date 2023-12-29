@@ -53,6 +53,18 @@ int sched_proc_update_handler(struct ctl_table *table, int write,
 		void *buffer, size_t *length, loff_t *ppos);
 #endif
 
+#define NUMA_BALANCING_DISABLED		0x0
+#define NUMA_BALANCING_NORMAL		0x1
+#define NUMA_BALANCING_MEMORY_TIERING	0x2
+
+#ifdef CONFIG_NUMA_BALANCING
+extern int sysctl_numa_balancing_mode;
+extern unsigned int sysctl_numa_balancing_hot_threshold;
+extern unsigned int sysctl_numa_balancing_promote_rate_limit;
+#else
+#define sysctl_numa_balancing_mode	0
+#endif
+
 /*
  *  control realtime throttling:
  *

@@ -216,6 +216,10 @@ enum node_stat_item {
 #ifdef CONFIG_DUPTEXT
 	NR_DUPTEXT,
 #endif
+#ifdef CONFIG_NUMA_BALANCING
+        PGPROMOTE_SUCCESS,      /* promote successfully */
+	PGPROMOTE_CANDIDATE,    /* candidate pages to promote */
+#endif
 	NR_PAGETABLE,		/* used for pagetables */
 	NR_VM_NODE_STAT_ITEMS
 };
@@ -550,6 +554,7 @@ enum zone_watermarks {
 	WMARK_MIN,
 	WMARK_LOW,
 	WMARK_HIGH,
+	WMARK_PROMO,
 	NR_WMARK
 };
 
@@ -1098,6 +1103,12 @@ typedef struct pglist_data {
 	struct deferred_split deferred_split_queue;
 #endif
 
+#ifdef CONFIG_NUMA_BALANCING
+	/* start time in ms of current promote rate limit period */
+	unsigned int nbp_rl_start;
+	/* number of promote candidate pages at start time of current rate limit period */
+	unsigned long nbp_rl_nr_cand;
+#endif
 	/* Fields commonly accessed by the page reclaim scanner */
 
 	/*
@@ -1120,8 +1131,19 @@ typedef struct pglist_data {
 	struct per_cpu_nodestat __percpu *per_cpu_nodestats;
 	atomic_long_t		vm_stat[NR_VM_NODE_STAT_ITEMS];
 
+#ifdef CONFIG_NUMA_BALANCING
+	/* promote threshold in ms */
+	/* start time in ms of current promote threshold adjustment period */
+	CK_KABI_USE_SPLIT(1, unsigned int nbp_threshold, unsigned int nbp_th_start)
+	/*
+	 * number of promote candidate pages at stat time of current promote
+	 * threshold adjustment period
+	 */
+	CK_KABI_USE(2, unsigned long nbp_th_nr_cand)
+#else
 	CK_KABI_RESERVE(1)
 	CK_KABI_RESERVE(2)
+#endif
 	CK_KABI_RESERVE(3)
 	CK_KABI_RESERVE(4)
 } pg_data_t;
