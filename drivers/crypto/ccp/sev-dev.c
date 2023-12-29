@@ -1828,11 +1828,13 @@ void sev_pci_init(void)
 	}
 
 #ifdef CONFIG_HYGON_CSV
-	/* Set SMR for CSV */
-	rc = csv_platform_cmd_set_secure_memory_region(&error);
-	if (rc)
-		dev_warn(sev->dev,
+	if (boot_cpu_data.x86_vendor == X86_VENDOR_HYGON) {
+		/* Set SMR for CSV */
+		rc = csv_platform_cmd_set_secure_memory_region(&error);
+		if (rc)
+			dev_warn(sev->dev,
 			 "CSV3: fail to set secure memory region, CSV3 support unavailable\n");
+	}
 #endif
 
 	/* Initialize the platform */
