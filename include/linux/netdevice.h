@@ -2972,6 +2972,12 @@ struct softnet_data {
 	struct sk_buff_head	input_pkt_queue;
 	struct napi_struct	backlog;
 
+	/* Another possibly contended cache line */
+	spinlock_t		defer_lock ____cacheline_aligned_in_smp;
+	int			defer_count;
+	int			defer_ipi_scheduled;
+	struct sk_buff		*defer_list;
+	call_single_data_t	defer_csd;
 };
 
 static inline void input_queue_head_incr(struct softnet_data *sd)
@@ -3614,6 +3620,7 @@ void dev_queue_xmit_nit(struct sk_buff *skb, struct net_device *dev);
 
 extern int		netdev_budget;
 extern unsigned int	netdev_budget_usecs;
+extern unsigned int	sysctl_skb_defer_max;
 
 /* Called by rtnetlink.c:rtnl_unlock() */
 void netdev_run_todo(void);

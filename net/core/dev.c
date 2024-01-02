@@ -3949,6 +3949,7 @@ int netdev_max_backlog __read_mostly = 1000;
 EXPORT_SYMBOL(netdev_max_backlog);
 
 int netdev_tstamp_prequeue __read_mostly = 1;
+unsigned int sysctl_skb_defer_max __read_mostly = 64;
 int netdev_budget __read_mostly = 300;
 unsigned int __read_mostly netdev_budget_usecs = 2000;
 int weight_p __read_mostly = 64;           /* old backlog weight */
@@ -4173,6 +4174,15 @@ static void rps_trigger_softirq(void *data)
 }
 
 #endif /* CONFIG_RPS */
+
+/* Called from hardirq (IPI) context */
+static void trigger_rx_softirq(void *data)
+{
+	struct softnet_data *sd = data;
+
+	__raise_softirq_irqoff(NET_RX_SOFTIRQ);
+	smp_store_release(&sd->defer_ipi_scheduled, 0);
+}
 
 /*
  * Check if this softnet_data structure is another cpu one
@@ -6364,6 +6374,28 @@ out_unlock:
 	return work;
 }
 
+static void skb_defer_free_flush(struct softnet_data *sd)
+{
+	struct sk_buff *skb, *next;
+	unsigned long flags;
+
+	/* Paired with WRITE_ONCE() in skb_attempt_defer_free() */
+	if (!READ_ONCE(sd->defer_list))
+		return;
+
+	spin_lock_irqsave(&sd->defer_lock, flags);
+	skb = sd->defer_list;
+	sd->defer_list = NULL;
+	sd->defer_count = 0;
+	spin_unlock_irqrestore(&sd->defer_lock, flags);
+
+	while (skb != NULL) {
+		next = skb->next;
+		napi_consume_skb(skb, 1);
+		skb = next;
+	}
+}
+
 static __latent_entropy void net_rx_action(struct softirq_action *h)
 {
 	struct softnet_data *sd = this_cpu_ptr(&softnet_data);
@@ -6380,9 +6412,11 @@ static __latent_entropy void net_rx_action(struct softirq_action *h)
 	for (;;) {
 		struct napi_struct *n;
 
+		skb_defer_free_flush(sd);
+
 		if (list_empty(&list)) {
 			if (!sd_has_rps_ipi_waiting(sd) && list_empty(&repoll))
-				goto out;
+				goto end;
 			break;
 		}
 
@@ -6409,7 +6443,8 @@ static __latent_entropy void net_rx_action(struct softirq_action *h)
 		__raise_softirq_irqoff(NET_RX_SOFTIRQ);
 
 	net_rps_action_and_irq_enable(sd);
-out:
+
+end:
 	__kfree_skb_flush();
 }
 
@@ -9693,6 +9728,9 @@ static int __init net_dev_init(void)
 		sd->csd.info = sd;
 		sd->cpu = i;
 #endif
+		sd->defer_csd.func = trigger_rx_softirq;
+		sd->defer_csd.info = sd;
+		spin_lock_init(&sd->defer_lock);
 
 		init_gro_hash(&sd->backlog);
 		sd->backlog.poll = process_backlog;

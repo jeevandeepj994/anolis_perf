@@ -1774,6 +1774,7 @@ process:
 			}
 			goto discard_and_relse;
 		}
+		nf_reset(skb);
 		if (nsk == sk) {
 			reqsk_put(req);
 			tcp_v4_restore_cb(skb);

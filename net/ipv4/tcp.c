@@ -1597,6 +1597,18 @@ static void tcp_cleanup_rbuf(struct sock *sk, int copied)
 		tcp_send_ack(sk);
 }
 
+static void tcp_eat_recv_skb(struct sock *sk, struct sk_buff *skb)
+{
+	__skb_unlink(skb, &sk->sk_receive_queue);
+	if (likely(skb->destructor == sock_rfree)) {
+		sock_rfree(skb);
+		skb->destructor = NULL;
+		skb->sk = NULL;
+		return skb_attempt_defer_free(skb);
+	}
+	__kfree_skb(skb);
+}
+
 static struct sk_buff *tcp_recv_skb(struct sock *sk, u32 seq, u32 *off)
 {
 	struct sk_buff *skb;
@@ -1616,7 +1628,7 @@ static struct sk_buff *tcp_recv_skb(struct sock *sk, u32 seq, u32 *off)
 		 * splitted a fat GRO packet, while we released socket lock
 		 * in skb_splice_bits()
 		 */
-		sk_eat_skb(sk, skb);
+		tcp_eat_recv_skb(sk, skb);
 	}
 	return NULL;
 }
@@ -1682,11 +1694,11 @@ int tcp_read_sock(struct sock *sk, read_descriptor_t *desc,
 				continue;
 		}
 		if (TCP_SKB_CB(skb)->tcp_flags & TCPHDR_FIN) {
-			sk_eat_skb(sk, skb);
+			tcp_eat_recv_skb(sk, skb);
 			++seq;
 			break;
 		}
-		sk_eat_skb(sk, skb);
+		tcp_eat_recv_skb(sk, skb);
 		if (!desc->count)
 			break;
 		tp->copied_seq = seq;
@@ -2079,9 +2091,8 @@ int tcp_recvmsg(struct sock *sk, struct msghdr *msg, size_t len, int nonblock,
 			/* Do not sleep, just process backlog. */
 			release_sock(sk);
 			lock_sock(sk);
-		} else {
+		} else
 			sk_wait_data(sk, &timeo, last);
-		}
 
 		if ((flags & MSG_PEEK) &&
 		    (peek_seq - copied - urg_hole != tp->copied_seq)) {
@@ -2148,14 +2159,14 @@ skip_copy:
 		if (TCP_SKB_CB(skb)->tcp_flags & TCPHDR_FIN)
 			goto found_fin_ok;
 		if (!(flags & MSG_PEEK))
-			sk_eat_skb(sk, skb);
+			tcp_eat_recv_skb(sk, skb);
 		continue;
 
 	found_fin_ok:
 		/* Process the FIN. */
 		++*seq;
 		if (!(flags & MSG_PEEK))
-			sk_eat_skb(sk, skb);
+			tcp_eat_recv_skb(sk, skb);
 		break;
 	} while (len > 0);
 

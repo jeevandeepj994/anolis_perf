@@ -39,6 +39,7 @@
 #include <linux/splice.h>
 #include <linux/in6.h>
 #include <linux/if_packet.h>
+#include <linux/llist.h>
 #include <net/flow.h>
 
 /* The interface for checksum offload between the stack and networking drivers
@@ -599,6 +600,7 @@ typedef unsigned char *sk_buff_data_t;
  *	@prev: Previous buffer in list
  *	@tstamp: Time we arrived/left
  *	@rbnode: RB tree node, alternative to next/prev for netem/tcp
+ *	@ll_node: anchor in an llist (eg socket defer_list)
  *	@sk: Socket we are owned by
  *	@dev: Device we arrived on/are leaving by
  *	@cb: Control buffer. Free for use by every layer. Put private vars here
@@ -650,6 +652,7 @@ typedef unsigned char *sk_buff_data_t;
  *	@dst_pending_confirm: need to confirm neighbour
  *	@decrypted: Decrypted SKB
   *	@napi_id: id of the NAPI struct this skb came from
+ *	@alloc_cpu: CPU which did the skb allocation.
  *	@secmark: security marking
  *	@mark: Generic packet mark
  *	@vlan_proto: vlan encapsulation protocol
@@ -688,6 +691,7 @@ struct sk_buff {
 		};
 		struct rb_node		rbnode; /* used in netem, ip4 defrag, and tcp stack */
 		struct list_head	list;
+		struct llist_node	ll_node;
 	};
 
 	union {
@@ -835,6 +839,7 @@ struct sk_buff {
 		unsigned int	sender_cpu;
 	};
 #endif
+	u16			alloc_cpu;
 #ifdef CONFIG_NETWORK_SECMARK
 	__u32		secmark;
 #endif
@@ -1009,6 +1014,7 @@ struct sk_buff *__alloc_skb(unsigned int size, gfp_t priority, int flags,
 			    int node);
 struct sk_buff *__build_skb(void *data, unsigned int frag_size);
 struct sk_buff *build_skb(void *data, unsigned int frag_size);
+void skb_attempt_defer_free(struct sk_buff *skb);
 static inline struct sk_buff *alloc_skb(unsigned int size,
 					gfp_t priority)
 {
