@@ -777,8 +777,12 @@ struct cfs_rq {
 
 	unsigned long		nr_uninterruptible;
 
+#ifdef CONFIG_SMP
+	CK_KABI_USE(1, 2, struct list_head throttled_csd_list)
+#else
 	CK_KABI_RESERVE(1)
 	CK_KABI_RESERVE(2)
+#endif
 	CK_KABI_RESERVE(3)
 	CK_KABI_RESERVE(4)
 	CK_KABI_RESERVE(5)
@@ -1327,8 +1331,12 @@ struct rq {
 	u64 last_acpu_update_time;
 #endif
 
+#if defined(CONFIG_CFS_BANDWIDTH) && defined(CONFIG_SMP)
+	CK_KABI_USE(1, 2, struct list_head cfsb_csd_list)
+#else
 	CK_KABI_RESERVE(1)
 	CK_KABI_RESERVE(2)
+#endif
 	CK_KABI_RESERVE(3)
 	CK_KABI_RESERVE(4)
 	CK_KABI_RESERVE(5)
@@ -1386,6 +1394,11 @@ DECLARE_PER_CPU_SHARED_ALIGNED(struct rq, runqueues);
 #define task_rq(p)		cpu_rq(task_cpu(p))
 #define cpu_curr(cpu)		(cpu_rq(cpu)->curr)
 #define raw_rq()		raw_cpu_ptr(&runqueues)
+
+#if defined(CONFIG_CFS_BANDWIDTH) && defined(CONFIG_SMP)
+DECLARE_PER_CPU_SHARED_ALIGNED(call_single_data_t, cfsb_csd);
+#define cpu_cfsb_csd(cpu)	(&per_cpu(cfsb_csd, (cpu)))
+#endif
 
 struct sched_group;
 #ifdef CONFIG_SCHED_CORE
@@ -1752,6 +1765,28 @@ static inline void rq_clock_cancel_skipupdate(struct rq *rq)
 {
 	lockdep_assert_rq_held(rq);
 	rq->clock_update_flags &= ~RQCF_REQ_SKIP;
+}
+
+/*
+ * During cpu offlining and rq wide unthrottling, we can trigger
+ * an update_rq_clock() for several cfs and rt runqueues (Typically
+ * when using list_for_each_entry_*)
+ * rq_clock_start_loop_update() can be called after updating the clock
+ * once and before iterating over the list to prevent multiple update.
+ * After the iterative traversal, we need to call rq_clock_stop_loop_update()
+ * to clear RQCF_ACT_SKIP of rq->clock_update_flags.
+ */
+static inline void rq_clock_start_loop_update(struct rq *rq)
+{
+	lockdep_assert_rq_held(rq);
+	SCHED_WARN_ON(rq->clock_update_flags & RQCF_ACT_SKIP);
+	rq->clock_update_flags |= RQCF_ACT_SKIP;
+}
+
+static inline void rq_clock_stop_loop_update(struct rq *rq)
+{
+	lockdep_assert_rq_held(rq);
+	rq->clock_update_flags &= ~RQCF_ACT_SKIP;
 }
 
 struct rq_flags {
