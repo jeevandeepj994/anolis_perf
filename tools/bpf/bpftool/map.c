@@ -502,6 +502,9 @@ static int show_map_close_json(int fd, struct bpf_map_info *info)
 	}
 	close(fd);
 
+	if (info->btf_id)
+		jsonw_int_field(json_wtr, "btf_id", info->btf_id);
+
 	if (!hash_empty(map_table.table)) {
 		struct pinned_obj *obj;
 
@@ -568,15 +571,19 @@ static int show_map_close_plain(int fd, struct bpf_map_info *info)
 	}
 	close(fd);
 
-	printf("\n");
 	if (!hash_empty(map_table.table)) {
 		struct pinned_obj *obj;
 
 		hash_for_each_possible(map_table.table, obj, hash, info->id) {
 			if (obj->id == info->id)
-				printf("\tpinned %s\n", obj->path);
+				printf("\n\tpinned %s", obj->path);
 		}
 	}
+
+	if (info->btf_id)
+		printf("\n\tbtf_id %d", info->btf_id);
+
+	printf("\n");
 	return 0;
 }
 

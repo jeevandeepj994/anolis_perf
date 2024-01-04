@@ -2229,7 +2229,7 @@ static int hns3_handle_rx_bd(struct hns3_enet_ring *ring,
 		ring->stats.seg_pkt_cnt++;
 		u64_stats_update_end(&ring->syncp);
 
-		pull_len = eth_get_headlen(va, HNS3_RX_HEAD_SIZE);
+		pull_len = eth_get_headlen(netdev, va, HNS3_RX_HEAD_SIZE);
 
 		memcpy(__skb_put(skb, pull_len), va,
 		       ALIGN(pull_len, sizeof(long)));
