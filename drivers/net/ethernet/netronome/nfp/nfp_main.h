@@ -48,6 +48,7 @@ struct nfp_dumpspec {
 /**
  * struct nfp_pf - NFP PF-specific device structure
  * @pdev:		Backpointer to PCI device
+ * @dev_info:		NFP ASIC params
  * @cpp:		Pointer to the CPP handle
  * @app:		Pointer to the APP handle
  * @data_vnic_bar:	Pointer to the CPP area for the data vNICs' BARs
@@ -84,10 +85,18 @@ struct nfp_dumpspec {
  * @port_refresh_work:	Work entry for taking netdevs out
  * @shared_bufs:	Array of shared buffer structures if FW has any SBs
  * @num_shared_bufs:	Number of elements in @shared_bufs
+ * @multi_pf:		Used in multi-PF setup
+ * @multi_pf.en:	Is multi-PF setup?
+ * @multi_pf.id:	PF index
+ * @multi_pf.vf_fid:	Id of first VF that belongs to this PF
+ * @multi_pf.beat_timer:Timer for beat to keepalive
+ * @multi_pf.beat_area:	Pointer to CPP area for beat to keepalive
+ * @multi_pf.beat_addr:	Pointer to mapped beat address used for keepalive
  * @lock:		Protects all fields which may change after probe
  */
 struct nfp_pf {
 	struct pci_dev *pdev;
+	const struct nfp_dev_info *dev_info;
 
 	struct nfp_cpp *cpp;
 
@@ -140,6 +149,15 @@ struct nfp_pf {
 	struct nfp_shared_buf *shared_bufs;
 	unsigned int num_shared_bufs;
 
+	struct {
+		bool en;
+		u8 id;
+		u8 vf_fid;
+		struct timer_list beat_timer;
+		struct nfp_cpp_area *beat_area;
+		u8 __iomem *beat_addr;
+	} multi_pf;
+
 	struct mutex lock;
 };
 
@@ -161,6 +179,10 @@ bool nfp_ctrl_tx(struct nfp_net *nn, struct sk_buff *skb);
 
 int nfp_pf_rtsym_read_optional(struct nfp_pf *pf, const char *format,
 			       unsigned int default_val);
+u8 __iomem *
+nfp_pf_map_rtsym_offset(struct nfp_pf *pf, const char *name, const char *sym_fmt,
+			unsigned int offset, unsigned int min_size,
+			struct nfp_cpp_area **area);
 u8 __iomem *
 nfp_pf_map_rtsym(struct nfp_pf *pf, const char *name, const char *sym_fmt,
 		 unsigned int min_size, struct nfp_cpp_area **area);
@@ -190,4 +212,6 @@ int nfp_shared_buf_pool_set(struct nfp_pf *pf, unsigned int sb,
 
 int nfp_devlink_params_register(struct nfp_pf *pf);
 void nfp_devlink_params_unregister(struct nfp_pf *pf);
+
+u8 nfp_get_pf_id(struct nfp_pf *pf);
 #endif /* NFP_MAIN_H */

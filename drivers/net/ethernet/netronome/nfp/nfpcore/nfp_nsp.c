@@ -37,7 +37,8 @@
 
 #define NSP_COMMAND		0x08
 #define   NSP_COMMAND_OPTION	GENMASK_ULL(63, 32)
-#define   NSP_COMMAND_CODE	GENMASK_ULL(31, 16)
+#define   NSP_COMMAND_CODE_MJ_VER	GENMASK_ULL(31, 28)
+#define   NSP_COMMAND_CODE	GENMASK_ULL(27, 16)
 #define   NSP_COMMAND_DMA_BUF	BIT_ULL(1)
 #define   NSP_COMMAND_START	BIT_ULL(0)
 
@@ -58,7 +59,7 @@
 #define NFP_CAP_CMD_DMA_SG	0x28
 
 #define NSP_MAGIC		0xab10
-#define NSP_MAJOR		0
+#define NSP_MAJOR		1
 #define NSP_MINOR		8
 
 #define NSP_CODE_MAJOR		GENMASK(15, 12)
@@ -246,14 +247,14 @@ static int nfp_nsp_check(struct nfp_nsp *state)
 	state->ver.major = FIELD_GET(NSP_STATUS_MAJOR, reg);
 	state->ver.minor = FIELD_GET(NSP_STATUS_MINOR, reg);
 
-	if (state->ver.major != NSP_MAJOR) {
+	if (state->ver.major > NSP_MAJOR) {
 		nfp_err(cpp, "Unsupported ABI %hu.%hu\n",
 			state->ver.major, state->ver.minor);
 		return -EINVAL;
 	}
 	if (state->ver.minor < NSP_MINOR) {
-		nfp_err(cpp, "ABI too old to support NIC operation (%u.%hu < %u.%u), please update the management FW on the flash\n",
-			NSP_MAJOR, state->ver.minor, NSP_MAJOR, NSP_MINOR);
+		nfp_err(cpp, "ABI too old to support NIC operation (x.%hu < x.%u), please update the management FW on the flash\n",
+			state->ver.minor, NSP_MINOR);
 		return -EINVAL;
 	}
 
@@ -379,6 +380,7 @@ __nfp_nsp_command(struct nfp_nsp *state, const struct nfp_nsp_command_arg *arg)
 
 	err = nfp_cpp_writeq(cpp, nsp_cpp, nsp_command,
 			     FIELD_PREP(NSP_COMMAND_OPTION, arg->option) |
+			     FIELD_PREP(NSP_COMMAND_CODE_MJ_VER, state->ver.major) |
 			     FIELD_PREP(NSP_COMMAND_CODE, arg->code) |
 			     FIELD_PREP(NSP_COMMAND_DMA_BUF, arg->dma) |
 			     FIELD_PREP(NSP_COMMAND_START, 1));

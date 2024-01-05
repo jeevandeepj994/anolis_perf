@@ -103,7 +103,6 @@
 #define   NFP_NET_CFG_CTRL_RINGCFG	  (0x1 << 16) /* Ring runtime changes */
 #define   NFP_NET_CFG_CTRL_RSS		  (0x1 << 17) /* RSS (version 1) */
 #define   NFP_NET_CFG_CTRL_IRQMOD	  (0x1 << 18) /* Interrupt moderation */
-#define   NFP_NET_CFG_CTRL_RINGPRIO	  (0x1 << 19) /* Ring priorities */
 #define   NFP_NET_CFG_CTRL_MSIXAUTO	  (0x1 << 20) /* MSI-X auto-masking */
 #define   NFP_NET_CFG_CTRL_TXRWB	  (0x1 << 21) /* Write-back of TX ring*/
 #define   NFP_NET_CFG_CTRL_VXLAN	  (0x1 << 24) /* VXLAN tunnel support */
@@ -162,7 +161,10 @@
  * - define more STS bits
  */
 #define NFP_NET_CFG_VERSION		0x0030
-#define   NFP_NET_CFG_VERSION_RESERVED_MASK	(0xff << 24)
+#define   NFP_NET_CFG_VERSION_RESERVED_MASK	(0xfe << 24)
+#define   NFP_NET_CFG_VERSION_DP_NFD3		0
+#define   NFP_NET_CFG_VERSION_DP_NFDK		1
+#define   NFP_NET_CFG_VERSION_DP_MASK		1
 #define   NFP_NET_CFG_VERSION_CLASS_MASK  (0xff << 16)
 #define   NFP_NET_CFG_VERSION_CLASS(x)	  (((x) & 0xff) << 16)
 #define   NFP_NET_CFG_VERSION_CLASS_GENERIC	0
@@ -248,10 +250,19 @@
 #define   NFP_NET_CFG_BPF_ADDR_MASK	(~NFP_NET_CFG_BPF_CFG_MASK)
 
 /**
- * 40B reserved for future use (0x0098 - 0x00c0)
+ * 3 words reserved for extended ctrl words (0x0098 - 0x00a4)
+ * 3 words reserved for extended cap words (0x00a4 - 0x00b0)
+ * Currently only one word is used, can be extended in future.
  */
-#define NFP_NET_CFG_RESERVED		0x0098
-#define NFP_NET_CFG_RESERVED_SZ		0x0028
+#define NFP_NET_CFG_CTRL_WORD1		0x0098
+#define   NFP_NET_CFG_CTRL_PKT_TYPE	  (0x1 << 0) /* Pkttype offload */
+#define   NFP_NET_CFG_CTRL_MULTI_PF	  (0x1 << 5) /* Multi PF */
+
+#define NFP_NET_CFG_CAP_WORD1		0x00a4
+
+/* 16B reserved for future use (0x00b0 - 0x00c0) */
+#define NFP_NET_CFG_RESERVED		0x00b0
+#define NFP_NET_CFG_RESERVED_SZ		0x0010
 
 /**
  * RSS configuration (0x0100 - 0x01ac):
