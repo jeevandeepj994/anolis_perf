@@ -14,6 +14,8 @@
 #include <linux/syscalls.h>
 #include <linux/error-injection.h>
 
+#include <asm/tlb.h>
+
 #include "trace_probe.h"
 #include "trace.h"
 
@@ -126,12 +128,18 @@ BPF_CALL_3(bpf_probe_write_user, void *, unsafe_ptr, const void *, src,
 	 * access_ok() should prevent writing to non-user memory, but in
 	 * some situations (nommu, temporary switch, etc) access_ok() does
 	 * not provide enough validation, hence the check on KERNEL_DS.
+	 *
+	 * nmi_uaccess_okay() ensures the probe is not run in an interim
+	 * state, when the task or mm are switched. This is specifically
+	 * required to prevent the use of temporary mm.
 	 */
 
 	if (unlikely(in_interrupt() ||
 		     current->flags & (PF_KTHREAD | PF_EXITING)))
 		return -EPERM;
 	if (unlikely(uaccess_kernel()))
+		return -EPERM;
+	if (unlikely(!nmi_uaccess_okay()))
 		return -EPERM;
 	if (!access_ok(VERIFY_WRITE, unsafe_ptr, size))
 		return -EPERM;
@@ -963,6 +971,27 @@ const struct bpf_verifier_ops raw_tracepoint_verifier_ops = {
 const struct bpf_prog_ops raw_tracepoint_prog_ops = {
 };
 
+static bool raw_tp_writable_prog_is_valid_access(int off, int size,
+						 enum bpf_access_type type,
+						 const struct bpf_prog *prog,
+						 struct bpf_insn_access_aux *info)
+{
+	if (off == 0) {
+		if (size != sizeof(u64) || type != BPF_READ)
+			return false;
+		info->reg_type = PTR_TO_TP_BUFFER;
+	}
+	return raw_tp_prog_is_valid_access(off, size, type, prog, info);
+}
+
+const struct bpf_verifier_ops raw_tracepoint_writable_verifier_ops = {
+	.get_func_proto  = raw_tp_prog_func_proto,
+	.is_valid_access = raw_tp_writable_prog_is_valid_access,
+};
+
+const struct bpf_prog_ops raw_tracepoint_writable_prog_ops = {
+};
+
 static bool pe_prog_is_valid_access(int off, int size, enum bpf_access_type type,
 				    const struct bpf_prog *prog,
 				    struct bpf_insn_access_aux *info)
@@ -1241,6 +1270,9 @@ static int __bpf_probe_register(struct bpf_raw_event_map *btp, struct bpf_prog *
 	 * available in this tracepoint
 	 */
 	if (prog->aux->max_ctx_offset > btp->num_args * sizeof(u64))
+		return -EINVAL;
+
+	if (prog->aux->max_tp_access > btp->writable_size)
 		return -EINVAL;
 
 	return tracepoint_probe_register(tp, (void *)btp->bpf_func, prog);

@@ -27,6 +27,7 @@ typedef __u16 __sum16;
 #include <linux/unistd.h>
 #include <linux/if.h>
 #include <linux/if_tun.h>
+#include <linux/nbd.h>
 
 #include <sys/ioctl.h>
 #include <sys/wait.h>
@@ -2380,7 +2381,7 @@ static int libbpf_debug_print_verifier_scale(enum libbpf_print_level level,
 	return vfprintf(stderr, "%s", args);
 }
 
-static int check_load(const char *file)
+static int check_load(const char *file, enum bpf_prog_type type)
 {
 	struct bpf_prog_load_attr attr;
 	struct bpf_object *obj;
@@ -2388,7 +2389,7 @@ static int check_load(const char *file)
 
 	memset(&attr, 0, sizeof(struct bpf_prog_load_attr));
 	attr.file = file;
-	attr.prog_type = BPF_PROG_TYPE_SCHED_CLS;
+	attr.prog_type = type;
 	attr.log_level = 4;
 	err = bpf_prog_load_xattr(&attr, &obj, &prog_fd);
 	bpf_object__close(obj);
@@ -2399,21 +2400,26 @@ static int check_load(const char *file)
 
 void test_bpf_verif_scale(void)
 {
-	const char *file1 = "./test_verif_scale1.o";
-	const char *file2 = "./test_verif_scale2.o";
-	const char *file3 = "./test_verif_scale3.o";
-	int err;
+	const char *scale[] = {
+		"./test_verif_scale1.o", "./test_verif_scale2.o", "./test_verif_scale3.o"
+	};
+	const char *pyperf[] = {
+		"./pyperf50.o",	"./pyperf100.o", "./pyperf180.o"
+	};
+	int err, i;
 
 	if (verifier_stats)
 		libbpf_set_print(libbpf_debug_print_verifier_scale);
 
-	err = check_load(file1);
-	err |= check_load(file2);
-	err |= check_load(file3);
-	if (!err)
-		printf("test_verif_scale:OK\n");
-	else
-		printf("test_verif_scale:FAIL\n");
+	for (i = 0; i < ARRAY_SIZE(scale); i++) {
+		err = check_load(scale[i], BPF_PROG_TYPE_SCHED_CLS);
+		printf("test_scale:%s:%s\n", scale[i], err ? "FAIL" : "OK");
+	}
+
+	for (i = 0; i < ARRAY_SIZE(pyperf); i++) {
+		err = check_load(pyperf[i], BPF_PROG_TYPE_RAW_TRACEPOINT);
+		printf("test_scale:%s:%s\n", pyperf[i], err ? "FAIL" : "OK");
+	}
 }
 
 static void test_global_data_number(struct bpf_object *obj, __u32 duration)
@@ -2617,6 +2623,120 @@ static void test_flow_dissector_load_bytes(void)
 		close(fd);
 }
 
+static void test_raw_tp_writable_reject_nbd_invalid(void)
+{
+	__u32 duration = 0;
+	char error[4096];
+	int bpf_fd = -1, tp_fd = -1;
+
+	const struct bpf_insn program[] = {
+		/* r6 is our tp buffer */
+		BPF_LDX_MEM(BPF_DW, BPF_REG_6, BPF_REG_1, 0),
+		/* one byte beyond the end of the nbd_request struct */
+		BPF_LDX_MEM(BPF_B, BPF_REG_0, BPF_REG_6,
+			    sizeof(struct nbd_request)),
+		BPF_EXIT_INSN(),
+	};
+
+	struct bpf_load_program_attr load_attr = {
+		.prog_type = BPF_PROG_TYPE_RAW_TRACEPOINT_WRITABLE,
+		.license = "GPL v2",
+		.insns = program,
+		.insns_cnt = sizeof(program) / sizeof(struct bpf_insn),
+		.log_level = 2,
+	};
+
+	bpf_fd = bpf_load_program_xattr(&load_attr, error, sizeof(error));
+	if (CHECK(bpf_fd < 0, "bpf_raw_tracepoint_writable load",
+		  "failed: %d errno %d\n", bpf_fd, errno))
+		return;
+
+	tp_fd = bpf_raw_tracepoint_open("nbd_send_request", bpf_fd);
+	if (CHECK(tp_fd >= 0, "bpf_raw_tracepoint_writable open",
+		  "erroneously succeeded\n"))
+		goto out_bpffd;
+
+	close(tp_fd);
+out_bpffd:
+	close(bpf_fd);
+}
+
+static void test_raw_tp_writable_test_run(void)
+{
+	__u32 duration = 0;
+	char error[4096];
+
+	const struct bpf_insn trace_program[] = {
+		BPF_LDX_MEM(BPF_DW, BPF_REG_6, BPF_REG_1, 0),
+		BPF_LDX_MEM(BPF_W, BPF_REG_0, BPF_REG_6, 0),
+		BPF_MOV64_IMM(BPF_REG_0, 42),
+		BPF_STX_MEM(BPF_W, BPF_REG_6, BPF_REG_0, 0),
+		BPF_EXIT_INSN(),
+	};
+
+	struct bpf_load_program_attr load_attr = {
+		.prog_type = BPF_PROG_TYPE_RAW_TRACEPOINT_WRITABLE,
+		.license = "GPL v2",
+		.insns = trace_program,
+		.insns_cnt = sizeof(trace_program) / sizeof(struct bpf_insn),
+		.log_level = 2,
+	};
+
+	int bpf_fd = bpf_load_program_xattr(&load_attr, error, sizeof(error));
+	if (CHECK(bpf_fd < 0, "bpf_raw_tracepoint_writable loaded",
+		  "failed: %d errno %d\n", bpf_fd, errno))
+		return;
+
+	const struct bpf_insn skb_program[] = {
+		BPF_MOV64_IMM(BPF_REG_0, 0),
+		BPF_EXIT_INSN(),
+	};
+
+	struct bpf_load_program_attr skb_load_attr = {
+		.prog_type = BPF_PROG_TYPE_SOCKET_FILTER,
+		.license = "GPL v2",
+		.insns = skb_program,
+		.insns_cnt = sizeof(skb_program) / sizeof(struct bpf_insn),
+	};
+
+	int filter_fd =
+		bpf_load_program_xattr(&skb_load_attr, error, sizeof(error));
+	if (CHECK(filter_fd < 0, "test_program_loaded", "failed: %d errno %d\n",
+		  filter_fd, errno))
+		goto out_bpffd;
+
+	int tp_fd = bpf_raw_tracepoint_open("bpf_test_finish", bpf_fd);
+	if (CHECK(tp_fd < 0, "bpf_raw_tracepoint_writable opened",
+		  "failed: %d errno %d\n", tp_fd, errno))
+		goto out_filterfd;
+
+	char test_skb[128] = {
+		0,
+	};
+
+	__u32 prog_ret;
+	int err = bpf_prog_test_run(filter_fd, 1, test_skb, sizeof(test_skb), 0,
+				    0, &prog_ret, 0);
+	CHECK(err != 42, "test_run",
+	      "tracepoint did not modify return value\n");
+	CHECK(prog_ret != 0, "test_run_ret",
+	      "socket_filter did not return 0\n");
+
+	close(tp_fd);
+
+	err = bpf_prog_test_run(filter_fd, 1, test_skb, sizeof(test_skb), 0, 0,
+				&prog_ret, 0);
+	CHECK(err != 0, "test_run_notrace",
+	      "test_run failed with %d errno %d\n", err, errno);
+	CHECK(prog_ret != 0, "test_run_ret_notrace",
+	      "socket_filter did not return 0\n");
+
+out_filterfd:
+	close(filter_fd);
+out_bpffd:
+	close(bpf_fd);
+}
+
 int main(int ac, char **av)
 {
 	srand(time(NULL));
@@ -2655,6 +2775,8 @@ int main(int ac, char **av)
 	test_signal_pending(BPF_PROG_TYPE_FLOW_DISSECTOR);
 	test_bpf_verif_scale();
 	test_global_data();
+	test_raw_tp_writable_reject_nbd_invalid();
+	test_raw_tp_writable_test_run();
 
 	printf("Summary: %d PASSED, %d FAILED\n", pass_cnt, error_cnt);
 	return error_cnt ? EXIT_FAILURE : EXIT_SUCCESS;
