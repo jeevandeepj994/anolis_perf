@@ -207,6 +207,11 @@ static int (*bpf_strtoul)(const char *buf, unsigned long long buf_len,
 static int (*bpf_tcp_check_syncookie)(struct bpf_sock *sk,
 	    void *ip, int ip_len, void *tcp, int tcp_len) =
 	(void *) BPF_FUNC_tcp_check_syncookie;
+static void *(*bpf_sk_storage_get)(void *map, struct bpf_sock *sk,
+				   void *value, __u64 flags) =
+	(void *) BPF_FUNC_sk_storage_get;
+static int (*bpf_sk_storage_delete)(void *map, struct bpf_sock *sk) =
+	(void *)BPF_FUNC_sk_storage_delete;
 
 /* llvm builtin functions that eBPF C program may use to
  * emit BPF_LD_ABS and BPF_LD_IND instructions
@@ -269,7 +274,7 @@ static int (*bpf_skb_change_type)(void *ctx, __u32 type) =
 	(void *) BPF_FUNC_skb_change_type;
 static unsigned int (*bpf_get_hash_recalc)(void *ctx) =
 	(void *) BPF_FUNC_get_hash_recalc;
-static unsigned long long (*bpf_get_current_task)(void *ctx) =
+static unsigned long long (*bpf_get_current_task)(void) =
 	(void *) BPF_FUNC_get_current_task;
 static int (*bpf_skb_change_tail)(void *ctx, __u32 len, __u64 flags) =
 	(void *) BPF_FUNC_skb_change_tail;
