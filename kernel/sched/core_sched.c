@@ -268,6 +268,20 @@ void clear_all_cookie(void)
 	flush_workqueue(system_wq);
 }
 
+bool sched_check_sched_core_lock(void)
+{
+	mutex_lock(&sched_core_gi_conflict_mutex);
+	if (!static_branch_unlikely(&__sysctl_sched_core_enabled))
+		return true;
+	mutex_unlock(&sched_core_gi_conflict_mutex);
+	return false;
+}
+
+void sched_check_sched_core_unlock(void)
+{
+	mutex_unlock(&sched_core_gi_conflict_mutex);
+}
+
 int sysctl_sched_core_handler(struct ctl_table *table, int write,
 				void __user *buffer, size_t *lenp, loff_t *ppos)
 {
@@ -286,7 +300,12 @@ int sysctl_sched_core_handler(struct ctl_table *table, int write,
 		return err;
 
 	if (new) {
+		if (!sched_check_group_identity_lock()) {
+			sysctl_sched_core = old;
+			return -EBUSY;
+		}
 		static_branch_enable(&__sysctl_sched_core_enabled);
+		sched_check_group_identity_unlock();
 	} else {
 		static_branch_disable(&__sysctl_sched_core_enabled);
 		/*

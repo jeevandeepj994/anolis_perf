@@ -1390,6 +1390,19 @@ void group_identity_put(void)
 	atomic_dec(&group_identity_count);
 }
 
+bool sched_check_group_identity_lock(void)
+{
+	mutex_lock(&sched_core_gi_conflict_mutex);
+	if (group_identity_disabled())
+		return true;
+	mutex_unlock(&sched_core_gi_conflict_mutex);
+	return false;
+}
+void sched_check_group_identity_unlock(void)
+{
+	mutex_unlock(&sched_core_gi_conflict_mutex);
+}
+
 int sched_group_identity_enable_handler(struct ctl_table *table, int write,
 		void __user *buffer, size_t *lenp,
 		loff_t *ppos)
@@ -1405,17 +1418,24 @@ int sched_group_identity_enable_handler(struct ctl_table *table, int write,
 	}
 
 	if (atomic_read(&group_identity_count)) {
-		mutex_unlock(&identity_mutex);
-		return -EBUSY;
+		ret = -EBUSY;
+		goto out;
 	}
 	old = sysctl_sched_group_indentity_enabled;
 	ret = proc_dointvec_minmax(table, write, buffer, lenp, ppos);
 	new = sysctl_sched_group_indentity_enabled;
 	if (!ret && write && (old != new)) {
-		if (new)
+		if (new) {
+			if (!sched_check_sched_core_lock()) {
+				sysctl_sched_group_indentity_enabled = old;
+				ret = -EBUSY;
+				goto out;
+			}
 			__group_identity_enable();
-		else
+			sched_check_sched_core_unlock();
+		} else {
 			__group_identity_disable();
+		}
 	}
 out:
 	mutex_unlock(&identity_mutex);
