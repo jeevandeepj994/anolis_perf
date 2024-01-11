@@ -903,6 +903,9 @@ struct kvm_ppc_resize_hpt {
 #ifdef __KVM_HAVE_PIT
 #define KVM_CAP_REINJECT_CONTROL 24
 #endif
+
+#define KVM_CAP_ARM_VIRT_MSI_BYPASS 799
+
 #define KVM_CAP_IRQ_ROUTING 25
 #define KVM_CAP_IRQ_INJECT_STATUS 26
 #define KVM_CAP_ASSIGN_DEV_IRQ 29
@@ -1338,6 +1341,11 @@ struct kvm_vfio_spapr_tce {
 	__s32	tablefd;
 };
 
+struct kvm_master_dev_info {
+	__u32 nvectors;
+	struct kvm_msi msi[];
+};
+
 /*
  * ioctls for VM fds
  */
@@ -1454,6 +1462,9 @@ struct kvm_s390_ucas_mapping {
 #define KVM_SET_DEVICE_ATTR	  _IOW(KVMIO,  0xe1, struct kvm_device_attr)
 #define KVM_GET_DEVICE_ATTR	  _IOW(KVMIO,  0xe2, struct kvm_device_attr)
 #define KVM_HAS_DEVICE_ATTR	  _IOW(KVMIO,  0xe3, struct kvm_device_attr)
+
+#define KVM_CREATE_SHADOW_DEV	  _IOW(KVMIO,  0xf0, struct kvm_master_dev_info)
+#define KVM_DEL_SHADOW_DEV	  _IOW(KVMIO,  0xf1, __u32)
 
 /* ioctls for control vm during system reset */
 #define KVM_CONTROL_PRE_SYSTEM_RESET	 _IO(KVMIO, 0xe8)
