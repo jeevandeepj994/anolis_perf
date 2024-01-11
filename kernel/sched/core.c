@@ -399,6 +399,10 @@ sched_core_dequeue(struct rq *rq, struct task_struct *p, int flags) { }
 
 #endif /* CONFIG_SCHED_CORE */
 
+#if defined(CONFIG_SCHED_CORE) && defined(CONFIG_GROUP_IDENTITY)
+DEFINE_MUTEX(sched_core_gi_conflict_mutex);
+#endif
+
 /*
  * part of the period that we allow rt tasks to run in us.
  * default: 0.95s
