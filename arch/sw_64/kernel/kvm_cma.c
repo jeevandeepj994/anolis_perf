@@ -75,7 +75,7 @@ static int __init kvm_cma_activate_area(struct cma *cma)
 		init_kvm_cma_reserved_pageblock(pfn_to_page(base_pfn));
 	} while (--i);
 
-	mutex_init(&cma->lock);
+	spin_lock_init(&cma->lock);
 
 	return 0;
 }

@@ -1189,6 +1189,9 @@ static inline bool kvm_is_error_gpa(struct kvm *kvm, gpa_t gpa)
 enum kvm_stat_kind {
 	KVM_STAT_VM,
 	KVM_STAT_VCPU,
+#ifdef CONFIG_SW64
+	KVM_STAT_DFX_SW64, /* Detail For vcpu stat EXtension */
+#endif
 };
 
 struct kvm_stat_data {
@@ -1211,6 +1214,21 @@ struct kvm_stats_debugfs_item {
 #define VCPU_STAT(n, x, ...)							\
 	{ n, offsetof(struct kvm_vcpu, stat.x), KVM_STAT_VCPU, ## __VA_ARGS__ }
 
+#ifdef CONFIG_SW64
+enum dfx_sw64_stat_kind {
+	DFX_SW64_STAT_U64,
+	DFX_SW64_STAT_CPUTIME,
+};
+
+/* Detail For vcpu stat EXtension debugfs item */
+struct dfx_sw64_kvm_stats_debugfs_item {
+	const char *name;
+	int offset;
+	enum dfx_sw64_stat_kind dfx_kind;
+	struct dentry *dentry;
+};
+extern struct dfx_sw64_kvm_stats_debugfs_item dfx_sw64_debugfs_entries[];
+#endif
 extern struct kvm_stats_debugfs_item debugfs_entries[];
 extern struct dentry *kvm_debugfs_dir;
 

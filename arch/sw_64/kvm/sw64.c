@@ -23,7 +23,7 @@
 bool set_msi_flag;
 
 #define DFX_STAT(n, x, ...) \
-	{ n, offsetof(struct kvm_vcpu_stat, x), DFX_STAT_U64, ## __VA_ARGS__ }
+	{ n, offsetof(struct kvm_vcpu_stat, x), DFX_SW64_STAT_U64, ## __VA_ARGS__ }
 
 static unsigned long get_new_vpn_context(struct kvm_vcpu *vcpu, long cpu)
 {
@@ -138,11 +138,11 @@ struct kvm_stats_debugfs_item debugfs_entries[] = {
 	VCPU_STAT("halt_wakeup", halt_wakeup),
 	VCPU_STAT("halt_poll_invalid", halt_poll_invalid),
 	VCPU_STAT("signal_exits", signal_exits),
-	{ "vcpu_stat", 0, KVM_STAT_DFX },
+	{ "vcpu_stat", 0, KVM_STAT_DFX_SW64 },
 	{ NULL }
 };
 
-struct dfx_kvm_stats_debugfs_item dfx_debugfs_entries[] = {
+struct dfx_sw64_kvm_stats_debugfs_item dfx_sw64_debugfs_entries[] = {
 	DFX_STAT("pid", pid),
 	DFX_STAT("exits", exits),
 	DFX_STAT("io_exits", io_exits),
