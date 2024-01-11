@@ -154,6 +154,11 @@ static void kvm_uevent_notify_change(unsigned int type, struct kvm *kvm);
 static unsigned long long kvm_createvm_count;
 static unsigned long long kvm_active_vms;
 
+#ifdef CONFIG_SW64
+#define DFX_SW64_MAX_VCPU            1024
+#define DFX_SW64_MAX_VCPU_STAT_SIZE  1024
+#endif
+
 __weak void kvm_arch_mmu_notifier_invalidate_range(struct kvm *kvm,
 						   unsigned long start, unsigned long end)
 {
@@ -4716,9 +4721,121 @@ static int vcpu_stat_clear(void *_offset, u64 val)
 DEFINE_SIMPLE_ATTRIBUTE(vcpu_stat_fops, vcpu_stat_get, vcpu_stat_clear,
 			"%llu\n");
 
+#ifdef CONFIG_SW64
+void __attribute__((weak)) kvm_arch_vcpu_stat_reset(struct kvm_vcpu_stat *vcpu_stat)
+{
+}
+
+/*
+ * copy of seq_buf_alloc of kernel, kernel not export it
+ */
+static void *dfx_sw64_seq_buf_alloc(unsigned long size)
+{
+	return kvmalloc(size, GFP_KERNEL_ACCOUNT);
+}
+
+static void dfx_sw64_seq_buf_free(const void *buf)
+{
+	kvfree(buf);
+}
+
+static int dfx_sw64_seq_buf_alloc_vcpu(struct seq_file *p, int vcpu_nr)
+{
+	char *buf;
+	size_t size;
+
+	size = (vcpu_nr + 1) * DFX_SW64_MAX_VCPU_STAT_SIZE;
+	buf = dfx_sw64_seq_buf_alloc(size);
+	if (!buf)
+		return -ENOMEM;
+	if (p->buf)
+		dfx_sw64_seq_buf_free(p->buf);
+	p->buf = buf;
+	p->size = size;
+	return 0;
+}
+
+static int __dfx_sw64_vcpu_stats_get(struct seq_file *p, void *v)
+{
+	struct kvm *kvm;
+	struct kvm_vcpu *vcpu;
+	struct kvm_vcpu_stat *vcpu_stats;
+	struct dfx_sw64_kvm_stats_debugfs_item *dp;
+	int vcpu_nr = 0;
+	int i, index = 0;
+
+	mutex_lock(&kvm_lock);
+	list_for_each_entry(kvm, &vm_list, vm_list)
+		kvm_for_each_vcpu(i, vcpu, kvm) {
+			vcpu_nr++;
+		}
+	mutex_unlock(&kvm_lock);
+	vcpu_nr = min(vcpu_nr, DFX_SW64_MAX_VCPU);
+	if (!vcpu_nr) {
+		seq_putc(p, '\n');
+		return 0;
+	}
+
+	if (dfx_sw64_seq_buf_alloc_vcpu(p, vcpu_nr))
+		return -ENOMEM;
+
+	vcpu_stats = vmalloc(vcpu_nr * sizeof(struct kvm_vcpu_stat));
+	if (!vcpu_stats)
+		return -ENOMEM;
+
+	mutex_lock(&kvm_lock);
+	list_for_each_entry(kvm, &vm_list, vm_list) {
+		kvm_for_each_vcpu(i, vcpu, kvm) {
+			if (index >= vcpu_nr)
+				break;
+			memcpy(vcpu_stats + index, &(vcpu->stat),
+			       sizeof(struct kvm_vcpu_stat));
+			kvm_arch_vcpu_stat_reset(&vcpu->stat);
+			++index;
+		}
+	}
+	mutex_unlock(&kvm_lock);
+	for (i = 0; i < vcpu_nr; i++) {
+		for (dp = dfx_sw64_debugfs_entries; dp->name; ++dp) {
+			switch (dp->dfx_kind) {
+			case DFX_SW64_STAT_U64:
+				seq_put_decimal_ull(p, " ",
+						*(u64 *)((void *)&vcpu_stats[i] + dp->offset));
+				break;
+			case DFX_SW64_STAT_CPUTIME:
+				pr_warn("DFX_SW64_STAT_CPUTIME not supported currently!");
+				break;
+			default:
+				pr_warn("Bad dfx_sw64_kind in dfx_debugfs_entries!");
+				break;
+			}
+		}
+		seq_putc(p, '\n');
+	}
+
+	vfree(vcpu_stats);
+	return 0;
+}
+
+static int dfx_sw64_vcpu_stats_open(struct inode *inode, struct file *file)
+{
+	return single_open(file, __dfx_sw64_vcpu_stats_get, NULL);
+}
+
+static const struct file_operations dfx_sw64_stat_fops = {
+	.open           = dfx_sw64_vcpu_stats_open,
+	.read           = seq_read,
+	.llseek         = seq_lseek,
+	.release        = single_release,
+};
+#endif
+
 static const struct file_operations *stat_fops[] = {
 	[KVM_STAT_VCPU] = &vcpu_stat_fops,
 	[KVM_STAT_VM]   = &vm_stat_fops,
+#ifdef CONFIG_SW64
+	[KVM_STAT_DFX_SW64]  = &dfx_sw64_stat_fops,
+#endif
 };
 
 static void kvm_uevent_notify_change(unsigned int type, struct kvm *kvm)
