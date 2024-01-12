@@ -82,16 +82,6 @@ static inline void pgtable_share_create(struct vm_area_struct *vma)
 {
 }
 
-static unsigned long pgtable_share_get_unmapped_area(struct file *filp,
-						     unsigned long addr,
-						     unsigned long len,
-						     unsigned long pgoff,
-						     unsigned long flags)
-{
-	BUILD_BUG();
-	return 0;
-}
-
 static inline vm_fault_t pgtable_share_copy_pmd(struct vm_area_struct *orig_vma,
 				  struct vm_area_struct *shadow_vma,
 				  unsigned long addr)
