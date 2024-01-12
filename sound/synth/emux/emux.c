@@ -132,7 +132,7 @@ int snd_emux_free(struct snd_emux *emu)
 
 	spin_lock_irqsave(&emu->voice_lock, flags);
 	if (emu->timer_active)
-		del_timer(&emu->tlist);
+		timer_shutdown(&emu->tlist);
 	spin_unlock_irqrestore(&emu->voice_lock, flags);
 
 	snd_emux_proc_free(emu);
