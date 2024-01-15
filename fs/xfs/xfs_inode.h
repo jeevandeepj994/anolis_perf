@@ -57,6 +57,9 @@ typedef struct xfs_inode {
 
 	struct xfs_icdinode	i_d;		/* most of ondisk inode */
 
+	/* flags for controlling reflink cow behavior */
+	uint32_t		i_reflink_flags;
+
 	/* VFS inode */
 	struct inode		i_vnode;	/* embedded VFS inode */
 
