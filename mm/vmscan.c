@@ -1038,15 +1038,7 @@ static int __remove_mapping(struct address_space *mapping, struct page *page,
 	BUG_ON(!PageLocked(page));
 	BUG_ON(mapping != page_mapping(page));
 
-	/*
-	 * If duplicated slaver pages can not be released, maintain master
-	 * page here.
-	 */
-	if (!dedup_page(page, false))
-		return 0;
-
 	xa_lock_irqsave(&mapping->i_pages, flags);
-
 	/*
 	 * The non racy check for a busy page.
 	 *
@@ -1119,6 +1111,8 @@ static int __remove_mapping(struct address_space *mapping, struct page *page,
 
 		if (freepage != NULL)
 			freepage(page);
+
+		dedup_page(page, false);
 	}
 
 	return 1;
@@ -1506,6 +1500,11 @@ static unsigned int shrink_page_list(struct list_head *page_list,
 					stat->nr_lazyfree_fail += nr_pages;
 				goto activate_locked;
 			}
+		}
+
+		if (unlikely(dup_page_mapped(page))) {
+			if (!dedup_page2(page, false, false))
+				goto activate_locked;
 		}
 
 		if (PageDirty(page)) {
