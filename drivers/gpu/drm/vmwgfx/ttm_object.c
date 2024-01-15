@@ -225,41 +225,6 @@ void ttm_base_object_unref(struct ttm_base_object **p_base)
 	kref_put(&base->refcount, ttm_release_base);
 }
 
-/**
- * ttm_base_object_noref_lookup - look up a base object without reference
- * @tfile: The struct ttm_object_file the object is registered with.
- * @key: The object handle.
- *
- * This function looks up a ttm base object and returns a pointer to it
- * without refcounting the pointer. The returned pointer is only valid
- * until ttm_base_object_noref_release() is called, and the object
- * pointed to by the returned pointer may be doomed. Any persistent usage
- * of the object requires a refcount to be taken using kref_get_unless_zero().
- * Iff this function returns successfully it needs to be paired with
- * ttm_base_object_noref_release() and no sleeping- or scheduling functions
- * may be called inbetween these function callse.
- *
- * Return: A pointer to the object if successful or NULL otherwise.
- */
-struct ttm_base_object *
-ttm_base_object_noref_lookup(struct ttm_object_file *tfile, uint32_t key)
-{
-	struct drm_hash_item *hash;
-	struct drm_open_hash *ht = &tfile->ref_hash[TTM_REF_USAGE];
-	int ret;
-
-	rcu_read_lock();
-	ret = drm_ht_find_item_rcu(ht, key, &hash);
-	if (ret) {
-		rcu_read_unlock();
-		return NULL;
-	}
-
-	__release(RCU);
-	return drm_hash_entry(hash, struct ttm_ref_object, hash)->obj;
-}
-EXPORT_SYMBOL(ttm_base_object_noref_lookup);
-
 struct ttm_base_object *ttm_base_object_lookup(struct ttm_object_file *tfile,
 					       uint32_t key)
 {
@@ -268,15 +233,16 @@ struct ttm_base_object *ttm_base_object_lookup(struct ttm_object_file *tfile,
 	struct drm_open_hash *ht = &tfile->ref_hash[TTM_REF_USAGE];
 	int ret;
 
-	rcu_read_lock();
-	ret = drm_ht_find_item_rcu(ht, key, &hash);
+	spin_lock(&tfile->lock);
+	ret = drm_ht_find_item(ht, key, &hash);
 
 	if (likely(ret == 0)) {
 		base = drm_hash_entry(hash, struct ttm_ref_object, hash)->obj;
 		if (!kref_get_unless_zero(&base->refcount))
 			base = NULL;
 	}
-	rcu_read_unlock();
+	spin_unlock(&tfile->lock);
+
 
 	return base;
 }
@@ -313,8 +279,8 @@ bool ttm_ref_object_exists(struct ttm_object_file *tfile,
 	struct drm_hash_item *hash;
 	struct ttm_ref_object *ref;
 
-	rcu_read_lock();
-	if (unlikely(drm_ht_find_item_rcu(ht, base->handle, &hash) != 0))
+	spin_lock(&tfile->lock);
+	if (unlikely(drm_ht_find_item(ht, base->handle, &hash) != 0))
 		goto out_false;
 
 	/*
@@ -333,7 +299,7 @@ bool ttm_ref_object_exists(struct ttm_object_file *tfile,
 	if (unlikely(kref_read(&ref->kref) == 0))
 		goto out_false;
 
-	rcu_read_unlock();
+	spin_unlock(&tfile->lock);
 	return true;
 
  out_false:
@@ -363,8 +329,8 @@ int ttm_ref_object_add(struct ttm_object_file *tfile,
 		*existed = true;
 
 	while (ret == -EINVAL) {
-		rcu_read_lock();
-		ret = drm_ht_find_item_rcu(ht, base->handle, &hash);
+		spin_lock(&tfile->lock);
+		ret = drm_ht_find_item(ht, base->handle, &hash);
 
 		if (ret == 0) {
 			ref = drm_hash_entry(hash, struct ttm_ref_object, hash);
@@ -374,7 +340,7 @@ int ttm_ref_object_add(struct ttm_object_file *tfile,
 			}
 		}
 
-		rcu_read_unlock();
+		spin_unlock(&tfile->lock);
 		if (require_existed)
 			return -EPERM;
 
