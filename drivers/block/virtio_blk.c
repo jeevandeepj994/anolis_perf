@@ -10,7 +10,6 @@
 #include <linux/virtio_blk.h>
 #include <linux/scatterlist.h>
 #include <linux/string_helpers.h>
-#include <scsi/scsi_cmnd.h>
 #include <linux/idr.h>
 #include <linux/blk-mq.h>
 #include <linux/blk-mq-virtio.h>
@@ -19,6 +18,12 @@
 #define PART_BITS 4
 #define VQ_NAME_LEN 16
 #define MAX_DISCARD_SEGMENTS 256u
+
+#ifdef CONFIG_ARCH_HAS_SG_CHAIN
+#define VIRTIO_BLK_INLINE_SG_CNT	2
+#else
+#define VIRTIO_BLK_INLINE_SG_CNT	0
+#endif
 
 static int major;
 static DEFINE_IDA(vd_index_ida);
@@ -71,13 +76,9 @@ struct virtio_blk {
 };
 
 struct virtblk_req {
-#ifdef CONFIG_VIRTIO_BLK_SCSI
-	struct scsi_request sreq;	/* for SCSI passthrough, must be first */
-	u8 sense[SCSI_SENSE_BUFFERSIZE];
-	struct virtio_scsi_inhdr in_hdr;
-#endif
 	struct virtio_blk_outhdr out_hdr;
 	u8 status;
+	struct sg_table sg_table;
 	struct scatterlist sg[];
 };
 
@@ -92,80 +93,6 @@ static inline blk_status_t virtblk_result(struct virtblk_req *vbr)
 		return BLK_STS_IOERR;
 	}
 }
-
-/*
- * If this is a packet command we need a couple of additional headers.  Behind
- * the normal outhdr we put a segment with the scsi command block, and before
- * the normal inhdr we put the sense data and the inhdr with additional status
- * information.
- */
-#ifdef CONFIG_VIRTIO_BLK_SCSI
-static int virtblk_add_req_scsi(struct virtqueue *vq, struct virtblk_req *vbr,
-		struct scatterlist *data_sg, bool have_data)
-{
-	struct scatterlist hdr, status, cmd, sense, inhdr, *sgs[6];
-	unsigned int num_out = 0, num_in = 0;
-
-	sg_init_one(&hdr, &vbr->out_hdr, sizeof(vbr->out_hdr));
-	sgs[num_out++] = &hdr;
-	sg_init_one(&cmd, vbr->sreq.cmd, vbr->sreq.cmd_len);
-	sgs[num_out++] = &cmd;
-
-	if (have_data) {
-		if (vbr->out_hdr.type & cpu_to_virtio32(vq->vdev, VIRTIO_BLK_T_OUT))
-			sgs[num_out++] = data_sg;
-		else
-			sgs[num_out + num_in++] = data_sg;
-	}
-
-	sg_init_one(&sense, vbr->sense, SCSI_SENSE_BUFFERSIZE);
-	sgs[num_out + num_in++] = &sense;
-	sg_init_one(&inhdr, &vbr->in_hdr, sizeof(vbr->in_hdr));
-	sgs[num_out + num_in++] = &inhdr;
-	sg_init_one(&status, &vbr->status, sizeof(vbr->status));
-	sgs[num_out + num_in++] = &status;
-
-	return virtqueue_add_sgs(vq, sgs, num_out, num_in, vbr, GFP_ATOMIC);
-}
-
-static inline void virtblk_scsi_request_done(struct request *req)
-{
-	struct virtblk_req *vbr = blk_mq_rq_to_pdu(req);
-	struct virtio_blk *vblk = req->q->queuedata;
-	struct scsi_request *sreq = &vbr->sreq;
-
-	sreq->resid_len = virtio32_to_cpu(vblk->vdev, vbr->in_hdr.residual);
-	sreq->sense_len = virtio32_to_cpu(vblk->vdev, vbr->in_hdr.sense_len);
-	sreq->result = virtio32_to_cpu(vblk->vdev, vbr->in_hdr.errors);
-}
-
-static int virtblk_ioctl(struct block_device *bdev, fmode_t mode,
-			     unsigned int cmd, unsigned long data)
-{
-	struct gendisk *disk = bdev->bd_disk;
-	struct virtio_blk *vblk = disk->private_data;
-
-	/*
-	 * Only allow the generic SCSI ioctls if the host can support it.
-	 */
-	if (!virtio_has_feature(vblk->vdev, VIRTIO_BLK_F_SCSI))
-		return -ENOTTY;
-
-	return scsi_cmd_blk_ioctl(bdev, mode, cmd,
-				  (void __user *)data);
-}
-#else
-static inline int virtblk_add_req_scsi(struct virtqueue *vq,
-		struct virtblk_req *vbr, struct scatterlist *data_sg,
-		bool have_data)
-{
-	return -EIO;
-}
-static inline void virtblk_scsi_request_done(struct request *req)
-{
-}
-#define virtblk_ioctl	NULL
-#endif /* CONFIG_VIRTIO_BLK_SCSI */
 
 static int virtblk_add_req(struct virtqueue *vq, struct virtblk_req *vbr,
 		struct scatterlist *data_sg, bool have_data)
@@ -229,22 +156,102 @@ static int virtblk_setup_discard_write_zeroes(struct request *req, bool unmap)
 	return 0;
 }
 
-static inline void virtblk_request_done(struct request *req)
+static void virtblk_unmap_data(struct request *req, struct virtblk_req *vbr)
 {
-	struct virtblk_req *vbr = blk_mq_rq_to_pdu(req);
+	if (blk_rq_nr_phys_segments(req))
+		sg_free_table_chained(&vbr->sg_table,
+				      VIRTIO_BLK_INLINE_SG_CNT);
+}
 
+static int virtblk_map_data(struct blk_mq_hw_ctx *hctx, struct request *req,
+		struct virtblk_req *vbr)
+{
+	int err;
+
+	if (!blk_rq_nr_phys_segments(req))
+		return 0;
+
+	vbr->sg_table.sgl = vbr->sg;
+	err = sg_alloc_table_chained(&vbr->sg_table,
+				     blk_rq_nr_phys_segments(req),
+				     vbr->sg_table.sgl,
+				     VIRTIO_BLK_INLINE_SG_CNT);
+	if (unlikely(err))
+		return -ENOMEM;
+
+	return blk_rq_map_sg(hctx->queue, req, vbr->sg_table.sgl);
+}
+
+static void virtblk_cleanup_cmd(struct request *req)
+{
 	if (req->rq_flags & RQF_SPECIAL_PAYLOAD) {
 		kfree(page_address(req->special_vec.bv_page) +
 		      req->special_vec.bv_offset);
 	}
+}
+
+static int virtblk_setup_cmd(struct virtio_device *vdev, struct request *req,
+		struct virtblk_req *vbr)
+{
+	bool unmap = false;
+	u32 type;
+	int err;
+
+	vbr->out_hdr.sector = 0;
 
 	switch (req_op(req)) {
-	case REQ_OP_SCSI_IN:
-	case REQ_OP_SCSI_OUT:
-		virtblk_scsi_request_done(req);
+	case REQ_OP_READ:
+		type = VIRTIO_BLK_T_IN;
+		vbr->out_hdr.sector = cpu_to_virtio64(vdev,
+						      blk_rq_pos(req));
 		break;
+	case REQ_OP_WRITE:
+		type = VIRTIO_BLK_T_OUT;
+		vbr->out_hdr.sector = cpu_to_virtio64(vdev,
+						      blk_rq_pos(req));
+		break;
+	case REQ_OP_FLUSH:
+		type = VIRTIO_BLK_T_FLUSH;
+		break;
+	case REQ_OP_DISCARD:
+		type = VIRTIO_BLK_T_DISCARD;
+		break;
+	case REQ_OP_WRITE_ZEROES:
+		type = VIRTIO_BLK_T_WRITE_ZEROES;
+		unmap = !(req->cmd_flags & REQ_NOUNMAP);
+		break;
+	case REQ_OP_DRV_IN:
+		type = VIRTIO_BLK_T_GET_ID;
+		break;
+	default:
+		WARN_ON_ONCE(1);
+		return BLK_STS_IOERR;
 	}
 
+	vbr->out_hdr.type = cpu_to_virtio32(vdev, type);
+	vbr->out_hdr.ioprio = cpu_to_virtio32(vdev, req_get_ioprio(req));
+
+	if (type == VIRTIO_BLK_T_DISCARD || type == VIRTIO_BLK_T_WRITE_ZEROES) {
+		err = virtblk_setup_discard_write_zeroes(req, unmap);
+		if (err) {
+			switch (err) {
+			case -ENOMEM:
+				return BLK_STS_RESOURCE;
+			default:
+				return BLK_STS_IOERR;
+			}
+		}
+	}
+
+	return 0;
+}
+
+static inline void virtblk_request_done(struct request *req)
+{
+	struct virtblk_req *vbr = blk_mq_rq_to_pdu(req);
+
+	virtblk_unmap_data(req, vbr);
+	virtblk_cleanup_cmd(req);
 	blk_mq_end_request(req, virtblk_result(vbr));
 }
 
@@ -301,71 +308,24 @@ static blk_status_t virtio_queue_rq(struct blk_mq_hw_ctx *hctx,
 	int qid = hctx->queue_num;
 	int err;
 	bool notify = false;
-	bool unmap = false;
-	u32 type;
 
 	if (req_op(req) != REQ_OP_DISCARD)
 		BUG_ON(req->nr_phys_segments + 2 > vblk->sg_elems);
 
-	switch (req_op(req)) {
-	case REQ_OP_READ:
-	case REQ_OP_WRITE:
-		type = 0;
-		break;
-	case REQ_OP_FLUSH:
-		type = VIRTIO_BLK_T_FLUSH;
-		break;
-	case REQ_OP_DISCARD:
-		type = VIRTIO_BLK_T_DISCARD;
-		break;
-	case REQ_OP_WRITE_ZEROES:
-		type = VIRTIO_BLK_T_WRITE_ZEROES;
-		unmap = !(req->cmd_flags & REQ_NOUNMAP);
-		break;
-	case REQ_OP_SCSI_IN:
-	case REQ_OP_SCSI_OUT:
-		type = VIRTIO_BLK_T_SCSI_CMD;
-		break;
-	case REQ_OP_DRV_IN:
-		type = VIRTIO_BLK_T_GET_ID;
-		break;
-	default:
-		WARN_ON_ONCE(1);
-		return BLK_STS_IOERR;
-	}
-
-	vbr->out_hdr.type = cpu_to_virtio32(vblk->vdev, type);
-	vbr->out_hdr.sector = type ?
-		0 : cpu_to_virtio64(vblk->vdev, blk_rq_pos(req));
-	vbr->out_hdr.ioprio = cpu_to_virtio32(vblk->vdev, req_get_ioprio(req));
+	err = virtblk_setup_cmd(vblk->vdev, req, vbr);
+	if (unlikely(err))
+		return err;
 
 	blk_mq_start_request(req);
 
-	if (type == VIRTIO_BLK_T_DISCARD || type == VIRTIO_BLK_T_WRITE_ZEROES) {
-		err = virtblk_setup_discard_write_zeroes(req, unmap);
-		if (err) {
-			switch (err) {
-			case -ENOMEM:
-				return BLK_STS_RESOURCE;
-			default:
-				return BLK_STS_IOERR;
-			}
-		}
-	}
-
-	num = blk_rq_map_sg(hctx->queue, req, vbr->sg);
-	if (num) {
-		if (rq_data_dir(req) == WRITE)
-			vbr->out_hdr.type |= cpu_to_virtio32(vblk->vdev, VIRTIO_BLK_T_OUT);
-		else
-			vbr->out_hdr.type |= cpu_to_virtio32(vblk->vdev, VIRTIO_BLK_T_IN);
+	num = virtblk_map_data(hctx, req, vbr);
+	if (unlikely(num < 0)) {
+		virtblk_cleanup_cmd(req);
+		return BLK_STS_RESOURCE;
 	}
 
 	spin_lock_irqsave(&vblk->vqs[qid].lock, flags);
-	if (blk_rq_is_scsi(req))
-		err = virtblk_add_req_scsi(vblk->vqs[qid].vq, vbr, vbr->sg, num);
-	else
-		err = virtblk_add_req(vblk->vqs[qid].vq, vbr, vbr->sg, num);
+	err = virtblk_add_req(vblk->vqs[qid].vq, vbr, vbr->sg_table.sgl, num);
 	if (err) {
 		virtqueue_kick(vblk->vqs[qid].vq);
 		/* Don't stop the queue if -ENOMEM: we may have failed to
@@ -374,6 +334,8 @@ static blk_status_t virtio_queue_rq(struct blk_mq_hw_ctx *hctx,
 		if (err == -ENOSPC)
 			blk_mq_stop_hw_queue(hctx);
 		spin_unlock_irqrestore(&vblk->vqs[qid].lock, flags);
+		virtblk_unmap_data(req, vbr);
+		virtblk_cleanup_cmd(req);
 		switch (err) {
 		case -ENOSPC:
 			return BLK_STS_DEV_RESOURCE;
@@ -487,7 +449,6 @@ out:
 }
 
 static const struct block_device_operations virtblk_fops = {
-	.ioctl  = virtblk_ioctl,
 	.owner  = THIS_MODULE,
 	.open = virtblk_open,
 	.release = virtblk_release,
@@ -762,19 +723,6 @@ static const struct attribute_group *virtblk_attr_groups[] = {
 	NULL,
 };
 
-static int virtblk_init_request(struct blk_mq_tag_set *set, struct request *rq,
-		unsigned int hctx_idx, unsigned int numa_node)
-{
-	struct virtio_blk *vblk = set->driver_data;
-	struct virtblk_req *vbr = blk_mq_rq_to_pdu(rq);
-
-#ifdef CONFIG_VIRTIO_BLK_SCSI
-	vbr->sreq.sense = vbr->sense;
-#endif
-	sg_init_table(vbr->sg, vblk->sg_elems);
-	return 0;
-}
-
 static int virtblk_map_queues(struct blk_mq_tag_set *set)
 {
 	struct virtio_blk *vblk = set->driver_data;
@@ -782,23 +730,10 @@ static int virtblk_map_queues(struct blk_mq_tag_set *set)
 	return blk_mq_virtio_map_queues(&set->map[0], vblk->vdev, 0);
 }
 
-#ifdef CONFIG_VIRTIO_BLK_SCSI
-static void virtblk_initialize_rq(struct request *req)
-{
-	struct virtblk_req *vbr = blk_mq_rq_to_pdu(req);
-
-	scsi_req_init(&vbr->sreq);
-}
-#endif
-
 static const struct blk_mq_ops virtio_mq_ops = {
 	.queue_rq	= virtio_queue_rq,
 	.commit_rqs	= virtio_commit_rqs,
 	.complete	= virtblk_request_done,
-	.init_request	= virtblk_init_request,
-#ifdef CONFIG_VIRTIO_BLK_SCSI
-	.initialize_rq_fn = virtblk_initialize_rq,
-#endif
 	.map_queues	= virtblk_map_queues,
 };
 
@@ -879,7 +814,7 @@ static int virtblk_probe(struct virtio_device *vdev)
 	vblk->tag_set.flags = BLK_MQ_F_SHOULD_MERGE;
 	vblk->tag_set.cmd_size =
 		sizeof(struct virtblk_req) +
-		sizeof(struct scatterlist) * sg_elems;
+		sizeof(struct scatterlist) * VIRTIO_BLK_INLINE_SG_CNT;
 	vblk->tag_set.driver_data = vblk;
 	vblk->tag_set.nr_hw_queues = vblk->num_vqs;
 
@@ -1090,9 +1025,6 @@ static const struct virtio_device_id id_table[] = {
 static unsigned int features_legacy[] = {
 	VIRTIO_BLK_F_SEG_MAX, VIRTIO_BLK_F_SIZE_MAX, VIRTIO_BLK_F_GEOMETRY,
 	VIRTIO_BLK_F_RO, VIRTIO_BLK_F_BLK_SIZE,
-#ifdef CONFIG_VIRTIO_BLK_SCSI
-	VIRTIO_BLK_F_SCSI,
-#endif
 	VIRTIO_BLK_F_FLUSH, VIRTIO_BLK_F_TOPOLOGY, VIRTIO_BLK_F_CONFIG_WCE,
 	VIRTIO_BLK_F_MQ, VIRTIO_BLK_F_DISCARD, VIRTIO_BLK_F_WRITE_ZEROES,
 }
