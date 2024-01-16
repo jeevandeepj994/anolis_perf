@@ -52,6 +52,9 @@ module_param(napi_tx, bool, 0644);
 module_param(force_xdp, bool, 0644);
 module_param(lro, bool, 0644);
 
+#define VIRTNET_DIM_TUNE_TRAFFIC 1
+#define VIRTNET_DIM_NEVENTS 128
+
 /* FIXME: MTU in config. */
 #define GOOD_PACKET_LEN (ETH_HLEN + VLAN_HLEN + ETH_DATA_LEN)
 #define GOOD_COPY_LEN	128
@@ -1979,7 +1982,8 @@ static void virtnet_rx_dim_update(struct virtnet_info *vi, struct receive_queue 
 			  &cur_sample);
 	u64_stats_update_end(&rq->stats.syncp);
 
-	net_dim(&rq->dim, cur_sample);
+	net_dim_tune(&rq->dim, cur_sample, VIRTNET_DIM_NEVENTS,
+		     VIRTNET_DIM_TUNE_TRAFFIC);
 	rq->packets_in_napi = 0;
 }
 

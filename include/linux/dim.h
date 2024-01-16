@@ -25,12 +25,18 @@ struct net_device;
  */
 #define DIM_NEVENTS 64
 
+#define DIM_RATIO 5
+
 /*
  * Is a difference between values justifies taking an action.
  * We consider 10% difference as significant.
  */
 #define IS_SIGNIFICANT_DIFF(val, ref) \
 	((ref) && (((100UL * abs((val) - (ref))) / (ref)) > 10))
+
+/* Consider 1% difference as traffic is stable. */
+#define IS_SIGNIFICANT_DIFF_1(val, ref) \
+	((ref) && (((100UL * abs((val) - (ref))) / (ref)) <= 1))
 
 /*
  * Calculate the gap between two values.
@@ -424,6 +430,18 @@ struct dim_cq_moder net_dim_get_def_tx_moderation(u8 cq_period_mode);
  * to decide on next required action.
  */
 void net_dim(struct dim *dim, struct dim_sample end_sample);
+
+/**
+ *	net_dim_tune - DIM algorithm entry point with tunable params
+ *	@dim: DIM instance information
+ *	@end_sample: Current data measurement
+ *	@sample_events: Sampling event interval
+ *	@tune_traffic: non-high load traffic decision optimization
+ *
+ * This provides more tuning parameter settings than the net_dim interface.
+ */
+void net_dim_tune(struct dim *dim, struct dim_sample end_sample,
+		  u16 sample_events, bool tune_traffic);
 
 /* RDMA DIM */
 
