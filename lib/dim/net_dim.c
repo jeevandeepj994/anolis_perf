@@ -294,7 +294,8 @@ static int net_dim_stats_compare(struct dim_stats *curr,
 	return DIM_STATS_SAME;
 }
 
-static bool net_dim_decision(struct dim_stats *curr_stats, struct dim *dim)
+static bool net_dim_decision(struct dim_stats *curr_stats, struct dim *dim,
+			     bool tune_traffic)
 {
 	int prev_state = dim->tune_state;
 	int prev_ix = dim->profile_ix;
@@ -317,6 +318,16 @@ static bool net_dim_decision(struct dim_stats *curr_stats, struct dim *dim)
 
 	case DIM_GOING_RIGHT:
 	case DIM_GOING_LEFT:
+		/* A new local optimum for tune. Other states are cleared.*/
+		if (tune_traffic && dim->prev_stats.ppms && curr_stats->epms &&
+		    IS_SIGNIFICANT_DIFF_1(curr_stats->ppms, dim->prev_stats.ppms) &&
+		    (curr_stats->ppms / curr_stats->epms) <= DIM_RATIO) {
+			dim_park_on_top(dim);
+			dim->profile_ix = 1;
+			dim->prev_stats = *curr_stats;
+			return true;
+		}
+
 		stats_res = net_dim_stats_compare(curr_stats,
 						  &dim->prev_stats);
 		if (stats_res != DIM_STATS_BETTER)
@@ -347,7 +358,8 @@ static bool net_dim_decision(struct dim_stats *curr_stats, struct dim *dim)
 	return dim->profile_ix != prev_ix;
 }
 
-void net_dim(struct dim *dim, struct dim_sample end_sample)
+static void net_dim_impl(struct dim *dim, struct dim_sample end_sample,
+			 u16 sample_events, bool tune_traffic)
 {
 	struct dim_stats curr_stats;
 	u16 nevents;
@@ -357,10 +369,15 @@ void net_dim(struct dim *dim, struct dim_sample end_sample)
 		nevents = BIT_GAP(BITS_PER_TYPE(u16),
 				  end_sample.event_ctr,
 				  dim->start_sample.event_ctr);
-		if (nevents < DIM_NEVENTS)
+		/* Compared with the timer method, judging the minimum
+		 * interval of an iteration with a larger sample_nevents
+		 * has a better results.
+		 */
+		if (nevents < sample_events)
 			break;
+
 		dim_calc_stats(&dim->start_sample, &end_sample, &curr_stats);
-		if (net_dim_decision(&curr_stats, dim)) {
+		if (net_dim_decision(&curr_stats, dim, tune_traffic)) {
 			dim->state = DIM_APPLY_NEW_PROFILE;
 			schedule_work(&dim->work);
 			break;
@@ -375,4 +392,16 @@ void net_dim(struct dim *dim, struct dim_sample end_sample)
 		break;
 	}
 }
+
+void net_dim(struct dim *dim, struct dim_sample end_sample)
+{
+	net_dim_impl(dim, end_sample, DIM_NEVENTS, false);
+}
 EXPORT_SYMBOL(net_dim);
+
+void net_dim_tune(struct dim *dim, struct dim_sample end_sample,
+		  u16 sample_events, bool tune_traffic)
+{
+	net_dim_impl(dim, end_sample, sample_events, tune_traffic);
+}
+EXPORT_SYMBOL(net_dim_tune);
