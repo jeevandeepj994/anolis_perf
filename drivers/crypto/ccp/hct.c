@@ -1475,7 +1475,7 @@ static int hct_iommu_map(struct hct_private *private, unsigned long vaddr,
 
 	mutex_lock(&hct_data.lock);
 	for (i = 0; iova < iova_end && i < n; iova = iova_next, i += npages) {
-		int len;
+		size_t len;
 		phys_addr_t phys;
 
 		npages = get_num_contig_pages(i, pages, n);
