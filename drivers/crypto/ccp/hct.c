@@ -147,6 +147,7 @@ struct hct_cmd_queue {
 struct hct_dev_ctx {
 	struct hct_cmd_queue cmd_q[MCCP_DEV_QUEUE_MAX];
 	struct tasklet_struct irq_tasklet;
+	char devname[MCCP_STRING_LEN];
 	void __iomem *io_regs;
 	u32 q_count;
 	int irq;
@@ -266,7 +267,6 @@ static irqreturn_t hct_cmd_queue_intr_handler(int irq, void *arg)
 static int hct_dev_cmd_queue_init(struct pci_dev *pdev, struct hct_dev_ctx *dev_ctx, int idx)
 {
 	struct hct_cmd_queue *cmd_q;
-	char name[MCCP_STRING_LEN];
 	unsigned long addr, len;
 	unsigned int retval, qmr;
 	int i, ret;
@@ -291,9 +291,9 @@ static int hct_dev_cmd_queue_init(struct pci_dev *pdev, struct hct_dev_ctx *dev_
 	if (retval != MCCP_NTB_VECTOR_NUM && retval != MCCP_PSP_VECTOR_NUM)
 		return -ENOMEM;
 
-	snprintf(name, MCCP_STRING_LEN, "hct-ccp-%d", idx);
+	snprintf(dev_ctx->devname, MCCP_STRING_LEN, "hct-ccp-%d", idx);
 	dev_ctx->irq = pci_irq_vector(pdev, retval - 1);
-	ret = request_irq(dev_ctx->irq, hct_cmd_queue_intr_handler, 0, name, dev_ctx);
+	ret = request_irq(dev_ctx->irq, hct_cmd_queue_intr_handler, 0, dev_ctx->devname, dev_ctx);
 	if (ret) {
 		pci_free_irq_vectors(pdev);
 		dev_ctx->irq = 0;
@@ -1475,7 +1475,7 @@ static int hct_iommu_map(struct hct_private *private, unsigned long vaddr,
 
 	mutex_lock(&hct_data.lock);
 	for (i = 0; iova < iova_end && i < n; iova = iova_next, i += npages) {
-		int len;
+		size_t len;
 		phys_addr_t phys;
 
 		npages = get_num_contig_pages(i, pages, n);
