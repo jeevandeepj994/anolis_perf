@@ -2351,4 +2351,17 @@ static inline void sched_core_fork(struct task_struct *p) { }
 static inline int sched_core_idle_cpu(int cpu) { return idle_cpu(cpu); }
 #endif
 
+#if defined(CONFIG_SCHED_CORE) && defined(CONFIG_GROUP_IDENTITY)
+extern struct mutex sched_core_gi_conflict_mutex;
+extern bool sched_check_group_identity_lock(void);
+extern void sched_check_group_identity_unlock(void);
+extern bool sched_check_sched_core_lock(void);
+extern void sched_check_sched_core_unlock(void);
+#else
+static inline bool sched_check_group_identity_lock(void) { return true; }
+static inline void sched_check_group_identity_unlock(void) { }
+static inline bool sched_check_sched_core_lock(void) { return true; }
+static inline void sched_check_sched_core_unlock(void) { }
+#endif
+
 #endif
