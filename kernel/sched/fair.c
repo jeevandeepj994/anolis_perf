@@ -1373,6 +1373,7 @@ void group_identity_put(void)
 	atomic_dec(&group_identity_count);
 }
 
+#if defined(CONFIG_SCHED_CORE)
 bool sched_check_group_identity_lock(void)
 {
 	mutex_lock(&sched_core_gi_conflict_mutex);
@@ -1385,6 +1386,7 @@ void sched_check_group_identity_unlock(void)
 {
 	mutex_unlock(&sched_core_gi_conflict_mutex);
 }
+#endif
 
 int sched_group_identity_enable_handler(struct ctl_table *table, int write,
 		void __user *buffer, size_t *lenp,

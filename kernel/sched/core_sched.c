@@ -268,6 +268,7 @@ void clear_all_cookie(void)
 	flush_workqueue(system_wq);
 }
 
+#if defined(CONFIG_GROUP_IDENTITY)
 bool sched_check_sched_core_lock(void)
 {
 	mutex_lock(&sched_core_gi_conflict_mutex);
@@ -281,6 +282,7 @@ void sched_check_sched_core_unlock(void)
 {
 	mutex_unlock(&sched_core_gi_conflict_mutex);
 }
+#endif
 
 int sysctl_sched_core_handler(struct ctl_table *table, int write,
 				void __user *buffer, size_t *lenp, loff_t *ppos)
