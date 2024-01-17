@@ -1250,7 +1250,7 @@ struct rq {
 	u64			max_idle_balance_cost;
 #endif /* CONFIG_SMP */
 
-#if defined(CONFIG_IRQ_TIME_ACCOUNTING) && defined(CONFIG_X86)
+#if defined(CONFIG_IRQ_TIME_ACCOUNTING) && (defined(CONFIG_X86) || defined(CONFIG_LOONGARCH))
 	u64			prev_irq_time;
 #endif
 #ifdef CONFIG_PARAVIRT
