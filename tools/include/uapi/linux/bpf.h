@@ -192,6 +192,8 @@ enum bpf_attach_type {
 	BPF_LIRC_MODE2,
 	BPF_FLOW_DISSECTOR,
 	BPF_CGROUP_SYSCTL,
+	BPF_CGROUP_UDP4_RECVMSG,
+	BPF_CGROUP_UDP6_RECVMSG,
 	__MAX_BPF_ATTACH_TYPE
 };
 
@@ -3059,6 +3061,10 @@ struct bpf_sock_tuple {
 			__be16 dport;
 		} ipv6;
 	};
+};
+
+struct bpf_xdp_sock {
+	__u32 queue_id;
 };
 
 #define XDP_PACKET_HEADROOM 256
