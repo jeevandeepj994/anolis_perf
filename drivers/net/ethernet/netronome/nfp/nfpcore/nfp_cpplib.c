@@ -52,10 +52,12 @@
 #include "nfp6000/nfp_xpb.h"
 
 /* NFP6000 PL */
+#define NFP_PL_DEVICE_PART_NFP6000		0x6200
 #define NFP_PL_DEVICE_ID			0x00000004
 #define   NFP_PL_DEVICE_ID_MASK			GENMASK(7, 0)
-
-#define NFP6000_ARM_GCSR_SOFTMODEL0		0x00400144
+#define   NFP_PL_DEVICE_PART_MASK		GENMASK(31, 16)
+#define NFP_PL_DEVICE_MODEL_MASK		(NFP_PL_DEVICE_PART_MASK | \
+						 NFP_PL_DEVICE_ID_MASK)
 
 /**
  * nfp_cpp_readl() - Read a u32 word from a CPP location
@@ -150,22 +152,21 @@ int nfp_cpp_writeq(struct nfp_cpp *cpp, u32 cpp_id,
  */
 int nfp_cpp_model_autodetect(struct nfp_cpp *cpp, u32 *model)
 {
-	const u32 arm_id = NFP_CPP_ID(NFP_CPP_TARGET_ARM, 0, 0);
 	u32 reg;
 	int err;
 
-	err = nfp_cpp_readl(cpp, arm_id, NFP6000_ARM_GCSR_SOFTMODEL0, model);
-	if (err < 0)
-		return err;
-
-	/* The PL's PluDeviceID revision code is authoratative */
-	*model &= ~0xff;
 	err = nfp_xpb_readl(cpp, NFP_XPB_DEVICE(1, 1, 16) + NFP_PL_DEVICE_ID,
 			    &reg);
 	if (err < 0)
 		return err;
 
-	*model |= (NFP_PL_DEVICE_ID_MASK & reg) - 0x10;
+	*model = reg & NFP_PL_DEVICE_MODEL_MASK;
+	/* Disambiguate the NFP4000/NFP5000/NFP6000 chips */
+	if (FIELD_GET(NFP_PL_DEVICE_PART_MASK, reg) ==
+	    NFP_PL_DEVICE_PART_NFP6000) {
+		if (*model & NFP_PL_DEVICE_ID_MASK)
+			*model -= 0x10;
+	}
 
 	return 0;
 }
@@ -294,8 +295,7 @@ exit_release:
  * nfp_cpp_map_area() - Helper function to map an area
  * @cpp:    NFP CPP handler
  * @name:   Name for the area
- * @domain: CPP domain
- * @target: CPP target
+ * @cpp_id: CPP ID for operation
  * @addr:   CPP address
  * @size:   Size of the area
  * @area:   Area handle (output)
@@ -306,15 +306,12 @@ exit_release:
  * Return: Pointer to memory mapped area or ERR_PTR
  */
 u8 __iomem *
-nfp_cpp_map_area(struct nfp_cpp *cpp, const char *name, int domain, int target,
-		 u64 addr, unsigned long size, struct nfp_cpp_area **area)
+nfp_cpp_map_area(struct nfp_cpp *cpp, const char *name, u32 cpp_id, u64 addr,
+		 unsigned long size, struct nfp_cpp_area **area)
 {
 	u8 __iomem *res;
-	u32 dest;
 
-	dest = NFP_CPP_ISLAND_ID(target, NFP_CPP_ACTION_RW, 0, domain);
-
-	*area = nfp_cpp_area_alloc_acquire(cpp, name, dest, addr, size);
+	*area = nfp_cpp_area_alloc_acquire(cpp, name, cpp_id, addr, size);
 	if (!*area)
 		goto err_eio;
 

@@ -314,7 +314,7 @@ int nfp_abm_ctrl_find_addrs(struct nfp_abm *abm)
 	unsigned int pf_id;
 	char pf_symbol[64];
 
-	pf_id =	nfp_cppcore_pcie_unit(pf->cpp);
+	pf_id =	nfp_get_pf_id(pf);
 	abm->pf_id = pf_id;
 
 	snprintf(pf_symbol, sizeof(pf_symbol), NFP_QLVL_SYM_NAME, pf_id);
