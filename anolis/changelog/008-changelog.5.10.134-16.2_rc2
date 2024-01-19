@@ -1,0 +1,12 @@
+* Fri Jan 19 2024 Qiao Ma <mqaio@linux.alibaba.com> [5.10.134-16.2_rc2%%DIST%%]
+- anolis: spec: avoid override system %rpmversion definition (Qiao Ma)
+- anolis: drivers/iommu: Add iommu support for loongarch (xianglai li)
+- anolis: mm: hugetlb: wait hugetlb pages to be released to buddy allocator (yangge)
+- anolis: inspur-drm: Support build on loongarch (wangkaiyuan)
+- anolis: bugfix: fix the system may automatically shut down after hct dependent app closed after a long time. (Yabin Li)
+- anolis: bugfix: fix hct module virtual mode feature may cause memory leaks during qemu startup. (Yabin Li)
+- anolis: configs: open SND related configs. (Qinyun Tan)
+- anolis: configs: refresh configs by scripts/dummy-tools (Qinyun Tan)
+- anolis: x86/head/64: Flush caches for .bss..decrypted section after CR3 switches to early_top_pgt (hanliyang)
+- anolis: configs: enable CONFIG_MICROCODE_HYGON for x86 (Pu Wen)
+
