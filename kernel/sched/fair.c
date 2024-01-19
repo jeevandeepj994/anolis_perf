@@ -13330,6 +13330,7 @@ static int task_is_throttled_fair(struct task_struct *p, int cpu)
 	return throttled_hierarchy(cfs_rq);
 }
 
+#ifdef CONFIG_CFS_BANDWIDTH
 void account_ht_aware_quota(struct task_struct *p, u64 delta)
 {
 	struct sched_entity *se;
@@ -13366,6 +13367,7 @@ void account_ht_aware_quota(struct task_struct *p, u64 delta)
 		}
 	}
 }
+#endif
 
 static inline void sched_core_init_cfs_rq(struct task_group *tg, struct cfs_rq *cfs_rq)
 {

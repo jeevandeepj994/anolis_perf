@@ -375,7 +375,7 @@ void __sched_core_account_sibidle(struct rq *rq)
 		account_ht_aware_quota(p, delta);
 	}
 
-out:
+out:;
 #ifdef CONFIG_SCHED_ACPU
 	for_each_cpu(i, smt_mask) {
 		rq_i = cpu_rq(i);
