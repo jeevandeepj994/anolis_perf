@@ -8618,7 +8618,7 @@ struct task_group *sched_create_group(struct task_group *parent)
 
 	alloc_uclamp_sched_group(tg, parent);
 
-#ifdef CONFIG_SCHED_CORE
+#if defined(CONFIG_SCHED_CORE) && defined(CONFIG_CFS_BANDWIDTH)
 	tg->ht_ratio = 100;
 #endif
 	return tg;
@@ -9563,7 +9563,7 @@ static s64 cpu_identity_read_s64(struct cgroup_subsys_state *css,
 }
 #endif
 
-#ifdef CONFIG_SCHED_CORE
+#if defined(CONFIG_SCHED_CORE) && defined(CONFIG_CFS_BANDWIDTH)
 static int cpu_ht_ratio_write(struct cgroup_subsys_state *css,
 			      struct cftype *cftype, u64 ht_ratio)
 {
@@ -9708,7 +9708,7 @@ static struct cftype cpu_legacy_files[] = {
 		.write_u64 = cpu_ht_stable_write_u64,
 	},
 #endif
-#ifdef CONFIG_SCHED_CORE
+#if defined(CONFIG_SCHED_CORE) && defined(CONFIG_CFS_BANDWIDTH)
 	{
 		.name = "ht_ratio",
 		.read_u64 = cpu_ht_ratio_read,
@@ -10288,7 +10288,7 @@ static struct cftype cpu_files[] = {
 		.seq_show = sched_lat_stat_show
 	},
 #endif
-#ifdef CONFIG_SCHED_CORE
+#if defined(CONFIG_SCHED_CORE) && defined(CONFIG_CFS_BANDWIDTH)
 	{
 		.name = "ht_ratio",
 		.read_u64 = cpu_ht_ratio_read,
