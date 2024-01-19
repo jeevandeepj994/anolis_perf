@@ -34,6 +34,7 @@ int kvm_virt_ipi(struct kvm_vcpu *vcpu)
 int kvm_save_notify(struct kvm_vcpu *vcpu)
 {
 	unsigned long num, id, data;
+	struct gfn_to_pfn_cache *cache = &vcpu->arch.st.cache;
 
 	int ret = 0;
 
@@ -45,6 +46,10 @@ int kvm_save_notify(struct kvm_vcpu *vcpu)
 	case KVM_FEATURE_STEAL_TIME:
 		if (!sched_info_on())
 			break;
+
+		if (vcpu->arch.st.guest_addr && (data == 0))
+			kvm_release_pfn(cache->pfn, cache->dirty, cache);
+
 		vcpu->arch.st.guest_addr = data;
 		kvm_debug("cpu :%d addr:%lx\n", vcpu->vcpu_id, data);
 		vcpu->arch.st.last_steal = current->sched_info.run_delay;
