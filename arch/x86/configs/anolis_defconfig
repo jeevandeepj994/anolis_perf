@@ -5787,6 +5787,7 @@ CONFIG_MLX_PLATFORM=m
 CONFIG_INTEL_IPS=m
 CONFIG_INTEL_RST=m
 # CONFIG_INTEL_SMARTCONNECT is not set
+CONFIG_INTEL_TPMI=m
 
 #
 # Intel Speed Select Technology interface support
