@@ -579,7 +579,9 @@ struct sched_entity {
 
 #ifdef CONFIG_SCHED_CORE
 	u64				core_vruntime;
+#ifdef CONFIG_CFS_BANDWIDTH
 	unsigned int			ht_ratio;
+#endif
 #endif
 
 	CK_KABI_USE(1, long priority)
