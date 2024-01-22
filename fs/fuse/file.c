@@ -19,6 +19,7 @@
 #include <linux/falloc.h>
 #include <linux/uio.h>
 #include <linux/fs.h>
+#include <linux/file.h>
 
 static int fuse_send_open(struct fuse_conn *fc, u64 nodeid, struct file *file,
 			  int opcode, struct fuse_open_out *outargp)
@@ -430,49 +431,39 @@ static void fuse_sync_writes(struct inode *inode)
 	fuse_release_nowrite(inode);
 }
 
-static int fuse_flush(struct file *file, fl_owner_t id)
-{
-	struct inode *inode = file_inode(file);
-	struct fuse_conn *fc = get_fuse_conn(inode);
-	struct fuse_file *ff = file->private_data;
-	struct fuse_req *req;
-	struct fuse_flush_in inarg;
-	int err;
 
-	if (is_bad_inode(inode))
-		return -EIO;
+struct fuse_flush_args {
+	struct fuse_args args;
+	struct fuse_flush_in inarg;
+	struct work_struct work;
+	struct file *file;
+};
+
+static int fuse_do_flush(struct fuse_flush_args *fa)
+{
+	int err;
+	struct inode *inode = file_inode(fa->file);
+	struct fuse_mount *fm = get_fuse_mount(inode);
 
 	err = write_inode_now(inode, 1);
 	if (err)
-		return err;
+		goto out;
 
 	inode_lock(inode);
 	fuse_sync_writes(inode);
 	inode_unlock(inode);
 
-	err = filemap_check_errors(file->f_mapping);
+	err = filemap_check_errors(fa->file->f_mapping);
 	if (err)
-		return err;
+		goto out;
 
 	err = 0;
-	if (fc->no_flush)
+	if (fm->fc->no_flush)
 		goto inval_attr_out;
 
-	req = fuse_get_req_nofail_nopages(fc, file);
-	memset(&inarg, 0, sizeof(inarg));
-	inarg.fh = ff->fh;
-	inarg.lock_owner = fuse_lock_owner_id(fc, id);
-	req->in.h.opcode = FUSE_FLUSH;
-	req->in.h.nodeid = get_node_id(inode);
-	req->in.numargs = 1;
-	req->in.args[0].size = sizeof(inarg);
-	req->in.args[0].value = &inarg;
-	__set_bit(FR_FORCE, &req->flags);
-	fuse_request_send(fc, req);
-	err = req->out.h.error;
-	fuse_put_request(fc, req);
+	err = fuse_simple_request(fm, &fa->args);
 	if (err == -ENOSYS) {
-		fc->no_flush = 1;
+		fm->fc->no_flush = 1;
 		err = 0;
 	}
 
@@ -481,10 +472,56 @@ inval_attr_out:
 	 * In memory i_blocks is not maintained by fuse, if writeback cache is
 	 * enabled, i_blocks from cached attr may not be accurate.
 	 */
-	if (!err && fc->writeback_cache)
+	if (!err && fm->fc->writeback_cache)
 		fuse_invalidate_attr(inode);
+out:
+	fput(fa->file);
+	kfree(fa);
 	return err;
 }
+
+static void fuse_flush_async(struct work_struct *work)
+{
+	struct fuse_flush_args *fa = container_of(work, typeof(*fa), work);
+
+	fuse_do_flush(fa);
+}
+
+static int fuse_flush(struct file *file, fl_owner_t id)
+{
+	struct fuse_flush_args *fa;
+	struct inode *inode = file_inode(file);
+	struct fuse_mount *fm = get_fuse_mount(inode);
+	struct fuse_file *ff = file->private_data;
+
+	if (fuse_is_bad(inode))
+		return -EIO;
+
+	fa = kzalloc(sizeof(*fa), GFP_KERNEL);
+	if (!fa)
+		return -ENOMEM;
+
+	fa->inarg.fh = ff->fh;
+	fa->inarg.lock_owner = fuse_lock_owner_id(fm->fc, id);
+	fa->args.opcode = FUSE_FLUSH;
+	fa->args.nodeid = get_node_id(inode);
+	fa->args.in_numargs = 1;
+	fa->args.in_args[0].size = sizeof(fa->inarg);
+	fa->args.in_args[0].value = &fa->inarg;
+	fa->args.force = true;
+	fa->file = get_file(file);
+
+	/* Don't wait if the task is exiting */
+	if (current->flags & PF_EXITING) {
+		INIT_WORK(&fa->work, fuse_flush_async);
+		schedule_work(&fa->work);
+		return 0;
+	}
+
+	return fuse_do_flush(fa);
+}
+
+
 
 int fuse_fsync_common(struct file *file, loff_t start, loff_t end,
 		      int datasync, int isdir)
