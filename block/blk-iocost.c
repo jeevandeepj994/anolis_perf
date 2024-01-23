@@ -3270,6 +3270,11 @@ static ssize_t ioc_qos_write(struct kernfs_open_file *of, char *input,
 	ioc_refresh_params(ioc, true);
 	spin_unlock_irq(&ioc->lock);
 
+	if (enable)
+		wbt_disable_default(disk->queue);
+	else
+		wbt_enable_default(disk->queue);
+
 	put_disk_and_module(disk);
 	return nbytes;
 einval:
