@@ -96,30 +96,30 @@ struct virtnet_stat_desc {
 
 struct virtnet_sq_stats {
 	struct u64_stats_sync syncp;
-	u64 packets;
-	u64 bytes;
-	u64 xdp_tx;
-	u64 xdp_tx_drops;
-	u64 kicks;
-	u64 tx_timeouts;
-	u64 xsk_wakeup;
-	u64 xsk_wakeup_recycle;
-	u64 xsk_run;
-	u64 xsk_devfull;
-	u64 xsk_timer;
-	u64 xsk_timer_run;
+	u64_stats_t packets;
+	u64_stats_t bytes;
+	u64_stats_t xdp_tx;
+	u64_stats_t xdp_tx_drops;
+	u64_stats_t kicks;
+	u64_stats_t tx_timeouts;
+	u64_stats_t xsk_wakeup;
+	u64_stats_t xsk_wakeup_recycle;
+	u64_stats_t xsk_run;
+	u64_stats_t xsk_devfull;
+	u64_stats_t xsk_timer;
+	u64_stats_t xsk_timer_run;
 };
 
 struct virtnet_rq_stats {
 	struct u64_stats_sync syncp;
-	u64 packets;
-	u64 bytes;
-	u64 drops;
-	u64 xdp_packets;
-	u64 xdp_tx;
-	u64 xdp_redirects;
-	u64 xdp_drops;
-	u64 kicks;
+	u64_stats_t packets;
+	u64_stats_t bytes;
+	u64_stats_t drops;
+	u64_stats_t xdp_packets;
+	u64_stats_t xdp_tx;
+	u64_stats_t xdp_redirects;
+	u64_stats_t xdp_drops;
+	u64_stats_t kicks;
 };
 
 enum {
@@ -773,11 +773,11 @@ static int virtnet_xdp_xmit(struct net_device *dev,
 	}
 out:
 	u64_stats_update_begin(&sq->stats.syncp);
-	sq->stats.bytes += bytes;
-	sq->stats.packets += packets;
-	sq->stats.xdp_tx += n;
-	sq->stats.xdp_tx_drops += drops;
-	sq->stats.kicks += kicks;
+	u64_stats_add(&sq->stats.bytes, bytes);
+	u64_stats_add(&sq->stats.packets, packets);
+	u64_stats_add(&sq->stats.xdp_tx, n);
+	u64_stats_add(&sq->stats.xdp_tx_drops, drops);
+	u64_stats_add(&sq->stats.kicks, kicks);
 	u64_stats_update_end(&sq->stats.syncp);
 
 	virtnet_xdp_put_sq(vi, sq);
@@ -879,7 +879,7 @@ static struct sk_buff *receive_small(struct net_device *dev,
 	unsigned int metasize = 0;
 
 	len -= vi->hdr_len;
-	stats->bytes += len;
+	u64_stats_add(&stats->bytes, len);
 
 	if (unlikely(len > GOOD_PACKET_LEN)) {
 		pr_debug("%s: rx error: len %u exceeds max size %d\n",
@@ -928,7 +928,7 @@ static struct sk_buff *receive_small(struct net_device *dev,
 		xdp.frame_sz = buflen;
 		orig_data = xdp.data;
 		act = bpf_prog_run_xdp(xdp_prog, &xdp);
-		stats->xdp_packets++;
+		u64_stats_inc(&stats->xdp_packets);
 
 		switch (act) {
 		case XDP_PASS:
@@ -938,7 +938,7 @@ static struct sk_buff *receive_small(struct net_device *dev,
 			metasize = xdp.data - xdp.data_meta;
 			break;
 		case XDP_TX:
-			stats->xdp_tx++;
+			u64_stats_inc(&stats->xdp_tx);
 			xdpf = xdp_convert_buff_to_frame(&xdp);
 			if (unlikely(!xdpf))
 				goto err_xdp;
@@ -951,7 +951,7 @@ static struct sk_buff *receive_small(struct net_device *dev,
 			rcu_read_unlock();
 			goto xdp_xmit;
 		case XDP_REDIRECT:
-			stats->xdp_redirects++;
+			u64_stats_inc(&stats->xdp_redirects);
 			err = xdp_do_redirect(dev, &xdp, xdp_prog);
 			if (err)
 				goto err_xdp;
@@ -989,9 +989,9 @@ err:
 
 err_xdp:
 	rcu_read_unlock();
-	stats->xdp_drops++;
+	u64_stats_inc(&stats->xdp_drops);
 err_len:
-	stats->drops++;
+	u64_stats_inc(&stats->drops);
 	put_page(page);
 xdp_xmit:
 	return NULL;
@@ -1008,14 +1008,14 @@ static struct sk_buff *receive_big(struct net_device *dev,
 	struct sk_buff *skb =
 		page_to_skb(vi, rq, page, 0, len, PAGE_SIZE, true, 0, 0);
 
-	stats->bytes += len - vi->hdr_len;
+	u64_stats_add(&stats->bytes, len - vi->hdr_len);
 	if (unlikely(!skb))
 		goto err;
 
 	return skb;
 
 err:
-	stats->drops++;
+	u64_stats_inc(&stats->drops);
 	give_pages(rq, page);
 	return NULL;
 }
@@ -1042,7 +1042,7 @@ static struct sk_buff *receive_mergeable(struct net_device *dev,
 	int err;
 
 	head_skb = NULL;
-	stats->bytes += len - vi->hdr_len;
+	u64_stats_add(&stats->bytes, len - vi->hdr_len);
 
 	if (unlikely(len > truesize)) {
 		pr_debug("%s: rx error: len %u exceeds truesize %lu\n",
@@ -1105,7 +1105,7 @@ static struct sk_buff *receive_mergeable(struct net_device *dev,
 		xdp.frame_sz = frame_sz - vi->hdr_len;
 
 		act = bpf_prog_run_xdp(xdp_prog, &xdp);
-		stats->xdp_packets++;
+		u64_stats_inc(&stats->xdp_packets);
 
 		switch (act) {
 		case XDP_PASS:
@@ -1135,7 +1135,7 @@ static struct sk_buff *receive_mergeable(struct net_device *dev,
 			}
 			break;
 		case XDP_TX:
-			stats->xdp_tx++;
+			u64_stats_inc(&stats->xdp_tx);
 			xdpf = xdp_convert_buff_to_frame(&xdp);
 			if (unlikely(!xdpf))
 				goto err_xdp;
@@ -1152,7 +1152,7 @@ static struct sk_buff *receive_mergeable(struct net_device *dev,
 			rcu_read_unlock();
 			goto xdp_xmit;
 		case XDP_REDIRECT:
-			stats->xdp_redirects++;
+			u64_stats_inc(&stats->xdp_redirects);
 			err = xdp_do_redirect(dev, &xdp, xdp_prog);
 			if (err) {
 				if (unlikely(xdp_page != page))
@@ -1197,7 +1197,7 @@ static struct sk_buff *receive_mergeable(struct net_device *dev,
 			goto err_buf;
 		}
 
-		stats->bytes += len;
+		u64_stats_add(&stats->bytes, len);
 		page = virt_to_head_page(buf);
 
 		truesize = mergeable_ctx_to_truesize(ctx);
@@ -1243,7 +1243,7 @@ static struct sk_buff *receive_mergeable(struct net_device *dev,
 
 err_xdp:
 	rcu_read_unlock();
-	stats->xdp_drops++;
+	u64_stats_inc(&stats->xdp_drops);
 err_skb:
 	put_page(page);
 	while (num_buf-- > 1) {
@@ -1254,12 +1254,12 @@ err_skb:
 			dev->stats.rx_length_errors++;
 			break;
 		}
-		stats->bytes += len;
+		u64_stats_add(&stats->bytes, len);
 		page = virt_to_head_page(buf);
 		put_page(page);
 	}
 err_buf:
-	stats->drops++;
+	u64_stats_inc(&stats->drops);
 	dev_kfree_skb(head_skb);
 xdp_xmit:
 	return NULL;
@@ -1524,7 +1524,7 @@ static bool try_fill_recv(struct virtnet_info *vi, struct receive_queue *rq,
 		unsigned long flags;
 
 		flags = u64_stats_update_begin_irqsave(&rq->stats.syncp);
-		rq->stats.kicks++;
+		u64_stats_inc(&rq->stats.kicks);
 		u64_stats_update_end_irqrestore(&rq->stats.syncp, flags);
 	}
 
@@ -1604,22 +1604,23 @@ static int virtnet_receive(struct receive_queue *rq, int budget,
 	struct virtnet_info *vi = rq->vq->vdev->priv;
 	struct virtnet_rq_stats stats = {};
 	unsigned int len;
+	int packets = 0;
 	void *buf;
 	int i;
 
 	if (!vi->big_packets || vi->mergeable_rx_bufs) {
 		void *ctx;
 
-		while (stats.packets < budget &&
+		while (packets < budget &&
 		       (buf = virtqueue_get_buf_ctx(rq->vq, &len, &ctx))) {
 			receive_buf(vi, rq, buf, len, ctx, xdp_xmit, &stats);
-			stats.packets++;
+			packets++;
 		}
 	} else {
-		while (stats.packets < budget &&
+		while (packets < budget &&
 		       (buf = virtqueue_get_buf(rq->vq, &len)) != NULL) {
 			receive_buf(vi, rq, buf, len, NULL, xdp_xmit, &stats);
-			stats.packets++;
+			packets++;
 		}
 	}
 
@@ -1628,17 +1629,19 @@ static int virtnet_receive(struct receive_queue *rq, int budget,
 			schedule_delayed_work(&vi->refill, 0);
 	}
 
+	u64_stats_set(&stats.packets, packets);
 	u64_stats_update_begin(&rq->stats.syncp);
 	for (i = 0; i < VIRTNET_RQ_STATS_LEN; i++) {
 		size_t offset = virtnet_rq_stats_desc[i].offset;
-		u64 *item;
+		u64_stats_t *item, *src;
 
-		item = (u64 *)((u8 *)&rq->stats + offset);
-		*item += *(u64 *)((u8 *)&stats + offset);
+		item = (u64_stats_t *)((u8 *)&rq->stats + offset);
+		src = (u64_stats_t *)((u8 *)&stats + offset);
+		u64_stats_add(item, u64_stats_read(src));
 	}
 	u64_stats_update_end(&rq->stats.syncp);
 
-	return stats.packets;
+	return packets;
 }
 
 static void virt_xsk_complete(struct send_queue *sq, u32 num, bool xsk_wakeup)
@@ -1676,7 +1679,7 @@ static void virt_xsk_complete(struct send_queue *sq, u32 num, bool xsk_wakeup)
 		sq->xsk.wait_slot = false;
 		virtqueue_napi_schedule(&sq->napi, sq->vq);
 		u64_stats_update_begin(&sq->stats.syncp);
-		sq->stats.xsk_wakeup_recycle  += 1;
+		u64_stats_add(&sq->stats.xsk_wakeup_recycle, 1);
 		u64_stats_update_end(&sq->stats.syncp);
 	}
 }
@@ -1740,8 +1743,8 @@ static void free_old_xmit_skbs(struct send_queue *sq, bool in_napi)
 		return;
 
 	u64_stats_update_begin(&sq->stats.syncp);
-	sq->stats.bytes += bytes;
-	sq->stats.packets += packets;
+	u64_stats_add(&sq->stats.bytes, bytes);
+	u64_stats_add(&sq->stats.packets, packets);
 	u64_stats_update_end(&sq->stats.syncp);
 }
 
@@ -1802,7 +1805,7 @@ static int virtnet_poll(struct napi_struct *napi, int budget)
 		sq = virtnet_xdp_get_sq(vi);
 		if (virtqueue_kick_prepare(sq->vq) && virtqueue_notify(sq->vq)) {
 			u64_stats_update_begin(&sq->stats.syncp);
-			sq->stats.kicks++;
+			u64_stats_inc(&sq->stats.kicks);
 			u64_stats_update_end(&sq->stats.syncp);
 		}
 		virtnet_xdp_put_sq(vi, sq);
@@ -1998,7 +2001,7 @@ static netdev_tx_t start_xmit(struct sk_buff *skb, struct net_device *dev)
 	if (kick || netif_xmit_stopped(txq)) {
 		if (virtqueue_kick_prepare(sq->vq) && virtqueue_notify(sq->vq)) {
 			u64_stats_update_begin(&sq->stats.syncp);
-			sq->stats.kicks++;
+			u64_stats_inc(&sq->stats.kicks);
 			u64_stats_update_end(&sq->stats.syncp);
 		}
 	}
@@ -2111,16 +2114,16 @@ static void virtnet_stats(struct net_device *dev,
 
 		do {
 			start = u64_stats_fetch_begin_irq(&sq->stats.syncp);
-			tpackets = sq->stats.packets;
-			tbytes   = sq->stats.bytes;
-			terrors  = sq->stats.tx_timeouts;
+			tpackets = u64_stats_read(&sq->stats.packets);
+			tbytes   = u64_stats_read(&sq->stats.bytes);
+			terrors  = u64_stats_read(&sq->stats.tx_timeouts);
 		} while (u64_stats_fetch_retry_irq(&sq->stats.syncp, start));
 
 		do {
 			start = u64_stats_fetch_begin_irq(&rq->stats.syncp);
-			rpackets = rq->stats.packets;
-			rbytes   = rq->stats.bytes;
-			rdrops   = rq->stats.drops;
+			rpackets = u64_stats_read(&rq->stats.packets);
+			rbytes   = u64_stats_read(&rq->stats.bytes);
+			rdrops   = u64_stats_read(&rq->stats.drops);
 		} while (u64_stats_fetch_retry_irq(&rq->stats.syncp, start));
 
 		tot->rx_packets += rpackets;
@@ -2678,17 +2681,19 @@ static void virtnet_get_ethtool_stats(struct net_device *dev,
 	struct virtnet_info *vi = netdev_priv(dev);
 	unsigned int idx = 0, start, i, j;
 	const u8 *stats_base;
+	const u64_stats_t *p;
 	size_t offset;
 
 	for (i = 0; i < vi->curr_queue_pairs; i++) {
 		struct receive_queue *rq = &vi->rq[i];
 
-		stats_base = (u8 *)&rq->stats;
+		stats_base = (const u8 *)&rq->stats;
 		do {
 			start = u64_stats_fetch_begin_irq(&rq->stats.syncp);
 			for (j = 0; j < VIRTNET_RQ_STATS_LEN; j++) {
 				offset = virtnet_rq_stats_desc[j].offset;
-				data[idx + j] = *(u64 *)(stats_base + offset);
+				p = (const u64_stats_t *)(stats_base + offset);
+				data[idx + j] = u64_stats_read(p);
 			}
 		} while (u64_stats_fetch_retry_irq(&rq->stats.syncp, start));
 		idx += VIRTNET_RQ_STATS_LEN;
@@ -2697,12 +2702,13 @@ static void virtnet_get_ethtool_stats(struct net_device *dev,
 	for (i = 0; i < vi->curr_queue_pairs; i++) {
 		struct send_queue *sq = &vi->sq[i];
 
-		stats_base = (u8 *)&sq->stats;
+		stats_base = (const u8 *)&sq->stats;
 		do {
 			start = u64_stats_fetch_begin_irq(&sq->stats.syncp);
 			for (j = 0; j < VIRTNET_SQ_STATS_LEN; j++) {
 				offset = virtnet_sq_stats_desc[j].offset;
-				data[idx + j] = *(u64 *)(stats_base + offset);
+				p = (const u64_stats_t *)(stats_base + offset);
+				data[idx + j] = u64_stats_read(p);
 			}
 		} while (u64_stats_fetch_retry_irq(&sq->stats.syncp, start));
 		idx += VIRTNET_SQ_STATS_LEN;
@@ -3313,7 +3319,7 @@ static enum hrtimer_restart virtnet_xsk_timeout(struct hrtimer *timer)
 	virtqueue_napi_schedule(&sq->napi, sq->vq);
 
 	u64_stats_update_begin(&sq->stats.syncp);
-	sq->stats.xsk_timer_run += 1;
+	u64_stats_inc(&sq->stats.xsk_timer_run);
 	u64_stats_update_end(&sq->stats.syncp);
 
 	return HRTIMER_NORESTART;
@@ -3519,7 +3525,7 @@ static int virtnet_xsk_xmit_zc(struct send_queue *sq,
 	if (packet) {
 		if (virtqueue_kick_prepare(sq->vq) && virtqueue_notify(sq->vq)) {
 			u64_stats_update_begin(&sq->stats.syncp);
-			sq->stats.kicks++;
+			u64_stats_inc(&sq->stats.kicks);
 			u64_stats_update_end(&sq->stats.syncp);
 		}
 
@@ -3604,11 +3610,11 @@ static int virtnet_xsk_run(struct send_queue *sq,
 
 end:
 	u64_stats_update_begin(&sq->stats.syncp);
-	sq->stats.bytes       += bytes;
-	sq->stats.packets     += packets;
-	sq->stats.xsk_run     += 1;
-	sq->stats.xsk_devfull += devfull;
-	sq->stats.xsk_timer   += timer;
+	u64_stats_add(&sq->stats.bytes, bytes);
+	u64_stats_add(&sq->stats.packets, packets);
+	u64_stats_add(&sq->stats.xsk_run, 1);
+	u64_stats_add(&sq->stats.xsk_devfull, devfull);
+	u64_stats_add(&sq->stats.xsk_timer, timer);
 	u64_stats_update_end(&sq->stats.syncp);
 
 	return ret;
@@ -3653,7 +3659,7 @@ static int virtnet_xsk_wakeup(struct net_device *dev, u32 qid, u32 flags)
 		virtqueue_napi_schedule(&sq->napi, sq->vq);
 
 	u64_stats_update_begin(&sq->stats.syncp);
-	sq->stats.xsk_wakeup += 1;
+	u64_stats_inc(&sq->stats.xsk_wakeup);
 	u64_stats_update_end(&sq->stats.syncp);
 
 end:
@@ -3726,7 +3732,7 @@ static void virtnet_tx_timeout(struct net_device *dev, unsigned int txqueue)
 			continue;
 
 		u64_stats_update_begin(&sq->stats.syncp);
-		sq->stats.tx_timeouts++;
+		u64_stats_inc(&sq->stats.tx_timeouts);
 		u64_stats_update_end(&sq->stats.syncp);
 
 		netdev_warn(dev, "TX timeout on queue: %d, sq: %s, vq: 0x%x, name: %s, usecs since last trans: %u\n",
