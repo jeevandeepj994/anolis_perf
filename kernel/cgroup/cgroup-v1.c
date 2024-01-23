@@ -718,7 +718,8 @@ static ssize_t cgroup_pool_size_write(struct kernfs_open_file *of,
 		 * may fail, create cgroup util pool is full.
 		 */
 		for (i = 0; i < val;) {
-			sprintf(name, "pool-%llu", atomic64_add_return(1, &cgrp->pool_index));
+			sprintf(name, "pool-%llu",
+				(u64)atomic64_add_return(1, &cgrp->pool_index));
 			kernfs_get_active(parent);
 			if (!cgroup_mkdir(parent, name, CGROUP_MODE_IN_POOL))
 				i++;
