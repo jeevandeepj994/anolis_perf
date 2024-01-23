@@ -14,17 +14,23 @@
 #include "bpf_endian.h"
 #include "test_tcpnotify.h"
 
-struct bpf_map_def SEC("maps") global_map = {
+struct {
+	__u32 type;
+	__u32 max_entries;
+	__u32 *key;
+	struct tcpnotify_globals *value;
+} global_map SEC(".maps") = {
 	.type = BPF_MAP_TYPE_ARRAY,
-	.key_size = sizeof(__u32),
-	.value_size = sizeof(struct tcpnotify_globals),
 	.max_entries = 4,
 };
 
-struct bpf_map_def SEC("maps") perf_event_map = {
+struct {
+	__u32 type;
+	__u32 max_entries;
+	__u32 key_size;
+	__u32 value_size;
+} perf_event_map SEC(".maps") = {
 	.type = BPF_MAP_TYPE_PERF_EVENT_ARRAY,
-	.key_size = sizeof(int),
-	.value_size = sizeof(__u32),
 	.max_entries = 2,
 };
 
