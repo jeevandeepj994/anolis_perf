@@ -883,6 +883,10 @@ static struct sk_buff *receive_small(struct net_device *dev,
 		if (unlikely(hdr->hdr.gso_type))
 			goto err_xdp;
 
+		/* Partially checksummed packets must be dropped. */
+		if (unlikely(hdr->hdr.flags & VIRTIO_NET_HDR_F_NEEDS_CSUM))
+			goto err_xdp;
+
 		if (unlikely(xdp_headroom < virtnet_get_headroom(vi))) {
 			int offset = buf - page_address(page) + header_offset;
 			unsigned int tlen = len + vi->hdr_len;
@@ -1048,6 +1052,10 @@ static struct sk_buff *receive_mergeable(struct net_device *dev,
 		 * the receive path after XDP is loaded.
 		 */
 		if (unlikely(hdr->hdr.gso_type))
+			goto err_xdp;
+
+		/* Partially checksummed packets must be dropped. */
+		if (unlikely(hdr->hdr.flags & VIRTIO_NET_HDR_F_NEEDS_CSUM))
 			goto err_xdp;
 
 		/* Buffers with headroom use PAGE_SIZE as alloc size,
@@ -1286,6 +1294,7 @@ static void receive_buf(struct virtnet_info *vi, struct receive_queue *rq,
 	struct net_device *dev = vi->dev;
 	struct sk_buff *skb;
 	struct virtio_net_hdr_mrg_rxbuf *hdr;
+	u8 flags;
 
 	if (unlikely(len < vi->hdr_len + ETH_HLEN)) {
 		pr_debug("%s: short packet %i\n", dev->name, len);
@@ -1299,6 +1308,11 @@ static void receive_buf(struct virtnet_info *vi, struct receive_queue *rq,
 		}
 		return;
 	}
+
+	/* XDP invalidates virtio-net-hdr. Save flags in advance to
+	 * determine checksum information before submitting it to netdev.
+	 */
+	flags = ((struct virtio_net_hdr_mrg_rxbuf *)buf)->hdr.flags;
 
 	if (vi->mergeable_rx_bufs)
 		skb = receive_mergeable(dev, vi, rq, buf, ctx, len, xdp_xmit,
@@ -1315,7 +1329,7 @@ static void receive_buf(struct virtnet_info *vi, struct receive_queue *rq,
 	if (dev->features & NETIF_F_RXHASH && vi->has_rss_hash_report)
 		virtio_skb_set_hash((const struct virtio_net_hdr_v1_hash *)hdr, skb);
 
-	if (hdr->hdr.flags & VIRTIO_NET_HDR_F_DATA_VALID)
+	if (flags & VIRTIO_NET_HDR_F_DATA_VALID)
 		skb->ip_summed = CHECKSUM_UNNECESSARY;
 
 	if (virtio_net_hdr_to_skb(skb, &hdr->hdr,
@@ -4017,8 +4031,13 @@ static int virtnet_probe(struct virtio_device *vdev)
 			dev->features |= dev->hw_features & NETIF_F_ALL_TSO;
 		/* (!csum && gso) case will be fixed by register_netdev() */
 	}
-	if (virtio_has_feature(vdev, VIRTIO_NET_F_GUEST_CSUM))
-		dev->features |= NETIF_F_RXCSUM;
+
+	/* The device validates the packet checksum and sets DATA_VALID
+	 * regardless of whether VIRTIO_NET_F_GUEST_CSUM is negotiated.
+	 * We do not allow users to switch rx checksum offload for now.
+	 */
+	dev->features |= NETIF_F_RXCSUM;
+
 	if (virtio_has_feature(vdev, VIRTIO_NET_F_GUEST_TSO4) ||
 	    virtio_has_feature(vdev, VIRTIO_NET_F_GUEST_TSO6))
 		dev->features |= NETIF_F_GRO_HW;
