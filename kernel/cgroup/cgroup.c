@@ -5291,7 +5291,7 @@ static void cgroup_supply_work(struct work_struct *work)
 
 	while (atomic64_read(&parent->pool_amount) < parent->pool_size) {
 		sprintf(name, "pool-%llu",
-				atomic64_add_return(1, &parent->pool_index));
+			(u64)atomic64_add_return(1, &parent->pool_index));
 		kernfs_get_active(parent_kn);
 		if (!cgroup_mkdir(parent_kn, name, CGROUP_MODE_IN_POOL))
 			atomic64_add(1, &parent->pool_amount);
