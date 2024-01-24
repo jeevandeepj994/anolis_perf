@@ -372,10 +372,12 @@ static int get_cpumask_from_cache_id(u32 cache_id, u32 cache_level,
 	u32 iter_cache_id;
 	struct device_node *iter;
 
-	if (!acpi_disabled)
-		return acpi_pptt_get_cpumask_from_cache_id_and_level(cache_id,
-								     cache_level,
-								     affinity);
+	if (!acpi_disabled) {
+		if (mpam_current_machine == MPAM_YITIAN710)
+			return acpi_pptt_get_cpumask_from_cache_id_and_level(
+					cache_id, cache_level, affinity);
+		return acpi_pptt_get_cpumask_from_cache_id(cache_id, affinity);
+	}
 
 	for_each_possible_cpu(cpu) {
 		iter = of_get_cpu_node(cpu, NULL);
