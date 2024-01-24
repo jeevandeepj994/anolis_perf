@@ -573,7 +573,7 @@ static void erofs_managed_cache_invalidatepage(struct page *page,
 	DBG_BUGON(stop > PAGE_SIZE || stop < length);
 
 	if (offset == 0 && stop == PAGE_SIZE)
-		while (!erofs_managed_cache_releasepage(page, GFP_NOFS))
+		while (!erofs_managed_cache_releasepage(page, 0))
 			cond_resched();
 }
 
@@ -594,7 +594,7 @@ static int erofs_init_managed_cache(struct super_block *sb)
 	inode->i_size = OFFSET_MAX;
 
 	inode->i_mapping->a_ops = &managed_cache_aops;
-	mapping_set_gfp_mask(inode->i_mapping, GFP_NOFS);
+	mapping_set_gfp_mask(inode->i_mapping, GFP_KERNEL);
 	sbi->managed_cache = inode;
 	return 0;
 }
