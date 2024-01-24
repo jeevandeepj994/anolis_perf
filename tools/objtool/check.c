@@ -30,6 +30,8 @@
 
 #define FAKE_JUMP_OFFSET -1
 
+#define C_JUMP_TABLE_SECTION ".rodata..c_jump_table"
+
 struct alternative {
 	struct list_head list;
 	struct instruction *insn;
@@ -561,7 +563,7 @@ static int add_jump_destinations(struct objtool_file *file)
 		 * However this code can't completely replace the
 		 * read_symbols() code because this doesn't detect the case
 		 * where the parent function's only reference to a subfunction
-		 * is through a switch table.
+		 * is through a jump table.
 		 */
 		if (insn->func && insn->jump_dest->func &&
 		    insn->func != insn->jump_dest->func &&
@@ -831,20 +833,26 @@ out:
 	return ret;
 }
 
-static int add_switch_table(struct objtool_file *file, struct instruction *insn,
-			    struct rela *table, struct rela *next_table)
+static int add_jump_table(struct objtool_file *file, struct instruction *insn,
+			    struct rela *table)
 {
 	struct rela *rela = table;
-	struct instruction *alt_insn;
+	struct instruction *dest_insn;
 	struct alternative *alt;
 	struct symbol *pfunc = insn->func->pfunc;
 	unsigned int prev_offset = 0;
 
-	list_for_each_entry_from(rela, &table->rela_sec->rela_list, list) {
-		if (rela == next_table)
+	/*
+	 * Each @rela is a switch table relocation which points to the target
+	 * instruction.
+	 */
+	list_for_each_entry_from(rela, &table->sec->rela_list, list) {
+
+		/* Check for the end of the table: */
+		if (rela != table && rela->jump_table_start)
 			break;
 
-		/* Make sure the switch table entries are consecutive: */
+		/* Make sure the table entries are consecutive: */
 		if (prev_offset && rela->offset != prev_offset + 8)
 			break;
 
@@ -853,12 +861,12 @@ static int add_switch_table(struct objtool_file *file, struct instruction *insn,
 		    rela->addend == pfunc->offset)
 			break;
 
-		alt_insn = find_insn(file, rela->sym->sec, rela->addend);
-		if (!alt_insn)
+		dest_insn = find_insn(file, rela->sym->sec, rela->addend);
+		if (!dest_insn)
 			break;
 
-		/* Make sure the jmp dest is in the function or subfunction: */
-		if (alt_insn->func->pfunc != pfunc)
+		/* Make sure the destination is in the same function: */
+		if (dest_insn->func->pfunc != pfunc)
 			break;
 
 		alt = malloc(sizeof(*alt));
@@ -867,7 +875,7 @@ static int add_switch_table(struct objtool_file *file, struct instruction *insn,
 			return -1;
 		}
 
-		alt->insn = alt_insn;
+		alt->insn = dest_insn;
 		list_add_tail(&alt->list, &insn->alts);
 		prev_offset = rela->offset;
 	}
@@ -882,7 +890,7 @@ static int add_switch_table(struct objtool_file *file, struct instruction *insn,
 }
 
 /*
- * find_switch_table() - Given a dynamic jump, find the switch jump table in
+ * find_jump_table() - Given a dynamic jump, find the switch jump table in
  * .rodata associated with it.
  *
  * There are 3 basic patterns:
@@ -924,13 +932,13 @@ static int add_switch_table(struct objtool_file *file, struct instruction *insn,
  *
  *    NOTE: RETPOLINE made it harder still to decode dynamic jumps.
  */
-static struct rela *find_switch_table(struct objtool_file *file,
+static struct rela *find_jump_table(struct objtool_file *file,
 				      struct symbol *func,
 				      struct instruction *insn)
 {
-	struct rela *text_rela, *rodata_rela;
+	struct rela *text_rela, *table_rela;
 	struct instruction *orig_insn = insn;
-	struct section *rodata_sec;
+	struct section *table_sec;
 	unsigned long table_offset;
 
 	/*
@@ -963,42 +971,52 @@ static struct rela *find_switch_table(struct objtool_file *file,
 			continue;
 
 		table_offset = text_rela->addend;
-		rodata_sec = text_rela->sym->sec;
+		table_sec = text_rela->sym->sec;
 
 		if (text_rela->type == R_X86_64_PC32)
 			table_offset += 4;
 
 		/*
 		 * Make sure the .rodata address isn't associated with a
-		 * symbol.  gcc jump tables are anonymous data.
+		 * symbol.  GCC jump tables are anonymous data.
+		 *
+		 * Also support C jump tables which are in the same format as
+		 * switch jump tables.  For objtool to recognize them, they
+		 * need to be placed in the C_JUMP_TABLE_SECTION section.  They
+		 * have symbols associated with them.
 		 */
-		if (find_symbol_containing(rodata_sec, table_offset))
+		if (find_symbol_containing(table_sec, table_offset) &&
+		    strcmp(table_sec->name, C_JUMP_TABLE_SECTION))
 			continue;
 
-		rodata_rela = find_rela_by_dest(rodata_sec, table_offset);
-		if (rodata_rela) {
-			/*
-			 * Use of RIP-relative switch jumps is quite rare, and
-			 * indicates a rare GCC quirk/bug which can leave dead
-			 * code behind.
-			 */
-			if (text_rela->type == R_X86_64_PC32)
-				file->ignore_unreachables = true;
+		/* Each table entry has a rela associated with it. */
+		table_rela = find_rela_by_dest(table_sec, table_offset);
+		if (!table_rela)
+			continue;
 
-			return rodata_rela;
-		}
+		/*
+		 * Use of RIP-relative switch jumps is quite rare, and
+		 * indicates a rare GCC quirk/bug which can leave dead code
+		 * behind.
+		 */
+		if (text_rela->type == R_X86_64_PC32)
+			file->ignore_unreachables = true;
+
+		return table_rela;
 	}
 
 	return NULL;
 }
 
-
-static int add_func_switch_tables(struct objtool_file *file,
-				  struct symbol *func)
+/*
+ * First pass: Mark the head of each jump table so that in the next pass,
+ * we know when a given jump table ends and the next one starts.
+ */
+static void mark_func_jump_tables(struct objtool_file *file,
+				    struct symbol *func)
 {
-	struct instruction *insn, *last = NULL, *prev_jump = NULL;
-	struct rela *rela, *prev_rela = NULL;
-	int ret;
+	struct instruction *insn, *last = NULL;
+	struct rela *rela;
 
 	func_for_each_insn_all(file, func, insn) {
 		if (!last)
@@ -1006,7 +1024,7 @@ static int add_func_switch_tables(struct objtool_file *file,
 
 		/*
 		 * Store back-pointers for unconditional forward jumps such
-		 * that find_switch_table() can back-track using those and
+		 * that find_jump_table() can back-track using those and
 		 * avoid some potentially confusing code.
 		 */
 		if (insn->type == INSN_JUMP_UNCONDITIONAL && insn->jump_dest &&
@@ -1021,27 +1039,25 @@ static int add_func_switch_tables(struct objtool_file *file,
 		if (insn->type != INSN_JUMP_DYNAMIC)
 			continue;
 
-		rela = find_switch_table(file, func, insn);
-		if (!rela)
+		rela = find_jump_table(file, func, insn);
+		if (rela) {
+			rela->jump_table_start = true;
+			insn->jump_table = rela;
+		}
+	}
+}
+
+static int add_func_jump_tables(struct objtool_file *file,
+				  struct symbol *func)
+{
+	struct instruction *insn;
+	int ret;
+
+	func_for_each_insn_all(file, func, insn) {
+		if (!insn->jump_table)
 			continue;
 
-		/*
-		 * We found a switch table, but we don't know yet how big it
-		 * is.  Don't add it until we reach the end of the function or
-		 * the beginning of another switch table in the same function.
-		 */
-		if (prev_jump) {
-			ret = add_switch_table(file, prev_jump, prev_rela, rela);
-			if (ret)
-				return ret;
-		}
-
-		prev_jump = insn;
-		prev_rela = rela;
-	}
-
-	if (prev_jump) {
-		ret = add_switch_table(file, prev_jump, prev_rela, NULL);
+		ret = add_jump_table(file, insn, insn->jump_table);
 		if (ret)
 			return ret;
 	}
@@ -1054,7 +1070,7 @@ static int add_func_switch_tables(struct objtool_file *file,
  * section which contains a list of addresses within the function to jump to.
  * This finds these jump tables and adds them to the insn->alts lists.
  */
-static int add_switch_table_alts(struct objtool_file *file)
+static int add_jump_table_alts(struct objtool_file *file)
 {
 	struct section *sec;
 	struct symbol *func;
@@ -1068,7 +1084,8 @@ static int add_switch_table_alts(struct objtool_file *file)
 			if (func->type != STT_FUNC)
 				continue;
 
-			ret = add_func_switch_tables(file, func);
+			mark_func_jump_tables(file, func);
+			ret = add_func_jump_tables(file, func);
 			if (ret)
 				return ret;
 		}
@@ -1212,13 +1229,18 @@ static void mark_rodata(struct objtool_file *file)
 	bool found = false;
 
 	/*
-	 * This searches for the .rodata section or multiple .rodata.func_name
-	 * sections if -fdata-sections is being used. The .str.1.1 and .str.1.8
-	 * rodata sections are ignored as they don't contain jump tables.
+	 * Search for the following rodata sections, each of which can
+	 * potentially contain jump tables:
+	 *
+	 * - .rodata: can contain GCC switch tables
+	 * - .rodata.<func>: same, if -fdata-sections is being used
+	 * - .rodata..c_jump_table: contains C annotated jump tables
+	 *
+	 * .rodata.str1.* sections are ignored; they don't contain jump tables.
 	 */
 	for_each_sec(file, sec) {
-		if (!strncmp(sec->name, ".rodata", 7) &&
-		    !strstr(sec->name, ".str1.")) {
+		if ((!strncmp(sec->name, ".rodata", 7) && !strstr(sec->name, ".str1.")) ||
+		    !strcmp(sec->name, C_JUMP_TABLE_SECTION)) {
 			sec->rodata = true;
 			found = true;
 		}
@@ -1259,7 +1281,7 @@ static int decode_sections(struct objtool_file *file)
 	if (ret)
 		return ret;
 
-	ret = add_switch_table_alts(file);
+	ret = add_jump_table_alts(file);
 	if (ret)
 		return ret;
 

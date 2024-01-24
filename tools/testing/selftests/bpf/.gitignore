@@ -16,6 +16,9 @@ test_libbpf_open
 test_sock
 test_sock_addr
 test_sock_fields
+test_sockopt
+test_sockopt_multi
+test_sockopt_sk
 urandom_read
 test_btf
 test_sockmap
