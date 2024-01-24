@@ -124,12 +124,20 @@ static int acpi_mpam_parse_resource(struct mpam_msc *msc,
 	switch (res->locator_type) {
 	case ACPI_MPAM_LOCATION_TYPE_PROCESSOR_CACHE:
 		cache_id = res->locator1;
-		/*
-		 * [FIX ME] As different levels of cache may have the same cache
-		 * id number, find_acpi_cache_level_from_id() will have conflicts.
-		 * Here we set the level of cache resource to a default value, 3.
-		 */
-		level = 3;
+		if (mpam_current_machine == MPAM_YITIAN710) {
+			/*
+			 * Yitian710's BIOS doesn't support find level from
+			 * cache id. Since it only supports L3 cache, use a
+			 * fixed value, 3.
+			 */
+			level = 3;
+		} else {
+			level = find_acpi_cache_level_from_id(cache_id);
+			if (level < 0) {
+				pr_err_once("Bad level for cache with id %u\n", cache_id);
+				return level;
+			}
+		}
 		return mpam_ris_create(msc, res->ris_index, MPAM_CLASS_CACHE,
 				       level, cache_id);
 	case ACPI_MPAM_LOCATION_TYPE_MEMORY:
