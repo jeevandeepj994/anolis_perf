@@ -513,6 +513,14 @@ void truncate_inode_pages_final(struct address_space *mapping)
 	 */
 	mapping_set_exiting(mapping);
 
+	/* Flush fast reflink work if any. */
+	if (unlikely(mapping->fast_reflink_work)) {
+		flush_work(&mapping->fast_reflink_work->work);
+
+		kfree(mapping->fast_reflink_work);
+		mapping->fast_reflink_work = NULL;
+	}
+
 	/*
 	 * When reclaim installs eviction entries, it increases
 	 * nrexceptional first, then decreases nrpages.  Make sure we see

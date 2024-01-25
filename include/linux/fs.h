@@ -488,7 +488,9 @@ struct address_space {
 	struct list_head	private_list;
 	void			*private_data;
 
-	CK_KABI_RESERVE(1)
+	/* CK_KABI_RESERVE(1) */
+	CK_KABI_USE(1, struct fast_reflink_work *fast_reflink_work);
+
 	CK_KABI_RESERVE(2)
 	CK_KABI_RESERVE(3)
 	CK_KABI_RESERVE(4)
@@ -1865,6 +1867,8 @@ struct dir_context {
  * btrfs clone/dedupe ioctls.
  */
 #define REMAP_FILE_ADVISORY		(REMAP_FILE_CAN_SHORTEN)
+
+#define REMAP_FILE_FAST_REFLINK		(1 << 2)
 
 struct iov_iter;
 struct io_uring_cmd;
