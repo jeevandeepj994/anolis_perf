@@ -5733,11 +5733,16 @@ static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn
 
 	/* find function prototype */
 	func_id = insn->imm;
+	if (func_id > __ANOLIS_BPF_FUNC_MIN_ID &&
+	    func_id < __ANOLIS_BPF_FUNC_MAX_ID)
+		goto ok;
+
 	if (func_id < 0 || func_id >= __BPF_FUNC_MAX_ID) {
 		verbose(env, "invalid func %s#%d\n", func_id_name(func_id),
 			func_id);
 		return -EINVAL;
 	}
+ok:
 
 	if (env->ops->get_func_proto)
 		fn = env->ops->get_func_proto(func_id, env->prog);
