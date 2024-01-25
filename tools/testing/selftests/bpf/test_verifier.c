@@ -108,6 +108,7 @@ struct bpf_test {
 			__u64 data64[TEST_DATA_LEN / 8];
 		};
 	} retvals[MAX_TEST_RUNS];
+	enum bpf_attach_type expected_attach_type;
 };
 
 /* Note we want this to be 64 bit aligned so that the end of our array is
@@ -17381,6 +17382,79 @@ static struct bpf_test tests[] = {
 		.result = ACCEPT,
 		.prog_type = BPF_PROG_TYPE_CGROUP_SYSCTL,
 	},
+	#define BPF_SOCK_ADDR_STORE(field, off, res, err) \
+	{ \
+		"wide store to bpf_sock_addr." #field "[" #off "]", \
+		.insns = { \
+		BPF_MOV64_IMM(BPF_REG_0, 1), \
+		BPF_STX_MEM(BPF_DW, BPF_REG_1, BPF_REG_0, \
+			offsetof(struct bpf_sock_addr, field[off])), \
+		BPF_EXIT_INSN(), \
+		}, \
+		.result = res, \
+		.prog_type = BPF_PROG_TYPE_CGROUP_SOCK_ADDR, \
+		.expected_attach_type = BPF_CGROUP_UDP6_SENDMSG, \
+		.errstr = err, \
+	}
+
+	/* user_ip6[0] is u64 aligned */
+	BPF_SOCK_ADDR_STORE(user_ip6, 0, ACCEPT,
+			NULL),
+	BPF_SOCK_ADDR_STORE(user_ip6, 1, REJECT,
+			"invalid bpf_context access off=12 size=8"),
+	BPF_SOCK_ADDR_STORE(user_ip6, 2, ACCEPT,
+			NULL),
+	BPF_SOCK_ADDR_STORE(user_ip6, 3, REJECT,
+			"invalid bpf_context access off=20 size=8"),
+
+	/* msg_src_ip6[0] is _not_ u64 aligned */
+	BPF_SOCK_ADDR_STORE(msg_src_ip6, 0, REJECT,
+			"invalid bpf_context access off=44 size=8"),
+	BPF_SOCK_ADDR_STORE(msg_src_ip6, 1, ACCEPT,
+			NULL),
+	BPF_SOCK_ADDR_STORE(msg_src_ip6, 2, REJECT,
+			"invalid bpf_context access off=52 size=8"),
+	BPF_SOCK_ADDR_STORE(msg_src_ip6, 3, REJECT,
+			"invalid bpf_context access off=56 size=8"),
+
+	#undef BPF_SOCK_ADDR_STORE
+
+	#define BPF_SOCK_ADDR_LOAD(field, off, res, err) \
+	{ \
+		"wide load from bpf_sock_addr." #field "[" #off "]", \
+		.insns = { \
+		BPF_LDX_MEM(BPF_DW, BPF_REG_0, BPF_REG_1, \
+			offsetof(struct bpf_sock_addr, field[off])), \
+		BPF_MOV64_IMM(BPF_REG_0, 1), \
+		BPF_EXIT_INSN(), \
+		}, \
+		.result = res, \
+		.prog_type = BPF_PROG_TYPE_CGROUP_SOCK_ADDR, \
+		.expected_attach_type = BPF_CGROUP_UDP6_SENDMSG, \
+		.errstr = err, \
+	}
+
+	/* user_ip6[0] is u64 aligned */
+	BPF_SOCK_ADDR_LOAD(user_ip6, 0, ACCEPT,
+			NULL),
+	BPF_SOCK_ADDR_LOAD(user_ip6, 1, REJECT,
+			"invalid bpf_context access off=12 size=8"),
+	BPF_SOCK_ADDR_LOAD(user_ip6, 2, ACCEPT,
+			NULL),
+	BPF_SOCK_ADDR_LOAD(user_ip6, 3, REJECT,
+			"invalid bpf_context access off=20 size=8"),
+
+	/* msg_src_ip6[0] is _not_ u64 aligned */
+	BPF_SOCK_ADDR_LOAD(msg_src_ip6, 0, REJECT,
+			"invalid bpf_context access off=44 size=8"),
+	BPF_SOCK_ADDR_LOAD(msg_src_ip6, 1, ACCEPT,
+			NULL),
+	BPF_SOCK_ADDR_LOAD(msg_src_ip6, 2, REJECT,
+			"invalid bpf_context access off=52 size=8"),
+	BPF_SOCK_ADDR_LOAD(msg_src_ip6, 3, REJECT,
+			"invalid bpf_context access off=56 size=8"),
+
+	#undef BPF_SOCK_ADDR_LOAD
 };
 
 static int probe_filter_length(const struct bpf_insn *fp)
@@ -17885,6 +17959,7 @@ static void do_test_single(struct bpf_test *test, bool unpriv,
 	int fd_prog, expected_ret, alignment_prevented_execution;
 	int prog_len, prog_type = test->prog_type;
 	struct bpf_insn *prog = test->insns;
+	struct bpf_load_program_attr attr;
 	int run_errs, run_successes;
 	int map_fds[MAX_NR_MAPS];
 	const char *expected_err;
@@ -17917,8 +17992,16 @@ static void do_test_single(struct bpf_test *test, bool unpriv,
 		pflags |= BPF_F_STRICT_ALIGNMENT;
 	if (test->flags & F_NEEDS_EFFICIENT_UNALIGNED_ACCESS)
 		pflags |= BPF_F_ANY_ALIGNMENT;
-	fd_prog = bpf_verify_program(prog_type, prog, prog_len, pflags,
-				     "GPL", 0, bpf_vlog, sizeof(bpf_vlog), 4);
+	memset(&attr, 0, sizeof(attr));
+	attr.prog_type = prog_type;
+	attr.expected_attach_type = test->expected_attach_type;
+	attr.insns = prog;
+	attr.insns_cnt = prog_len;
+	attr.license = "GPL";
+	attr.log_level = 4;
+	attr.prog_flags = pflags;
+
+	fd_prog = bpf_load_program_xattr(&attr, bpf_vlog, sizeof(bpf_vlog));
 	saved_errno = errno;
 	if (fd_prog < 0 && !bpf_probe_prog_type(prog_type, 0)) {
 		printf("SKIP (unsupported program type %d)\n", prog_type);
@@ -17949,7 +18032,7 @@ static void do_test_single(struct bpf_test *test, bool unpriv,
 			printf("FAIL\nUnexpected success to load!\n");
 			goto fail_log;
 		}
-		if (!strstr(bpf_vlog, expected_err)) {
+		if (!expected_err || !strstr(bpf_vlog, expected_err)) {
 			printf("FAIL\nUnexpected error message!\n\tEXP: %s\n\tRES: %s\n",
 			      expected_err, bpf_vlog);
 			goto fail_log;
