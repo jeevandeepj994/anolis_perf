@@ -6975,9 +6975,24 @@ sock_filter_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 	}
 }
 
+const struct bpf_func_proto bpf_anolis_ipv6_addr_set_proto __weak;
+
 static const struct bpf_func_proto *
 sock_addr_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 {
+	/* For anolis custom helper, func_id is checked before the check for
+	 * bpf_func_id to avoid warnings when compile, because the id is not
+	 * defined in enum bpf_func_id.
+	 */
+	if ((enum anolis_bpf_func_id)func_id == BPF_FUNC_anolis_ipv6_addr_set) {
+		switch (prog->expected_attach_type) {
+		case BPF_CGROUP_INET4_GETPEERNAME:
+			return &bpf_anolis_ipv6_addr_set_proto;
+		default:
+			return NULL;
+		}
+	}
+
 	switch (func_id) {
 	/* inet and inet6 sockets are created in a process
 	 * context so there is always a valid uid/gid
