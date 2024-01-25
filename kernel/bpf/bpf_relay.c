@@ -433,3 +433,41 @@ static int __init bpf_relay_init(void)
 	return 0;
 }
 late_initcall(bpf_relay_init);
+
+BPF_CALL_3(bpf_anolis_relay_write, void *, data, u64, size, u64, index)
+{
+	struct rchan *rch, **rch_arr;
+	int ret = 0;
+
+	/* capacity does not need to be protected because it is always updated
+	 * after rchan_array and will not decrease. It is safe to use a newer
+	 * rchan_array is with older (as well as smaller) capacity.
+	 */
+	if (index >= array_capacity)
+		return -EINVAL;
+
+	rcu_read_lock();
+
+	/* rch_arr will not be NULL, because if it is NULL, array_capacity must
+	 * be 0 and then the above index checking would not pass.
+	 */
+	rch_arr = rcu_dereference(rchan_array);
+	rch = rcu_dereference(rch_arr[index]);
+	if (!rch) {
+		ret = -ENOENT;
+		goto out;
+	}
+
+	relay_write(rch, data, size);
+out:
+	rcu_read_unlock();
+	return ret;
+}
+
+const struct bpf_func_proto bpf_anolis_relay_write_proto = {
+	.func		= bpf_anolis_relay_write,
+	.ret_type	= RET_INTEGER,
+	.arg1_type	= ARG_PTR_TO_MEM | MEM_RDONLY,
+	.arg2_type	= ARG_CONST_SIZE_OR_ZERO,
+	.arg3_type	= ARG_ANYTHING,
+};
