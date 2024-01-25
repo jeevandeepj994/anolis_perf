@@ -26,10 +26,20 @@ function do_prep() {
     popd > /dev/null
     DIST_OUTPUT=${DIST_RPMBUILDDIR_OUTPUT}/SPECS/ sh genspec.sh
 
-    cp ${DIST_SRCROOT}/arch/x86/configs/anolis_defconfig		${DIST_RPMBUILDDIR_OUTPUT}/SOURCES/kernel-${DIST_KERNELVERSION}-x86_64.config
-    cp ${DIST_SRCROOT}/arch/x86/configs/anolis-debug_defconfig	${DIST_RPMBUILDDIR_OUTPUT}/SOURCES/kernel-${DIST_KERNELVERSION}-x86_64-debug.config
-    cp ${DIST_SRCROOT}/arch/arm64/configs/anolis_defconfig		${DIST_RPMBUILDDIR_OUTPUT}/SOURCES/kernel-${DIST_KERNELVERSION}-aarch64.config
-    cp ${DIST_SRCROOT}/arch/arm64/configs/anolis-debug_defconfig	${DIST_RPMBUILDDIR_OUTPUT}/SOURCES/kernel-${DIST_KERNELVERSION}-aarch64-debug.config
+    # the kconfigs of x86 and arm64 has been moved to kconfig baseline,
+    # so use `make dist-configs` to generate them
+    make -C ${DIST_SRCROOT}/anolis dist-configs
+    cp ${DIST_OUTPUT}/kernel-${DIST_KERNELVERSION}-x86-ANCK.config \
+    ${DIST_RPMBUILDDIR_OUTPUT}/SOURCES/kernel-${DIST_KERNELVERSION}-x86_64.config
+    cp ${DIST_OUTPUT}/kernel-${DIST_KERNELVERSION}-x86-debug-ANCK.config \
+    ${DIST_RPMBUILDDIR_OUTPUT}/SOURCES/kernel-${DIST_KERNELVERSION}-x86_64-debug.config
+    cp ${DIST_OUTPUT}/kernel-${DIST_KERNELVERSION}-arm64-ANCK.config \
+    ${DIST_RPMBUILDDIR_OUTPUT}/SOURCES/kernel-${DIST_KERNELVERSION}-aarch64.config
+    cp ${DIST_OUTPUT}/kernel-${DIST_KERNELVERSION}-arm64-debug-ANCK.config \
+    ${DIST_RPMBUILDDIR_OUTPUT}/SOURCES/kernel-${DIST_KERNELVERSION}-aarch64-debug.config
+
+    # the kconfigs of sw_64 and loongarch keep the legacy way,
+    # so still copy them from arch/${arch}/configs/ directory.
     cp ${DIST_SRCROOT}/arch/sw_64/configs/anolis_defconfig \
     ${DIST_RPMBUILDDIR_OUTPUT}/SOURCES/kernel-${DIST_KERNELVERSION}-sw_64.config
     cp ${DIST_SRCROOT}/arch/sw_64/configs/anolis-debug_defconfig \
