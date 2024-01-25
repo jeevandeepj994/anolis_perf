@@ -1064,9 +1064,22 @@ const struct bpf_func_proto bpf_probe_read_user_str_proto __weak;
 const struct bpf_func_proto bpf_probe_read_kernel_proto __weak;
 const struct bpf_func_proto bpf_probe_read_kernel_str_proto __weak;
 
+/* anolis own helpers */
+const struct bpf_func_proto bpf_anolis_relay_write_proto __weak;
+
 const struct bpf_func_proto *
 bpf_base_func_proto(enum bpf_func_id func_id)
 {
+	/* For anolis custom helper, func_id is checked before the check for
+	 * bpf_func_id to avoid warnings when compile, because the id is not
+	 * defined in enum bpf_func_id.
+	 */
+#ifdef CONFIG_RELAY
+	if ((enum anolis_bpf_func_id)func_id == BPF_FUNC_anolis_relay_write) {
+		return &bpf_anolis_relay_write_proto;
+	}
+#endif
+
 	switch (func_id) {
 	case BPF_FUNC_map_lookup_elem:
 		return &bpf_map_lookup_elem_proto;
