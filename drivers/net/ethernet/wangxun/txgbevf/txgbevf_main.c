@@ -4119,6 +4119,7 @@ static const struct net_device_ops txgbe_netdev_ops = {
 void txgbe_assign_netdev_ops(struct net_device *dev)
 {
 	dev->netdev_ops = &txgbe_netdev_ops;
+	txgbe_set_ethtool_ops(dev);
 	dev->watchdog_timeo = 5 * HZ;
 }
 

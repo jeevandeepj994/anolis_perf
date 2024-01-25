@@ -8,4 +8,5 @@
 obj-$(CONFIG_TXGBEVF) += txgbevf.o
 
 txgbevf-objs := txgbevf_main.o txgbe_vf.o \
-				txgbe_mbx.o txgbe_txrx.o
+				txgbe_mbx.o txgbe_txrx.o  \
+				txgbe_ethtool.o
