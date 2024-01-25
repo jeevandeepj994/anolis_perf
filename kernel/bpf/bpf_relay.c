@@ -218,6 +218,58 @@ static struct rchan_callbacks relay_callbacks = {
 	.subbuf_start    = subbuf_start,
 };
 
+/* each time print a line */
+static ssize_t relay_ebpf_read(struct file *file,
+			       char __user *user_buf,
+			       size_t count, loff_t *ppos)
+{
+	/* use relay_array index as ppos, each read() process an element and
+	 * *ppos increases by 1, until it reaches array_capacity.
+	 */
+	struct rchan *rch;
+	char buf[128];
+	int size, ret;
+	loff_t index;
+
+	if (count < sizeof(buf))
+		return -EACCES;
+
+	mutex_lock(&relay_file_lock);
+	index = *ppos;
+	if (index < 0) {
+		ret = -EINVAL;
+		goto out;
+	}
+
+	/* find the first non-null rchan from ppos */
+	while (index < array_capacity && rchan_array[index] == NULL)
+		index++;
+
+	if (index >= array_capacity) {
+		ret = 0;
+		goto out;
+	}
+
+	/* find a valid entry, rch->is_global==0 means percpu is on */
+	rch = rchan_array[index];
+	size = snprintf(buf, sizeof(buf), "%lld %s %s %lu %lu %d\n", index,
+			rch->parent->d_name.name, rch->base_filename,
+			rch->n_subbufs, rch->subbuf_size, !rch->is_global);
+
+	ret = copy_to_user(user_buf, buf, size);
+	if (ret) {
+		ret = -EFAULT;
+		goto out;
+	}
+
+	ret = size;
+	/* current element is processed, increase index */
+	*ppos = index + 1;
+out:
+	mutex_unlock(&relay_file_lock);
+	return ret;
+}
+
 static int bpf_relay_create(const char *dir_name, const char *file_name,
 			    unsigned long bufnum, unsigned long bufsize,
 			    void *is_global, int index)
@@ -366,6 +418,7 @@ static ssize_t relay_ebpf_write(struct file *file,
 
 static const struct file_operations relay_ebpf_fops = {
 	.write = relay_ebpf_write,
+	.read  = relay_ebpf_read,
 };
 
 /* create relay-ebpf file, rchan_array is created with "create" cmd */
