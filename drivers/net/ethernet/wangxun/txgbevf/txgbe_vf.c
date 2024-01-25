@@ -216,8 +216,8 @@ s32 txgbe_check_mac_link_vf(struct txgbe_hw *hw, txgbe_link_speed *speed,
 	if (!po32m(hw, TXGBE_VXSTATUS, TXGBE_VXSTATUS_UP, 0, 100, 5))
 		goto out;
 
-	for (i = 0; i < 5; i++) {
-		usleep_range(100, 200);
+	for (i = 0; i < 100; i++) {
+		udelay(5);
 		links_reg = rd32(hw, TXGBE_VXSTATUS);
 
 		if (!(links_reg & TXGBE_VXSTATUS_UP))
