@@ -107,6 +107,41 @@ static int relay_array_lookup(const char *dirname, const char *filename)
 	return -1;
 }
 
+/* return first index if found, else return -1 */
+static int relay_array_lookup_dir(struct dentry *dir)
+{
+	int i;
+
+	for (i = 0; i < array_capacity; ++i) {
+		if (!rchan_array[i])
+			continue;
+
+		if (rchan_array[i]->parent == dir)
+			return i;
+	}
+
+	return -1;
+}
+
+/* must ensure the index is valid */
+static void relay_array_delete(int index)
+{
+	struct dentry *dir = rchan_array[index]->parent;
+	struct rchan *rch = rchan_array[index];
+
+	/* remove targe relay channel */
+	rcu_assign_pointer(rchan_array[index], NULL);
+	synchronize_rcu();
+
+	relay_close(rch);
+
+	/* check if the parent dir is still in use */
+	if (relay_array_lookup_dir(dir) == -1) {
+		debugfs_remove_recursive(dir);
+		pr_info("bpf-relay: directory deleted\n");
+	}
+}
+
 /* get the next usable id, return -1 if there is no id left */
 static int relay_array_usable_id(const char *dir_name, const char *file_name)
 {
@@ -268,6 +303,28 @@ static int handle_create(const char *buf)
 				is_global, ret);
 }
 
+static int handle_remove(const char *buf)
+{
+	char dir_name[NAME_MAX], file_name[NAME_MAX];
+	int ret;
+
+	ret = sscanf(buf, " remove %s %s", dir_name, file_name);
+	if (ret != 2) {
+		pr_info("bpf-relay: remove fail, get args failed\n");
+		return -EINVAL;
+	}
+
+	ret = relay_array_lookup(dir_name, file_name);
+	if (ret >= 0) {
+		relay_array_delete(ret);
+		pr_info("bpf-relay: remove finished, id=%d\n", ret);
+	} else {
+		pr_info("bpf-relay: remove finished, not exists\n");
+	}
+
+	return 0;
+}
+
 static ssize_t relay_ebpf_write(struct file *file,
 				const char __user *user_buf,
 				size_t count, loff_t *ppos)
@@ -292,12 +349,16 @@ static ssize_t relay_ebpf_write(struct file *file,
 	mutex_lock(&relay_file_lock);
 	if (strcmp(cmd, "create") == 0) {
 		ret = handle_create(buf);
-		if (!ret)
-			ret = count;
+	} else if (strcmp(cmd, "remove") == 0) {
+		ret = handle_remove(buf);
 	} else {
 		pr_info("bpf-relay: write fail, invalid cmd\n");
 		ret = -EINVAL;
 	}
+
+	/* create or remove succ */
+	if (!ret)
+		ret = count;
 
 	mutex_unlock(&relay_file_lock);
 	return ret;
