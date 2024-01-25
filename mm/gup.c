@@ -444,7 +444,7 @@ retry:
 	if (unlikely(pmd_bad(*pmd)))
 		return no_page_table(vma, flags);
 
-	if (async_fork_staging()) {
+	if (is_pmd_async_fork(*pmd)) {
 		async_fork_fixup_pmd(vma, pmd, address);
 		if (is_pmd_async_fork(*pmd))
 			return no_page_table(vma, flags);
