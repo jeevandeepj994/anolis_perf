@@ -329,7 +329,7 @@ unsigned long __startup_secondary_64(void)
 #ifdef CONFIG_AMD_MEM_ENCRYPT
 extern bool bsp_flush_bss_decrypted_section_done;
 
-void early_clflush_bss_decrypted_section(void)
+void __init early_clflush_bss_decrypted_section(void)
 {
 	/* Only allow bsp flush these caches and the bsp must at early boot stage */
 	if (bsp_flush_bss_decrypted_section_done)
