@@ -26,6 +26,17 @@
 #include <linux/err.h>
 #include <linux/fs.h>
 
+/* preserved index used for tcprt */
+enum reserve_relay_idex {
+	RELAY_INDEX_TCPRT_LOG = 0,
+	RELAY_INDEX_TCPRT_STAT,
+	RELAY_INDEX_BEGIN = 4,
+};
+
+#define DIR_NAME_TCPRT		"tcp-rt"
+#define FILE_NAME_TCPRT_LOG	"rt-network-log"
+#define FILE_NAME_TCPRT_STAT	"rt-network-stats"
+
 /* dynamic array to maintain relay channels, with number limit RCHAN_NUM_MAX */
 static struct rchan **rchan_array;
 static size_t array_capacity;
@@ -97,15 +108,31 @@ static int relay_array_lookup(const char *dirname, const char *filename)
 }
 
 /* get the next usable id, return -1 if there is no id left */
-static int relay_array_get_id(void)
+static int relay_array_usable_id(const char *dir_name, const char *file_name)
 {
 	int i;
 
-	for (i = 0; i < array_capacity; ++i) {
+	/* firstly check preserved special ids */
+	if (strcmp(dir_name, DIR_NAME_TCPRT) == 0 &&
+	    strcmp(file_name, FILE_NAME_TCPRT_LOG) == 0) {
+		pr_info("bpf-relay: prepare to create tcprt log\n");
+		i = RELAY_INDEX_TCPRT_LOG;
+		goto check;
+	}
+	if (strcmp(dir_name, DIR_NAME_TCPRT) == 0 &&
+	    strcmp(file_name, FILE_NAME_TCPRT_STAT) == 0) {
+		pr_info("bpf-relay: prepare to create stats\n");
+		i = RELAY_INDEX_TCPRT_STAT;
+		goto check;
+	}
+
+	/* not special relay, find the minimal usable id */
+	for (i = RELAY_INDEX_BEGIN; i < array_capacity; ++i) {
 		if (!rchan_array[i])
 			return i;
 	}
 
+check:
 	/* if extend needed but fails, return -1 */
 	if (i >= array_capacity) {
 		if (relay_array_extend(i + 1))
@@ -230,7 +257,7 @@ static int handle_create(const char *buf)
 	if (strcmp(percpu, "off") == 0)
 		is_global = &global_flag;
 
-	ret = relay_array_get_id();
+	ret = relay_array_usable_id(dir_name, file_name);
 	if (ret < 0) {
 		pr_info("bpf-relay: create fail, no id left\n");
 		return -ENOMEM;
