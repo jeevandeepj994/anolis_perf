@@ -1425,7 +1425,7 @@ static inline unsigned long zap_pmd_range(struct mmu_gather *tlb,
 		 * because MADV_DONTNEED holds the mmap_lock in read
 		 * mode.
 		 */
-		async_fork_fixup_pmd(vma, pmd, addr);
+		fixup_pmd(vma, pmd, addr);
 
 		if (pmd_none_or_trans_huge_or_clear_bad(pmd))
 			goto next;
@@ -5080,7 +5080,7 @@ retry_pud:
 			}
 		}
 
-		async_fork_fixup_pmd(vma, vmf.pmd, address);
+		fixup_pmd(vma, vmf.pmd, address);
 	}
 
 	return handle_pte_fault(&vmf);
