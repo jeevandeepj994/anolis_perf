@@ -10,6 +10,7 @@
 %global dist %%DIST%%
 %define kernelversion %%DIST_KERNELVERSION%%
 %define pkgrelease %%DIST_PKGRELEASEVERION%%
+%define variant %%VARIANT%%
 
 # allow pkg_release to have configurable %%{?dist} tag
 %define specrelease %{pkgrelease}%{?dist}
@@ -111,19 +112,19 @@
 %define with_bpftool 0
 %define with_debug 0
 %define with_doc 0
-%define all_arch_configs %{name}-%{version}-*.config
+%define all_arch_configs kernel-%{version}-*.config
 %endif
 
 # Per-arch tweaks
 
 %ifarch x86_64
 %define asmarch x86
-%define all_arch_configs %{name}-%{version}-x86_64*.config
+%define all_arch_configs kernel-%{version}-x86_64*.config
 %define kernel_image arch/x86/boot/bzImage
 %endif
 
 %ifarch aarch64
-%define all_arch_configs %{name}-%{version}-aarch64*.config
+%define all_arch_configs kernel-%{version}-aarch64*.config
 %define asmarch arm64
 %define hdrarch arm64
 %define make_target Image.gz
@@ -131,7 +132,7 @@
 %endif
 
 %ifarch sw_64
-%define all_arch_configs %{name}-%{version}-sw_64*.config
+%define all_arch_configs kernel-%{version}-sw_64*.config
 %define asmarch sw_64
 %define hdrarch sw_64
 %define make_target vmlinux
@@ -139,7 +140,7 @@
 %endif
 
 %ifarch loongarch64
-%define all_arch_configs %{name}-%{version}-loongarch64*.config
+%define all_arch_configs kernel-%{version}-loongarch64*.config
 %define asmarch loongarch
 %define make_target vmlinux
 %define hdrarch loongarch
@@ -177,7 +178,7 @@
 %define initrd_prereq  dracut >= 027
 
 
-Name: kernel%{?variant}
+Name: kernel%{?variant:-%{variant}}
 Group: System Environment/Kernel
 License: GPLv2 and Redistributable, no modification permitted
 URL: http://www.kernel.org/
@@ -1802,7 +1803,7 @@ fi
 /lib/modules/%{KVERREL}%{?2:+%{2}}/weak-updates\
 /lib/modules/%{KVERREL}%{?2:+%{2}}/bls.conf\
 /lib/modules/%{KVERREL}%{?2:+%{2}}/modules.*\
-%{expand:%%files -f kernel-%{?2:%{2}-}modules.list %{?2:%{2}-}modules}\
+%{expand:%%files -f %{name}-%{?2:%{2}-}modules.list %{?2:%{2}-}modules}\
 %defattr(-,root,root)\
 %{expand:%%files %{?2:%{2}-}devel}\
 %defattr(-,root,root)\
