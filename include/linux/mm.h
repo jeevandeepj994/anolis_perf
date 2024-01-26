@@ -3508,5 +3508,21 @@ static inline void async_fork_fixup_vma(struct vm_area_struct *mpnt)
 }
 #endif
 
+static inline bool is_pmd_transient(pmd_t pmd)
+{
+	if (is_pmd_async_fork(pmd))
+		return true;
+	return false;
+}
+static inline void fixup_pmd(struct vm_area_struct *vma,
+			     pmd_t *pmd, unsigned long addr)
+{
+	async_fork_fixup_pmd(vma, pmd, addr);
+}
+static inline void fixup_vma(struct vm_area_struct *vma)
+{
+	async_fork_fixup_vma(vma);
+}
+
 #endif /* __KERNEL__ */
 #endif /* _LINUX_MM_H */
