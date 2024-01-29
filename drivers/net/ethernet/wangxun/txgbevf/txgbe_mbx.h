@@ -36,6 +36,12 @@
 
 #define TXGBE_VF_MBX_INIT_DELAY         500  /* microseconds between retries */
 
+/* GET_QUEUES return data indices within the mailbox */
+#define TXGBE_VF_TX_QUEUES      1       /* number of Tx queues supported */
+#define TXGBE_VF_RX_QUEUES      2       /* number of Rx queues supported */
+#define TXGBE_VF_TRANS_VLAN     3       /* Indication of port vlan */
+#define TXGBE_VF_DEF_QUEUE      4       /* Default queue offset */
+
 enum txgbe_pfvf_api_rev {
 	txgbe_mbox_api_null,
 	txgbe_mbox_api_10,      /* API version 1.0, linux/freebsd VF driver */
