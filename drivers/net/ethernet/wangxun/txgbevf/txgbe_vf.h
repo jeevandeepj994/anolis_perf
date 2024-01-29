@@ -27,9 +27,17 @@
 
 #define TXGBE_DEFAULT_TXD   128
 #define TXGBE_DEFAULT_RXD   128
+#define TXGBE_MAX_TXD       4096
+#define TXGBE_MIN_TXD       64
+#define TXGBE_MAX_RXD       4096
+#define TXGBE_MIN_RXD       64
 
 #define TXGBE_MAX_TXD_PWR       14
 #define TXGBE_MAX_DATA_PER_TXD  BIT(TXGBE_MAX_TXD_PWR)
+
+/* Number of Transmit and Receive Descriptors(*1024) */
+#define TXGBE_REQ_TX_DESCRIPTOR_MULTIPLE        8
+#define TXGBE_REQ_RX_DESCRIPTOR_MULTIPLE        8
 
 /* Tx Descriptors needed, worst case */
 #define TXD_USE_COUNT(S) DIV_ROUND_UP((S), TXGBE_MAX_DATA_PER_TXD)
@@ -407,6 +415,12 @@ __maybe_unused static int txgbe_conf_size(int v, int mwidth, int uwidth)
 #define TXGBE_20K_ITR           (0x019)
 #define TXGBE_12K_ITR           (0x02A)
 
+/*#define TXGBE_VFRETA_SIZE	64	 64 entries */
+#define TXGBE_VFRETA_SIZE	128	/* 128 entries */
+
+#define TXGBE_RSS_HASH_KEY_SIZE	40
+#define TXGBE_VFRSSRK_REGS		10	/* 10 registers for RSS key */
+
 enum txgbe_xcast_modes {
 	TXGBE_XCAST_MODE_NONE = 0,
 	TXGBE_XCAST_MODE_MULTI,
@@ -516,6 +530,8 @@ enum txgbe_error {
 #define TXGBE_ERR_MBX                         (-TXGBE_ERR_MBX)
 
 extern char txgbe_firmware_version[];
+extern char txgbe_driver_name[];
+extern const char txgbe_driver_version[];
 
 typedef u32 txgbe_link_speed;
 
@@ -1176,5 +1192,18 @@ void txgbe_disable_rx_queue(struct txgbe_adapter *adapter,
 			    struct txgbe_ring *ring);
 void txgbe_alloc_rx_buffers(struct txgbe_ring *rx_ring,
 			    u16 cleaned_count);
+void txgbe_set_ethtool_ops(struct net_device *netdev);
+void txgbe_reinit_locked(struct txgbe_adapter *adapter);
+int txgbe_setup_tx_resources(struct txgbe_ring *tx_ring);
+void txgbe_free_tx_resources(struct txgbe_ring *tx_ring);
+int txgbe_setup_rx_resources(struct txgbe_adapter *adapter,
+			     struct txgbe_ring *rx_ring);
+void txgbe_down(struct txgbe_adapter *adapter);
+void txgbe_free_irq(struct txgbe_adapter *adapter);
+void txgbe_configure(struct txgbe_adapter *adapter);
+int txgbe_request_irq(struct txgbe_adapter *adapter);
+void txgbe_up_complete(struct txgbe_adapter *adapter);
+void txgbe_reset(struct txgbe_adapter *adapter);
+void txgbe_update_stats(struct txgbe_adapter *adapter);
 
 #endif
