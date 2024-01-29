@@ -60,6 +60,8 @@ s32 txgbe_reset_hw_vf(struct txgbe_hw *hw)
 	u8 *addr = (u8 *)(&msgbuf[1]);
 	u32 i;
 
+	hw->mac.ops.stop_adapter(hw);
+
 	/* reset the api version */
 	hw->api_version = txgbe_mbox_api_10;
 
@@ -501,6 +503,102 @@ int txgbe_negotiate_api_version(struct txgbe_hw *hw, int api)
 	return err;
 }
 
+static s32 txgbe_write_msg_read_ack(struct txgbe_hw *hw, u32 *msg,
+				    u32 *retmsg, u16 size)
+{
+	struct txgbe_mbx_info *mbx = &hw->mbx;
+	s32 retval = mbx->ops.write_posted(hw, msg, size, 0);
+
+	if (retval)
+		return retval;
+
+	return mbx->ops.read_posted(hw, retmsg, size, 0);
+}
+
+/**
+ *  txgbe_rlpml_set_vf - Set the maximum receive packet length
+ *  @hw: pointer to the HW structure
+ *  @max_size: value to assign to max frame size
+ **/
+s32 txgbe_rlpml_set_vf(struct txgbe_hw *hw, u16 max_size)
+{
+	u32 msgbuf[2];
+	s32 retval;
+
+	msgbuf[0] = TXGBE_VF_SET_LPE;
+	msgbuf[1] = max_size;
+
+	retval = txgbe_write_msg_read_ack(hw, msgbuf, msgbuf, 2);
+	if (retval)
+		return retval;
+	if ((msgbuf[0] & TXGBE_VF_SET_LPE) &&
+	    (msgbuf[0] & TXGBE_VT_MSGTYPE_NACK))
+		return TXGBE_ERR_MBX;
+
+	return 0;
+}
+
+int txgbe_get_queues(struct txgbe_hw *hw, unsigned int *num_tcs,
+		     unsigned int *default_tc)
+{
+	int err;
+	u32 msg[5];
+
+	/* do nothing if API doesn't support txgbe_get_queues */
+	switch (hw->api_version) {
+	case txgbe_mbox_api_11:
+	case txgbe_mbox_api_12:
+	case txgbe_mbox_api_13:
+		break;
+	default:
+		return 0;
+	}
+
+	/* Fetch queue configuration from the PF */
+	msg[0] = TXGBE_VF_GET_QUEUES;
+	msg[1] = 0;
+	msg[2] = 0;
+	msg[3] = 0;
+	msg[4] = 0;
+	err = hw->mbx.ops.write_posted(hw, msg, 5, 0);
+
+	if (!err)
+		err = hw->mbx.ops.read_posted(hw, msg, 5, 0);
+	if (!err) {
+		msg[0] &= ~TXGBE_VT_MSGTYPE_CTS;
+
+		/* if we didn't get an ACK there must have been
+		 * some sort of mailbox error so we should treat it
+		 * as such
+		 */
+		if (msg[0] != (TXGBE_VF_GET_QUEUES | TXGBE_VT_MSGTYPE_ACK))
+			return TXGBE_ERR_MBX;
+
+		/* record and validate values from message */
+		hw->mac.max_tx_queues = msg[TXGBE_VF_TX_QUEUES];
+		if (hw->mac.max_tx_queues == 0 ||
+		    hw->mac.max_tx_queues > TXGBE_VF_MAX_TX_QUEUES)
+			hw->mac.max_tx_queues = TXGBE_VF_MAX_TX_QUEUES;
+
+		hw->mac.max_rx_queues = msg[TXGBE_VF_RX_QUEUES];
+		if (hw->mac.max_rx_queues == 0 ||
+		    hw->mac.max_rx_queues > TXGBE_VF_MAX_RX_QUEUES)
+			hw->mac.max_rx_queues = TXGBE_VF_MAX_RX_QUEUES;
+
+		*num_tcs = msg[TXGBE_VF_TRANS_VLAN];
+		/* in case of unknown state assume we cannot tag frames */
+		if (*num_tcs > hw->mac.max_rx_queues)
+			*num_tcs = 1;
+
+		*default_tc = msg[TXGBE_VF_DEF_QUEUE];
+		/* default to queue 0 on out-of-bounds queue number */
+		if (*default_tc >= hw->mac.max_tx_queues)
+			*default_tc = 0;
+	}
+
+	return err;
+}
+
 void txgbe_init_ops_vf(struct txgbe_hw *hw)
 {
 	/* MAC */
@@ -510,6 +608,7 @@ void txgbe_init_ops_vf(struct txgbe_hw *hw)
 	/* Cannot clear stats on VF */
 	hw->mac.ops.get_mac_addr = txgbe_get_mac_addr_vf;
 	hw->mac.ops.get_fw_version = txgbe_get_fw_version;
+	hw->mac.ops.stop_adapter = txgbe_stop_adapter_vf;
 
 	/* Link */
 	hw->mac.ops.check_link = txgbe_check_mac_link_vf;
