@@ -15865,6 +15865,7 @@ L:	netdev@vger.kernel.org
 S:	Maintained
 F:	Documentation/networking/device_drivers/ethernet/wangxun/txgbe.rst
 F:	Documentation/networking/device_drivers/ethernet/wangxun/ngbe.rst
+F:	Documentation/networking/device_drivers/ethernet/wangxun/txgbevf.rst
 F:	drivers/net/ethernet/wangxun/
 
 WATCHDOG DEVICE DRIVERS
