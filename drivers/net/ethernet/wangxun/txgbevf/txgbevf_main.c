@@ -22,7 +22,7 @@ char txgbe_driver_name[] = "txgbevf";
 static const char txgbe_driver_string[] =
 	"WangXun(R) 10GbE PCI Express Virtual Function Linux Network Driver";
 
-const char txgbe_driver_version[] = __stringify(1.3.1);
+const char txgbe_driver_version[] = __stringify(1.3.1_anolis);
 
 char txgbe_firmware_version[TXGBE_FW_VER_SIZE] = "N/A";
 
@@ -4112,6 +4112,7 @@ static const struct net_device_ops txgbe_netdev_ops = {
 void txgbe_assign_netdev_ops(struct net_device *dev)
 {
 	dev->netdev_ops = &txgbe_netdev_ops;
+	txgbe_set_ethtool_ops(dev);
 	dev->watchdog_timeo = 5 * HZ;
 }
 
