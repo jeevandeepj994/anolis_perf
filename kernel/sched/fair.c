@@ -10181,7 +10181,8 @@ static int detach_tasks(struct lb_env *env)
 				break;
 			if (is_underclass_task(p))
 				goto next;
-		/* If there is highclass or normal tasks, we pull tasks as migrate_load. */
+			/* If there is highclass or normal tasks, we pull tasks as migrate_load. */
+			fallthrough;
 #endif
 		case migrate_load:
 			/*
@@ -11887,6 +11888,9 @@ static struct rq *find_busiest_queue(struct lb_env *env,
 			continue;
 
 		switch (env->migration_type) {
+#ifdef CONFIG_GROUP_IDENTITY
+		case migrate_identity:
+#endif
 		case migrate_load:
 			/*
 			 * A CPU on expel is a good source for CPU not on,
@@ -12092,8 +12096,8 @@ static int load_balance(int this_cpu, struct rq *this_rq,
 		.cpus		= cpus,
 		.fbq_type	= all,
 		.tasks		= LIST_HEAD_INIT(env.tasks),
-#ifdef CONFIG_GROUP_IDENTTIY
-		.migration_type = type;
+#ifdef CONFIG_GROUP_IDENTITY
+		.migration_type	= type,
 #endif
 	};
 
