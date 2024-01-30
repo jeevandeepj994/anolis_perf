@@ -1,0 +1,7 @@
+* Tue Jan 30 2024 Qinyun Tan <qinyuntan@linux.alibaba.com> [5.10.134-16.1.64k.1_rc1%%DIST%%]
+- anolis: spec: adjust kernel variant for special ANCK versions (Qiao Ma)
+- anolis: spec: avoid override system %rpmversion definition (Qiao Ma)
+- anolis: sw64: support arch loongarch firstly (Gu Mi)
+- anolis: enable PGO config and add PGO profiling data for arm64 (Feng Su)
+- arm64: open CONFIG_ARM64_64K_PAGES (Feng Su)
+
