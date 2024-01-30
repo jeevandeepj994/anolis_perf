@@ -148,6 +148,7 @@ int main(int argc, char *argv[])
 		vcpu_enable_evmcs(vm, VCPU_ID);
 		vcpu_load_state(vm, VCPU_ID, state);
 		run = vcpu_state(vm, VCPU_ID);
+		free(state->xsave);
 		free(state);
 
 		memset(&regs2, 0, sizeof(regs2));

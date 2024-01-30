@@ -985,7 +985,11 @@ struct kvm_x86_state *vcpu_save_state(struct kvm_vm *vm, uint32_t vcpuid)
         TEST_ASSERT(r == 0, "Unexpected result from KVM_GET_REGS, r: %i",
                 r);
 
-	r = ioctl(vcpu->fd, KVM_GET_XSAVE, &state->xsave);
+	state->xsave = malloc(sizeof(struct kvm_xsave));
+	if (state->xsave)
+		r = ioctl(vcpu->fd, KVM_GET_XSAVE, state->xsave);
+	else
+		r = -1;
         TEST_ASSERT(r == 0, "Unexpected result from KVM_GET_XSAVE, r: %i",
                 r);
 
@@ -1030,7 +1034,7 @@ void vcpu_load_state(struct kvm_vm *vm, uint32_t vcpuid, struct kvm_x86_state *s
 	struct vcpu *vcpu = vcpu_find(vm, vcpuid);
 	int r;
 
-	r = ioctl(vcpu->fd, KVM_SET_SREGS, &state->xsave);
+	r = ioctl(vcpu->fd, KVM_SET_SREGS, &state->sregs);
 	TEST_ASSERT(r == 0, "Unexpected result from KVM_SET_SREGS, r: %i",
                 r);
 
@@ -1044,7 +1048,7 @@ void vcpu_load_state(struct kvm_vm *vm, uint32_t vcpuid, struct kvm_x86_state *s
 			    r);
 	}
 
-	r = ioctl(vcpu->fd, KVM_SET_XSAVE, &state->sregs);
+	r = ioctl(vcpu->fd, KVM_SET_XSAVE, state->xsave);
 	TEST_ASSERT(r == 0, "Unexpected result from KVM_SET_XSAVE, r: %i",
                 r);
 
