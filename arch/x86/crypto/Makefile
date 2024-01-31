@@ -104,6 +104,7 @@ obj-$(CONFIG_CRYPTO_SM4_AESNI_AVX2_X86_64) += sm4-aesni-avx2-x86_64.o
 sm4-aesni-avx2-x86_64-y := sm4-aesni-avx2-asm_64.o sm4_aesni_avx2_glue.o
 
 obj-$(CONFIG_CRYPTO_SM3_ZHAOXIN_GMI) += sm3-zhaoxin-gmi.o
+obj-$(CONFIG_CRYPTO_SM4_ZHAOXIN_GMI) += sm4-zhaoxin-gmi.o
 
 quiet_cmd_perlasm = PERLASM $@
       cmd_perlasm = $(PERL) $< > $@
