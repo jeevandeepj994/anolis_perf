@@ -4375,6 +4375,8 @@ enum bpf_func_id {
 };
 #undef __BPF_ENUM_FN
 
+#include "bpf-anolis-helper.h"
+
 /* All flags used by eBPF helper functions, placed here. */
 
 /* BPF_FUNC_skb_store_bytes flags. */

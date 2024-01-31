@@ -15,8 +15,37 @@
 #include <linux/pid_namespace.h>
 #include <linux/proc_ns.h>
 #include <linux/security.h>
+#include <net/ipv6.h>
 
 #include "../../lib/kstrtox.h"
+
+/* anolis own helper: add from the beginning to avoid conflicts */
+BPF_CALL_3(bpf_anolis_ipv6_addr_set, struct bpf_sock_addr_kern *, ctx,
+	   struct in6_addr *, addr, size_t, addr_len)
+{
+	struct sockaddr_in6 *sin = (struct sockaddr_in6 *)ctx->uaddr;
+
+	if (addr_len > sizeof(*addr))
+		return -EINVAL;
+
+	/* sin->sin6_port should be set directly in bpf prog without helper */
+	sin->sin6_family = AF_INET6;
+	sin->sin6_flowinfo = 0;
+	sin->sin6_scope_id = 0;
+
+	memcpy(&sin->sin6_addr, addr, addr_len);
+
+	return 0;
+}
+
+const struct bpf_func_proto bpf_anolis_ipv6_addr_set_proto = {
+	.func		= bpf_anolis_ipv6_addr_set,
+	.gpl_only	= false,
+	.ret_type	= RET_INTEGER,
+	.arg1_type	= ARG_PTR_TO_CTX,
+	.arg2_type	= ARG_PTR_TO_MEM | MEM_RDONLY,
+	.arg3_type	= ARG_CONST_SIZE,
+};
 
 /* If kernel subsystem is allowing eBPF programs to call this function,
  * inside its own verifier_ops->get_func_proto() callback it should return

@@ -793,13 +793,17 @@ int inet_getname(struct socket *sock, struct sockaddr *uaddr,
 		sin->sin_port = inet->inet_sport;
 		sin->sin_addr.s_addr = addr;
 	}
+	/* when using v6vtoa, sockaddr_in need to be changed to sockaddr_in6,
+	 * we use helper to do that, so memset() should be done before bpf prog.
+	 */
+	memset(sin->sin_zero, 0, sizeof(sin->sin_zero));
 	if (cgroup_bpf_enabled)
 		BPF_CGROUP_RUN_SA_PROG_LOCK(sk, (struct sockaddr *)sin,
 					    peer ? CGROUP_INET4_GETPEERNAME :
 						   CGROUP_INET4_GETSOCKNAME,
 					    NULL);
-	memset(sin->sin_zero, 0, sizeof(sin->sin_zero));
-	return sizeof(*sin);
+	return sin->sin_family == AF_INET ? sizeof(struct sockaddr_in) :
+					    sizeof(struct sockaddr_in6);
 }
 EXPORT_SYMBOL(inet_getname);
 
