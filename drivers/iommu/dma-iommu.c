@@ -1230,10 +1230,31 @@ static void *iommu_dma_alloc_pages(struct device *dev, size_t size,
 	int node = dev_to_node(dev);
 	struct page *page = NULL;
 	void *cpu_addr;
+#ifdef CONFIG_X86
+	nodemask_t nodemask;
+
+	nodes_clear(nodemask);
+#endif
 
 	page = dma_alloc_contiguous(dev, alloc_size, gfp);
-	if (!page)
+	if (!page) {
+#ifdef CONFIG_X86
+		if (zhaoxin_p2cw_patch_en == true) {
+			if (!(gfp & (GFP_DMA | GFP_DMA32))) {
+				node_set(node, nodemask);
+				page = __alloc_pages_nodemask(gfp | __GFP_HIGH,
+					get_order(alloc_size),
+					node, &nodemask);
+			} else
+				page = __alloc_pages_nodemask(gfp | __GFP_HIGH,
+					get_order(alloc_size),
+					node, NULL);
+			goto check_alloc;
+		}
+#endif
 		page = alloc_pages_node(node, gfp, get_order(alloc_size));
+	}
+check_alloc:
 	if (!page)
 		return NULL;
 

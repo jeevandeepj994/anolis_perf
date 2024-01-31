@@ -100,6 +100,11 @@ static struct page *__dma_direct_alloc_pages(struct device *dev, size_t size,
 	int node = dev_to_node(dev);
 	struct page *page = NULL;
 	u64 phys_limit;
+#if defined(CONFIG_X86) && defined(CONFIG_PCI)
+	nodemask_t nodemask;
+
+	nodes_clear(nodemask);
+#endif
 
 	WARN_ON_ONCE(!PAGE_ALIGNED(size));
 
@@ -111,8 +116,25 @@ static struct page *__dma_direct_alloc_pages(struct device *dev, size_t size,
 		page = NULL;
 	}
 again:
-	if (!page)
+	if (!page) {
+#if defined(CONFIG_X86) && defined(CONFIG_PCI)
+		if (zhaoxin_p2cw_patch_en == true) {
+			if (!(gfp & (GFP_DMA | GFP_DMA32))) {
+				node_set(node, nodemask);
+				page = __alloc_pages_nodemask(gfp | __GFP_HIGH,
+					get_order(size),
+					node, &nodemask);
+			} else
+				page = __alloc_pages_nodemask(gfp | __GFP_HIGH,
+					get_order(size),
+					node, NULL);
+			goto check_alloc;
+		}
+#endif
 		page = alloc_pages_node(node, gfp, get_order(size));
+	}
+
+check_alloc:
 	if (page && !dma_coherent_ok(dev, page_to_phys(page), size)) {
 		dma_free_contiguous(dev, page, size);
 		page = NULL;
