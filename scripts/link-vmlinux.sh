@@ -141,7 +141,7 @@ gen_btf()
 
 	info "BTF" ${2}
 	vmlinux_link ${1}
-	LLVM_OBJCOPY=${OBJCOPY} ${PAHOLE} -J ${1}
+	LLVM_OBJCOPY=${OBJCOPY} ${PAHOLE} -J ${PAHOLE_FLAGS} ${1}
 
 	# dump .BTF section into raw binary file to link with final vmlinux
 	bin_arch=$(LANG=C ${OBJDUMP} -f ${1} | grep architecture | \
