@@ -343,7 +343,8 @@ void pgtable_share_clear_pmd(struct mmu_gather *tlb, struct vm_area_struct *vma,
 	 * Make sure page fault will happen when accessing
 	 * this area.
 	 */
-	__pgtable_share_clear_pmd(vma->vm_mm, pmdp, addr);
+	if (!pmd_none_or_clear_bad(pmdp))
+		__pgtable_share_clear_pmd(vma->vm_mm, pmdp, addr);
 	spin_unlock(ptl);
 
 	tlb_change_page_size(tlb, PAGE_SIZE);
