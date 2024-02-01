@@ -2719,6 +2719,7 @@ repair:
 			tcp_schedule_loss_probe(sk, false);
 
 		tcp_rt_call(sk, send_data);
+		trace_tcp_data_send(sk);
 		return false;
 	}
 	return !tp->packets_out && !tcp_write_queue_empty(sk);
