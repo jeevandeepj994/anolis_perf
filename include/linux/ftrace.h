@@ -8,6 +8,7 @@
 #define _LINUX_FTRACE_H
 
 #include <linux/ck_kabi.h>
+#include <linux/trace_recursion.h>
 #include <linux/trace_clock.h>
 #include <linux/kallsyms.h>
 #include <linux/linkage.h>
@@ -96,15 +97,43 @@ ftrace_enable_sysctl(struct ctl_table *table, int write,
 
 struct ftrace_ops;
 
+#ifndef CONFIG_HAVE_DYNAMIC_FTRACE_WITH_ARGS
+
+struct ftrace_regs {
+	struct pt_regs		regs;
+};
+#define arch_ftrace_get_regs(fregs) (&(fregs)->regs)
+
+/*
+ * ftrace_instruction_pointer_set() is to be defined by the architecture
+ * if to allow setting of the instruction pointer from the ftrace_regs
+ * when HAVE_DYNAMIC_FTRACE_WITH_ARGS is set and it supports
+ * live kernel patching.
+ */
+#define ftrace_instruction_pointer_set(fregs, ip) do { } while (0)
+#endif /* CONFIG_HAVE_DYNAMIC_FTRACE_WITH_ARGS */
+
+static __always_inline struct pt_regs *ftrace_get_regs(struct ftrace_regs *fregs)
+{
+	if (!fregs)
+		return NULL;
+
+	return arch_ftrace_get_regs(fregs);
+}
+
 typedef void (*ftrace_func_t)(unsigned long ip, unsigned long parent_ip,
+#ifndef __GENKSYMS__
+			      struct ftrace_ops *op, struct ftrace_regs *fregs);
+#else
 			      struct ftrace_ops *op, struct pt_regs *regs);
+#endif
 
 ftrace_func_t ftrace_ops_get_func(struct ftrace_ops *ops);
 
 /*
  * FTRACE_OPS_FL_* bits denote the state of ftrace_ops struct and are
  * set in the flags member.
- * CONTROL, SAVE_REGS, SAVE_REGS_IF_SUPPORTED, RECURSION_SAFE, STUB and
+ * CONTROL, SAVE_REGS, SAVE_REGS_IF_SUPPORTED, RECURSION, STUB and
  * IPMODIFY are a kind of attribute flags which can be set only before
  * registering the ftrace_ops, and can not be modified while registered.
  * Changing those attribute flags after registering ftrace_ops will
@@ -127,10 +156,10 @@ ftrace_func_t ftrace_ops_get_func(struct ftrace_ops *ops);
  *            passing regs to the handler.
  *            Note, if this flag is set, the SAVE_REGS flag will automatically
  *            get set upon registering the ftrace_ops, if the arch supports it.
- * RECURSION_SAFE - The ftrace_ops can set this to tell the ftrace infrastructure
- *            that the call back has its own recursion protection. If it does
- *            not set this, then the ftrace infrastructure will add recursion
- *            protection for the caller.
+ * RECURSION - The ftrace_ops can set this to tell the ftrace infrastructure
+ *            that the call back needs recursion protection. If it does
+ *            not set this, then the ftrace infrastructure will assume
+ *            that the callback can handle recursion on its own.
  * STUB   - The ftrace_ops is just a place holder.
  * INITIALIZED - The ftrace_ops has already been initialized (first use time
  *            register_ftrace_function() is called, it will initialized the ops)
@@ -162,7 +191,7 @@ enum {
 	FTRACE_OPS_FL_DYNAMIC			= BIT(1),
 	FTRACE_OPS_FL_SAVE_REGS			= BIT(2),
 	FTRACE_OPS_FL_SAVE_REGS_IF_SUPPORTED	= BIT(3),
-	FTRACE_OPS_FL_RECURSION_SAFE		= BIT(4),
+	FTRACE_OPS_FL_RECURSION			= BIT(4),
 	FTRACE_OPS_FL_STUB			= BIT(5),
 	FTRACE_OPS_FL_INITIALIZED		= BIT(6),
 	FTRACE_OPS_FL_DELETED			= BIT(7),
@@ -267,7 +296,7 @@ int register_ftrace_function(struct ftrace_ops *ops);
 int unregister_ftrace_function(struct ftrace_ops *ops);
 
 extern void ftrace_stub(unsigned long a0, unsigned long a1,
-			struct ftrace_ops *op, struct pt_regs *regs);
+			struct ftrace_ops *op, struct ftrace_regs *fregs);
 
 #else /* !CONFIG_FUNCTION_TRACER */
 /*
@@ -872,11 +901,11 @@ struct ftrace_graph_ent {
  */
 struct ftrace_graph_ret {
 	unsigned long func; /* Current function */
+	int depth;
 	/* Number of functions that overran the depth limit for current task */
-	unsigned long overrun;
+	unsigned int overrun;
 	unsigned long long calltime;
 	unsigned long long rettime;
-	int depth;
 } __packed;
 
 /* Type of the callback handlers for tracing function graph*/
