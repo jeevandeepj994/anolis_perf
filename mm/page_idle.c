@@ -12,6 +12,7 @@
 #include <linux/mmu_notifier.h>
 #include <linux/page_ext.h>
 #include <linux/page_idle.h>
+#include <linux/pgtable_share.h>
 
 #define BITMAP_CHUNK_SIZE	sizeof(u64)
 #define BITMAP_CHUNK_BITS	(BITMAP_CHUNK_SIZE * BITS_PER_BYTE)
@@ -54,6 +55,17 @@ static bool page_idle_clear_pte_refs_one(struct page *page,
 		.address = addr,
 	};
 	bool referenced = false;
+
+#ifdef CONFIG_PAGETABLE_SHARE
+	/*
+	 * When pgtable shared or shadow vma coming, only
+	 * clear page idle by shadow vma.
+	 */
+	if (vma_is_pgtable_shared(vma))
+		return true;
+	if (vma_is_pgtable_shadow(vma))
+		pvmw.flags |= PVMW_SHARED_PGTABLE;
+#endif
 
 	while (page_vma_mapped_walk(&pvmw)) {
 		addr = pvmw.address;
