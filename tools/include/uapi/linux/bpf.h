@@ -4179,6 +4179,22 @@ union bpf_attr {
  *		if the first **s1_sz** bytes of **s1** is found to be
  *		less than, to match, or be greater than **s2**.
  */
+
+/* NOTE: Because bpf_helper_defs.h is generated with the document, we cut it
+ * here. Otherwise, bpf_ktime_get_tai_ns will be written to bpf_helper_defs.h
+ * with a wrong id.
+ *
+ * u64 bpf_ktime_get_tai_ns(void)
+ *	Description
+ *		A nonsettable system-wide clock derived from wall-clock time but
+ *		ignoring leap seconds.  This clock does not experience
+ *		discontinuities and backwards jumps caused by NTP inserting leap
+ *		seconds as CLOCK_REALTIME does.
+ *
+ *		See: **clock_gettime**\ (**CLOCK_TAI**)
+ *	Return
+ *		Current *ktime*.
+ */
 #define __BPF_FUNC_MAPPER(FN)		\
 	FN(unspec),			\
 	FN(map_lookup_elem),		\
@@ -4363,6 +4379,36 @@ union bpf_attr {
 	FN(find_vma),			\
 	FN(loop),			\
 	FN(strncmp),			\
+	/* padding: follow helpers are not implemented. We add them to support
+	 * helpers with larger id ensuring their ids consistent with upstream.
+	 */				\
+	FN(get_func_arg),		\
+	FN(get_func_ret),		\
+	FN(get_func_arg_cnt),		\
+	FN(get_retval),			\
+	FN(set_retval),			\
+	FN(xdp_get_buff_len),		\
+	FN(xdp_load_bytes),		\
+	FN(xdp_store_bytes),		\
+	FN(copy_from_user_task),	\
+	FN(skb_set_tstamp),		\
+	FN(ima_file_hash),		\
+	FN(kptr_xchg),			\
+	FN(map_lookup_percpu_elem),	\
+	FN(skc_to_mptcp_sock),		\
+	FN(dynptr_from_mem),		\
+	FN(ringbuf_reserve_dynptr),	\
+	FN(ringbuf_submit_dynptr),	\
+	FN(ringbuf_discard_dynptr),	\
+	FN(dynptr_read),		\
+	FN(dynptr_write),		\
+	FN(dynptr_data),		\
+	FN(tcp_raw_gen_syncookie_ipv4),	\
+	FN(tcp_raw_gen_syncookie_ipv6),	\
+	FN(tcp_raw_check_syncookie_ipv4),	\
+	FN(tcp_raw_check_syncookie_ipv6),	\
+	/* end of padding */ 		\
+	FN(ktime_get_tai_ns),		\
 	/* */
 
 /* integer value in 'imm' field of BPF_CALL instruction selects which helper
