@@ -676,6 +676,10 @@ static int dom_data_init(struct rdt_resource *r)
 	struct rmid_entry *entry = NULL;
 	int i;
 
+	/* Return early if the machine does not have any rmid. */
+	if (nr_idx == 0)
+		return 0;
+
 	rmid_ptrs = kcalloc(nr_idx, sizeof(struct rmid_entry), GFP_KERNEL);
 	if (!rmid_ptrs)
 		return -ENOMEM;
