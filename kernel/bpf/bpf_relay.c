@@ -277,7 +277,6 @@ static int bpf_relay_create(const char *dir_name, const char *file_name,
 	struct dentry *dir;
 	struct rchan *rch;
 	int dir_create = 0;
-	int ret = 0;
 
 	if (index >= array_capacity || index < 0) {
 		pr_info("bpf-relay: create fail, index %d out of range\n",
