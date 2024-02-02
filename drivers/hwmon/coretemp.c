@@ -470,16 +470,12 @@ static int create_core_data(struct platform_device *pdev, unsigned int cpu,
 	if (pkg_flag) {
 		index = PKG_SYSFS_ATTR_NO;
 	} else {
-		index = ida_alloc(&pdata->ida, GFP_KERNEL);
+		index = ida_alloc_max(&pdata->ida, NUM_REAL_CORES - 1, GFP_KERNEL);
 		if (index < 0)
 			return index;
+
 		pdata->cpu_map[index] = topology_core_id(cpu);
 		index += BASE_SYSFS_ATTR_NO;
-	}
-
-	if (index > MAX_CORE_DATA - 1) {
-		err = -ERANGE;
-		goto ida_free;
 	}
 
 	tdata = init_temp_data(cpu, pkg_flag);
