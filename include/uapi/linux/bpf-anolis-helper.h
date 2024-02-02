@@ -17,10 +17,20 @@
  *		*addr_len* is the length of the input addr.
  *	Returns
  *		0 on success, or a negative error in case of failure.
+ *
+ * long bpf_anolis_relay_write(void *data, u64 size, u64 id)
+ *	Description
+ *		Copy *size* bytes from *data* into bpf relay files, which is
+ *		only used by relay-bpf. *id* indicates the relay buffer id
+ *		to write into, which can be queried by
+ *		`cat /sys/kernel/debug/relay_ebpf`
+ *	Return
+ *		0 on success, or a negative error in case of failure.
  */
 
 #define ___ANOLIS_BPF_FUNC_MAPPER(FN)		\
 	FN(anolis_ipv6_addr_set)		\
+	FN(anolis_relay_write)			\
 
 #define __BPF_ENUM_FN(x) BPF_FUNC_ ## x,
 enum anolis_bpf_func_id {
