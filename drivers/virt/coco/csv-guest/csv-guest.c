@@ -9,6 +9,7 @@
 #include <linux/uaccess.h>
 #include <linux/miscdevice.h>
 #include <linux/slab.h>
+#include <linux/cc_platform.h>
 
 #include <asm/cacheflush.h>
 
@@ -91,6 +92,10 @@ static struct miscdevice csv_guest_dev = {
 
 static int __init csv_guest_init(void)
 {
+	// This module only working on CSV guest vm.
+	if (!cc_platform_has(CC_ATTR_GUEST_MEM_ENCRYPT))
+		return -ENODEV;
+
 	// Initialize 1 page for csv memory test
 	mem_test_init();
 
