@@ -3,6 +3,8 @@
 #include <linux/uaccess.h>
 #include <linux/kernel.h>
 
+#include <asm/vsyscall.h>
+
 #ifdef CONFIG_X86_64
 static __always_inline u64 canonical_address(u64 vaddr, u8 vaddr_bits)
 {
@@ -18,6 +20,14 @@ bool copy_from_kernel_nofault_allowed(const void *unsafe_src, size_t size)
 	 * normal userspace and the userspace guard page:
 	 */
 	if (vaddr < TASK_SIZE_MAX + PAGE_SIZE)
+		return false;
+
+	/*
+	 * Reading from the vsyscall page may cause an unhandled fault in
+	 * certain cases.  Though it is at an address above TASK_SIZE_MAX, it is
+	 * usually considered as a user space address.
+	 */
+	if (is_vsyscall_vaddr(vaddr))
 		return false;
 
 	/*
