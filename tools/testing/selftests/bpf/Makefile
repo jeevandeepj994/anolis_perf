@@ -54,7 +54,8 @@ TEST_PROGS := test_kmod.sh \
 	test_skb_cgroup_id.sh \
 	test_flow_dissector.sh \
 	test_tcp_check_syncookie.sh \
-	test_tc_tunnel.sh
+	test_tc_tunnel.sh \
+	test_bpftool_build.sh
 
 TEST_PROGS_EXTENDED := with_addr.sh \
 	with_tunnels.sh
