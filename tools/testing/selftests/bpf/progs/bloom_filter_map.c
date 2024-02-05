@@ -31,31 +31,32 @@ struct {
 	__array(values, struct map_bloom_type);
 } outer_map SEC(".maps");
 
+struct callback_ctx {
+	struct bpf_map *map;
+};
+
 int error = 0;
 
-static void check_elem(struct bpf_map *map)
+static __u64
+check_elem(struct bpf_map *map, __u32 *key, __u32 *val,
+	   struct callback_ctx *data)
 {
-	int err, i, key, *map_random_val;
+	int err;
 
-	for (i = 0; i < 1000; i++) {
-		key = i;
-		map_random_val = bpf_map_lookup_elem(&map_random_data, &key);
-		if (!map_random_val) {
-			error |= 2;
-			return;
-		}
-		err = bpf_map_peek_elem(map, map_random_val);
-		if (err) {
-			error |= 1;
-			return;
-		}
+	err = bpf_map_peek_elem(data->map, val);
+	if (err) {
+		error |= 1;
+		return 1; /* stop the iteration */
 	}
+
+	return 0;
 }
 
 SEC("fentry/" SYS_PREFIX "sys_getpgid")
 int inner_map(void *ctx)
 {
 	struct bpf_map *inner_map;
+	struct callback_ctx data;
 	int key = 0;
 
 	inner_map = bpf_map_lookup_elem(&outer_map, &key);
@@ -64,7 +65,8 @@ int inner_map(void *ctx)
 		return 0;
 	}
 
-	check_elem(inner_map);
+	data.map = inner_map;
+	bpf_for_each_map_elem(&map_random_data, check_elem, &data, 0);
 
 	return 0;
 }
@@ -72,7 +74,10 @@ int inner_map(void *ctx)
 SEC("fentry/" SYS_PREFIX "sys_getpgid")
 int check_bloom(void *ctx)
 {
-	check_elem(&map_bloom);
+	struct callback_ctx data;
+
+	data.map = (struct bpf_map *)&map_bloom;
+	bpf_for_each_map_elem(&map_random_data, check_elem, &data, 0);
 
 	return 0;
 }
