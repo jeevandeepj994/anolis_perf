@@ -2399,7 +2399,7 @@ static void restore_reserve_on_error(struct hstate *h,
 static int alloc_and_dissolve_huge_page(struct hstate *h, struct page *old_page,
 					struct list_head *list)
 {
-	gfp_t gfp_mask = htlb_alloc_mask(h) | __GFP_THISNODE;
+	gfp_t gfp_mask = htlb_alloc_mask(h);
 	int nid = page_to_nid(old_page);
 	struct page *new_page;
 	int ret = 0;
@@ -2457,7 +2457,7 @@ retry:
 		 * Reference count trick is needed because allocator gives us
 		 * referenced page but the pool requires pages with 0 refcount.
 		 */
-		__prep_account_new_huge_page(h, nid);
+		__prep_account_new_huge_page(h, page_to_nid(new_page));
 		page_ref_dec(new_page);
 		enqueue_huge_page(h, new_page);
 
