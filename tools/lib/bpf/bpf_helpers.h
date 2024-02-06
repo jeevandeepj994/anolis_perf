@@ -2,7 +2,7 @@
 #ifndef __BPF_HELPERS_H
 #define __BPF_HELPERS_H
 
-/* helper macro to place programs, maps, license in
+/* Helper macro to place programs, maps, license in
  * different sections in elf_bpf file. Section names
  * are interpreted by elf_bpf loader
  */
@@ -220,19 +220,13 @@ static long long (*bpf_tcp_gen_syncookie)(struct bpf_sock *sk, void *ip,
 					  int ip_len, void *tcp, int tcp_len) =
 	(void *) BPF_FUNC_tcp_gen_syncookie;
 
-/* llvm builtin functions that eBPF C program may use to
- * emit BPF_LD_ABS and BPF_LD_IND instructions
- */
-struct sk_buff;
-unsigned long long load_byte(void *skb,
-			     unsigned long long off) asm("llvm.bpf.load.byte");
-unsigned long long load_half(void *skb,
-			     unsigned long long off) asm("llvm.bpf.load.half");
-unsigned long long load_word(void *skb,
-			     unsigned long long off) asm("llvm.bpf.load.word");
+#ifndef __always_inline
+#define __always_inline __attribute__((always_inline))
+#endif
 
-/* a helper structure used by eBPF C program
- * to describe map attributes to elf_bpf loader
+/*
+ * Helper structure used by eBPF C program
+ * to describe BPF map attributes to libbpf loader
  */
 struct bpf_map_def {
 	unsigned int type;
@@ -240,18 +234,7 @@ struct bpf_map_def {
 	unsigned int value_size;
 	unsigned int max_entries;
 	unsigned int map_flags;
-	unsigned int inner_map_idx;
-	unsigned int numa_node;
 };
-
-#define BPF_ANNOTATE_KV_PAIR(name, type_key, type_val)		\
-	struct ____btf_map_##name {				\
-		type_key key;					\
-		type_val value;					\
-	};							\
-	struct ____btf_map_##name				\
-	__attribute__ ((section(".maps." #name), used))		\
-		____btf_map_##name = { }
 
 static int (*bpf_skb_load_bytes)(void *ctx, int off, void *to, int len) =
 	(void *) BPF_FUNC_skb_load_bytes;
@@ -301,162 +284,5 @@ static unsigned int (*bpf_set_hash)(void *ctx, __u32 hash) =
 static int (*bpf_skb_adjust_room)(void *ctx, __s32 len_diff, __u32 mode,
 				  unsigned long long flags) =
 	(void *) BPF_FUNC_skb_adjust_room;
-
-/* Scan the ARCH passed in from ARCH env variable (see Makefile) */
-#if defined(__TARGET_ARCH_x86)
-	#define bpf_target_x86
-	#define bpf_target_defined
-#elif defined(__TARGET_ARCH_s930x)
-	#define bpf_target_s930x
-	#define bpf_target_defined
-#elif defined(__TARGET_ARCH_arm64)
-	#define bpf_target_arm64
-	#define bpf_target_defined
-#elif defined(__TARGET_ARCH_mips)
-	#define bpf_target_mips
-	#define bpf_target_defined
-#elif defined(__TARGET_ARCH_powerpc)
-	#define bpf_target_powerpc
-	#define bpf_target_defined
-#elif defined(__TARGET_ARCH_sparc)
-	#define bpf_target_sparc
-	#define bpf_target_defined
-#else
-	#undef bpf_target_defined
-#endif
-
-/* Fall back to what the compiler says */
-#ifndef bpf_target_defined
-#if defined(__x86_64__)
-	#define bpf_target_x86
-#elif defined(__s390x__)
-	#define bpf_target_s930x
-#elif defined(__aarch64__)
-	#define bpf_target_arm64
-#elif defined(__mips__)
-	#define bpf_target_mips
-#elif defined(__powerpc__)
-	#define bpf_target_powerpc
-#elif defined(__sparc__)
-	#define bpf_target_sparc
-#endif
-#endif
-
-#if defined(bpf_target_x86)
-
-#define PT_REGS_PARM1(x) ((x)->di)
-#define PT_REGS_PARM2(x) ((x)->si)
-#define PT_REGS_PARM3(x) ((x)->dx)
-#define PT_REGS_PARM4(x) ((x)->cx)
-#define PT_REGS_PARM5(x) ((x)->r8)
-#define PT_REGS_RET(x) ((x)->sp)
-#define PT_REGS_FP(x) ((x)->bp)
-#define PT_REGS_RC(x) ((x)->ax)
-#define PT_REGS_SP(x) ((x)->sp)
-#define PT_REGS_IP(x) ((x)->ip)
-
-#elif defined(bpf_target_s390x)
-
-#define PT_REGS_PARM1(x) ((x)->gprs[2])
-#define PT_REGS_PARM2(x) ((x)->gprs[3])
-#define PT_REGS_PARM3(x) ((x)->gprs[4])
-#define PT_REGS_PARM4(x) ((x)->gprs[5])
-#define PT_REGS_PARM5(x) ((x)->gprs[6])
-#define PT_REGS_RET(x) ((x)->gprs[14])
-#define PT_REGS_FP(x) ((x)->gprs[11]) /* Works only with CONFIG_FRAME_POINTER */
-#define PT_REGS_RC(x) ((x)->gprs[2])
-#define PT_REGS_SP(x) ((x)->gprs[15])
-#define PT_REGS_IP(x) ((x)->psw.addr)
-
-#elif defined(bpf_target_arm64)
-
-#define PT_REGS_PARM1(x) ((x)->regs[0])
-#define PT_REGS_PARM2(x) ((x)->regs[1])
-#define PT_REGS_PARM3(x) ((x)->regs[2])
-#define PT_REGS_PARM4(x) ((x)->regs[3])
-#define PT_REGS_PARM5(x) ((x)->regs[4])
-#define PT_REGS_RET(x) ((x)->regs[30])
-#define PT_REGS_FP(x) ((x)->regs[29]) /* Works only with CONFIG_FRAME_POINTER */
-#define PT_REGS_RC(x) ((x)->regs[0])
-#define PT_REGS_SP(x) ((x)->sp)
-#define PT_REGS_IP(x) ((x)->pc)
-
-#elif defined(bpf_target_mips)
-
-#define PT_REGS_PARM1(x) ((x)->regs[4])
-#define PT_REGS_PARM2(x) ((x)->regs[5])
-#define PT_REGS_PARM3(x) ((x)->regs[6])
-#define PT_REGS_PARM4(x) ((x)->regs[7])
-#define PT_REGS_PARM5(x) ((x)->regs[8])
-#define PT_REGS_RET(x) ((x)->regs[31])
-#define PT_REGS_FP(x) ((x)->regs[30]) /* Works only with CONFIG_FRAME_POINTER */
-#define PT_REGS_RC(x) ((x)->regs[1])
-#define PT_REGS_SP(x) ((x)->regs[29])
-#define PT_REGS_IP(x) ((x)->cp0_epc)
-
-#elif defined(bpf_target_powerpc)
-
-#define PT_REGS_PARM1(x) ((x)->gpr[3])
-#define PT_REGS_PARM2(x) ((x)->gpr[4])
-#define PT_REGS_PARM3(x) ((x)->gpr[5])
-#define PT_REGS_PARM4(x) ((x)->gpr[6])
-#define PT_REGS_PARM5(x) ((x)->gpr[7])
-#define PT_REGS_RC(x) ((x)->gpr[3])
-#define PT_REGS_SP(x) ((x)->sp)
-#define PT_REGS_IP(x) ((x)->nip)
-
-#elif defined(bpf_target_sparc)
-
-#define PT_REGS_PARM1(x) ((x)->u_regs[UREG_I0])
-#define PT_REGS_PARM2(x) ((x)->u_regs[UREG_I1])
-#define PT_REGS_PARM3(x) ((x)->u_regs[UREG_I2])
-#define PT_REGS_PARM4(x) ((x)->u_regs[UREG_I3])
-#define PT_REGS_PARM5(x) ((x)->u_regs[UREG_I4])
-#define PT_REGS_RET(x) ((x)->u_regs[UREG_I7])
-#define PT_REGS_RC(x) ((x)->u_regs[UREG_I0])
-#define PT_REGS_SP(x) ((x)->u_regs[UREG_FP])
-
-/* Should this also be a bpf_target check for the sparc case? */
-#if defined(__arch64__)
-#define PT_REGS_IP(x) ((x)->tpc)
-#else
-#define PT_REGS_IP(x) ((x)->pc)
-#endif
-
-#endif
-
-#ifdef bpf_target_powerpc
-#define BPF_KPROBE_READ_RET_IP(ip, ctx)		({ (ip) = (ctx)->link; })
-#define BPF_KRETPROBE_READ_RET_IP		BPF_KPROBE_READ_RET_IP
-#elif bpf_target_sparc
-#define BPF_KPROBE_READ_RET_IP(ip, ctx)		({ (ip) = PT_REGS_RET(ctx); })
-#define BPF_KRETPROBE_READ_RET_IP		BPF_KPROBE_READ_RET_IP
-#else
-#define BPF_KPROBE_READ_RET_IP(ip, ctx)		({				\
-		bpf_probe_read(&(ip), sizeof(ip), (void *)PT_REGS_RET(ctx)); })
-#define BPF_KRETPROBE_READ_RET_IP(ip, ctx)	({				\
-		bpf_probe_read(&(ip), sizeof(ip),				\
-				(void *)(PT_REGS_FP(ctx) + sizeof(ip))); })
-#endif
-
-/*
- * BPF_CORE_READ abstracts away bpf_probe_read() call and captures offset
- * relocation for source address using __builtin_preserve_access_index()
- * built-in, provided by Clang.
- *
- * __builtin_preserve_access_index() takes as an argument an expression of
- * taking an address of a field within struct/union. It makes compiler emit
- * a relocation, which records BTF type ID describing root struct/union and an
- * accessor string which describes exact embedded field that was used to take
- * an address. See detailed description of this relocation format and
- * semantics in comments to struct bpf_offset_reloc in libbpf_internal.h.
- *
- * This relocation allows libbpf to adjust BPF instruction to use correct
- * actual field offset, based on target kernel BTF type that matches original
- * (local) BTF, used to record relocation.
- */
-#define BPF_CORE_READ(dst, src)						\
-	bpf_probe_read((dst), sizeof(*(src)),				\
-		       __builtin_preserve_access_index(src))
 
 #endif
