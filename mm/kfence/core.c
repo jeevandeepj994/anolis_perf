@@ -677,7 +677,17 @@ static struct page *kfence_guarded_alloc_page(int node)
 
 	addr = (void *)meta->addr;
 	page = virt_to_page(addr);
-	__ClearPageSlab(page);
+	if (PageSlab(page)) {
+		/*
+		 * For performance considerations,
+		 * we clean slab info here (when allocating pages).
+		 * So that slabs can reuse their flags and obj_cgroups
+		 * without being cleared or freed if the previous user
+		 * is slab too.
+		 */
+		memcg_free_page_obj_cgroups(page, page->slab_cache);
+		__ClearPageSlab(page);
+	}
 	page->mapping = NULL;
 #ifdef CONFIG_DEBUG_VM
 	atomic_set(&page->_refcount, 0);
@@ -855,8 +865,11 @@ static inline void kfence_clear_page_info(unsigned long addr, unsigned long size
 	for (i = addr; i < addr + size; i += PAGE_SIZE) {
 		struct page *page = virt_to_page(i);
 
+		if (PageSlab(page)) {
+			memcg_free_page_obj_cgroups(page, page->slab_cache);
+			__ClearPageSlab(page);
+		}
 		__ClearPageKfence(page);
-		__ClearPageSlab(page);
 		page->mapping = NULL;
 		atomic_set(&page->_refcount, 1);
 		kfence_unprotect(i);
