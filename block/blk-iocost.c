@@ -2398,14 +2398,10 @@ static ssize_t ioc_qos_write(struct kernfs_open_file *of, char *input,
 
 	spin_lock_irq(&ioc->lock);
 
-	if (enable) {
-		blk_stat_enable_accounting(ioc->rqos.q);
-		blk_queue_flag_set(QUEUE_FLAG_RQ_ALLOC_TIME, ioc->rqos.q);
+	if (enable)
 		ioc->enabled = true;
-	} else {
-		blk_queue_flag_clear(QUEUE_FLAG_RQ_ALLOC_TIME, ioc->rqos.q);
+	else
 		ioc->enabled = false;
-	}
 
 	if (user) {
 		memcpy(ioc->params.qos, qos, sizeof(qos));
@@ -2416,6 +2412,13 @@ static ssize_t ioc_qos_write(struct kernfs_open_file *of, char *input,
 
 	ioc_refresh_params(ioc, true);
 	spin_unlock_irq(&ioc->lock);
+
+	if (enable) {
+		blk_stat_enable_accounting(disk->queue);
+		blk_queue_flag_set(QUEUE_FLAG_RQ_ALLOC_TIME, disk->queue);
+	} else {
+		blk_queue_flag_clear(QUEUE_FLAG_RQ_ALLOC_TIME, disk->queue);
+	}
 
 	put_disk_and_module(disk);
 	return nbytes;
