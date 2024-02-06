@@ -4350,11 +4350,79 @@ static void txgbe_remove(struct pci_dev *pdev)
 		pci_disable_device(pdev);
 }
 
+int txgbe_suspend(struct pci_dev *pdev, pm_message_t __maybe_unused state)
+{
+	struct net_device *netdev = pci_get_drvdata(pdev);
+	struct txgbe_adapter *adapter = netdev_priv(netdev);
+	int retval = 0;
+
+	netif_device_detach(netdev);
+
+	if (netif_running(netdev)) {
+		rtnl_lock();
+		txgbe_down(adapter);
+		txgbe_free_irq(adapter);
+		txgbe_free_all_tx_resources(adapter);
+		txgbe_free_all_rx_resources(adapter);
+		rtnl_unlock();
+	}
+
+	txgbe_clear_interrupt_scheme(adapter);
+
+	retval = pci_save_state(pdev);
+	if (retval)
+		return retval;
+
+	if (!test_and_set_bit(__TXGBE_DISABLED, &adapter->state))
+		pci_disable_device(pdev);
+
+	return 0;
+}
+
+int txgbe_resume(struct pci_dev *pdev)
+{
+	struct txgbe_adapter *adapter = pci_get_drvdata(pdev);
+	struct net_device *netdev = adapter->netdev;
+	u32 err;
+
+	pci_restore_state(pdev);
+	pci_save_state(pdev);
+
+	err = pci_enable_device_mem(pdev);
+	if (err) {
+		dev_err(&pdev->dev, "Cannot enable PCI device from suspend\n");
+		return err;
+	}
+
+	adapter->hw.hw_addr = adapter->io_addr;
+
+	/* protect context */
+	smp_mb__before_atomic();
+	clear_bit(__TXGBE_DISABLED, &adapter->state);
+	pci_set_master(pdev);
+
+	txgbe_reset(adapter);
+
+	rtnl_lock();
+	err = txgbe_init_interrupt_scheme(adapter);
+	if (!err && netif_running(netdev))
+		err = txgbe_open(netdev);
+	rtnl_unlock();
+	if (err)
+		return err;
+
+	netif_device_attach(netdev);
+
+	return err;
+}
+
 static struct pci_driver txgbe_driver = {
 	.name     = txgbe_driver_name,
 	.id_table = txgbe_pci_tbl,
 	.probe    = txgbe_probe,
 	.remove   = txgbe_remove,
+	.suspend  = txgbe_suspend,
+	.resume   = txgbe_resume,
 };
 
 /**
