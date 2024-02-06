@@ -209,8 +209,12 @@ static inline int cache_vmstat_idx(struct kmem_cache *s)
 }
 
 #ifdef CONFIG_KIDLED
-static inline bool kidled_available_slab(struct kmem_cache *s)
+static inline bool kidled_available_slab(struct page *page, struct kmem_cache *s)
 {
+	/* Do not monitor kfence memory. */
+	if (unlikely(PageKfence(page)))
+		return false;
+
 	if (!strcmp(s->name, "inode_cache") ||
 		!strcmp(s->name, "ext4_inode_cache") ||
 		!strcmp(s->name, "dentry"))
@@ -225,7 +229,7 @@ static inline bool kidled_kmem_enabled(void)
 	return !cgroup_memory_nokmem;
 }
 #else
-static inline bool kidled_available_slab(struct kmem_cache *s)
+static inline bool kidled_available_slab(struct page *page, struct kmem_cache *s)
 {
 	return false;
 }
@@ -289,7 +293,7 @@ static inline void memcg_free_page_obj_cgroups(struct page *page, struct kmem_ca
 {
 	unsigned int objects = objs_per_slab_page(s, page);
 
-	if (kidled_available_slab(s)) {
+	if (kidled_available_slab(page, s)) {
 		/* In case fail to allocate memory for cold slab */
 		if (likely(page_obj_cgroups(page)))
 			kfree(page_obj_cgroups(page)[objects]);
