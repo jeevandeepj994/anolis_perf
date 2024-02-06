@@ -3357,7 +3357,7 @@ int memcg_alloc_page_obj_cgroups(struct page *page, struct kmem_cache *s,
 	void *vec;
 
 	/* extra allocate an special pointer for cold slab */
-	if (kidled_available_slab(s))
+	if (kidled_available_slab(page, s))
 		objects += 1;
 
 	gfp &= ~OBJCGS_CLEAR_MASK;
