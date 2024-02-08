@@ -3492,6 +3492,21 @@ out_close:
 	.fails = true,							\
 }
 
+#define EXISTENCE_DATA(struct_name) STRUCT_TO_CHAR_PTR(struct_name) {	\
+	.a = 42,							\
+}
+
+#define EXISTENCE_CASE_COMMON(name)					\
+	.case_name = #name,						\
+	.bpf_obj_file = "test_core_reloc_existence.o",			\
+	.btf_src_file = "btf__core_reloc_" #name ".o",			\
+	.relaxed_core_relocs = true					\
+
+#define EXISTENCE_ERR_CASE(name) {					\
+	EXISTENCE_CASE_COMMON(name),					\
+	.fails = true,							\
+}
+
 struct core_reloc_test_case {
 	const char *case_name;
 	const char *bpf_obj_file;
@@ -3501,6 +3516,7 @@ struct core_reloc_test_case {
 	const char *output;
 	int output_len;
 	bool fails;
+	bool relaxed_core_relocs;
 };
 
 static struct core_reloc_test_case test_cases[] = {
@@ -3601,6 +3617,59 @@ static struct core_reloc_test_case test_cases[] = {
 		},
 		.output_len = sizeof(struct core_reloc_misc_output),
 	},
+
+	/* validate field existence checks */
+	{
+		EXISTENCE_CASE_COMMON(existence),
+		.input = STRUCT_TO_CHAR_PTR(core_reloc_existence) {
+			.a = 1,
+			.b = 2,
+			.c = 3,
+			.arr = { 4 },
+			.s = { .x = 5 },
+		},
+		.input_len = sizeof(struct core_reloc_existence),
+		.output = STRUCT_TO_CHAR_PTR(core_reloc_existence_output) {
+			.a_exists = 1,
+			.b_exists = 1,
+			.c_exists = 1,
+			.arr_exists = 1,
+			.s_exists = 1,
+			.a_value = 1,
+			.b_value = 2,
+			.c_value = 3,
+			.arr_value = 4,
+			.s_value = 5,
+		},
+		.output_len = sizeof(struct core_reloc_existence_output),
+	},
+	{
+		EXISTENCE_CASE_COMMON(existence___minimal),
+		.input = STRUCT_TO_CHAR_PTR(core_reloc_existence___minimal) {
+			.a = 42,
+		},
+		.input_len = sizeof(struct core_reloc_existence),
+		.output = STRUCT_TO_CHAR_PTR(core_reloc_existence_output) {
+			.a_exists = 1,
+			.b_exists = 0,
+			.c_exists = 0,
+			.arr_exists = 0,
+			.s_exists = 0,
+			.a_value = 42,
+			.b_value = 0xff000002u,
+			.c_value = 0xff000003u,
+			.arr_value = 0xff000004u,
+			.s_value = 0xff000005u,
+		},
+		.output_len = sizeof(struct core_reloc_existence_output),
+	},
+
+	EXISTENCE_ERR_CASE(existence__err_int_sz),
+	EXISTENCE_ERR_CASE(existence__err_int_type),
+	EXISTENCE_ERR_CASE(existence__err_int_kind),
+	EXISTENCE_ERR_CASE(existence__err_arr_kind),
+	EXISTENCE_ERR_CASE(existence__err_arr_value_type),
+	EXISTENCE_ERR_CASE(existence__err_struct_type),
 };
 
 struct data {
@@ -3624,7 +3693,11 @@ static void test_core_reloc(void)
 	for (i = 0; i < ARRAY_SIZE(test_cases); i++) {
 		test_case = &test_cases[i];
 
-		obj = bpf_object__open(test_case->bpf_obj_file);
+		LIBBPF_OPTS(bpf_object_open_opts, opts,
+			.relaxed_core_relocs = test_case->relaxed_core_relocs,
+		);
+
+		obj = bpf_object__open_file(test_case->bpf_obj_file, &opts);
 		if (CHECK(IS_ERR_OR_NULL(obj), "obj_open",
 			  "failed to open '%s': %ld\n",
 			  test_case->bpf_obj_file, PTR_ERR(obj)))
@@ -3703,6 +3776,101 @@ cleanup:
 	}
 }
 
+/* ipv6 test vector */
+struct ipv6_packet {
+       struct ethhdr eth;
+       struct ipv6hdr iph;
+       struct tcphdr tcp;
+} __packed;
+
+static void on_sample_kfree_skb(void *ctx, int cpu, void *data, __u32 size)
+{
+	int ifindex = *(int *)data, duration = 0;
+	struct ipv6_packet *pkt_v6 = data + 4;
+
+	if (ifindex != 1)
+		/* spurious kfree_skb not on loopback device */
+		return;
+	if (CHECK(size != 76, "check_size", "size %u != 76\n", size))
+		return;
+	if (CHECK(pkt_v6->eth.h_proto != 0xdd86, "check_eth",
+		  "h_proto %x\n", pkt_v6->eth.h_proto))
+		return;
+	if (CHECK(pkt_v6->iph.nexthdr != 6, "check_ip",
+		  "iph.nexthdr %x\n", pkt_v6->iph.nexthdr))
+		return;
+	if (CHECK(pkt_v6->tcp.doff != 5, "check_tcp",
+		  "tcp.doff %x\n", pkt_v6->tcp.doff))
+		return;
+
+	*(bool *)ctx = true;
+}
+
+static void test_kfree_skb(void)
+{
+	struct bpf_prog_load_attr attr = {
+		.file = "./kfree_skb.o",
+	};
+
+	struct bpf_object *obj, *obj2 = NULL;
+	struct perf_buffer_opts pb_opts = {};
+	struct perf_buffer *pb = NULL;
+	struct bpf_link *link = NULL;
+	struct bpf_map *perf_buf_map;
+	struct bpf_program *prog;
+	__u32 duration, retval;
+	int err, pkt_fd, kfree_skb_fd;
+	bool passed = false;
+
+	err = bpf_prog_load("./test_pkt_access.o", BPF_PROG_TYPE_SCHED_CLS, &obj, &pkt_fd);
+	if (CHECK(err, "prog_load sched cls", "err %d errno %d\n", err, errno))
+		return;
+
+	err = bpf_prog_load_xattr(&attr, &obj2, &kfree_skb_fd);
+	if (CHECK(err, "prog_load raw tp", "err %d errno %d\n", err, errno))
+		goto close_prog;
+
+	prog = bpf_object__find_program_by_title(obj2, "tp_btf/kfree_skb");
+	if (CHECK(!prog, "find_prog", "prog kfree_skb not found\n"))
+		goto close_prog;
+	link = bpf_program__attach_raw_tracepoint(prog, NULL);
+	if (CHECK(IS_ERR(link), "attach_raw_tp", "err %ld\n", PTR_ERR(link)))
+		goto close_prog;
+
+	perf_buf_map = bpf_object__find_map_by_name(obj2, "perf_buf_map");
+	if (CHECK(!perf_buf_map, "find_perf_buf_map", "not found\n"))
+		goto close_prog;
+
+	/* set up perf buffer */
+	pb_opts.sample_cb = on_sample_kfree_skb;
+	pb_opts.ctx = &passed;
+	pb = perf_buffer__new(bpf_map__fd(perf_buf_map), 1, &pb_opts);
+	if (CHECK(IS_ERR(pb), "perf_buf__new", "err %ld\n", PTR_ERR(pb)))
+		goto close_prog;
+
+	err = bpf_prog_test_run(pkt_fd, 1, &pkt_v6, sizeof(pkt_v6),
+				NULL, NULL, &retval, &duration);
+	CHECK(err || retval, "ipv6",
+	      "err %d errno %d retval %d duration %d\n",
+	      err, errno, retval, duration);
+
+	/* read perf buffer */
+	err = perf_buffer__poll(pb, 100);
+	if (CHECK(err < 0, "perf_buffer__poll", "err %d\n", err))
+		goto close_prog;
+	/* make sure kfree_skb program was triggered
+	 * and it sent expected skb into ring buffer
+	 */
+	CHECK(!passed, "kfree_skb",
+	      "not triggered or no expected skb send\n");
+close_prog:
+	perf_buffer__free(pb);
+	if (!IS_ERR_OR_NULL(link))
+		bpf_link__destroy(link);
+	bpf_object__close(obj);
+	bpf_object__close(obj2);
+}
+
 int main(int ac, char **av)
 {
 	srand(time(NULL));
@@ -3746,6 +3914,7 @@ int main(int ac, char **av)
 	test_send_signal();
 	test_perf_buffer();
 	test_core_reloc();
+	test_kfree_skb();
 
 	printf("Summary: %d PASSED, %d FAILED\n", pass_cnt, error_cnt);
 	return error_cnt ? EXIT_FAILURE : EXIT_SUCCESS;
