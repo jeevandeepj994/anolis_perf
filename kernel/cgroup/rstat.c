@@ -305,6 +305,17 @@ static void cgroup_base_stat_add(struct cgroup_base_stat *dst_bstat,
 #endif
 }
 
+static void cgroup_base_stat_task_add(struct cgroup_base_stat_task *dst_bstat_task,
+				      struct cgroup_base_stat_task *src_bstat_task)
+{
+#ifdef CONFIG_SCHED_CORE
+	dst_bstat_task->forceidle_task_sum += src_bstat_task->forceidle_task_sum;
+#endif
+#if defined(CONFIG_SCHED_ACPU) || defined(CONFIG_SCHED_CORE)
+	dst_bstat_task->sibidle_task_sum += src_bstat_task->sibidle_task_sum;
+#endif
+}
+
 static void cgroup_base_stat_sub(struct cgroup_base_stat *dst_bstat,
 				 struct cgroup_base_stat *src_bstat)
 {
@@ -319,17 +330,30 @@ static void cgroup_base_stat_sub(struct cgroup_base_stat *dst_bstat,
 #endif
 }
 
+static void cgroup_base_stat_task_sub(struct cgroup_base_stat_task *dst_bstat_task,
+				      struct cgroup_base_stat_task *src_bstat_task)
+{
+#ifdef CONFIG_SCHED_CORE
+	dst_bstat_task->forceidle_task_sum -= src_bstat_task->forceidle_task_sum;
+#endif
+#if defined(CONFIG_SCHED_ACPU) || defined(CONFIG_SCHED_CORE)
+	dst_bstat_task->sibidle_task_sum -= src_bstat_task->sibidle_task_sum;
+#endif
+}
+
 static void cgroup_base_stat_flush(struct cgroup *cgrp, int cpu)
 {
 	struct cgroup *parent = cgroup_parent(cgrp);
 	struct cgroup_rstat_cpu *rstatc = cgroup_rstat_cpu(cgrp, cpu);
 	struct cgroup_base_stat delta;
+	struct cgroup_base_stat_task delta_task;
 	unsigned seq;
 
 	/* fetch the current per-cpu values */
 	do {
 		seq = __u64_stats_fetch_begin(&rstatc->bsync);
 		delta = rstatc->bstat;
+		delta_task = rstatc->bstat_task;
 	} while (__u64_stats_fetch_retry(&rstatc->bsync, seq));
 
 	/* propagate percpu delta to global */
@@ -337,12 +361,21 @@ static void cgroup_base_stat_flush(struct cgroup *cgrp, int cpu)
 	cgroup_base_stat_add(&cgrp->bstat, &delta);
 	cgroup_base_stat_add(&rstatc->last_bstat, &delta);
 
+	cgroup_base_stat_task_sub(&delta_task, &rstatc->last_bstat_task);
+	cgroup_base_stat_task_add(&cgrp->bstat_task, &delta_task);
+	cgroup_base_stat_task_add(&rstatc->last_bstat_task, &delta_task);
+
 	/* propagate global delta to parent */
 	if (parent) {
 		delta = cgrp->bstat;
 		cgroup_base_stat_sub(&delta, &cgrp->last_bstat);
 		cgroup_base_stat_add(&parent->bstat, &delta);
 		cgroup_base_stat_add(&cgrp->last_bstat, &delta);
+
+		delta_task = cgrp->bstat_task;
+		cgroup_base_stat_task_sub(&delta_task, &cgrp->last_bstat_task);
+		cgroup_base_stat_task_add(&parent->bstat_task, &delta_task);
+		cgroup_base_stat_task_add(&cgrp->last_bstat_task, &delta_task);
 	}
 }
 
@@ -394,10 +427,16 @@ void __cgroup_account_cputime_field(struct cgroup *cgrp,
 	case CPUTIME_FORCEIDLE:
 		rstatc->bstat.forceidle_sum += delta_exec;
 		break;
+	case CPUTIME_FORCEIDLE_TASK:
+		rstatc->bstat_task.forceidle_task_sum += delta_exec;
+		break;
 #endif
 #if defined(CONFIG_SCHED_ACPU) || defined(CONFIG_SCHED_CORE)
 	case CPUTIME_SIBIDLE:
 		rstatc->bstat.sibidle_sum += delta_exec;
+		break;
+	case CPUTIME_SIBIDLE_TASK:
+		rstatc->bstat_task.sibidle_task_sum += delta_exec;
 		break;
 #endif
 	default:
@@ -413,12 +452,14 @@ void __cgroup_account_cputime_field(struct cgroup *cgrp,
  * with how it is done by __cgroup_account_cputime_field for each bit of
  * cpu time attributed to a cgroup.
  */
-static void root_cgroup_cputime(struct cgroup_base_stat *bstat)
+static void root_cgroup_cputime(struct cgroup_base_stat *bstat,
+				struct cgroup_base_stat_task *bstat_task)
 {
 	struct task_cputime *cputime = &bstat->cputime;
 	int i;
 
 	memset(bstat, 0, sizeof(*bstat));
+	memset(bstat_task, 0, sizeof(*bstat_task));
 	for_each_possible_cpu(i) {
 		struct kernel_cpustat kcpustat;
 		u64 *cpustat = kcpustat.cpustat;
@@ -442,9 +483,11 @@ static void root_cgroup_cputime(struct cgroup_base_stat *bstat)
 
 #ifdef CONFIG_SCHED_CORE
 		bstat->forceidle_sum += cpustat[CPUTIME_FORCEIDLE];
+		bstat_task->forceidle_task_sum += cpustat[CPUTIME_FORCEIDLE_TASK];
 #endif
 #if defined(CONFIG_SCHED_ACPU) || defined(CONFIG_SCHED_CORE)
 		bstat->sibidle_sum += cpustat[CPUTIME_SIBIDLE];
+		bstat_task->sibidle_task_sum += cpustat[CPUTIME_SIBIDLE_TASK];
 #endif
 	}
 }
@@ -454,11 +497,14 @@ void cgroup_base_stat_cputime_show(struct seq_file *seq)
 	struct cgroup *cgrp = seq_css(seq)->cgroup;
 	u64 usage, utime, stime;
 	struct cgroup_base_stat bstat;
+	struct cgroup_base_stat_task bstat_task;
 #ifdef CONFIG_SCHED_CORE
 	u64 forceidle_time;
+	u64 forceidle_task_time;
 #endif
 #if defined(CONFIG_SCHED_ACPU) || defined(CONFIG_SCHED_CORE)
 	u64 sibidle_time;
+	u64 sibidle_task_time;
 #endif
 
 	if (cgroup_parent(cgrp)) {
@@ -468,21 +514,25 @@ void cgroup_base_stat_cputime_show(struct seq_file *seq)
 			       &utime, &stime);
 #ifdef CONFIG_SCHED_CORE
 		forceidle_time = cgrp->bstat.forceidle_sum;
+		forceidle_task_time = cgrp->bstat_task.forceidle_task_sum;
 #endif
 #if defined(CONFIG_SCHED_ACPU) || defined(CONFIG_SCHED_CORE)
 		sibidle_time = cgrp->bstat.sibidle_sum;
+		sibidle_task_time = cgrp->bstat_task.sibidle_task_sum;
 #endif
 		cgroup_rstat_flush_release();
 	} else {
-		root_cgroup_cputime(&bstat);
+		root_cgroup_cputime(&bstat, &bstat_task);
 		usage = bstat.cputime.sum_exec_runtime;
 		utime = bstat.cputime.utime;
 		stime = bstat.cputime.stime;
 #ifdef CONFIG_SCHED_CORE
 		forceidle_time = bstat.forceidle_sum;
+		forceidle_task_time = bstat_task.forceidle_task_sum;
 #endif
 #if defined(CONFIG_SCHED_ACPU) || defined(CONFIG_SCHED_CORE)
 		sibidle_time = bstat.sibidle_sum;
+		sibidle_task_time = bstat_task.sibidle_task_sum;
 #endif
 	}
 
@@ -491,9 +541,11 @@ void cgroup_base_stat_cputime_show(struct seq_file *seq)
 	do_div(stime, NSEC_PER_USEC);
 #ifdef CONFIG_SCHED_CORE
 	do_div(forceidle_time, NSEC_PER_USEC);
+	do_div(forceidle_task_time, NSEC_PER_USEC);
 #endif
 #if defined(CONFIG_SCHED_ACPU) || defined(CONFIG_SCHED_CORE)
 	do_div(sibidle_time, NSEC_PER_USEC);
+	do_div(sibidle_task_time, NSEC_PER_USEC);
 #endif
 
 	seq_printf(seq, "usage_usec %llu\n"
@@ -503,8 +555,10 @@ void cgroup_base_stat_cputime_show(struct seq_file *seq)
 
 #ifdef CONFIG_SCHED_CORE
 	seq_printf(seq, "core_sched.force_idle_usec %llu\n", forceidle_time);
+	seq_printf(seq, "core_sched.force_idle_task_usec %llu\n", forceidle_task_time);
 #endif
 #if defined(CONFIG_SCHED_ACPU) || defined(CONFIG_SCHED_CORE)
 	seq_printf(seq, "sibidle_usec %llu\n", sibidle_time);
+	seq_printf(seq, "sibidle_task_usec %llu\n", sibidle_task_time);
 #endif
 }

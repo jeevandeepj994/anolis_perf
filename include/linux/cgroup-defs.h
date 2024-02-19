@@ -328,6 +328,14 @@ struct cgroup_base_stat {
 #endif
 };
 
+struct cgroup_base_stat_task {
+#ifdef CONFIG_SCHED_CORE
+	unsigned long forceidle_task_sum;
+#endif
+#if defined(CONFIG_SCHED_ACPU) || defined(CONFIG_SCHED_CORE)
+	unsigned long sibidle_task_sum;
+#endif
+};
 /*
  * rstat - cgroup scalable recursive statistics.  Accounting is done
  * per-cpu in cgroup_rstat_cpu which is then lazily propagated up the
@@ -375,6 +383,8 @@ struct cgroup_rstat_cpu {
 	 */
 	struct cgroup *updated_children;	/* terminated by self cgroup */
 	struct cgroup *updated_next;		/* NULL iff not on the list */
+	CK_KABI_EXTEND(struct cgroup_base_stat_task bstat_task)
+	CK_KABI_EXTEND(struct cgroup_base_stat_task last_bstat_task)
 };
 
 struct cgroup_freezer_state {
@@ -534,10 +544,8 @@ struct cgroup {
 	struct kernfs_root *hidden_place; /* tree to hide cgroup in pool. */
 	struct delayed_work supply_pool_work;
 
-	CK_KABI_RESERVE(1)
-	CK_KABI_RESERVE(2)
-	CK_KABI_RESERVE(3)
-	CK_KABI_RESERVE(4)
+	CK_KABI_USE(1, 2, struct cgroup_base_stat_task last_bstat_task)
+	CK_KABI_USE(3, 4, struct cgroup_base_stat_task bstat_task)
 
 	/* ids of the ancestors at each level including self */
 	u64 ancestor_ids[];
