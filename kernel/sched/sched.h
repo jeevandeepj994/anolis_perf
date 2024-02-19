@@ -1347,9 +1347,18 @@ struct rq {
 #else
 	CK_KABI_RESERVE(3)
 #endif
+#ifdef CONFIG_SCHED_CORE
+	CK_KABI_USE(4, u64 core_sibidle_start_task)
+#else
 	CK_KABI_RESERVE(4)
+#endif
+#ifdef CONFIG_SCHED_ACPU
+	CK_KABI_USE(5, u64 sibidle_task_sum)
+	CK_KABI_USE(6, u64 last_acpu_update_time_task)
+#else
 	CK_KABI_RESERVE(5)
 	CK_KABI_RESERVE(6)
+#endif
 	CK_KABI_RESERVE(7)
 	CK_KABI_RESERVE(8)
 };
