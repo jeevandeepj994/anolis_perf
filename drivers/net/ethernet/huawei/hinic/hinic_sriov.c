@@ -26,75 +26,6 @@
 #include "hinic_sriov.h"
 #include "hinic_lld.h"
 
-#if !(defined(HAVE_SRIOV_CONFIGURE) || defined(HAVE_RHEL6_SRIOV_CONFIGURE))
-ssize_t hinic_sriov_totalvfs_show(struct device *dev,
-				  struct device_attribute *attr, char *buf)
-{
-	struct pci_dev *pdev = to_pci_dev(dev);
-
-	return sprintf(buf, "%d\n", pci_sriov_get_totalvfs(pdev));
-}
-
-ssize_t hinic_sriov_numvfs_show(struct device *dev,
-				struct device_attribute *attr, char *buf)
-{
-	struct pci_dev *pdev = to_pci_dev(dev);
-
-	return sprintf(buf, "%d\n", pci_num_vf(pdev));
-}
-
-/*lint -save -e713*/
-ssize_t hinic_sriov_numvfs_store(struct device *dev,
-				 struct device_attribute *attr,
-				 const char *buf, size_t count)
-{
-	struct pci_dev *pdev = to_pci_dev(dev);
-	int ret;
-	u16 num_vfs;
-	int cur_vfs, total_vfs;
-
-	ret = kstrtou16(buf, 0, &num_vfs);
-	if (ret < 0)
-		return ret;
-
-	cur_vfs = pci_num_vf(pdev);
-	total_vfs = pci_sriov_get_totalvfs(pdev);
-
-	if (num_vfs > total_vfs)
-		return -ERANGE;
-
-	if (num_vfs == cur_vfs)
-		return count;		/* no change */
-
-	if (num_vfs == 0) {
-		/* disable VFs */
-		ret = hinic_pci_sriov_configure(pdev, 0);
-		if (ret < 0)
-			return ret;
-		return count;
-	}
-
-	/* enable VFs */
-	if (cur_vfs) {
-		nic_warn(&pdev->dev, "%d VFs already enabled. Disable before enabling %d VFs\n",
-			 cur_vfs, num_vfs);
-		return -EBUSY;
-	}
-
-	ret = hinic_pci_sriov_configure(pdev, num_vfs);
-	if (ret < 0)
-		return ret;
-
-	if (ret != num_vfs)
-		nic_warn(&pdev->dev, "%d VFs requested; only %d enabled\n",
-			 num_vfs, ret);
-
-	return count;
-}
-
-/*lint -restore*/
-#endif /* !(HAVE_SRIOV_CONFIGURE || HAVE_RHEL6_SRIOV_CONFIGURE) */
-
 int hinic_pci_sriov_disable(struct pci_dev *dev)
 {
 #ifdef CONFIG_PCI_IOV
@@ -108,7 +39,7 @@ int hinic_pci_sriov_disable(struct pci_dev *dev)
 
 	if (test_and_set_bit(HINIC_SRIOV_DISABLE, &sriov_info->state)) {
 		nic_err(&sriov_info->pdev->dev,
-			"SR-IOV disable in process, please wait");
+			"SR-IOV disable in process, please wait\n");
 		return -EPERM;
 	}
 
@@ -250,33 +181,70 @@ int hinic_ndo_set_vf_mac(struct net_device *netdev, int vf, u8 *mac)
 	}
 
 	sriov_info = hinic_get_sriov_info_by_pcidev(adapter->pdev);
-	if (!is_valid_ether_addr(mac) || /*lint !e574*/
+	if (is_multicast_ether_addr(mac) || /*lint !e574*/
 	    vf >= sriov_info->num_vfs) /*lint !e574*/
 		return -EINVAL;
 
 	err = hinic_set_vf_mac(sriov_info->hwdev, OS_VF_ID_TO_HW(vf), mac);
-	if (err)
+	if (err) {
+		nicif_info(adapter, drv, netdev, "Failed to set MAC %pM on VF %d\n",
+			   mac, vf);
 		return err;
+	}
 
-	nic_info(&sriov_info->pdev->dev, "Setting MAC %pM on VF %d\n", mac, vf);
-	nic_info(&sriov_info->pdev->dev, "Reload the VF driver to make this change effective.");
+	if (is_zero_ether_addr(mac))
+		nicif_info(adapter, drv, netdev, "Removing MAC on VF %d\n", vf);
+	else
+		nicif_info(adapter, drv, netdev, "Setting MAC %pM on VF %d\n",
+			   mac, vf);
+	nicif_info(adapter, drv, netdev, "Reload the VF driver to make this change effective\n");
 
 	return 0;
 }
 
 /*lint -save -e574 -e734*/
-#ifdef IFLA_VF_MAX
-#ifdef IFLA_VF_VLAN_INFO_MAX
+static int set_hw_vf_vlan(struct hinic_sriov_info *sriov_info,
+			  u16 cur_vlanprio, int vf, u16 vlan, u8 qos)
+{
+	int err = 0;
+	u16 old_vlan = cur_vlanprio & VLAN_VID_MASK;
+
+	if (vlan || qos) {
+		if (cur_vlanprio) {
+			err = hinic_kill_vf_vlan(sriov_info->hwdev,
+						 OS_VF_ID_TO_HW(vf));
+			if (err) {
+				nic_err(&sriov_info->pdev->dev, "Failed to delete vf %d old vlan %d\n",
+					vf, old_vlan);
+				return err;
+			}
+		}
+		err = hinic_add_vf_vlan(sriov_info->hwdev,
+					OS_VF_ID_TO_HW(vf), vlan, qos);
+		if (err) {
+			nic_err(&sriov_info->pdev->dev, "Failed to add vf %d new vlan %d\n",
+				vf, vlan);
+			return err;
+		}
+	} else {
+		err = hinic_kill_vf_vlan(sriov_info->hwdev, OS_VF_ID_TO_HW(vf));
+		if (err) {
+			nic_err(&sriov_info->pdev->dev, "Failed to delete vf %d vlan %d\n",
+				vf, old_vlan);
+			return err;
+		}
+	}
+
+	return hinic_update_mac_vlan(sriov_info->hwdev, old_vlan, vlan,
+				     OS_VF_ID_TO_HW(vf));
+}
+
 int hinic_ndo_set_vf_vlan(struct net_device *netdev, int vf, u16 vlan, u8 qos,
 			  __be16 vlan_proto)
-#else
-int hinic_ndo_set_vf_vlan(struct net_device *netdev, int vf, u16 vlan, u8 qos)
-#endif
 {
 	struct hinic_nic_dev *adapter = netdev_priv(netdev);
 	struct hinic_sriov_info *sriov_info;
 	u16 vlanprio, cur_vlanprio;
-	int err = 0;
 
 	if (!FUNC_SUPPORT_SET_VF_MAC_VLAN(adapter->hwdev)) {
 		nicif_err(adapter, drv, netdev,
@@ -287,10 +255,10 @@ int hinic_ndo_set_vf_vlan(struct net_device *netdev, int vf, u16 vlan, u8 qos)
 	sriov_info = hinic_get_sriov_info_by_pcidev(adapter->pdev);
 	if (vf >= sriov_info->num_vfs || vlan > 4095 || qos > 7)
 		return -EINVAL;
-#ifdef IFLA_VF_VLAN_INFO_MAX
+
 	if (vlan_proto != htons(ETH_P_8021Q))
 		return -EPROTONOSUPPORT;
-#endif
+
 	vlanprio = vlan | qos << HINIC_VLAN_PRIORITY_SHIFT;
 	cur_vlanprio = hinic_vf_info_vlanprio(sriov_info->hwdev,
 					      OS_VF_ID_TO_HW(vf));
@@ -298,31 +266,9 @@ int hinic_ndo_set_vf_vlan(struct net_device *netdev, int vf, u16 vlan, u8 qos)
 	if (vlanprio == cur_vlanprio)
 		return 0;
 
-	if (vlan || qos) {
-		if (cur_vlanprio)
-			err = hinic_kill_vf_vlan(sriov_info->hwdev,
-						 OS_VF_ID_TO_HW(vf));
-		if (err)
-			goto out;
-		err = hinic_add_vf_vlan(sriov_info->hwdev, OS_VF_ID_TO_HW(vf),
-					vlan, qos);
-	} else {
-		err = hinic_kill_vf_vlan(sriov_info->hwdev, OS_VF_ID_TO_HW(vf));
-	}
-
-	if (err)
-		return err;
-
-	err = hinic_update_mac_vlan(sriov_info->hwdev,
-				    cur_vlanprio & VLAN_VID_MASK, vlan,
-				    OS_VF_ID_TO_HW(vf));
-
-out:
-	return err;
+	return set_hw_vf_vlan(sriov_info, cur_vlanprio, vf, vlan, qos);
 }
-#endif
 
-#ifdef HAVE_VF_SPOOFCHK_CONFIGURE
 int hinic_ndo_set_vf_spoofchk(struct net_device *netdev, int vf, bool setting)
 {
 	struct hinic_nic_dev *adapter = netdev_priv(netdev);
@@ -341,7 +287,7 @@ int hinic_ndo_set_vf_spoofchk(struct net_device *netdev, int vf, bool setting)
 		return 0;
 
 	err = hinic_set_vf_spoofchk(sriov_info->hwdev,
-				      OS_VF_ID_TO_HW(vf), setting);
+				    OS_VF_ID_TO_HW(vf), setting);
 
 	if (!err) {
 		nicif_info(adapter, drv, netdev, "Set VF %d spoofchk %s\n",
@@ -354,7 +300,35 @@ int hinic_ndo_set_vf_spoofchk(struct net_device *netdev, int vf, bool setting)
 
 	return err;
 }
-#endif
+
+int hinic_ndo_set_vf_trust(struct net_device *netdev, int vf, bool setting)
+{
+	struct hinic_nic_dev *adapter = netdev_priv(netdev);
+	struct hinic_sriov_info *sriov_info;
+	int err = 0;
+	bool cur_trust;
+
+	sriov_info = hinic_get_sriov_info_by_pcidev(adapter->pdev);
+	if (vf >= sriov_info->num_vfs)
+		return -EINVAL;
+
+	cur_trust = hinic_vf_info_trust(sriov_info->hwdev,
+					OS_VF_ID_TO_HW(vf));
+	/* same request, so just return success */
+	if ((setting && cur_trust) || (!setting && !cur_trust))
+		return 0;
+
+	err = hinic_set_vf_trust(sriov_info->hwdev,
+				 OS_VF_ID_TO_HW(vf), setting);
+	if (!err)
+		nicif_info(adapter, drv, netdev, "Set VF %d trusted %s succeed\n",
+			   vf, setting ? "on" : "off");
+	else
+		nicif_err(adapter, drv, netdev, "Failed set VF %d trusted %s\n",
+			  vf, setting ? "on" : "off");
+
+	return err;
+}
 
 int hinic_ndo_get_vf_config(struct net_device *netdev,
 			    int vf, struct ifla_vf_info *ivi)
@@ -412,19 +386,12 @@ int hinic_ndo_set_vf_link_state(struct net_device *netdev, int vf_id, int link)
 
 #define HINIC_TX_RATE_TABLE_FULL	12
 
-#ifdef HAVE_NDO_SET_VF_MIN_MAX_TX_RATE
 int hinic_ndo_set_vf_bw(struct net_device *netdev,
 			int vf, int min_tx_rate, int max_tx_rate)
-#else
-int hinic_ndo_set_vf_bw(struct net_device *netdev, int vf, int max_tx_rate)
-#endif /* HAVE_NDO_SET_VF_MIN_MAX_TX_RATE */
 {
 	struct hinic_nic_dev *adapter = netdev_priv(netdev);
 	struct nic_port_info port_info = {0};
 	struct hinic_sriov_info *sriov_info;
-#ifndef HAVE_NDO_SET_VF_MIN_MAX_TX_RATE
-	int min_tx_rate = 0;
-#endif
 	u8 link_status = 0;
 	u32 speeds[] = {SPEED_10, SPEED_100, SPEED_1000, SPEED_10000,
 			SPEED_25000, SPEED_40000, SPEED_100000};
@@ -486,15 +453,9 @@ int hinic_ndo_set_vf_bw(struct net_device *netdev, int vf, int max_tx_rate)
 		return -EIO;
 	}
 
-#ifdef HAVE_NDO_SET_VF_MIN_MAX_TX_RATE
 	nicif_info(adapter, drv, netdev,
 		   "Set VF %d max tx rate %d min tx rate %d successfully\n",
 		   vf, max_tx_rate, min_tx_rate);
-#else
-	nicif_info(adapter, drv, netdev,
-		   "Set VF %d tx rate %d successfully\n",
-		   vf, max_tx_rate);
-#endif
 
 	return 0;
 }

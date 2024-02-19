@@ -110,6 +110,16 @@ int hinic_sync_time(void *hwdev, u64 time)
 	return err;
 }
 
+void hinic_sync_time_async(void *hwdev, u64 time)
+{
+	struct hinic_sync_time_info time_info = { 0 };
+
+	time_info.mstime = time;
+	hinic_msg_to_mgmt_async(hwdev, HINIC_MOD_COMM,
+				HINIC_MGMT_CMD_SYNC_TIME, &time_info,
+				sizeof(time_info));
+}
+
 static void parse_sf_en_cap(struct service_cap *cap,
 			    struct hinic_dev_cap *dev_cap, enum func_type type)
 {
@@ -138,7 +148,8 @@ static void parse_sf_en_cap(struct service_cap *cap,
 	}
 }
 
-static void parse_pub_res_cap(struct service_cap *cap,
+static void parse_pub_res_cap(struct hinic_hwdev *hwdev,
+			      struct service_cap *cap,
 			      struct hinic_dev_cap *dev_cap,
 			      enum func_type type)
 {
@@ -202,31 +213,32 @@ static void parse_pub_res_cap(struct service_cap *cap,
 	if (cap->net_port_mode == CFG_NET_MODE_FC)
 		cap->max_vf = 0;
 
-	pr_info("Get public resource capbility, svc_cap_en: 0x%x\n",
-		dev_cap->svc_cap_en);
-	pr_info("Host_id=0x%x, ep_id=0x%x, max_cos_id=0x%x, cos_bitmap=0x%x, er_id=0x%x, port_id=0x%x\n",
-		cap->host_id, cap->ep_id,
-		cap->max_cos_id, cap->cos_valid_bitmap,
-		cap->er_id, cap->port_id);
-	pr_info("Host_total_function=0x%x, host_oq_id_mask_val=0x%x, net_port_mode=0x%x, max_vf=0x%x\n",
-		cap->host_total_function, cap->host_oq_id_mask_val,
-		cap->net_port_mode, cap->max_vf);
+	sdk_info(hwdev->dev_hdl, "Get public resource capbility, svc_cap_en: 0x%x\n",
+		 dev_cap->svc_cap_en);
+	sdk_info(hwdev->dev_hdl, "Host_id=0x%x, ep_id=0x%x, max_cos_id=0x%x, cos_bitmap=0x%x, er_id=0x%x, port_id=0x%x\n",
+		 cap->host_id, cap->ep_id,
+		 cap->max_cos_id, cap->cos_valid_bitmap,
+		 cap->er_id, cap->port_id);
+	sdk_info(hwdev->dev_hdl, "Host_total_function=0x%x, host_oq_id_mask_val=0x%x, net_port_mode=0x%x, max_vf=0x%x\n",
+		 cap->host_total_function, cap->host_oq_id_mask_val,
+		 cap->net_port_mode, cap->max_vf);
 
-	pr_info("Pf_num=0x%x, pf_id_start=0x%x, vf_num=0x%x, vf_id_start=0x%x\n",
-		cap->pf_num, cap->pf_id_start,
-		cap->vf_num, cap->vf_id_start);
+	sdk_info(hwdev->dev_hdl, "Pf_num=0x%x, pf_id_start=0x%x, vf_num=0x%x, vf_id_start=0x%x\n",
+		 cap->pf_num, cap->pf_id_start,
+		 cap->vf_num, cap->vf_id_start);
 
 	/* Check parameters from firmware */
 	if (cap->max_sqs > HINIC_CFG_MAX_QP ||
 	    cap->max_rqs > HINIC_CFG_MAX_QP) {
-		pr_info("Number of qp exceed limit[1-%d]: sq: %d, rq: %d\n",
-			HINIC_CFG_MAX_QP, cap->max_sqs, cap->max_rqs);
+		sdk_info(hwdev->dev_hdl, "Number of qp exceed limit[1-%d]: sq: %d, rq: %d\n",
+			 HINIC_CFG_MAX_QP, cap->max_sqs, cap->max_rqs);
 		cap->max_sqs = HINIC_CFG_MAX_QP;
 		cap->max_rqs = HINIC_CFG_MAX_QP;
 	}
 }
 
-static void parse_dynamic_share_res_cap(struct service_cap *cap,
+static void parse_dynamic_share_res_cap(struct hinic_hwdev *hwdev,
+					struct service_cap *cap,
 					struct hinic_dev_cap *dev_cap,
 					enum func_type type)
 {
@@ -244,15 +256,14 @@ static void parse_dynamic_share_res_cap(struct service_cap *cap,
 	shared_cap->host_srqs = dev_cap->host_srq_num;
 	shared_cap->host_mpts = dev_cap->host_mpt_num;
 
-	pr_info("Dynamic share resource capbility, host_pctxs=0x%x, host_cctxs=0x%x, host_scqs=0x%x, host_srqs=0x%x, host_mpts=0x%x\n",
-		shared_cap->host_pctxs,
-		shared_cap->host_cctxs,
-		shared_cap->host_scqs,
-		shared_cap->host_srqs,
-		shared_cap->host_mpts);
+	sdk_info(hwdev->dev_hdl, "Dynamic share resource capbility, host_pctxs=0x%x, host_cctxs=0x%x, host_scqs=0x%x, host_srqs=0x%x, host_mpts=0x%x\n",
+		 shared_cap->host_pctxs, shared_cap->host_cctxs,
+		 shared_cap->host_scqs, shared_cap->host_srqs,
+		 shared_cap->host_mpts);
 }
 
-static void parse_l2nic_res_cap(struct service_cap *cap,
+static void parse_l2nic_res_cap(struct hinic_hwdev *hwdev,
+				struct service_cap *cap,
 				struct hinic_dev_cap *dev_cap,
 				enum func_type type)
 {
@@ -264,12 +275,15 @@ static void parse_l2nic_res_cap(struct service_cap *cap,
 		nic_cap->max_rqs = dev_cap->nic_max_rq + 1;
 		nic_cap->vf_max_sqs = dev_cap->nic_vf_max_sq + 1;
 		nic_cap->vf_max_rqs = dev_cap->nic_vf_max_rq + 1;
+		nic_cap->max_queue_allowed = 0;
+		nic_cap->dynamic_qp = 0;
 	} else {
 		nic_cap->max_sqs = dev_cap->nic_max_sq;
 		nic_cap->max_rqs = dev_cap->nic_max_rq;
 		nic_cap->vf_max_sqs = 0;
 		nic_cap->vf_max_rqs = 0;
 		nic_cap->max_queue_allowed = dev_cap->max_queue_allowed;
+		nic_cap->dynamic_qp = dev_cap->ovs_dq_en;
 	}
 
 	if (dev_cap->nic_lro_en)
@@ -280,24 +294,23 @@ static void parse_l2nic_res_cap(struct service_cap *cap,
 	nic_cap->lro_sz = dev_cap->nic_lro_sz;
 	nic_cap->tso_sz = dev_cap->nic_tso_sz;
 
-	pr_info("L2nic resource capbility, max_sqs=0x%x, max_rqs=0x%x, vf_max_sqs=0x%x, vf_max_rqs=0x%x, max_queue_allowed=0x%x\n",
-		nic_cap->max_sqs,
-		nic_cap->max_rqs,
-		nic_cap->vf_max_sqs,
-		nic_cap->vf_max_rqs,
-		nic_cap->max_queue_allowed);
+	sdk_info(hwdev->dev_hdl, "L2nic resource capbility, max_sqs=0x%x, max_rqs=0x%x, vf_max_sqs=0x%x, vf_max_rqs=0x%x, max_queue_allowed=0x%x\n",
+		 nic_cap->max_sqs, nic_cap->max_rqs,
+		 nic_cap->vf_max_sqs, nic_cap->vf_max_rqs,
+		 nic_cap->max_queue_allowed);
 
 	/* Check parameters from firmware */
 	if (nic_cap->max_sqs > HINIC_CFG_MAX_QP ||
 	    nic_cap->max_rqs > HINIC_CFG_MAX_QP) {
-		pr_info("Number of qp exceed limit[1-%d]: sq: %d, rq: %d\n",
-			HINIC_CFG_MAX_QP, nic_cap->max_sqs, nic_cap->max_rqs);
+		sdk_info(hwdev->dev_hdl, "Number of qp exceed limit[1-%d]: sq: %d, rq: %d\n",
+			 HINIC_CFG_MAX_QP, nic_cap->max_sqs, nic_cap->max_rqs);
 		nic_cap->max_sqs = HINIC_CFG_MAX_QP;
 		nic_cap->max_rqs = HINIC_CFG_MAX_QP;
 	}
 }
 
-static void parse_roce_res_cap(struct service_cap *cap,
+static void parse_roce_res_cap(struct hinic_hwdev *hwdev,
+			       struct service_cap *cap,
 			       struct hinic_dev_cap *dev_cap,
 			       enum func_type type)
 {
@@ -335,26 +348,26 @@ static void parse_roce_res_cap(struct service_cap *cap,
 	roce_cap->wqe_cl_end = dev_cap->roce_wqe_cl_end;
 	roce_cap->wqe_cl_sz = dev_cap->roce_wqe_cl_size;
 
-	pr_info("Get roce resource capbility\n");
-	pr_info("Max_qps=0x%x, max_cqs=0x%x, max_srqs=0x%x, max_mpts=0x%x\n",
-		roce_cap->max_qps, roce_cap->max_cqs,
-		roce_cap->max_srqs, roce_cap->max_mpts);
+	sdk_info(hwdev->dev_hdl, "Get roce resource capbility\n");
+	sdk_info(hwdev->dev_hdl, "Max_qps=0x%x, max_cqs=0x%x, max_srqs=0x%x, max_mpts=0x%x\n",
+		 roce_cap->max_qps, roce_cap->max_cqs,
+		 roce_cap->max_srqs, roce_cap->max_mpts);
 
-	pr_info("Vf_max_qps=0x%x, vf_max_cqs=0x%x, vf_max_srqs= 0x%x, vf_max_mpts= 0x%x\n",
-		roce_cap->vf_max_qps, roce_cap->vf_max_cqs,
-		roce_cap->vf_max_srqs, roce_cap->vf_max_mpts);
+	sdk_info(hwdev->dev_hdl, "Vf_max_qps=0x%x, vf_max_cqs=0x%x, vf_max_srqs= 0x%x, vf_max_mpts= 0x%x\n",
+		 roce_cap->vf_max_qps, roce_cap->vf_max_cqs,
+		 roce_cap->vf_max_srqs, roce_cap->vf_max_mpts);
 
-	pr_info("Cmtt_start=0x%x, cmtt_end=0x%x, cmtt_sz=0x%x\n",
-		roce_cap->cmtt_cl_start, roce_cap->cmtt_cl_end,
-		roce_cap->cmtt_cl_sz);
+	sdk_info(hwdev->dev_hdl, "Cmtt_start=0x%x, cmtt_end=0x%x, cmtt_sz=0x%x\n",
+		 roce_cap->cmtt_cl_start, roce_cap->cmtt_cl_end,
+		 roce_cap->cmtt_cl_sz);
 
-	pr_info("Dmtt_start=0x%x, dmtt_end=0x%x, dmtt_sz=0x%x\n",
-		roce_cap->dmtt_cl_start, roce_cap->dmtt_cl_end,
-		roce_cap->dmtt_cl_sz);
+	sdk_info(hwdev->dev_hdl, "Dmtt_start=0x%x, dmtt_end=0x%x, dmtt_sz=0x%x\n",
+		 roce_cap->dmtt_cl_start, roce_cap->dmtt_cl_end,
+		 roce_cap->dmtt_cl_sz);
 
-	pr_info("Wqe_start=0x%x, wqe_end=0x%x, wqe_sz=0x%x\n",
-		roce_cap->wqe_cl_start, roce_cap->wqe_cl_end,
-		roce_cap->wqe_cl_sz);
+	sdk_info(hwdev->dev_hdl, "Wqe_start=0x%x, wqe_end=0x%x, wqe_sz=0x%x\n",
+		 roce_cap->wqe_cl_start, roce_cap->wqe_cl_end,
+		 roce_cap->wqe_cl_sz);
 
 	if (roce_cap->max_qps == 0) {
 		roce_cap->max_qps = 1024;
@@ -371,7 +384,8 @@ static void parse_roce_res_cap(struct service_cap *cap,
 	}
 }
 
-static void parse_iwarp_res_cap(struct service_cap *cap,
+static void parse_iwarp_res_cap(struct hinic_hwdev *hwdev,
+				struct service_cap *cap,
 				struct hinic_dev_cap *dev_cap,
 				enum func_type type)
 
@@ -407,25 +421,25 @@ static void parse_iwarp_res_cap(struct service_cap *cap,
 	iwarp_cap->wqe_cl_end = dev_cap->iwarp_wqe_cl_end;
 	iwarp_cap->wqe_cl_sz = dev_cap->iwarp_wqe_cl_size;
 
-	pr_info("Get iwrap resource capbility\n");
-	pr_info("Max_qps=0x%x, max_cqs=0x%x, max_mpts=0x%x\n",
-		iwarp_cap->max_qps, iwarp_cap->max_cqs,
-		iwarp_cap->max_mpts);
-	pr_info("Vf_max_qps=0x%x, vf_max_cqs=0x%x, vf_max_mpts=0x%x\n",
-		iwarp_cap->vf_max_qps, iwarp_cap->vf_max_cqs,
-		iwarp_cap->vf_max_mpts);
+	sdk_info(hwdev->dev_hdl, "Get iwrap resource capbility\n");
+	sdk_info(hwdev->dev_hdl, "Max_qps=0x%x, max_cqs=0x%x, max_mpts=0x%x\n",
+		 iwarp_cap->max_qps, iwarp_cap->max_cqs,
+		 iwarp_cap->max_mpts);
+	sdk_info(hwdev->dev_hdl, "Vf_max_qps=0x%x, vf_max_cqs=0x%x, vf_max_mpts=0x%x\n",
+		 iwarp_cap->vf_max_qps, iwarp_cap->vf_max_cqs,
+		 iwarp_cap->vf_max_mpts);
 
-	pr_info("Cmtt_start=0x%x, cmtt_end=0x%x, cmtt_sz=0x%x\n",
-		iwarp_cap->cmtt_cl_start, iwarp_cap->cmtt_cl_end,
-		iwarp_cap->cmtt_cl_sz);
+	sdk_info(hwdev->dev_hdl, "Cmtt_start=0x%x, cmtt_end=0x%x, cmtt_sz=0x%x\n",
+		 iwarp_cap->cmtt_cl_start, iwarp_cap->cmtt_cl_end,
+		 iwarp_cap->cmtt_cl_sz);
 
-	pr_info("Dmtt_start=0x%x, dmtt_end=0x%x, dmtt_sz=0x%x\n",
-		iwarp_cap->dmtt_cl_start, iwarp_cap->dmtt_cl_end,
-		iwarp_cap->dmtt_cl_sz);
+	sdk_info(hwdev->dev_hdl, "Dmtt_start=0x%x, dmtt_end=0x%x, dmtt_sz=0x%x\n",
+		 iwarp_cap->dmtt_cl_start, iwarp_cap->dmtt_cl_end,
+		 iwarp_cap->dmtt_cl_sz);
 
-	pr_info("Wqe_start=0x%x, wqe_end=0x%x, wqe_sz=0x%x\n",
-		iwarp_cap->wqe_cl_start, iwarp_cap->wqe_cl_end,
-		iwarp_cap->wqe_cl_sz);
+	sdk_info(hwdev->dev_hdl, "Wqe_start=0x%x, wqe_end=0x%x, wqe_sz=0x%x\n",
+		 iwarp_cap->wqe_cl_start, iwarp_cap->wqe_cl_end,
+		 iwarp_cap->wqe_cl_sz);
 
 	if (iwarp_cap->max_qps == 0) {
 		iwarp_cap->max_qps = 8;
@@ -440,7 +454,8 @@ static void parse_iwarp_res_cap(struct service_cap *cap,
 	}
 }
 
-static void parse_fcoe_res_cap(struct service_cap *cap,
+static void parse_fcoe_res_cap(struct hinic_hwdev *hwdev,
+			       struct service_cap *cap,
 			       struct hinic_dev_cap *dev_cap,
 			       enum func_type type)
 {
@@ -454,15 +469,16 @@ static void parse_fcoe_res_cap(struct service_cap *cap,
 	fcoe_cap->vp_id_start = dev_cap->fcoe_vp_id_start;
 	fcoe_cap->vp_id_end = dev_cap->fcoe_vp_id_end;
 
-	pr_info("Get fcoe resource capbility\n");
-	pr_info("Max_qps=0x%x, max_cqs=0x%x, max_srqs=0x%x, max_cctxs=0x%x, cctxs_id_start=0x%x\n",
-		fcoe_cap->max_qps, fcoe_cap->max_cqs, fcoe_cap->max_srqs,
-		fcoe_cap->max_cctxs, fcoe_cap->cctxs_id_start);
-	pr_info("Vp_id_start=0x%x, vp_id_end=0x%x\n",
-		fcoe_cap->vp_id_start, fcoe_cap->vp_id_end);
+	sdk_info(hwdev->dev_hdl, "Get fcoe resource capbility\n");
+	sdk_info(hwdev->dev_hdl, "Max_qps=0x%x, max_cqs=0x%x, max_srqs=0x%x, max_cctxs=0x%x, cctxs_id_start=0x%x\n",
+		 fcoe_cap->max_qps, fcoe_cap->max_cqs, fcoe_cap->max_srqs,
+		 fcoe_cap->max_cctxs, fcoe_cap->cctxs_id_start);
+	sdk_info(hwdev->dev_hdl, "Vp_id_start=0x%x, vp_id_end=0x%x\n",
+		 fcoe_cap->vp_id_start, fcoe_cap->vp_id_end);
 }
 
-static void parse_toe_res_cap(struct service_cap *cap,
+static void parse_toe_res_cap(struct hinic_hwdev *hwdev,
+			      struct service_cap *cap,
 			      struct hinic_dev_cap *dev_cap,
 			      enum func_type type)
 {
@@ -474,12 +490,13 @@ static void parse_toe_res_cap(struct service_cap *cap,
 	toe_cap->srq_id_start = dev_cap->toe_srq_id_start;
 	toe_cap->num_cos = dev_cap->max_cos_id + 1;
 
-	pr_info("Get toe resource capbility, max_pctxs=0x%x, max_cqs=0x%x, max_srqs=0x%x, srq_id_start=0x%x\n",
-		toe_cap->max_pctxs, toe_cap->max_cqs, toe_cap->max_srqs,
-		toe_cap->srq_id_start);
+	sdk_info(hwdev->dev_hdl, "Get toe resource capbility, max_pctxs=0x%x, max_cqs=0x%x, max_srqs=0x%x, srq_id_start=0x%x\n",
+		 toe_cap->max_pctxs, toe_cap->max_cqs, toe_cap->max_srqs,
+		 toe_cap->srq_id_start);
 }
 
-static void parse_fc_res_cap(struct service_cap *cap,
+static void parse_fc_res_cap(struct hinic_hwdev *hwdev,
+			     struct service_cap *cap,
 			     struct hinic_dev_cap *dev_cap,
 			     enum func_type type)
 {
@@ -493,15 +510,16 @@ static void parse_fc_res_cap(struct service_cap *cap,
 	fc_cap->vp_id_start = dev_cap->fc_vp_id_start;
 	fc_cap->vp_id_end = dev_cap->fc_vp_id_end;
 
-	pr_info("Get fc resource capbility\n");
-	pr_info("Max_parent_qpc_num=0x%x, scq_num=0x%x, srq_num=0x%x, max_child_qpc_num=0x%x, child_qpc_id_start=0x%x\n",
-		fc_cap->max_parent_qpc_num, fc_cap->scq_num, fc_cap->srq_num,
-		fc_cap->max_child_qpc_num, fc_cap->child_qpc_id_start);
-	pr_info("Vp_id_start=0x%x, vp_id_end=0x%x\n",
-		fc_cap->vp_id_start, fc_cap->vp_id_end);
+	sdk_info(hwdev->dev_hdl, "Get fc resource capbility\n");
+	sdk_info(hwdev->dev_hdl, "Max_parent_qpc_num=0x%x, scq_num=0x%x, srq_num=0x%x, max_child_qpc_num=0x%x, child_qpc_id_start=0x%x\n",
+		 fc_cap->max_parent_qpc_num, fc_cap->scq_num, fc_cap->srq_num,
+		 fc_cap->max_child_qpc_num, fc_cap->child_qpc_id_start);
+	sdk_info(hwdev->dev_hdl, "Vp_id_start=0x%x, vp_id_end=0x%x\n",
+		 fc_cap->vp_id_start, fc_cap->vp_id_end);
 }
 
-static void parse_ovs_res_cap(struct service_cap *cap,
+static void parse_ovs_res_cap(struct hinic_hwdev *hwdev,
+			      struct service_cap *cap,
 			      struct hinic_dev_cap *dev_cap,
 			      enum func_type type)
 {
@@ -510,8 +528,11 @@ static void parse_ovs_res_cap(struct service_cap *cap,
 	ovs_cap->dev_ovs_cap.max_pctxs = dev_cap->ovs_max_qpc;
 	ovs_cap->dev_ovs_cap.max_cqs = 0;
 
-	pr_info("Get ovs resource capbility, max_qpc: 0x%x\n",
-		ovs_cap->dev_ovs_cap.max_pctxs);
+	if (type == TYPE_PF || type == TYPE_PPF)
+		ovs_cap->dev_ovs_cap.dynamic_qp_en = dev_cap->ovs_dq_en;
+
+	sdk_info(hwdev->dev_hdl, "Get ovs resource capbility, max_qpc: 0x%x\n",
+		 ovs_cap->dev_ovs_cap.max_pctxs);
 }
 
 static void parse_acl_res_cap(struct service_cap *cap,
@@ -530,39 +551,38 @@ static void parse_dev_cap(struct hinic_hwdev *dev,
 	struct service_cap *cap = &dev->cfg_mgmt->svc_cap;
 
 	/* Public resource */
-	parse_pub_res_cap(cap, dev_cap, type);
+	parse_pub_res_cap(dev, cap, dev_cap, type);
 
 	/* PPF managed dynamic resource */
 	if (type == TYPE_PPF)
-		parse_dynamic_share_res_cap(cap, dev_cap, type);
+		parse_dynamic_share_res_cap(dev, cap, dev_cap, type);
 
 	/* L2 NIC resource */
 	if (IS_NIC_TYPE(dev))
-		parse_l2nic_res_cap(cap, dev_cap, type);
-
+		parse_l2nic_res_cap(dev, cap, dev_cap, type);
 
 	/* FCoE/IOE/TOE/FC without virtulization */
 	if (type == TYPE_PF || type == TYPE_PPF) {
 		if (IS_FC_TYPE(dev))
-			parse_fc_res_cap(cap, dev_cap, type);
+			parse_fc_res_cap(dev, cap, dev_cap, type);
 
 		if (IS_FCOE_TYPE(dev))
-			parse_fcoe_res_cap(cap, dev_cap, type);
+			parse_fcoe_res_cap(dev, cap, dev_cap, type);
 
 		if (IS_TOE_TYPE(dev))
-			parse_toe_res_cap(cap, dev_cap, type);
+			parse_toe_res_cap(dev, cap, dev_cap, type);
 	}
 
 	/* RoCE resource */
 	if (IS_ROCE_TYPE(dev))
-		parse_roce_res_cap(cap, dev_cap, type);
+		parse_roce_res_cap(dev, cap, dev_cap, type);
 
 	/* iWARP resource */
 	if (IS_IWARP_TYPE(dev))
-		parse_iwarp_res_cap(cap, dev_cap, type);
+		parse_iwarp_res_cap(dev, cap, dev_cap, type);
 
 	if (IS_OVS_TYPE(dev))
-		parse_ovs_res_cap(cap, dev_cap, type);
+		parse_ovs_res_cap(dev, cap, dev_cap, type);
 
 	if (IS_ACL_TYPE(dev))
 		parse_acl_res_cap(cap, dev_cap, type);
@@ -598,18 +618,17 @@ static int get_cap_from_fw(struct hinic_hwdev *dev, enum func_type type)
 
 static int get_cap_from_pf(struct hinic_hwdev *dev, enum func_type type)
 {
-	int err;
-	u16 in_len, out_len;
 	struct hinic_dev_cap dev_cap = {0};
+	u16 in_len, out_len;
+	int err;
 
 	in_len = sizeof(dev_cap);
 	out_len = in_len;
 
-	err = hinic_mbox_to_pf(dev, HINIC_MOD_CFGM, HINIC_CFG_MBOX_CAP,
-			       &dev_cap, in_len, &dev_cap, &out_len,
-			       CFG_MAX_CMD_TIMEOUT);
+	err = hinic_msg_to_mgmt_sync(dev, HINIC_MOD_CFGM, HINIC_CFG_MBOX_CAP,
+				     &dev_cap, in_len, &dev_cap, &out_len, 0);
 	if (err || dev_cap.status || !out_len) {
-		sdk_err(dev->dev_hdl, "Failed to get capability from PF,  err: %d, status: 0x%x, out size: 0x%x\n",
+		sdk_err(dev->dev_hdl, "Failed to get capability from PF, err: %d, status: 0x%x, out size: 0x%x\n",
 			err, dev_cap.status, out_len);
 		return -EFAULT;
 	}
@@ -657,7 +676,6 @@ static void nic_param_fix(struct hinic_hwdev *dev)
 		nic_cap->max_rqs = nic_cap->max_queue_allowed;
 		nic_cap->max_sqs = nic_cap->max_queue_allowed;
 	}
-
 }
 
 static void rdma_param_fix(struct hinic_hwdev *dev)
@@ -905,7 +923,7 @@ int hinic_vector_to_eqn(void *hwdev, enum hinic_service_type type, int vector)
 
 	if (type != SERVICE_T_ROCE && type != SERVICE_T_IWARP) {
 		sdk_err(dev->dev_hdl,
-			"Service type :%d, only RDMA service could get eqn by vector.\n",
+			"Service type: %d, only RDMA service could get eqn by vector\n",
 			type);
 		return -EINVAL;
 	}
@@ -962,7 +980,7 @@ static int cfg_enable_interrupt(struct hinic_hwdev *dev)
 
 	irq_info = cfg_mgmt->irq_param_info.alloc_info;
 
-	sdk_info(dev->dev_hdl, "Interrupt type: %d, irq num: %d.\n",
+	sdk_info(dev->dev_hdl, "Interrupt type: %d, irq num: %d\n",
 		 cfg_mgmt->svc_cap.interrupt_type, nreq);
 
 	switch (cfg_mgmt->svc_cap.interrupt_type) {
@@ -981,7 +999,7 @@ static int cfg_enable_interrupt(struct hinic_hwdev *dev)
 		actual_irq = pci_enable_msix_range(pcidev, entry,
 						   VECTOR_THRESHOLD, nreq);
 		if (actual_irq < 0) {
-			sdk_err(dev->dev_hdl, "Alloc msix entries with threshold 2 failed.\n");
+			sdk_err(dev->dev_hdl, "Alloc msix entries with threshold 2 failed\n");
 			kfree(entry);
 			return -ENOMEM;
 		}
@@ -989,7 +1007,7 @@ static int cfg_enable_interrupt(struct hinic_hwdev *dev)
 		nreq = (u16)actual_irq;
 		cfg_mgmt->irq_param_info.num_total = nreq;
 		cfg_mgmt->irq_param_info.num_irq_remain = nreq;
-		sdk_info(dev->dev_hdl, "Request %d msix vector success.\n",
+		sdk_info(dev->dev_hdl, "Request %d msix vector success\n",
 			 nreq);
 
 		for (i = 0; i < nreq; ++i) {
@@ -1039,12 +1057,12 @@ int hinic_alloc_irqs(void *hwdev, enum hinic_service_type type, u16 num,
 	if (num > free_num_irq) {
 		if (free_num_irq == 0) {
 			sdk_err(dev->dev_hdl,
-				"no free irq resource in cfg mgmt.\n");
+				"no free irq resource in cfg mgmt\n");
 			mutex_unlock(&irq_info->irq_mutex);
 			return -ENOMEM;
 		}
 
-		sdk_warn(dev->dev_hdl, "only %d irq resource in cfg mgmt.\n",
+		sdk_warn(dev->dev_hdl, "only %d irq resource in cfg mgmt\n",
 			 free_num_irq);
 		num = free_num_irq;
 	}
@@ -1105,7 +1123,7 @@ void hinic_free_irq(void *hwdev, enum hinic_service_type type, u32 irq_id)
 				alloc_info[i].free = CFG_FREE;
 				irq_info->num_irq_remain++;
 				if (irq_info->num_irq_remain > max_num_irq) {
-					sdk_err(dev->dev_hdl, "Find target,but over range\n");
+					sdk_err(dev->dev_hdl, "Find target, but over range\n");
 					mutex_unlock(&irq_info->irq_mutex);
 					return;
 				}
@@ -1115,7 +1133,7 @@ void hinic_free_irq(void *hwdev, enum hinic_service_type type, u32 irq_id)
 	}
 
 	if (i >= max_num_irq)
-		sdk_warn(dev->dev_hdl, "Irq %d don`t need to free\n", irq_id);
+		sdk_warn(dev->dev_hdl, "Irq %d don't need to free\n", irq_id);
 
 	mutex_unlock(&irq_info->irq_mutex);
 }
@@ -1187,7 +1205,7 @@ int hinic_alloc_ceqs(void *hwdev, enum hinic_service_type type, int num,
 	for (i = 0; i < num; i++) {
 		if (eq->num_ceq_remain == 0) {
 			sdk_warn(dev->dev_hdl, "Alloc %d ceqs, less than required %d ceqs\n",
-				*act_num, num);
+				 *act_num, num);
 			mutex_unlock(&eq->eq_mutex);
 			return 0;
 		}
@@ -1242,7 +1260,7 @@ void hinic_free_ceq(void *hwdev, enum hinic_service_type type, int ceq_id)
 	}
 
 	if (i >= num_ceq)
-		sdk_warn(dev->dev_hdl, "ceq %d don`t need to free.\n", ceq_id);
+		sdk_warn(dev->dev_hdl, "ceq %d don't need to free\n", ceq_id);
 
 	mutex_unlock(&eq->eq_mutex);
 }
@@ -1329,6 +1347,7 @@ static int cfg_mbx_pf_proc_vf_msg(void *hwdev, u16 vf_id, u8 cmd, void *buf_in,
 
 	/* OVS VF resources */
 	dev_cap->ovs_max_qpc = ovs_cap->max_pctxs;
+	dev_cap->ovs_dq_en = ovs_cap->dynamic_qp_en;
 
 	*out_size = sizeof(*dev_cap);
 
@@ -1339,28 +1358,33 @@ static int cfg_mbx_pf_proc_vf_msg(void *hwdev, u16 vf_id, u8 cmd, void *buf_in,
 	/* fixed qnum in ovs mode */
 	func_id = vf_id + hinic_glb_pf_vf_offset(hwdev);
 	dev_cap_tmp.func_id = func_id;
-	err = hinic_msg_to_mgmt_sync(dev, HINIC_MOD_CFGM, HINIC_CFG_FUNC_CAP,
-				     &dev_cap_tmp, sizeof(dev_cap_tmp),
-				     &dev_cap_tmp, &out_len, 0);
-	if (err || !out_len || dev_cap_tmp.status) {
+	err = hinic_pf_msg_to_mgmt_sync(dev, HINIC_MOD_CFGM, HINIC_CFG_FUNC_CAP,
+					&dev_cap_tmp, sizeof(dev_cap_tmp),
+					&dev_cap_tmp, &out_len, 0);
+	if (err && err != HINIC_DEV_BUSY_ACTIVE_FW &&
+	    err != HINIC_MBOX_PF_BUSY_ACTIVE_FW) {
 		sdk_err(dev->dev_hdl,
 			"Get func_id: %u capability from FW failed, err: %d, status: 0x%x, out_size: 0x%x\n",
 			func_id, err, dev_cap_tmp.status, out_len);
 		return -EFAULT;
+	} else if (err) {
+		return err;
 	}
 
 	dev_cap->nic_max_sq = dev_cap_tmp.nic_max_sq + 1;
 	dev_cap->nic_max_rq = dev_cap_tmp.nic_max_rq + 1;
 	dev_cap->max_queue_allowed = dev_cap_tmp.max_queue_allowed;
-	sdk_info(dev->dev_hdl, "func_id(%u) fixed qnum %u max_queue_allowed %u\n",
-		 func_id, dev_cap->nic_max_sq, dev_cap->max_queue_allowed);
+
+	sdk_info(dev->dev_hdl, "func_id(%u) %s qnum %u max_queue_allowed %u\n",
+		 func_id, (ovs_cap->dynamic_qp_en ? "dynamic" : "fixed"),
+		 dev_cap->nic_max_sq, dev_cap->max_queue_allowed);
 
 	return 0;
 }
 
 static int cfg_mbx_ppf_proc_msg(void *hwdev, u16 pf_id, u16 vf_id, u8 cmd,
-				 void *buf_in, u16 in_size, void *buf_out,
-				 u16 *out_size)
+				void *buf_in, u16 in_size, void *buf_out,
+				u16 *out_size)
 {
 	struct hinic_hwdev *dev = hwdev;
 
@@ -1373,7 +1397,7 @@ static int cfg_mbx_ppf_proc_msg(void *hwdev, u16 pf_id, u16 vf_id, u8 cmd,
 }
 
 static int cfg_mbx_vf_proc_msg(void *hwdev, u8 cmd, void *buf_in, u16 in_size,
-				void *buf_out, u16 *out_size)
+			       void *buf_out, u16 *out_size)
 {
 	struct hinic_hwdev *dev = hwdev;
 
@@ -1474,12 +1498,10 @@ int init_cfg_mgmt(struct hinic_hwdev *dev)
 
 free_interrupt_mem:
 	kfree(cfg_mgmt->irq_param_info.alloc_info);
-	mutex_deinit(&((cfg_mgmt->irq_param_info).irq_mutex));
 	cfg_mgmt->irq_param_info.alloc_info = NULL;
 
 free_eq_mem:
 	kfree(cfg_mgmt->eq_info.eq);
-	mutex_deinit(&cfg_mgmt->eq_info.eq_mutex);
 	cfg_mgmt->eq_info.eq = NULL;
 
 free_mgmt_mem:
@@ -1513,19 +1535,17 @@ void free_cfg_mgmt(struct hinic_hwdev *dev)
 
 	kfree(cfg_mgmt->irq_param_info.alloc_info);
 	cfg_mgmt->irq_param_info.alloc_info = NULL;
-	mutex_deinit(&((cfg_mgmt->irq_param_info).irq_mutex));
 
 	kfree(cfg_mgmt->eq_info.eq);
 	cfg_mgmt->eq_info.eq = NULL;
-	mutex_deinit(&cfg_mgmt->eq_info.eq_mutex);
 
 	kfree(cfg_mgmt);
 }
 
 int init_capability(struct hinic_hwdev *dev)
 {
-	int err;
 	struct cfg_mgmt_info *cfg_mgmt = dev->cfg_mgmt;
+	int err;
 
 	set_cfg_test_param(cfg_mgmt);
 
@@ -1750,6 +1770,16 @@ bool hinic_support_ft(void *hwdev)
 	return true;
 }
 EXPORT_SYMBOL(hinic_support_ft);
+
+bool hinic_support_dynamic_q(void *hwdev)
+{
+	struct hinic_hwdev *dev = hwdev;
+
+	if (!hwdev)
+		return false;
+
+	return dev->cfg_mgmt->svc_cap.nic_cap.dynamic_qp ? true : false;
+}
 
 bool hinic_func_for_mgmt(void *hwdev)
 {
@@ -2110,31 +2140,18 @@ static int hinic_os_dep_init(struct hinic_hwdev *hwdev)
 		return -EFAULT;
 	}
 
-	sema_init(&hwdev->recover_sem, 1);
-	sema_init(&hwdev->fault_list_sem, 1);
-
-	INIT_WORK(&hwdev->fault_work, hinic_fault_work_handler);
-
 	return 0;
 }
 
 static void hinic_os_dep_deinit(struct hinic_hwdev *hwdev)
 {
-	destroy_work(&hwdev->fault_work);
-
 	destroy_workqueue(hwdev->workq);
-
-	down(&hwdev->fault_list_sem);
-
-	up(&hwdev->fault_list_sem);
-
-	sema_deinit(&hwdev->fault_list_sem);
-	sema_deinit(&hwdev->recover_sem);
 }
 
 void hinic_ppf_hwdev_unreg(void *hwdev)
 {
 	struct hinic_hwdev *dev = hwdev;
+
 	if (!hwdev)
 		return;
 
@@ -2148,6 +2165,7 @@ void hinic_ppf_hwdev_unreg(void *hwdev)
 void hinic_ppf_hwdev_reg(void *hwdev, void *ppf_hwdev)
 {
 	struct hinic_hwdev *dev = hwdev;
+
 	if (!hwdev)
 		return;
 
@@ -2314,8 +2332,6 @@ init_hwif_err:
 	vfree(hwdev->chip_fault_stats);
 
 alloc_chip_fault_stats_err:
-	sema_deinit(&hwdev->func_sem);
-	sema_deinit(&hwdev->ppf_sem);
 	kfree(hwdev);
 	*para->hwdev = NULL;
 
@@ -2385,9 +2401,20 @@ void hinic_free_hwdev(void *hwdev)
 	clear_bit(HINIC_HWDEV_NONE_INITED, &dev->func_state);
 	hinic_free_hwif(dev);
 	vfree(dev->chip_fault_stats);
-	sema_deinit(&dev->func_sem);
-	sema_deinit(&dev->ppf_sem);
 	kfree(dev);
+}
+
+void hinic_set_api_stop(void *hwdev)
+{
+	struct hinic_hwdev *dev = hwdev;
+
+	if (!hwdev)
+		return;
+
+	dev->chip_present_flag = HINIC_CHIP_ABSENT;
+	sdk_info(dev->dev_hdl, "Set card absent\n");
+	hinic_force_complete_all(dev);
+	sdk_info(dev->dev_hdl, "All messages interacting with the chip will stop\n");
 }
 
 void hinic_shutdown_hwdev(void *hwdev)

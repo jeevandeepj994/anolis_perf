@@ -32,9 +32,9 @@
 #include "hinic_wq.h"
 #include "hinic_qe_def.h"
 
-#define	WQS_MAX_NUM_BLOCKS		128
+#define WQS_MAX_NUM_BLOCKS		256
 #define WQS_FREE_BLOCKS_SIZE(wqs)	(WQS_MAX_NUM_BLOCKS * \
-					sizeof((wqs)->free_blocks[0]))
+					 sizeof((wqs)->free_blocks[0]))
 
 static int wqs_next_block(struct hinic_wqs *wqs, u32 *page_idx,
 			  u32 *block_idx);
@@ -55,7 +55,7 @@ static int queue_alloc_page(void *handle, u64 **vaddr, u64 *paddr,
 	}
 
 	if (!ADDR_4K_ALIGNED(dma_addr)) {
-		sdk_err(handle, "Cla is not 4k aligned!\n");
+		sdk_err(handle, "Cla is not 4k aligned\n");
 		goto shadow_vaddr_err;
 	}
 
@@ -381,8 +381,8 @@ void hinic_wq_wqe_pg_clear(struct hinic_wq *wq)
 
 int hinic_cmdq_alloc(struct hinic_cmdq_pages *cmdq_pages,
 		     struct hinic_wq *wq, void *dev_hdl,
-			int cmdq_blocks, u32 wq_page_size, u32 wqebb_size,
-			u16 q_depth, u32 max_wqe_size)
+		     int cmdq_blocks, u32 wq_page_size, u32 wqebb_size,
+		     u16 q_depth, u32 max_wqe_size)
 {
 	int i, j, err = -ENOMEM;
 
@@ -528,8 +528,6 @@ void hinic_wqs_free(struct hinic_wqs *wqs)
 {
 	u32 page_idx;
 
-	spin_lock_deinit(&wqs->alloc_blocks_lock);
-
 	for (page_idx = 0; page_idx < wqs->num_pages; page_idx++)
 		wqs_free_page(wqs, page_idx);
 
@@ -616,7 +614,7 @@ void *hinic_get_wqe(struct hinic_wq *wq, int num_wqebbs, u16 *prod_idx)
 	/* If we only have one page, still need to get shadown wqe when
 	 * wqe rolling-over page
 	 */
-	if (curr_pg != end_pg || end_prod_idx < *prod_idx) {
+	if (curr_pg != end_pg || MASKED_WQE_IDX(wq, end_prod_idx) < *prod_idx) {
 		u32 offset = curr_pg * wq->max_wqe_size;
 		u8 *shadow_addr = wq->shadow_wqe + offset;
 
@@ -651,10 +649,7 @@ void *hinic_read_wqe(struct hinic_wq *wq, int num_wqebbs, u16 *cons_idx)
 
 	*cons_idx = curr_cons_idx;
 
-	/* If we only have one page, still need to get shadown wqe when
- 	 * wqe rolling-over page
- 	 */
-	if (curr_pg != end_pg || end_cons_idx < curr_cons_idx) {
+	if (curr_pg != end_pg) {
 		u32 offset = curr_pg * wq->max_wqe_size;
 		u8 *shadow_addr = wq->shadow_wqe + offset;
 

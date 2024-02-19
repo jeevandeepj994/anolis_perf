@@ -22,7 +22,7 @@
 #define HINIC_DEFAULT_WQ_PAGE_SIZE	0x40000
 #define HINIC_HW_WQ_PAGE_SIZE		0x1000
 
-#define HINIC_MSG_TO_MGMT_MAX_LEN		2016
+#define HINIC_MSG_TO_MGMT_MAX_LEN	2016
 
 #define HINIC_MGMT_STATUS_ERR_OK          0   /* Ok */
 #define HINIC_MGMT_STATUS_ERR_PARAM       1   /* Invalid parameter */
@@ -47,6 +47,9 @@
 #define HINIC_MGMT_STATUS_ERR_ROLLBACK    20  /* Chip rollback fail */
 #define HINIC_MGMT_STATUS_ERR_LEN         32  /* Length too short or too long */
 #define HINIC_MGMT_STATUS_ERR_UNSUPPORT   0xFF /* Feature not supported */
+
+#define HINIC_CHIP_PRESENT		1
+#define HINIC_CHIP_ABSENT		0
 
 struct cfg_mgmt_info;
 struct rdma_comp_resource;
@@ -97,7 +100,7 @@ struct mqm_addr_trans_tbl_info {
 #define HINIC_DEV_ACTIVE_FW_TIMEOUT	(35 * 1000)
 #define HINIC_DEV_BUSY_ACTIVE_FW	0xFE
 
-#define HINIC_HW_WQ_NAME	"hinic_hardware"
+#define HINIC_HW_WQ_NAME		"hinic_hardware"
 #define HINIC_HEARTBEAT_PERIOD		1000
 #define HINIC_HEARTBEAT_START_EXPIRE	5000
 
@@ -106,6 +109,7 @@ struct mqm_addr_trans_tbl_info {
 	(HINIC_NODE_ID_MAX * FAULT_LEVEL_MAX * HINIC_CHIP_ERROR_TYPE_MAX)
 
 enum hinic_node_id {
+	HINIC_NODE_ID_CPI = 0,
 	HINIC_NODE_ID_IPSU = 4,
 	HINIC_NODE_ID_MGMT_HOST = 21, /* Host CPU send API to uP */
 	HINIC_NODE_ID_MAX = 22
@@ -171,34 +175,13 @@ struct hinic_hw_stats {
 	struct hinic_fault_event_stats fault_event_stats;
 };
 
-struct hinic_fault_info_node {
-	struct list_head list;
-	struct hinic_hwdev *hwdev;
-	struct hinic_fault_recover_info info;
-};
-
-enum heartbeat_support_state {
-	HEARTBEAT_NOT_SUPPORT = 0,
-	HEARTBEAT_SUPPORT,
-};
-
-/* 25s for max 5 heartbeat event lost */
-#define HINIC_HEARBEAT_ENHANCED_LOST		25000
-struct hinic_heartbeat_enhanced {
-	bool		en;	/* enable enhanced heartbeat or not */
-
-	unsigned long	last_update_jiffies;
-	u32		last_heartbeat;
-
-	unsigned long	start_detect_jiffies;
-};
-
 #define HINIC_NORMAL_HOST_CAP	(HINIC_FUNC_MGMT | HINIC_FUNC_PORT | \
 				 HINIC_FUNC_SUPP_RATE_LIMIT | \
 				 HINIC_FUNC_SUPP_DFX_REG | \
 				 HINIC_FUNC_SUPP_RX_MODE | \
 				 HINIC_FUNC_SUPP_SET_VF_MAC_VLAN | \
-				 HINIC_FUNC_SUPP_CHANGE_MAC)
+				 HINIC_FUNC_SUPP_CHANGE_MAC | \
+				 HINIC_FUNC_SUPP_ENCAP_TSO_CSUM)
 #define HINIC_MULTI_BM_MASTER	(HINIC_FUNC_MGMT | HINIC_FUNC_PORT | \
 				 HINIC_FUNC_SUPP_DFX_REG | \
 				 HINIC_FUNC_SUPP_RX_MODE | \
@@ -240,16 +223,10 @@ struct hinic_heartbeat_enhanced {
 
 #define HINIC_BOARD_TYPE_MULTI_HOST_ETH_25GE	12
 
-enum hinic_chip_mode {
-	CHIP_MODE_NORMAL,
-	CHIP_MODE_BMGW,
-	CHIP_MODE_VMGW,
-};
-
 /* new version of roce qp not limited by power of 2 */
-#define HINIC_CMD_VER_ROCE_QP		1
+#define HINIC_CMD_VER_ROCE_QP			1
 /* new version for add function id in multi-host */
-#define HINIC_CMD_VER_FUNC_ID		2
+#define HINIC_CMD_VER_FUNC_ID			2
 
 struct hinic_hwdev {
 	void *adapter_hdl;  /* pointer to hinic_pcidev or NDIS_Adapter */
@@ -285,23 +262,12 @@ struct hinic_hwdev {
 	hinic_event_handler event_callback;
 	void *event_pri_handle;
 
-	struct semaphore recover_sem;
-	bool collect_log_flag;
-	bool history_fault_flag;
-	struct hinic_fault_recover_info history_fault;
-	void *recover_pri_hd;
-	hinic_fault_recover_handler recover_cb;
-
-	struct work_struct fault_work;
-	struct semaphore fault_list_sem;
-
 	struct work_struct timer_work;
 	struct workqueue_struct *workq;
 	struct timer_list heartbeat_timer;
 	/* true represent heartbeat lost, false represent heartbeat restore */
 	u32 heartbeat_lost;
 	int chip_present_flag;
-	struct hinic_heartbeat_enhanced heartbeat_ehd;
 	struct hinic_hw_stats hw_stats;
 	u8 *chip_fault_stats;
 
@@ -324,6 +290,7 @@ struct hinic_hwdev {
 	struct hinic_board_info board_info;
 #define MGMT_VERSION_MAX_LEN	32
 	u8	mgmt_ver[MGMT_VERSION_MAX_LEN];
+	u64	fw_support_func_flag;
 };
 
 int hinic_init_comm_ch(struct hinic_hwdev *hwdev);
@@ -374,14 +341,10 @@ int hinic_pf_msg_to_mgmt_sync(void *hwdev, enum hinic_mod_type mod, u8 cmd,
 			      void *buf_out, u16 *out_size, u32 timeout);
 
 int hinic_pf_send_clp_cmd(void *hwdev, enum hinic_mod_type mod, u8 cmd,
-			void *buf_in, u16 in_size,
-			void *buf_out, u16 *out_size);
+			  void *buf_in, u16 in_size,
+			  void *buf_out, u16 *out_size);
 
 int hinic_get_bios_pf_bw_limit(void *hwdev, u32 *pf_bw_limit);
-
-void hinic_fault_work_handler(struct work_struct *work);
-void hinic_swe_fault_handler(struct hinic_hwdev *hwdev, u8 level,
-			     u8 event, u64 val);
 
 bool hinic_mgmt_event_ack_first(u8 mod, u8 cmd);
 
@@ -391,8 +354,8 @@ int hinic_set_wq_page_size(struct hinic_hwdev *hwdev, u16 func_idx,
 int hinic_phy_init_status_judge(void *hwdev);
 
 int hinic_hilink_info_show(struct hinic_hwdev *hwdev);
-extern int hinic_api_csr_rd32(void *hwdev, u8 dest, u32 addr, u32 *val);
-extern int hinic_api_csr_wr32(void *hwdev, u8 dest, u32 addr, u32 val);
+int hinic_api_csr_rd32(void *hwdev, u8 dest, u32 addr, u32 *val);
+int hinic_api_csr_wr32(void *hwdev, u8 dest, u32 addr, u32 val);
 
 int hinic_ppf_process_mbox_msg(struct hinic_hwdev *hwdev, u16 pf_idx, u16 vf_id,
 			       enum hinic_mod_type mod, u8 cmd, void *buf_in,
@@ -403,8 +366,5 @@ int hinic_ppf_process_mbox_msg(struct hinic_hwdev *hwdev, u16 pf_idx, u16 vf_id,
 #define HINIC_SDI_MODE_VM		2
 #define HINIC_SDI_MODE_MAX		3
 int hinic_get_sdi_mode(struct hinic_hwdev *hwdev, u16 *cur_mode);
-
-void mgmt_heartbeat_event_handler(void *hwdev, void *buf_in, u16 in_size,
-				  void *buf_out, u16 *out_size);
 
 #endif

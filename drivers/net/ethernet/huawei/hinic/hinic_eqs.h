@@ -20,6 +20,7 @@
 
 #define HINIC_EQ_PAGE_SIZE		0x00001000
 
+#define HINIC_HW_MAX_AEQS		4
 #define HINIC_MAX_AEQS			3
 #define HINIC_MAX_CEQS			32
 
@@ -34,6 +35,9 @@
 
 #define HINIC_DEFAULT_AEQ_LEN		0x10000
 #define HINIC_DEFAULT_CEQ_LEN		0x10000
+
+#define HINIC_VMGW_DEFAULT_AEQ_LEN	128
+#define HINIC_VMGW_DEFAULT_CEQ_LEN	1024
 
 #define HINIC_MIN_AEQ_LEN		64
 #define HINIC_MAX_AEQ_LEN		(512 * 1024)
@@ -59,14 +63,6 @@ enum hinic_eq_ci_arm_state {
 	HINIC_EQ_ARMED,
 };
 
-struct hinic_eq_work {
-	struct work_struct	work;
-	void			*data;
-};
-
-struct hinic_ceq_tasklet_data {
-	void	*data;
-};
 struct hinic_eq {
 	struct hinic_hwdev		*hwdev;
 	u16				q_id;
@@ -82,7 +78,7 @@ struct hinic_eq {
 	u16				num_pages;
 	u32				num_elem_in_pg;
 
-	struct irq_info		eq_irq;
+	struct irq_info			eq_irq;
 	char				irq_name[EQ_IRQ_NAME_LEN];
 
 	dma_addr_t			*dma_addr;
@@ -90,9 +86,8 @@ struct hinic_eq {
 	dma_addr_t			*dma_addr_for_free;
 	u8				**virt_addr_for_free;
 
-	struct hinic_eq_work		aeq_work;
+	struct work_struct		aeq_work;
 	struct tasklet_struct		ceq_tasklet;
-	struct hinic_ceq_tasklet_data	ceq_tasklet_data;
 
 	u64	hard_intr_jif;
 	u64	soft_intr_jif;
@@ -156,8 +151,6 @@ u32 hinic_func_own_bit_get(struct hinic_hwdev *hwdev);
 
 void hinic_func_own_bit_set(struct hinic_hwdev *hwdev, u32 cfg);
 
-void hinic_qps_num_set(struct hinic_hwdev *hwdev, u32 num_qps);
-
 int hinic_aeqs_init(struct hinic_hwdev *hwdev, u16 num_aeqs,
 		    struct irq_info *msix_entries);
 
@@ -177,5 +170,8 @@ void hinic_get_aeq_irqs(struct hinic_hwdev *hwdev, struct irq_info *irqs,
 void hinic_dump_ceq_info(struct hinic_hwdev *hwdev);
 
 void hinic_dump_aeq_info(struct hinic_hwdev *hwdev);
+
+int hinic_reschedule_eq(struct hinic_hwdev *hwdev, enum hinic_eq_type type,
+			u16 eq_id);
 
 #endif

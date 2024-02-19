@@ -16,20 +16,6 @@
 #ifndef HINIC_HW_H_
 #define HINIC_HW_H_
 
-#ifndef __BIG_ENDIAN__
-#define __BIG_ENDIAN__    0x4321
-#endif
-
-#ifndef __LITTLE_ENDIAN__
-#define __LITTLE_ENDIAN__    0x1234
-#endif
-
-#ifdef __BYTE_ORDER__
-#undef __BYTE_ORDER__
-#endif
-/* X86 */
-#define __BYTE_ORDER__    __LITTLE_ENDIAN__
-
 enum hinic_mod_type {
 	HINIC_MOD_COMM = 0,	/* HW communication module */
 	HINIC_MOD_L2NIC = 1,	/* L2NIC module */
@@ -84,8 +70,8 @@ int hinic_msg_to_mgmt_async(void *hwdev, enum hinic_mod_type mod, u8 cmd,
 			    void *buf_in, u16 in_size);
 
 int hinic_mbox_to_vf(void *hwdev, enum hinic_mod_type mod,
-				u16 vf_id, u8 cmd, void *buf_in, u16 in_size,
-				void *buf_out, u16 *out_size, u32 timeout);
+		     u16 vf_id, u8 cmd, void *buf_in, u16 in_size,
+		     void *buf_out, u16 *out_size, u32 timeout);
 
 int hinic_api_cmd_write_nack(void *hwdev, u8 dest,
 			     void *cmd, u16 size);
@@ -169,7 +155,8 @@ int hinic_aeq_register_swe_cb(void *hwdev, enum hinic_aeq_sw_type event,
 void hinic_aeq_unregister_swe_cb(void *hwdev, enum hinic_aeq_sw_type event);
 
 typedef void (*hinic_mgmt_msg_cb)(void *hwdev, void *pri_handle,
-	u8 cmd, void *buf_in, u16 in_size, void *buf_out, u16 *out_size);
+				  u8 cmd, void *buf_in, u16 in_size,
+				  void *buf_out, u16 *out_size);
 
 int hinic_register_mgmt_msg_cb(void *hwdev,
 			       enum hinic_mod_type mod, void *pri_handle,
@@ -199,7 +186,8 @@ struct nic_interrupt_info {
 
 int hinic_get_interrupt_cfg(void *hwdev,
 			    struct nic_interrupt_info *interrupt_info);
-
+int hinic_set_interrupt_cfg_direct(void *hwdev,
+				   struct nic_interrupt_info *interrupt_info);
 int hinic_set_interrupt_cfg(void *hwdev,
 			    struct nic_interrupt_info interrupt_info);
 
@@ -253,15 +241,62 @@ struct hinic_init_para {
 	void *ppf_hwdev;
 };
 
-#ifndef IFNAMSIZ
-#define IFNAMSIZ    16
-#endif
 #define MAX_FUNCTION_NUM 512
 #define HINIC_MAX_PF_NUM 16
 #define HINIC_MAX_COS	8
 #define INIT_FAILED 0
 #define INIT_SUCCESS 1
 #define MAX_DRV_BUF_SIZE 4096
+
+struct hinic_cmd_get_light_module_abs {
+	u8 status;
+	u8 version;
+	u8 rsvd0[6];
+
+	u8 port_id;
+	u8 abs_status; /* 0:present, 1:absent */
+	u8 rsv[2];
+};
+
+#define MODULE_TYPE_SFP		0x3
+#define MODULE_TYPE_QSFP28	0x11
+#define MODULE_TYPE_QSFP	0x0C
+#define MODULE_TYPE_QSFP_PLUS	0x0D
+
+#define SFP_INFO_MAX_SIZE	512
+struct hinic_cmd_get_sfp_qsfp_info {
+	u8 status;
+	u8 version;
+	u8 rsvd0[6];
+
+	u8 port_id;
+	u8 wire_type;
+	u16 out_len;
+	u8 sfp_qsfp_info[SFP_INFO_MAX_SIZE];
+};
+
+#define STD_SFP_INFO_MAX_SIZE	640
+struct hinic_cmd_get_std_sfp_info {
+	u8 status;
+	u8 version;
+	u8 rsvd0[6];
+
+	u8 port_id;
+	u8 wire_type;
+	u16 eeprom_len;
+	u32 rsvd;
+	u8 sfp_info[STD_SFP_INFO_MAX_SIZE];
+};
+
+#define HINIC_MAX_PORT_ID	4
+
+struct hinic_port_routine_cmd {
+	int up_send_sfp_info;
+	int up_send_sfp_abs;
+
+	struct hinic_cmd_get_sfp_qsfp_info sfp_info;
+	struct hinic_cmd_get_light_module_abs abs;
+};
 
 struct card_node {
 	struct list_head node;
@@ -281,6 +316,10 @@ struct card_node {
 	bool disable_vf_load[HINIC_MAX_PF_NUM];
 	u32 vf_mbx_old_rand_id[MAX_FUNCTION_NUM];
 	u32 vf_mbx_rand_id[MAX_FUNCTION_NUM];
+	struct hinic_port_routine_cmd rt_cmd[HINIC_MAX_PORT_ID];
+
+	/* mutex used for copy sfp info */
+	struct mutex sfp_mutex;
 };
 
 enum hinic_hwdev_init_state {
@@ -325,6 +364,8 @@ enum hinic_func_cap {
 	HINIC_FUNC_SUPP_CHANGE_MAC = 1 << 9,
 	/* OVS don't support SCTP_CRC/HW_VLAN/LRO */
 	HINIC_FUNC_OFFLOAD_OVS_UNSUPP = 1 << 10,
+	/* OVS don't support encap-tso/encap-csum */
+	HINIC_FUNC_SUPP_ENCAP_TSO_CSUM = 1 << 11,
 };
 
 #define FUNC_SUPPORT_MGMT(hwdev)		\
@@ -363,14 +404,20 @@ enum hinic_func_cap {
 #define FUNC_SUPPORT_LRO(hwdev)			\
 	(!(hinic_get_func_feature_cap(hwdev) &  \
 	   HINIC_FUNC_OFFLOAD_OVS_UNSUPP))
+#define FUNC_SUPPORT_ENCAP_TSO_CSUM(hwdev)	\
+	(!!(hinic_get_func_feature_cap(hwdev) & \
+	   HINIC_FUNC_SUPP_ENCAP_TSO_CSUM))
 
 int hinic_init_hwdev(struct hinic_init_para *para);
 int hinic_set_vf_dev_cap(void *hwdev);
 void hinic_free_hwdev(void *hwdev);
 void hinic_shutdown_hwdev(void *hwdev);
+void hinic_set_api_stop(void *hwdev);
 
 void hinic_ppf_hwdev_unreg(void *hwdev);
 void hinic_ppf_hwdev_reg(void *hwdev, void *ppf_hwdev);
+
+void hinic_qps_num_set(void *hwdev, u32 num_qps);
 
 bool hinic_is_hwdev_mod_inited(void *hwdev, enum hinic_hwdev_init_state state);
 enum hinic_func_mode hinic_get_func_mode(void *hwdev);
@@ -382,6 +429,7 @@ enum hinic_service_mode {
 	HINIC_WORK_MODE_NIC,
 	HINIC_WORK_MODE_INVALID	= 0xFF,
 };
+
 enum hinic_service_mode hinic_get_service_mode(void *hwdev);
 
 int hinic_slq_init(void *dev, int num_wqs);
@@ -393,7 +441,8 @@ u64 hinic_slq_get_addr(void *handle, u16 index);
 u64 hinic_slq_get_first_pageaddr(void *handle);
 
 typedef void (*comm_up_self_msg_proc)(void *handle, void *buf_in,
-				u16 in_size, void *buf_out, u16 *out_size);
+				      u16 in_size, void *buf_out,
+				      u16 *out_size);
 
 void hinic_comm_recv_mgmt_self_cmd_reg(void *hwdev, u8 cmd,
 				       comm_up_self_msg_proc proc);
@@ -519,20 +568,9 @@ union hinic_fault_hw_mgmt {
 struct hinic_fault_event {
 	/* enum hinic_fault_type */
 	u8 type;
-	u8 rsvd0[3];
-	union hinic_fault_hw_mgmt event;
-};
-
-struct hinic_fault_recover_info {
-	u8 fault_src; /* enum hinic_fault_source_type */
-	u8 fault_lev; /* enum hinic_fault_err_level */
+	u8 fault_level; /* sdk write fault level for uld event */
 	u8 rsvd0[2];
-	union {
-		union hinic_fault_hw_mgmt hw_mgmt;
-		struct hinic_fault_sw_mgmt sw_mgmt;
-		u32 mgmt_rsvd[4];
-		u32 host_rsvd[4];
-	} fault_data;
+	union hinic_fault_hw_mgmt event;
 };
 
 struct hinic_dcb_state {
@@ -607,6 +645,7 @@ enum hinic_event_type {
 	HINIC_EVENT_MCTP_GET_HOST_INFO,
 	HINIC_EVENT_MULTI_HOST_MGMT,
 	HINIC_EVENT_INIT_MIGRATE_PF,
+	HINIC_EVENT_MGMT_WATCHDOG_EVENT,
 };
 
 struct hinic_event_info {
@@ -632,10 +671,8 @@ enum hinic_ucode_event_type {
 };
 
 typedef void (*hinic_event_handler)(void *handle,
-		struct hinic_event_info *event);
+				    struct hinic_event_info *event);
 
-typedef void (*hinic_fault_recover_handler)(void *pri_handle,
-					struct hinic_fault_recover_info info);
 /* only register once */
 void hinic_event_register(void *dev, void *pri_handle,
 			  hinic_event_handler callback);
@@ -717,16 +754,17 @@ struct hinic_hw_pf_infos {
 int hinic_get_hw_pf_infos(void *hwdev, struct hinic_hw_pf_infos *infos);
 int hinic_set_ip_check(void *hwdev, bool ip_check_ctl);
 int hinic_mbox_to_host_sync(void *hwdev, enum hinic_mod_type mod,
-		u8 cmd, void *buf_in, u16 in_size, void *buf_out,
-		u16 *out_size, u32 timeout);
-int hinic_mbox_ppf_to_vf(void *hwdev,
-		enum hinic_mod_type mod, u16 func_id, u8 cmd, void *buf_in,
-		u16 in_size, void *buf_out, u16 *out_size, u32 timeout);
+			    u8 cmd, void *buf_in, u16 in_size, void *buf_out,
+			    u16 *out_size, u32 timeout);
+int hinic_mbox_ppf_to_vf(void *hwdev, enum hinic_mod_type mod, u16 func_id,
+			 u8 cmd, void *buf_in, u16 in_size, void *buf_out,
+			 u16 *out_size, u32 timeout);
 
 int hinic_get_card_present_state(void *hwdev, bool *card_present_state);
 
 void hinic_migrate_report(void *dev);
 int hinic_set_vxlan_udp_dport(void *hwdev, u32 udp_port);
 bool is_multi_vm_slave(void *hwdev);
+bool is_multi_bm_slave(void *hwdev);
 
 #endif

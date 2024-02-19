@@ -35,7 +35,6 @@
 #include "hinic_nic.h"
 #include "hinic_mgmt_interface.h"
 #include "hinic_hwif.h"
-#include "hinic_eqs.h"
 
 static unsigned char set_vf_link_state;
 module_param(set_vf_link_state, byte, 0444);
@@ -50,7 +49,7 @@ MODULE_PARM_DESC(set_vf_link_state, "Set vf link state, 0 represents link auto, 
 	hinic_msg_to_mgmt_async(hwdev, HINIC_MOD_L2NIC, cmd, buf_in, in_size)
 
 #define CPATH_FUNC_ID_VALID_LIMIT	2
-#define CHECK_IPSU_15BIT	0X8000
+#define CHECK_IPSU_15BIT		0X8000
 
 static int hinic_set_rx_lro_timer(void *hwdev, u32 timer_value);
 
@@ -65,6 +64,32 @@ static bool check_func_table(struct hinic_hwdev *hwdev, u16 func_idx,
 	function_table = (struct hinic_function_table *)buf_in;
 
 	if (!function_table->rx_wqe_buf_size)
+		return false;
+
+	return true;
+}
+
+static bool check_rxcsum_setting(struct hinic_hwdev *hwdev, u16 func_idx,
+				 void *buf_in, u16 in_size)
+{
+	struct hinic_checksum_offload *rx_csum_cfg = NULL;
+
+	if (!hinic_mbox_check_func_id_8B(hwdev, func_idx, buf_in, in_size))
+		return false;
+
+	rx_csum_cfg = buf_in;
+	if (rx_csum_cfg->rx_csum_offload != HINIC_RX_CSUM_OFFLOAD_EN)
+		return false;
+
+	return true;
+}
+
+static bool check_force_pkt_drop(struct hinic_hwdev *hwdev, u16 func_idx,
+				 void *buf_in, u16 in_size)
+{
+	struct hinic_force_pkt_drop *pkt_drop = buf_in;
+
+	if (pkt_drop->port != hinic_physical_port_id(hwdev))
 		return false;
 
 	return true;
@@ -89,7 +114,7 @@ struct vf_cmd_check_handle nic_cmd_support_vf[] = {
 
 	{HINIC_PORT_CMD_GET_LINK_STATE, hinic_mbox_check_func_id_8B},
 	{HINIC_PORT_CMD_SET_LRO, hinic_mbox_check_func_id_8B},
-	{HINIC_PORT_CMD_SET_RX_CSUM, hinic_mbox_check_func_id_8B},
+	{HINIC_PORT_CMD_SET_RX_CSUM, check_rxcsum_setting},
 	{HINIC_PORT_CMD_SET_RX_VLAN_OFFLOAD, hinic_mbox_check_func_id_8B},
 
 	{HINIC_PORT_CMD_GET_VPORT_STAT, hinic_mbox_check_func_id_8B},
@@ -140,6 +165,14 @@ struct vf_cmd_check_handle nic_cmd_support_vf[] = {
 	{HINIC_PORT_CMD_SET_VHD_CFG, hinic_mbox_check_func_id_8B},
 
 	{HINIC_PORT_CMD_SET_VLAN_FILTER, hinic_mbox_check_func_id_8B},
+	{HINIC_PORT_CMD_FORCE_PKT_DROP, check_force_pkt_drop},
+	{HINIC_PORT_CMD_Q_FILTER, hinic_mbox_check_func_id_8B},
+	{HINIC_PORT_CMD_TCAM_FILTER, NULL},
+	{HINIC_PORT_CMD_UP_TC_ADD_FLOW, NULL},
+	{HINIC_PORT_CMD_UP_TC_DEL_FLOW, NULL},
+	{HINIC_PORT_CMD_UP_TC_FLUSH_TCAM, hinic_mbox_check_func_id_8B},
+	{HINIC_PORT_CMD_UP_TC_CTRL_TCAM_BLOCK, hinic_mbox_check_func_id_8B},
+	{HINIC_PORT_CMD_UP_TC_ENABLE, hinic_mbox_check_func_id_8B},
 };
 
 int hinic_init_function_table(void *hwdev, u16 rx_buf_sz)
@@ -202,8 +235,53 @@ int hinic_get_base_qpn(void *hwdev, u16 *global_qpn)
 	return 0;
 }
 
+int hinic_get_fw_support_func(void *hwdev)
+{
+	struct fw_support_func support_flag = {0};
+	struct hinic_hwdev *dev = hwdev;
+	u16 out_size = sizeof(support_flag);
+	int err;
+
+	if (!hwdev)
+		return -EINVAL;
+
+	err = hinic_msg_to_mgmt_sync(hwdev, HINIC_MOD_L2NIC,
+				     HINIC_PORT_CMD_GET_FW_SUPPORT_FLAG,
+				     &support_flag, sizeof(support_flag),
+				     &support_flag, &out_size, 0);
+	if (support_flag.status == HINIC_MGMT_CMD_UNSUPPORTED) {
+		nic_info(dev->dev_hdl, "Current firmware doesn't support to get function capability\n");
+		support_flag.flag = 0;
+	} else if (support_flag.status || err || !out_size) {
+		nic_err(dev->dev_hdl, "Failed to get function capability, err: %d, status: 0x%x, out size: 0x%x\n",
+			err, support_flag.status, out_size);
+		return -EFAULT;
+	}
+
+	dev->fw_support_func_flag = support_flag.flag;
+
+	return 0;
+}
+
 #define HINIC_ADD_VLAN_IN_MAC	0x8000
 #define HINIC_VLAN_ID_MASK	0x7FFF
+#define PF_SET_VF_MAC(hwdev, status)	\
+		(HINIC_FUNC_TYPE(hwdev) == TYPE_VF && \
+		 (status) == HINIC_PF_SET_VF_ALREADY)
+
+static int hinic_check_mac_status(struct hinic_hwdev *hwdev, u8 status,
+				  u16 vlan_id)
+{
+	if ((status && status != HINIC_MGMT_STATUS_EXIST) ||
+	    (vlan_id & CHECK_IPSU_15BIT && status == HINIC_MGMT_STATUS_EXIST)) {
+		if (PF_SET_VF_MAC(hwdev, status))
+			return 0;
+
+		return -EINVAL;
+	}
+
+	return 0;
+}
 
 int hinic_set_mac(void *hwdev, const u8 *mac_addr, u16 vlan_id, u16 func_id)
 {
@@ -228,17 +306,14 @@ int hinic_set_mac(void *hwdev, const u8 *mac_addr, u16 vlan_id, u16 func_id)
 	err = l2nic_msg_to_mgmt_sync(hwdev, HINIC_PORT_CMD_SET_MAC, &mac_info,
 				     sizeof(mac_info), &mac_info, &out_size);
 	if (err || !out_size ||
-	    (mac_info.status && mac_info.status != HINIC_MGMT_STATUS_EXIST &&
-	    mac_info.status != HINIC_PF_SET_VF_ALREADY) ||
-	    (mac_info.vlan_id & CHECK_IPSU_15BIT &&
-	    mac_info.status == HINIC_MGMT_STATUS_EXIST)) {
+	    hinic_check_mac_status(hwdev, mac_info.status, mac_info.vlan_id)) {
 		nic_err(nic_hwdev->dev_hdl,
 			"Failed to update MAC, err: %d, status: 0x%x, out size: 0x%x\n",
 			err, mac_info.status, out_size);
-		return -EINVAL;
+		return -EIO;
 	}
 
-	if (mac_info.status == HINIC_PF_SET_VF_ALREADY) {
+	if (PF_SET_VF_MAC(nic_hwdev, mac_info.status)) {
 		nic_warn(nic_hwdev->dev_hdl, "PF has already set VF mac, Ignore set operation\n");
 		return HINIC_PF_SET_VF_ALREADY;
 	}
@@ -275,14 +350,14 @@ int hinic_del_mac(void *hwdev, const u8 *mac_addr, u16 vlan_id, u16 func_id)
 	err = l2nic_msg_to_mgmt_sync(hwdev, HINIC_PORT_CMD_DEL_MAC, &mac_info,
 				     sizeof(mac_info), &mac_info, &out_size);
 	if (err || !out_size ||
-	    (mac_info.status && mac_info.status != HINIC_PF_SET_VF_ALREADY)) {
+	    (mac_info.status && !PF_SET_VF_MAC(nic_hwdev, mac_info.status))) {
 		nic_err(nic_hwdev->dev_hdl,
 			"Failed to delete MAC, err: %d, status: 0x%x, out size: 0x%x\n",
 			err, mac_info.status, out_size);
-		return -EINVAL;
+		return -EIO;
 	}
-	if (mac_info.status == HINIC_PF_SET_VF_ALREADY) {
-		nic_warn(nic_hwdev->dev_hdl, "PF has already set VF mac, Ignore delete operation.\n");
+	if (PF_SET_VF_MAC(nic_hwdev, mac_info.status)) {
+		nic_warn(nic_hwdev->dev_hdl, "PF has already set VF mac, Ignore delete operation\n");
 		return HINIC_PF_SET_VF_ALREADY;
 	}
 
@@ -316,17 +391,14 @@ int hinic_update_mac(void *hwdev, u8 *old_mac, u8 *new_mac, u16 vlan_id,
 				     &mac_info, sizeof(mac_info),
 				     &mac_info, &out_size);
 	if (err || !out_size ||
-	    (mac_info.status && mac_info.status != HINIC_MGMT_STATUS_EXIST &&
-	    mac_info.status != HINIC_PF_SET_VF_ALREADY) ||
-	    (mac_info.vlan_id & CHECK_IPSU_15BIT &&
-	    mac_info.status == HINIC_MGMT_STATUS_EXIST)) {
+	    hinic_check_mac_status(hwdev, mac_info.status, mac_info.vlan_id)) {
 		nic_err(nic_hwdev->dev_hdl,
 			"Failed to update MAC, err: %d, status: 0x%x, out size: 0x%x\n",
 			err, mac_info.status, out_size);
-		return -EINVAL;
+		return -EIO;
 	}
 
-	if (mac_info.status == HINIC_PF_SET_VF_ALREADY) {
+	if (PF_SET_VF_MAC(nic_hwdev, mac_info.status)) {
 		nic_warn(nic_hwdev->dev_hdl, "PF has already set VF MAC. Ignore update operation\n");
 		return HINIC_PF_SET_VF_ALREADY;
 	}
@@ -352,6 +424,11 @@ int hinic_update_mac_vlan(void *hwdev, u16 old_vlan, u16 new_vlan, int vf_id)
 	vf_info = dev->nic_io->vf_infos + HW_VF_ID_TO_OS(vf_id);
 	if (!vf_info->pf_set_mac)
 		return 0;
+
+	if (!FW_SUPPORT_MAC_REUSE_FUNC(dev)) {
+		nic_info(dev->dev_hdl, "Current firmware doesn't support mac reuse\n");
+		return 0;
+	}
 
 	func_id = hinic_glb_pf_vf_offset(dev) + (u16)vf_id;
 	vlan_id = old_vlan;
@@ -429,12 +506,14 @@ int hinic_set_port_mtu(void *hwdev, u32 new_mtu)
 
 	if (new_mtu < HINIC_MIN_MTU_SIZE) {
 		nic_err(nic_hwdev->dev_hdl,
-			"Invalid mtu size, mtu size < 256bytes");
+			"Invalid mtu size, mtu size < %dbytes\n",
+			HINIC_MIN_MTU_SIZE);
 		return -EINVAL;
 	}
 
 	if (new_mtu > HINIC_MAX_JUMBO_FRAME_SIZE) {
-		nic_err(nic_hwdev->dev_hdl, "Invalid mtu size, mtu size > 9600bytes");
+		nic_err(nic_hwdev->dev_hdl, "Invalid mtu size, mtu size > %dbytes\n",
+			HINIC_MAX_JUMBO_FRAME_SIZE);
 		return -EINVAL;
 	}
 
@@ -677,7 +756,7 @@ int hinic_del_vlan(void *hwdev, u16 vlan_id, u16 func_id)
 
 	err = l2nic_msg_to_mgmt_sync(hwdev, HINIC_PORT_CMD_DEL_VLAN,
 				     &vlan_info, sizeof(vlan_info),
-					&vlan_info, &out_size);
+				     &vlan_info, &out_size);
 	if (err || !out_size || vlan_info.status) {
 		nic_err(nic_hwdev->dev_hdl,
 			"Failed to delte vlan, err: %d, status: 0x%x, out size: 0x%x\n",
@@ -997,6 +1076,10 @@ int hinic_set_pause_info(void *hwdev, struct nic_pause_config nic_pause)
 		return -EINVAL;
 
 	nic_cfg = &nic_hwdev->nic_io->nic_cfg;
+	if (nic_cfg->pfc_en) {
+		nic_err(nic_hwdev->dev_hdl, "Failed to set pause, please disable pfc first\n");
+		return -EPERM;
+	}
 
 	down(&nic_cfg->cfg_lock);
 
@@ -1412,7 +1495,7 @@ int hinic_dcb_set_rq_iq_mapping(void *hwdev, u32 num_rqs, u8 *map)
 	u16 out_size = sizeof(rq_iq_mapping);
 	int err;
 
-	if (!hwdev || !map || num_rqs > HINIC_MAX_NUM_RQ)
+	if (!hwdev || num_rqs > HINIC_MAX_NUM_RQ)
 		return -EINVAL;
 
 	dev = hwdev;
@@ -1427,8 +1510,6 @@ int hinic_dcb_set_rq_iq_mapping(void *hwdev, u32 num_rqs, u8 *map)
 	rq_iq_mapping.num_rqs = num_rqs;
 	rq_iq_mapping.rq_depth = (u16)ilog2(nic_io->rq_depth);
 
-	memcpy(rq_iq_mapping.map, map, num_rqs);
-
 	err = l2nic_msg_to_mgmt_sync(hwdev, HINIC_PORT_CMD_SET_RQ_IQ_MAP,
 				     &rq_iq_mapping, sizeof(rq_iq_mapping),
 				     &rq_iq_mapping, &out_size);
@@ -1441,137 +1522,6 @@ int hinic_dcb_set_rq_iq_mapping(void *hwdev, u32 num_rqs, u8 *map)
 	return 0;
 }
 EXPORT_SYMBOL(hinic_dcb_set_rq_iq_mapping);
-
-int hinic_set_pfc_threshold(void *hwdev, u16 op_type, u16 threshold)
-{
-	struct hinic_pfc_thd pfc_thd = {0};
-	u16 out_size = sizeof(pfc_thd);
-	int err;
-
-	if (op_type == HINIC_PFC_SET_FUNC_THD)
-		pfc_thd.func_thd = threshold;
-	else if (op_type == HINIC_PFC_SET_GLB_THD)
-		pfc_thd.glb_thd = threshold;
-	else
-		return -EINVAL;
-
-	err = hinic_global_func_id_get(hwdev, &pfc_thd.func_id);
-	if (err)
-		return err;
-
-	pfc_thd.op_type = op_type;
-
-	err = l2nic_msg_to_mgmt_sync(hwdev, HINIC_PORT_CMD_SET_PFC_THD,
-				     &pfc_thd, sizeof(pfc_thd),
-				     &pfc_thd, &out_size);
-	if (err || !out_size || pfc_thd.status) {
-		nic_err(((struct hinic_hwdev *)hwdev)->dev_hdl,
-			"Failed to set pfc threshold, err: %d, status: 0x%x, out size: 0x%x\n",
-			err, pfc_thd.status, out_size);
-		return -EFAULT;
-	}
-
-	return 0;
-}
-
-int hinic_set_bp_thd(void *hwdev, u16 threshold)
-{
-	int err;
-
-	err = hinic_set_pfc_threshold(hwdev, HINIC_PFC_SET_GLB_THD, threshold);
-	if (err) {
-		nic_err(((struct hinic_hwdev *)hwdev)->dev_hdl,
-			"Failed to set global threshold\n");
-		return -EFAULT;
-	}
-
-	err = hinic_set_pfc_threshold(hwdev, HINIC_PFC_SET_FUNC_THD, threshold);
-	if (err) {
-		nic_err(((struct hinic_hwdev *)hwdev)->dev_hdl,
-			"Failed to set function threshold\n");
-		return -EFAULT;
-	}
-
-	return 0;
-}
-
-int hinic_disable_fw_bp(void *hwdev)
-{
-	int err;
-
-	err = hinic_set_pfc_threshold(hwdev, HINIC_PFC_SET_FUNC_THD, 0);
-	if (err) {
-		nic_err(((struct hinic_hwdev *)hwdev)->dev_hdl,
-			"Failed to disable ucode backpressure\n");
-		return -EFAULT;
-	}
-
-	return 0;
-}
-
-int hinic_set_iq_enable(void *hwdev, u16 q_id, u16 lower_thd, u16 prod_idx)
-{
-	struct hinic_hwdev *dev = hwdev;
-	struct hinic_cmd_enable_iq *iq_info;
-	struct hinic_cmd_buf *cmd_buf;
-	int err;
-
-	cmd_buf = hinic_alloc_cmd_buf(hwdev);
-	if (!cmd_buf) {
-		nic_err(dev->dev_hdl, "Failed to allocate cmd buf\n");
-		return -ENOMEM;
-	}
-
-	iq_info = cmd_buf->buf;
-	cmd_buf->size = sizeof(*iq_info);
-
-	iq_info->force_en = 0;
-	iq_info->rq_depth = (u8)ilog2(dev->nic_io->rq_depth);
-	iq_info->num_rq = (u8)dev->nic_io->max_qps;
-	/* num_qps will not lager than 64 */
-	iq_info->glb_rq_id = dev->nic_io->global_qpn + q_id;
-	iq_info->q_id = q_id;
-	iq_info->lower_thd = lower_thd;
-	iq_info->prod_idx = prod_idx;
-	hinic_cpu_to_be32(iq_info, sizeof(*iq_info));
-
-	err = hinic_cmdq_async(hwdev, HINIC_ACK_TYPE_CMDQ, HINIC_MOD_L2NIC,
-			       HINIC_UCODE_CMD_SET_IQ_ENABLE, cmd_buf);
-	if (err) {
-		hinic_free_cmd_buf(hwdev, cmd_buf);
-		nic_err(dev->dev_hdl, "Failed to set iq enable, err:%d\n", err);
-		return -EFAULT;
-	}
-
-	return 0;
-}
-
-int hinic_set_iq_enable_mgmt(void *hwdev, u16 q_id, u16 lower_thd, u16 prod_idx)
-{
-	struct hinic_hwdev *dev = hwdev;
-	struct hinic_cmd_enable_iq_mgmt iq_info = {0};
-	int err;
-
-	iq_info.force_en = 0;
-
-	iq_info.rq_depth = (u8)ilog2(dev->nic_io->rq_depth);
-	iq_info.num_rq = (u8)dev->nic_io->max_qps;
-	/* num_qps will not lager than 64 */
-	iq_info.glb_rq_id = dev->nic_io->global_qpn + q_id;
-	iq_info.q_id = q_id;
-	iq_info.lower_thd = lower_thd;
-	iq_info.prod_idx = prod_idx;
-
-	err = l2nic_msg_to_mgmt_async(hwdev, HINIC_PORT_CMD_SET_IQ_ENABLE,
-				      &iq_info, sizeof(iq_info));
-	if (err || iq_info.status) {
-		nic_err(dev->dev_hdl, "Failed to set iq enable for rq:%d, err: %d, status: 0x%x\n",
-			q_id, err, iq_info.status);
-		return -EFAULT;
-	}
-
-	return 0;
-}
 
 /* nictool */
 int hinic_set_lro_aging_timer(void *hwdev, u8 timer_en, u32 period)
@@ -1696,6 +1646,7 @@ int hinic_set_vport_enable(void *hwdev, bool enable)
 	struct hinic_vport_state en_state = {0};
 	u16 out_size = sizeof(en_state);
 	int err;
+	u32 timeout;
 
 	if (!hwdev)
 		return -EINVAL;
@@ -1706,9 +1657,16 @@ int hinic_set_vport_enable(void *hwdev, bool enable)
 
 	en_state.state = enable ? 1 : 0;
 
-	err = l2nic_msg_to_mgmt_sync(hwdev, HINIC_PORT_CMD_SET_VPORT_ENABLE,
-				     &en_state, sizeof(en_state),
-				     &en_state, &out_size);
+	if (HINIC_IS_VF(nic_hwdev))
+		timeout = SET_VPORT_MBOX_TIMEOUT;
+	else
+		timeout = SET_VPORT_MGMT_TIMEOUT;
+
+	err = hinic_msg_to_mgmt_sync(hwdev, HINIC_MOD_L2NIC,
+				     HINIC_PORT_CMD_SET_VPORT_ENABLE,
+				     &en_state, sizeof(en_state), &en_state,
+				     &out_size, timeout);
+
 	if (err || !out_size || en_state.status) {
 		nic_err(nic_hwdev->dev_hdl, "Failed to set vport state, err: %d, status: 0x%x, out size: 0x%x\n",
 			err, en_state.status, out_size);
@@ -1897,7 +1855,7 @@ int hinic_rss_get_template_tbl(void *hwdev, u32 tmpl_idx, u8 *temp)
 				     &temp_key, sizeof(temp_key),
 				     &temp_key, &out_size);
 	if (err || !out_size || temp_key.status) {
-		nic_err(nic_hwdev->dev_hdl, "Failed to set hash key, err: %d, status: 0x%x, out size: 0x%x\n",
+		nic_err(nic_hwdev->dev_hdl, "Failed to get hash key, err: %d, status: 0x%x, out size: 0x%x\n",
 			err, temp_key.status, out_size);
 		return -EINVAL;
 	}
@@ -2175,7 +2133,13 @@ int hinic_get_mgmt_version(void *hwdev, u8 *mgmt_ver)
 		return -EINVAL;
 	}
 
-	snprintf(mgmt_ver, HINIC_MGMT_VERSION_MAX_LEN, "%s", up_ver.ver);
+	err = snprintf(mgmt_ver, HINIC_MGMT_VERSION_MAX_LEN, "%s", up_ver.ver);
+	if (err <= 0 || err >= HINIC_MGMT_VERSION_MAX_LEN) {
+		nic_err(dev->dev_hdl,
+			"Failed to snprintf fw version, function return(%d) and dest_len(%d)\n",
+			err, HINIC_MGMT_VERSION_MAX_LEN);
+		return -EINVAL;
+	}
 
 	return 0;
 }
@@ -2419,7 +2383,8 @@ static int hinic_set_vf_mac_msg_handler(struct hinic_nic_io *nic_io, u16 vf,
 	struct hinic_port_mac_set *mac_out = buf_out;
 	int err;
 
-	if (vf_info->pf_set_mac && is_valid_ether_addr(mac_in->mac)) {
+	if (vf_info->pf_set_mac && !(vf_info->trust) &&
+	    is_valid_ether_addr(mac_in->mac)) {
 		nic_warn(nic_io->hwdev->dev_hdl, "PF has already set VF %d MAC address\n",
 			 HW_VF_ID_TO_OS(vf));
 		mac_out->status = HINIC_PF_SET_VF_ALREADY;
@@ -2449,9 +2414,10 @@ static int hinic_del_vf_mac_msg_handler(struct hinic_nic_io *nic_io, u16 vf,
 	struct hinic_port_mac_set *mac_out = buf_out;
 	int err;
 
-	if (vf_info->pf_set_mac && is_valid_ether_addr(mac_in->mac) &&
+	if (vf_info->pf_set_mac && !(vf_info->trust) &&
+	    is_valid_ether_addr(mac_in->mac) &&
 	    !memcmp(vf_info->vf_mac_addr, mac_in->mac, ETH_ALEN)) {
-		nic_warn(nic_io->hwdev->dev_hdl, "PF has already set VF mac.\n");
+		nic_warn(nic_io->hwdev->dev_hdl, "PF has already set VF mac\n");
 		mac_out->status = HINIC_PF_SET_VF_ALREADY;
 		*out_size = sizeof(*mac_out);
 		return 0;
@@ -2480,12 +2446,12 @@ static int hinic_update_vf_mac_msg_handler(struct hinic_nic_io *nic_io, u16 vf,
 	int err;
 
 	if (!is_valid_ether_addr(mac_in->new_mac)) {
-		nic_err(nic_io->hwdev->dev_hdl, "Update VF MAC is invalid.\n");
+		nic_err(nic_io->hwdev->dev_hdl, "Update VF MAC is invalid\n");
 		return -EINVAL;
 	}
 
-	if (vf_info->pf_set_mac) {
-		nic_warn(nic_io->hwdev->dev_hdl, "PF has already set VF mac.\n");
+	if (vf_info->pf_set_mac && !(vf_info->trust)) {
+		nic_warn(nic_io->hwdev->dev_hdl, "PF has already set VF mac\n");
 		mac_out->status = HINIC_PF_SET_VF_ALREADY;
 		*out_size = sizeof(*mac_out);
 		return 0;
@@ -2547,9 +2513,14 @@ static int hinic_init_vf_config(struct hinic_hwdev *hwdev, u16 vf_id)
 	vf_info = hwdev->nic_io->vf_infos + HW_VF_ID_TO_OS(vf_id);
 	if (vf_info->pf_set_mac) {
 		func_id = hinic_glb_pf_vf_offset(hwdev) + vf_id;
-		vlan_id = vf_info->pf_vlan;
-		if (vlan_id)
-			vlan_id |= HINIC_ADD_VLAN_IN_MAC;
+		if (FW_SUPPORT_MAC_REUSE_FUNC(hwdev)) {
+			vlan_id = vf_info->pf_vlan;
+			if (vlan_id)
+				vlan_id |= HINIC_ADD_VLAN_IN_MAC;
+		} else {
+			vlan_id = 0;
+		}
+
 		err = hinic_set_mac(hwdev, vf_info->vf_mac_addr, vlan_id,
 				    func_id);
 		if (err) {
@@ -2658,9 +2629,10 @@ static void hinic_get_vf_cos_msg_handler(struct hinic_nic_io *nic_io,
 int nic_pf_mbox_handler(void *hwdev, u16 vf_id, u8 cmd, void *buf_in,
 			u16 in_size, void *buf_out, u16 *out_size)
 {
-	u8 size = sizeof(nic_cmd_support_vf) / sizeof(nic_cmd_support_vf[0]);
+	u8 size = ARRAY_SIZE(nic_cmd_support_vf);
 	struct hinic_nic_io *nic_io;
 	int err = 0;
+	u32 timeout = 0;
 
 	if (!hwdev)
 		return -EFAULT;
@@ -2668,7 +2640,7 @@ int nic_pf_mbox_handler(void *hwdev, u16 vf_id, u8 cmd, void *buf_in,
 	if (!hinic_mbox_check_cmd_valid(hwdev, nic_cmd_support_vf, vf_id, cmd,
 					buf_in, in_size, size)) {
 		nic_err(((struct hinic_hwdev *)hwdev)->dev_hdl,
-			"PF Receive VF nic cmd(0x%x), mbox len(0x%x) is invalid\n",
+			"PF Receive VF nic cmd(0x%x) or mbox len(0x%x) is invalid\n",
 			cmd, in_size);
 		err = HINIC_MBOX_VF_CMD_ERROR;
 		return err;
@@ -2725,16 +2697,19 @@ int nic_pf_mbox_handler(void *hwdev, u16 vf_id, u8 cmd, void *buf_in,
 
 	default:
 		/* pass through */
+		if (cmd == HINIC_PORT_CMD_SET_VPORT_ENABLE)
+			timeout = SET_VPORT_MGMT_TIMEOUT;
+
 		err = hinic_pf_msg_to_mgmt_sync(nic_io->hwdev, HINIC_MOD_L2NIC,
 						cmd, buf_in, in_size,
-						buf_out, out_size, 0);
+						buf_out, out_size, timeout);
 
 		break;
 	}
 
 	if (err && err != HINIC_DEV_BUSY_ACTIVE_FW &&
 	    err != HINIC_MBOX_PF_BUSY_ACTIVE_FW)
-		nic_err(nic_io->hwdev->dev_hdl, "PF receive VF L2NIC cmd: %d process error, err:%d\n",
+		nic_err(nic_io->hwdev->dev_hdl, "PF receive VF L2NIC cmd: %d process error, err: %d\n",
 			cmd, err);
 	return err;
 }
@@ -2867,7 +2842,6 @@ init_vf_infos_err:
 	kfree(nic_io->vf_infos);
 
 out_free_nic_io:
-	sema_deinit(&hwdev->nic_io->nic_cfg.cfg_lock);
 	kfree(hwdev->nic_io);
 	hwdev->nic_io = NULL;
 
@@ -2895,8 +2869,6 @@ void hinic_vf_func_free(struct hinic_hwdev *hwdev)
 		}
 	}
 
-	sema_deinit(&hwdev->nic_io->nic_cfg.cfg_lock);
-
 	kfree(hwdev->nic_io);
 	hwdev->nic_io = NULL;
 }
@@ -2910,25 +2882,25 @@ int hinic_set_vf_mac(void *hwdev, int vf, unsigned char *mac_addr)
 	struct hinic_hwdev *hw_dev = (struct hinic_hwdev *)hwdev;
 	struct hinic_nic_io *nic_io = hw_dev->nic_io;
 	struct vf_data_storage *vf_info = nic_io->vf_infos + HW_VF_ID_TO_OS(vf);
+	int del_vf_mac = is_zero_ether_addr(mac_addr);
 	u16 func_id;
 	int err;
 
 	/* duplicate request, so just return success */
-	if (vf_info->pf_set_mac &&
-	    !memcmp(vf_info->vf_mac_addr, mac_addr, ETH_ALEN))
+	if (!memcmp(vf_info->vf_mac_addr, mac_addr, ETH_ALEN))
 		return 0;
 
-	vf_info->pf_set_mac = true;
-
 	func_id = hinic_glb_pf_vf_offset(hw_dev) + vf;
-	err = hinic_update_mac(hw_dev, vf_info->vf_mac_addr,
-			       mac_addr, 0, func_id);
-	if (err) {
-		vf_info->pf_set_mac = false;
+	if (del_vf_mac)
+		err = hinic_del_mac(hwdev, vf_info->vf_mac_addr, 0, func_id);
+	else
+		err = hinic_update_mac(hw_dev, vf_info->vf_mac_addr,
+				       mac_addr, 0, func_id);
+	if (err)
 		return err;
-	}
 
 	memcpy(vf_info->vf_mac_addr, mac_addr, ETH_ALEN);
+	vf_info->pf_set_mac = !del_vf_mac;
 
 	return 0;
 }
@@ -3004,26 +2976,18 @@ void hinic_get_vf_config(void *hwdev, u16 vf_id, struct ifla_vf_info *ivi)
 	memcpy(ivi->mac, vfinfo->vf_mac_addr, ETH_ALEN);
 	ivi->vlan = vfinfo->pf_vlan;
 	ivi->qos = vfinfo->pf_qos;
-
-#ifdef HAVE_VF_SPOOFCHK_CONFIGURE
 	ivi->spoofchk = vfinfo->spoofchk;
-#endif
+	ivi->trusted = vfinfo->trust;
 
-#ifdef HAVE_NDO_SET_VF_MIN_MAX_TX_RATE
 	ivi->max_tx_rate = vfinfo->max_rate;
 	ivi->min_tx_rate = vfinfo->min_rate;
-#else
-	ivi->tx_rate = vfinfo->max_rate;
-#endif /* HAVE_NDO_SET_VF_MIN_MAX_TX_RATE */
 
-#ifdef HAVE_NDO_SET_VF_LINK_STATE
 	if (!vfinfo->link_forced)
 		ivi->linkstate = IFLA_VF_LINK_STATE_AUTO;
 	else if (vfinfo->link_up)
 		ivi->linkstate = IFLA_VF_LINK_STATE_ENABLE;
 	else
 		ivi->linkstate = IFLA_VF_LINK_STATE_DISABLE;
-#endif
 }
 
 void hinic_clear_vf_infos(void *hwdev, u16 vf_id)
@@ -3045,6 +3009,9 @@ void hinic_clear_vf_infos(void *hwdev, u16 vf_id)
 
 	if (vf_infos->spoofchk)
 		hinic_set_vf_spoofchk(hwdev, vf_id, false);
+
+	if (vf_infos->trust)
+		hinic_set_vf_trust(hwdev, vf_id, false);
 
 	memset(vf_infos, 0, sizeof(*vf_infos));
 	/* set vf_infos to default */
@@ -3164,12 +3131,36 @@ int hinic_set_vf_spoofchk(void *hwdev, u16 vf_id, bool spoofchk)
 	return err;
 }
 
+int hinic_set_vf_trust(void *hwdev, u16 vf_id, bool trust)
+{
+	struct hinic_hwdev *hw_dev = hwdev;
+	struct hinic_nic_io *nic_io = NULL;
+	struct vf_data_storage *vf_infos = NULL;
+
+	if (!hwdev)
+		return -EINVAL;
+
+	nic_io = hw_dev->nic_io;
+	vf_infos = nic_io->vf_infos;
+	vf_infos[HW_VF_ID_TO_OS(vf_id)].trust = trust;
+
+	return 0;
+}
+
 bool hinic_vf_info_spoofchk(void *hwdev, int vf_id)
 {
 	struct hinic_nic_io *nic_io = ((struct hinic_hwdev *)hwdev)->nic_io;
 	bool spoofchk = nic_io->vf_infos[HW_VF_ID_TO_OS(vf_id)].spoofchk;
 
 	return spoofchk;
+}
+
+bool hinic_vf_info_trust(void *hwdev, int vf_id)
+{
+	struct hinic_nic_io *nic_io = ((struct hinic_hwdev *)hwdev)->nic_io;
+	bool trust = nic_io->vf_infos[HW_VF_ID_TO_OS(vf_id)].trust;
+
+	return trust;
 }
 
 static int hinic_set_vf_rate_limit(void *hwdev, u16 vf_id, u32 tx_rate)
@@ -3447,13 +3438,13 @@ int hinic_set_anti_attack(void *hwdev, bool enable)
 				     &rate, sizeof(rate), &rate,
 				     &out_size);
 	if (err || !out_size || rate.status) {
-		nic_err(nic_hwdev->dev_hdl, "Can`t %s port Anti-Attack rate limit err: %d, status: 0x%x, out size: 0x%x\n",
+		nic_err(nic_hwdev->dev_hdl, "Can't %s port Anti-Attack rate limit err: %d, status: 0x%x, out size: 0x%x\n",
 			(enable ? "enable" : "disable"), err, rate.status,
 			out_size);
 		return -EINVAL;
 	}
 
-	nic_info(nic_hwdev->dev_hdl, "%s port Anti-Attack rate limit succeed.\n",
+	nic_info(nic_hwdev->dev_hdl, "%s port Anti-Attack rate limit succeed\n",
 		 (enable ? "Enable" : "Disable"));
 
 	return 0;
@@ -3541,14 +3532,43 @@ int hinic_set_super_cqe_state(void *hwdev, bool enable)
 				     &super_cqe, sizeof(super_cqe), &super_cqe,
 				     &out_size);
 	if (err || !out_size || super_cqe.status) {
-		nic_err(nic_hwdev->dev_hdl, "Can`t %s surper cqe, err: %d, status: 0x%x, out size: 0x%x\n",
+		nic_err(nic_hwdev->dev_hdl, "Can't %s surper cqe, err: %d, status: 0x%x, out size: 0x%x\n",
 			(enable ? "enable" : "disable"), err, super_cqe.status,
 			out_size);
 		return -EINVAL;
 	}
 
-	nic_info(nic_hwdev->dev_hdl, "%s super cqe succeed.\n",
+	nic_info(nic_hwdev->dev_hdl, "%s super cqe succeed\n",
 		 (enable ? "Enable" : "Disable"));
+
+	return 0;
+}
+
+int hinic_set_port_routine_cmd_report(void *hwdev, bool enable)
+{
+	struct hinic_port_rt_cmd rt_cmd = { 0 };
+	struct hinic_hwdev *dev = hwdev;
+	u16 out_size = sizeof(rt_cmd);
+	int err;
+
+	if (!hwdev)
+		return -EINVAL;
+
+	rt_cmd.pf_id = (u8)hinic_global_func_id(hwdev);
+	rt_cmd.enable = enable;
+
+	err = l2nic_msg_to_mgmt_sync(hwdev,
+				     HINIC_PORT_CMD_SET_PORT_REPORT,
+				     &rt_cmd, sizeof(rt_cmd), &rt_cmd,
+				     &out_size);
+	if (rt_cmd.status == HINIC_MGMT_CMD_UNSUPPORTED) {
+		nic_info(dev->dev_hdl, "Current firmware doesn't support to set port routine command report\n");
+	} else if (rt_cmd.status || err || !out_size) {
+		nic_err(dev->dev_hdl,
+			"Failed to set port routine command report, err: %d, status: 0x%x, out size: 0x%x\n",
+			err, rt_cmd.status, out_size);
+		return -EFAULT;
+	}
 
 	return 0;
 }
@@ -3844,6 +3864,7 @@ int hinic_set_link_settings(void *hwdev, struct hinic_link_ksettings *settings)
 
 	return info.status;
 }
+
 int hinic_disable_tx_promisc(void *hwdev)
 {
 	struct hinic_promsic_info info = {0};
@@ -3856,18 +3877,127 @@ int hinic_disable_tx_promisc(void *hwdev)
 
 	info.cfg = HINIC_TX_PROMISC_DISABLE;
 	err = hinic_msg_to_mgmt_sync(hwdev, HINIC_MOD_L2NIC,
-				     HINIC_PORT_CMD_DISABLE_PROMISIC, &info,
+				     HINIC_PORT_CMD_DISABLE_PROMISC, &info,
 				     sizeof(info), &info, &out_size, 0);
 	if (err || !out_size || info.status) {
 		if (info.status == HINIC_MGMT_CMD_UNSUPPORTED) {
 			nic_info(((struct hinic_hwdev *)hwdev)->dev_hdl,
-				 "Unsupported to disable TX promisic\n");
+				 "Unsupported to disable TX promisc\n");
 			return 0;
 		}
 		nic_err(((struct hinic_hwdev *)hwdev)->dev_hdl,
-			"Failed to disable multihost promisic, err: %d, status: 0x%x, out size: 0x%x\n",
+			"Failed to disable multihost promisc, err: %d, status: 0x%x, out size: 0x%x\n",
 			err, info.status, out_size);
 		return -EFAULT;
 	}
 	return  0;
+}
+
+static bool hinic_if_sfp_absent(void *hwdev)
+{
+	struct card_node *chip_node = ((struct hinic_hwdev *)hwdev)->chip_node;
+	struct hinic_port_routine_cmd *rt_cmd;
+	struct hinic_cmd_get_light_module_abs sfp_abs = {0};
+	u8 port_id = hinic_physical_port_id(hwdev);
+	u16 out_size = sizeof(sfp_abs);
+	int err;
+	bool sfp_abs_valid;
+	bool sfp_abs_status;
+
+	rt_cmd = &chip_node->rt_cmd[port_id];
+	mutex_lock(&chip_node->sfp_mutex);
+	sfp_abs_valid = rt_cmd->up_send_sfp_abs;
+	sfp_abs_status = (bool)rt_cmd->abs.abs_status;
+	if (sfp_abs_valid) {
+		mutex_unlock(&chip_node->sfp_mutex);
+		return sfp_abs_status;
+	}
+	mutex_unlock(&chip_node->sfp_mutex);
+
+	sfp_abs.port_id = port_id;
+	err = l2nic_msg_to_mgmt_sync(hwdev, HINIC_PORT_CMD_GET_SFP_ABS,
+				     &sfp_abs, sizeof(sfp_abs), &sfp_abs,
+				     &out_size);
+	if (sfp_abs.status || err || !out_size) {
+		nic_err(((struct hinic_hwdev *)hwdev)->dev_hdl,
+			"Failed to get port%d sfp absent status, err: %d, status: 0x%x, out size: 0x%x\n",
+			port_id, err, sfp_abs.status, out_size);
+		return true;
+	}
+
+	return ((sfp_abs.abs_status == 0) ? false : true);
+}
+
+int hinic_get_sfp_eeprom(void *hwdev, u8 *data, u16 *len)
+{
+	struct hinic_cmd_get_std_sfp_info sfp_info = {0};
+	u8 port_id;
+	u16 out_size = sizeof(sfp_info);
+	int err;
+
+	if (!hwdev || !data || !len)
+		return -EINVAL;
+
+	port_id = hinic_physical_port_id(hwdev);
+	if (port_id >= HINIC_MAX_PORT_ID)
+		return -EINVAL;
+
+	if (hinic_if_sfp_absent(hwdev))
+		return -ENXIO;
+
+	sfp_info.port_id = port_id;
+	err = l2nic_msg_to_mgmt_sync(hwdev, HINIC_PORT_CMD_GET_STD_SFP_INFO,
+				     &sfp_info, sizeof(sfp_info), &sfp_info,
+				     &out_size);
+	if (sfp_info.status || err || !out_size) {
+		nic_err(((struct hinic_hwdev *)hwdev)->dev_hdl,
+			"Failed to get port%d sfp eeprom information, err: %d, status: 0x%x, out size: 0x%x\n",
+			port_id, err, sfp_info.status, out_size);
+		return -EIO;
+	}
+
+	*len = min_t(u16, sfp_info.eeprom_len, STD_SFP_INFO_MAX_SIZE);
+	memcpy(data, sfp_info.sfp_info, STD_SFP_INFO_MAX_SIZE);
+
+	return  0;
+}
+
+int hinic_get_sfp_type(void *hwdev, u8 *data0, u8 *data1)
+{
+	struct card_node *chip_node = NULL;
+	struct hinic_port_routine_cmd *rt_cmd;
+	u8 sfp_data[STD_SFP_INFO_MAX_SIZE];
+	u16 len;
+	u8 port_id;
+	int err;
+
+	if (!hwdev || !data0 || !data1)
+		return -EINVAL;
+
+	port_id = hinic_physical_port_id(hwdev);
+	if (port_id >= HINIC_MAX_PORT_ID)
+		return -EINVAL;
+
+	if (hinic_if_sfp_absent(hwdev))
+		return -ENXIO;
+
+	chip_node = ((struct hinic_hwdev *)hwdev)->chip_node;
+	rt_cmd = &chip_node->rt_cmd[port_id];
+	mutex_lock(&chip_node->sfp_mutex);
+	if (rt_cmd->up_send_sfp_info) {
+		*data0 = rt_cmd->sfp_info.sfp_qsfp_info[0];
+		*data1 = rt_cmd->sfp_info.sfp_qsfp_info[1];
+		mutex_unlock(&chip_node->sfp_mutex);
+		return 0;
+	}
+	mutex_unlock(&chip_node->sfp_mutex);
+
+	err = hinic_get_sfp_eeprom(hwdev, sfp_data, &len);
+	if (err)
+		return err;
+
+	*data0 = sfp_data[0];
+	*data1 = sfp_data[1];
+
+	return 0;
 }

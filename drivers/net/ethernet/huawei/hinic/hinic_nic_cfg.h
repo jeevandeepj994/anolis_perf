@@ -19,6 +19,10 @@
 #define OS_VF_ID_TO_HW(os_vf_id) ((os_vf_id) + 1)
 #define HW_VF_ID_TO_OS(hw_vf_id) ((hw_vf_id) - 1)
 
+#define FW_SUPPORT_MAC_REUSE		0x1
+#define FW_SUPPORT_MAC_REUSE_FUNC(hwdev)	\
+	((hwdev)->fw_support_func_flag & FW_SUPPORT_MAC_REUSE)
+
 #define HINIC_VLAN_PRIORITY_SHIFT	13
 
 #define HINIC_RSS_INDIR_SIZE		256
@@ -32,29 +36,28 @@
 
 #define HINIC_RSS_KEY_SIZE		40
 
-#define HINIC_MAX_NUM_RQ		64
+#define HINIC_MAX_NUM_RQ		128
 
 #define HINIC_MIN_MTU_SIZE		256
 #define HINIC_MAX_JUMBO_FRAME_SIZE	9600
 
-#define HINIC_LRO_MAX_WQE_NUM_UPPER	32
-#define HINIC_LRO_MAX_WQE_NUM_LOWER	1
-#define HINIC_LRO_MAX_WQE_NUM_DEFAULT_ARM 4
-#define HINIC_LRO_MAX_WQE_NUM_DEFAULT_X86 8
-#define HINIC_LRO_MAX_WQE_NUM_DEFAULT     8
+#define HINIC_LRO_MAX_WQE_NUM_UPPER		32
+#define HINIC_LRO_MAX_WQE_NUM_LOWER		1
+#define HINIC_LRO_MAX_WQE_NUM_DEFAULT_ARM	4
+#define HINIC_LRO_MAX_WQE_NUM_DEFAULT_X86	8
+#define HINIC_LRO_MAX_WQE_NUM_DEFAULT		8
 #define HINIC_LRO_WQE_NUM_PANGEA_DEFAULT	32
 
-#define HINIC_LRO_RX_TIMER_UPPER	1024
-#define HINIC_LRO_RX_TIMER_LOWER	1
-#define HINIC_LRO_RX_TIMER_DEFAULT	16
-#define HINIC_LRO_RX_TIMER_DEFAULT_25GE	16
-#define HINIC_LRO_RX_TIMER_DEFAULT_100GE 64
+#define HINIC_LRO_RX_TIMER_UPPER		1024
+#define HINIC_LRO_RX_TIMER_LOWER		1
+#define HINIC_LRO_RX_TIMER_DEFAULT		16
+#define HINIC_LRO_RX_TIMER_DEFAULT_25GE		16
+#define HINIC_LRO_RX_TIMER_DEFAULT_100GE	64
 #define HINIC_LRO_RX_TIMER_DEFAULT_PG_10GE	10
-#define HINIC_LRO_RX_TIMER_DEFAULT_PG_100GE 8
+#define HINIC_LRO_RX_TIMER_DEFAULT_PG_100GE	8
 
+#if defined(__aarch64__)
 #define HINIC_LOWEST_LATENCY		1
-#define HINIC_MULTI_VM_LATENCY		32
-#define HINIC_MULTI_VM_PENDING_LIMIT	4
 #define HINIC_RX_RATE_LOW		400000
 #define HINIC_RX_COAL_TIME_LOW		20
 #define HINIC_RX_PENDING_LIMIT_LOW	2
@@ -65,9 +68,22 @@
 #define HINIC_TX_RATE_THRESH		35000
 #define HINIC_RX_RATE_LOW_VM		400000
 #define HINIC_RX_PENDING_LIMIT_HIGH_VM	50
+#else
+#define HINIC_LOWEST_LATENCY		1
+#define HINIC_RX_RATE_LOW		400000
+#define HINIC_RX_COAL_TIME_LOW		16
+#define HINIC_RX_PENDING_LIMIT_LOW	2
+#define HINIC_RX_RATE_HIGH		1000000
+#define HINIC_RX_COAL_TIME_HIGH		225
+#define HINIC_RX_PENDING_LIMIT_HIGH	8
+#define HINIC_RX_RATE_THRESH		50000
+#define HINIC_TX_RATE_THRESH		50000
+#define HINIC_RX_RATE_LOW_VM		100000
+#define HINIC_RX_PENDING_LIMIT_HIGH_VM	87
+#endif
 
 enum hinic_board_type {
-	HINIC_BOARD_UNKNOWN        = 0,
+	HINIC_BOARD_UNKNOWN       = 0,
 	HINIC_BOARD_10GE          = 1,
 	HINIC_BOARD_25GE          = 2,
 	HINIC_BOARD_40GE          = 3,
@@ -78,13 +94,13 @@ enum hinic_board_type {
 };
 
 enum hinic_os_type {
-	HINIC_OS_UNKNOWN       = 0,
+	HINIC_OS_UNKNOWN      = 0,
 	HINIC_OS_HUAWEI       = 1,
 	HINIC_OS_NON_HUAWEI   = 2,
 };
 
 enum hinic_cpu_type {
-	HINIC_CPU_UNKNOWN      = 0,
+	HINIC_CPU_UNKNOWN     = 0,
 	HINIC_CPU_X86_GENERIC = 1,
 	HINIC_CPU_ARM_GENERIC = 2,
 };
@@ -371,7 +387,7 @@ struct hinic_rq_filter_info {
 
 #define HINIC_MGMT_VERSION_MAX_LEN	32
 
-#define HINIC_FW_VERSION_NAME	16
+#define HINIC_FW_VERSION_NAME		16
 #define HINIC_FW_VERSION_SECTION_CNT	4
 #define HINIC_FW_VERSION_SECTION_BORDER	0xFF
 struct hinic_fw_version {
@@ -408,6 +424,8 @@ enum hinic_lro_en_status {
 
 #define HINIC_VLAN_FILTER_EN		(1U << 0)
 #define HINIC_BROADCAST_FILTER_EX_EN	(1U << 1)
+
+#define HINIC_RX_CSUM_OFFLOAD_EN	0xFFF
 
 /* Set mac_vlan table */
 int hinic_set_mac(void *hwdev, const u8 *mac_addr, u16 vlan_id, u16 func_id);
@@ -482,17 +500,6 @@ int hinic_dcb_get_ets(void *hwdev, u8 *up_tc, u8 *pg_bw, u8 *pgid,
 int hinic_dcb_set_cos_up_map(void *hwdev, u8 cos_valid_bitmap, u8 *cos_up);
 
 int hinic_dcb_set_rq_iq_mapping(void *hwdev, u32 num_rqs, u8 *map);
-
-int hinic_set_pfc_threshold(void *hwdev, u16 op_type, u16 threshold);
-
-int hinic_set_bp_thd(void *hwdev, u16 threshold);
-
-int hinic_disable_fw_bp(void *hwdev);
-
-int hinic_set_iq_enable(void *hwdev, u16 q_id, u16 lower_thd, u16 prod_idx);
-
-int hinic_set_iq_enable_mgmt(void *hwdev, u16 q_id, u16 lower_thd,
-			     u16 prod_idx);
 
 /* nictool adaptation interface*/
 int hinic_set_lro_aging_timer(void *hwdev, u8 timer_en, u32 period);
@@ -580,6 +587,9 @@ int hinic_set_vf_spoofchk(void *hwdev, u16 vf_id, bool spoofchk);
 
 bool hinic_vf_info_spoofchk(void *hwdev, int vf_id);
 
+int hinic_set_vf_trust(void *hwdev, u16 vf_id, bool trust);
+bool hinic_vf_info_trust(void *hwdev, int vf_id);
+
 int hinic_set_vf_tx_rate(void *hwdev, u16 vf_id, u32 max_rate, u32 min_rate);
 
 int hinic_init_vf_hw(void *hwdev, u16 start_vf_id, u16 end_vf_id);
@@ -619,8 +629,10 @@ int hinic_set_link_settings(void *hwdev, struct hinic_link_ksettings *settings);
 
 int hinic_enable_netq(void *hwdev, u8 en);
 int hinic_add_hw_rqfilter(void *hwdev,
-			struct hinic_rq_filter_info *filter_info);
+			  struct hinic_rq_filter_info *filter_info);
 int hinic_del_hw_rqfilter(void *hwdev,
-			struct hinic_rq_filter_info *filter_info);
+			  struct hinic_rq_filter_info *filter_info);
+int hinic_get_sfp_eeprom(void *hwdev, u8 *data, u16 *len);
+int hinic_get_sfp_type(void *hwdev, u8 *data0, u8 *data1);
 
 #endif

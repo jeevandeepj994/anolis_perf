@@ -30,6 +30,8 @@
 #include "hinic_nic_io.h"
 #include "hinic_nic.h"
 #include "hinic_ctx_def.h"
+#include "hinic_wq.h"
+#include "hinic_cmdq.h"
 
 #define HINIC_DEAULT_TX_CI_PENDING_LIMIT	0
 #define HINIC_DEAULT_TX_CI_COALESCING_TIME	0
@@ -251,7 +253,7 @@ int hinic_create_qps(void *dev, u16 num_qp, u16 sq_depth, u16 rq_depth,
 
 	max_qps = hinic_func_max_qnum(hwdev);
 	if (num_qp > max_qps) {
-		nic_err(hwdev->dev_hdl, "Create number of qps: %d > max number of qps:%d\n",
+		nic_err(hwdev->dev_hdl, "Create number of qps: %d > max number of qps: %d\n",
 			num_qp, max_qps);
 		return -EINVAL;
 	}
@@ -543,9 +545,9 @@ static int init_sq_ctxts(struct hinic_nic_io *nic_io)
 		cmd_buf->size = SQ_CTXT_SIZE(max_ctxts);
 
 		err = hinic_cmdq_direct_resp(hwdev, HINIC_ACK_TYPE_CMDQ,
-					     HINIC_MOD_L2NIC,
+					HINIC_MOD_L2NIC,
 					HINIC_UCODE_CMD_MODIFY_QUEUE_CONTEXT,
-					     cmd_buf, &out_param, 0);
+					cmd_buf, &out_param, 0);
 		if (err || out_param != 0) {
 			nic_err(hwdev->dev_hdl, "Failed to set SQ ctxts, err: %d, out_param: 0x%llx\n",
 				err, out_param);
@@ -600,9 +602,9 @@ static int init_rq_ctxts(struct hinic_nic_io *nic_io)
 		cmd_buf->size = RQ_CTXT_SIZE(max_ctxts);
 
 		err = hinic_cmdq_direct_resp(hwdev, HINIC_ACK_TYPE_CMDQ,
-					     HINIC_MOD_L2NIC,
-					   HINIC_UCODE_CMD_MODIFY_QUEUE_CONTEXT,
-					     cmd_buf, &out_param, 0);
+					HINIC_MOD_L2NIC,
+					HINIC_UCODE_CMD_MODIFY_QUEUE_CONTEXT,
+					cmd_buf, &out_param, 0);
 
 		if (err || out_param != 0) {
 			nic_err(hwdev->dev_hdl, "Failed to set RQ ctxts, err: %d, out_param: 0x%llx\n",
@@ -674,8 +676,8 @@ static int clean_queue_offload_ctxt(struct hinic_nic_io *nic_io,
 
 	err = hinic_cmdq_direct_resp(hwdev, HINIC_ACK_TYPE_CMDQ,
 				     HINIC_MOD_L2NIC,
-					HINIC_UCODE_CMD_CLEAN_QUEUE_CONTEXT,
-					cmd_buf, &out_param, 0);
+				     HINIC_UCODE_CMD_CLEAN_QUEUE_CONTEXT,
+				     cmd_buf, &out_param, 0);
 
 	if ((err) || (out_param)) {
 		nic_err(hwdev->dev_hdl, "Failed to clean queue offload ctxts, err: %d, out_param: 0x%llx\n",
@@ -761,6 +763,8 @@ void hinic_free_qp_ctxts(void *hwdev)
 	if (!hwdev)
 		return;
 
+	hinic_qps_num_set(hwdev, 0);
+
 	err = hinic_clean_root_ctxt(hwdev);
 	if (err)
 		nic_err(((struct hinic_hwdev *)hwdev)->dev_hdl,
@@ -777,6 +781,14 @@ int hinic_init_nic_hwdev(void *hwdev, u16 rx_buff_len)
 
 	if (!hwdev)
 		return -EINVAL;
+
+	if (is_multi_bm_slave(hwdev) && hinic_support_dynamic_q(hwdev)) {
+		err = hinic_reinit_cmdq_ctxts(dev);
+		if (err) {
+			nic_err(dev->dev_hdl, "Failed to reinit cmdq\n");
+			return err;
+		}
+	}
 
 	nic_io = dev->nic_io;
 
@@ -817,13 +829,28 @@ int hinic_init_nic_hwdev(void *hwdev, u16 rx_buff_len)
 			}
 		}
 	}
-	return 0;
+
+	/* VFs don't set port routine command report */
+	if (hinic_func_type(dev) != TYPE_VF) {
+		/* Get the fw support mac reuse flag */
+		err = hinic_get_fw_support_func(hwdev);
+		if (err) {
+			nic_err(dev->dev_hdl, "Failed to get function capability\n");
+			return err;
+		}
+
+		/* Inform mgmt to send sfp's information to driver */
+		err = hinic_set_port_routine_cmd_report(hwdev, true);
+	}
+
+	return err;
 }
 EXPORT_SYMBOL(hinic_init_nic_hwdev);
 
 void hinic_free_nic_hwdev(void *hwdev)
 {
-	/* nothing to do for now */
+	if (hinic_func_type(hwdev) != TYPE_VF)
+		hinic_set_port_routine_cmd_report(hwdev, false);
 }
 EXPORT_SYMBOL(hinic_free_nic_hwdev);
 

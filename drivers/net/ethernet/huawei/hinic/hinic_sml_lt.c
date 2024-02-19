@@ -27,21 +27,18 @@
 #include "hinic_sm_lt.h"
 #include "hinic_hw.h"
 #include "hinic_hwdev.h"
+#include "hinic_hw_mgmt.h"
+#include "hinic_hwif.h"
 #include "hinic_dbg.h"
 
-#define ACK 1
-#define NOACK 0
+#define ACK			1
+#define NOACK			0
 
-#define LT_LOAD16_API_SIZE (16 + 4)
-#define LT_STORE16_API_SIZE (32 + 4)
+#define LT_LOAD16_API_SIZE	(16 + 4)
+#define LT_STORE16_API_SIZE	(32 + 4)
 
-#ifndef HTONL
-#define HTONL(x) \
-	((((x) & 0x000000ff) << 24) \
-	| (((x) & 0x0000ff00) << 8) \
-	| (((x) & 0x00ff0000) >> 8) \
-	| (((x) & 0xff000000) >> 24))
-#endif
+#define HINIC_API_RD_8B		8
+#define HINIC_API_RD_4B		4
 
 static inline void sm_lt_build_head(sml_lt_req_head_u *head,
 				    u8 instance_id,
@@ -56,7 +53,7 @@ static inline void sm_lt_build_head(sml_lt_req_head_u *head,
 	head->bs.abuf_flg = 0;
 	head->bs.bc = 1;
 	head->bs.offset = offset;
-	head->value = HTONL((head->value));
+	head->value = cpu_to_be32(head->value);
 }
 
 static inline void sm_lt_load_build_req(sml_lt_load_req_s *req,
@@ -68,7 +65,7 @@ static inline void sm_lt_load_build_req(sml_lt_load_req_s *req,
 	sm_lt_build_head(&req->head, instance_id, op_id, ack, offset, num);
 	req->extra = 0;
 	req->index = lt_index;
-	req->index = HTONL(req->index);
+	req->index = cpu_to_be32(req->index);
 }
 
 static inline void sm_lt_store_build_req(sml_lt_store_req_s *req,
@@ -84,11 +81,11 @@ static inline void sm_lt_store_build_req(sml_lt_store_req_s *req,
 {
 	sm_lt_build_head(&req->head, instance_id, op_id, ack, offset, num);
 	req->index     = lt_index;
-	req->index     = HTONL(req->index);
+	req->index     = cpu_to_be32(req->index);
 	req->extra = 0;
 	req->byte_enb[0] = (u32)(byte_enb3);
-	req->byte_enb[0] = HTONL(req->byte_enb[0]);
-	req->byte_enb[1] = HTONL((((u32)byte_enb2) << 16) | byte_enb1);
+	req->byte_enb[0] = cpu_to_be32(req->byte_enb[0]);
+	req->byte_enb[1] = cpu_to_be32((((u32)byte_enb2) << 16) | byte_enb1);
 	sml_lt_store_memcpy((u32 *)req->write_data, (u32 *)(void *)data, num);
 }
 
@@ -140,7 +137,8 @@ EXPORT_SYMBOL(hinic_dbg_lt_wr_16byte_mask);
 
 int hinic_api_csr_rd32(void *hwdev, u8 dest, u32 addr, u32 *val)
 {
-	struct hinic_csr_request_api_data api_data = {0};
+	struct hinic_hwdev *dev = hwdev;
+	struct hinic_csr_request_api_data api_data = { 0 };
 	u32 csr_val = 0;
 	u16 in_size = sizeof(api_data);
 	int ret;
@@ -148,7 +146,11 @@ int hinic_api_csr_rd32(void *hwdev, u8 dest, u32 addr, u32 *val)
 	if (!hwdev || !val)
 		return -EFAULT;
 
-	memset(&api_data, 0, sizeof(struct hinic_csr_request_api_data));
+	if (dest == HINIC_NODE_ID_CPI) {
+		*val = readl(dev->hwif->cfg_regs_base + addr);
+		return 0;
+	}
+
 	api_data.dw0 = 0;
 	api_data.dw1.bits.operation_id = HINIC_CSR_OPERATION_READ_CSR;
 	api_data.dw1.bits.need_response = HINIC_CSR_NEED_RESP_DATA;
@@ -158,10 +160,10 @@ int hinic_api_csr_rd32(void *hwdev, u8 dest, u32 addr, u32 *val)
 	api_data.dw2.val32 = cpu_to_be32(api_data.dw2.val32);
 
 	ret = hinic_api_cmd_read_ack(hwdev, dest, (u8 *)(&api_data),
-				     in_size, &csr_val, 4);
+				     in_size, &csr_val, HINIC_API_RD_4B);
 	if (ret) {
 		sdk_err(((struct hinic_hwdev *)hwdev)->dev_hdl,
-			"Read 32 bit csr fail, dest %d addr 0x%x, ret: 0x%x\n",
+			"Read 32 bit csr failed, dest %d addr 0x%x, ret: 0x%x\n",
 			dest, addr, ret);
 		return ret;
 	}
@@ -174,14 +176,19 @@ EXPORT_SYMBOL(hinic_api_csr_rd32);
 
 int hinic_api_csr_wr32(void *hwdev, u8 dest, u32 addr, u32 val)
 {
-	struct hinic_csr_request_api_data api_data;
+	struct hinic_hwdev *dev = hwdev;
+	struct hinic_csr_request_api_data api_data = { 0 };
 	u16 in_size = sizeof(api_data);
 	int ret;
 
 	if (!hwdev)
 		return -EFAULT;
 
-	memset(&api_data, 0, sizeof(struct hinic_csr_request_api_data));
+	if (dest == HINIC_NODE_ID_CPI) {
+		writel(val, dev->hwif->cfg_regs_base + addr);
+		return 0;
+	}
+
 	api_data.dw1.bits.operation_id = HINIC_CSR_OPERATION_WRITE_CSR;
 	api_data.dw1.bits.need_response = HINIC_CSR_NO_RESP_DATA;
 	api_data.dw1.bits.data_size = HINIC_CSR_DATA_SZ_32;
@@ -194,7 +201,7 @@ int hinic_api_csr_wr32(void *hwdev, u8 dest, u32 addr, u32 val)
 	ret = hinic_api_cmd_write_nack(hwdev, dest, (u8 *)(&api_data), in_size);
 	if (ret) {
 		sdk_err(((struct hinic_hwdev *)hwdev)->dev_hdl,
-			"Write 32 bit csr fail! dest %d addr 0x%x val 0x%x\n",
+			"Write 32 bit csr failed, dest %d addr 0x%x val 0x%x\n",
 			dest, addr, val);
 		return ret;
 	}
@@ -205,7 +212,7 @@ EXPORT_SYMBOL(hinic_api_csr_wr32);
 
 int hinic_api_csr_rd64(void *hwdev, u8 dest, u32 addr, u64 *val)
 {
-	struct hinic_csr_request_api_data api_data = {0};
+	struct hinic_csr_request_api_data api_data = { 0 };
 	u64 csr_val = 0;
 	u16 in_size = sizeof(api_data);
 	int ret;
@@ -213,7 +220,12 @@ int hinic_api_csr_rd64(void *hwdev, u8 dest, u32 addr, u64 *val)
 	if (!hwdev || !val)
 		return -EFAULT;
 
-	memset(&api_data, 0, sizeof(struct hinic_csr_request_api_data));
+	if (dest == HINIC_NODE_ID_CPI) {
+		sdk_err(((struct hinic_hwdev *)hwdev)->dev_hdl,
+			"Unsupport to read 64 bit csr from cpi\n");
+		return -EOPNOTSUPP;
+	}
+
 	api_data.dw0 = 0;
 	api_data.dw1.bits.operation_id = HINIC_CSR_OPERATION_READ_CSR;
 	api_data.dw1.bits.need_response = HINIC_CSR_NEED_RESP_DATA;
@@ -223,10 +235,10 @@ int hinic_api_csr_rd64(void *hwdev, u8 dest, u32 addr, u64 *val)
 	api_data.dw2.val32 = cpu_to_be32(api_data.dw2.val32);
 
 	ret = hinic_api_cmd_read_ack(hwdev, dest, (u8 *)(&api_data),
-				     in_size, &csr_val, 8);
+				     in_size, &csr_val, HINIC_API_RD_8B);
 	if (ret) {
 		sdk_err(((struct hinic_hwdev *)hwdev)->dev_hdl,
-			"Read 64 bit csr fail, dest %d addr 0x%x\n",
+			"Read 64 bit csr failed, dest %d addr 0x%x\n",
 			dest, addr);
 		return ret;
 	}
@@ -236,3 +248,39 @@ int hinic_api_csr_rd64(void *hwdev, u8 dest, u32 addr, u64 *val)
 	return 0;
 }
 EXPORT_SYMBOL(hinic_api_csr_rd64);
+
+int hinic_api_csr_wr64(void *hwdev, u8 dest, u32 addr, u64 val)
+{
+	struct hinic_csr_request_api_data api_data = { 0 };
+	u16 in_size = sizeof(api_data);
+	int ret;
+
+	if (!hwdev || !val)
+		return -EFAULT;
+
+	if (dest == HINIC_NODE_ID_CPI) {
+		sdk_err(((struct hinic_hwdev *)hwdev)->dev_hdl,
+			"Unsupport to write 64 bit csr from cpi\n");
+		return -EOPNOTSUPP;
+	}
+
+	api_data.dw0 = 0;
+	api_data.dw1.bits.operation_id = HINIC_CSR_OPERATION_WRITE_CSR;
+	api_data.dw1.bits.need_response = HINIC_CSR_NO_RESP_DATA;
+	api_data.dw1.bits.data_size = HINIC_CSR_DATA_SZ_64;
+	api_data.dw1.val32 = cpu_to_be32(api_data.dw1.val32);
+	api_data.dw2.bits.csr_addr = addr;
+	api_data.dw2.val32 = cpu_to_be32(api_data.dw2.val32);
+	api_data.csr_write_data_h = cpu_to_be32(upper_32_bits(val));
+	api_data.csr_write_data_l = cpu_to_be32(lower_32_bits(val));
+
+	ret = hinic_api_cmd_write_nack(hwdev, dest, (u8 *)(&api_data), in_size);
+	if (ret) {
+		sdk_err(((struct hinic_hwdev *)hwdev)->dev_hdl,
+			"Write 64 bit csr failed, dest %d addr 0x%x val 0x%llx\n",
+			dest, addr, val);
+		return ret;
+	}
+
+	return 0;
+}

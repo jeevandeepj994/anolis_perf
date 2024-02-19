@@ -46,7 +46,7 @@ struct ffm_intr_info {
 	u32 err_csr_value;
 };
 
-#define DBGTOOL_MSG_MAX_SIZE	2048ULL
+#define DBGTOOL_MSG_MAX_SIZE			2048ULL
 #define HINIC_SELF_CMD_UP2PF_FFM		0x26
 
 void *g_card_node_array[MAX_CARD_NUM] = {0};
@@ -57,9 +57,9 @@ struct mutex	g_addr_lock;
 int card_id;
 
 /* dbgtool character device name, class name, dev path */
-#define CHR_DEV_DBGTOOL "dbgtool_chr_dev"
-#define CLASS_DBGTOOL "dbgtool_class"
-#define DBGTOOL_DEV_PATH "/dev/dbgtool_chr_dev"
+#define CHR_DEV_DBGTOOL		"dbgtool_chr_dev"
+#define CLASS_DBGTOOL		"dbgtool_class"
+#define DBGTOOL_DEV_PATH	"/dev/dbgtool_chr_dev"
 
 struct dbgtool_k_glb_info {
 	struct semaphore dbgtool_sem;
@@ -630,6 +630,7 @@ void ffm_intr_msg_record(void *handle, void *buf_in, u16 in_size,
 	struct timex txc;
 	struct rtc_time rctm;
 	struct card_node *card_info = NULL;
+	struct hinic_hwdev *hwdev = handle;
 	bool flag = false;
 	int i, j;
 
@@ -667,7 +668,8 @@ void ffm_intr_msg_record(void *handle, void *buf_in, u16 in_size,
 
 	ffm_idx = dbgtool_info->ffm->ffm_num;
 	if (ffm_idx < FFM_RECORD_NUM_MAX) {
-		pr_info("%s: recv intr, ffm_idx: %d\n", __func__, ffm_idx);
+		nic_info(hwdev->dev_hdl, "%s: recv intr, ffm_idx: %d\n",
+			 __func__, ffm_idx);
 
 		dbgtool_info->ffm->ffm[ffm_idx].node_id = intr->node_id;
 		dbgtool_info->ffm->ffm[ffm_idx].err_level = intr->err_level;
@@ -768,7 +770,7 @@ int dbgtool_knl_init(void *vhwdev, void *chip_node)
 	sema_init(&dbgtool_info->dbgtool_sem, 1);
 
 	ret = sscanf(chip_info->chip_name, HINIC_CHIP_NAME "%d", &id);
-	if (ret < 0) {
+	if (ret <= 0) {
 		pr_err("Failed to get hinic id\n");
 		goto sscanf_chdev_fail;
 	}
@@ -874,7 +876,7 @@ void dbgtool_knl_deinit(void *vhwdev, void *chip_node)
 		return;
 
 	err = sscanf(chip_info->chip_name, HINIC_CHIP_NAME "%d", &id);
-	if (err < 0)
+	if (err <= 0)
 		pr_err("Failed to get hinic id\n");
 
 	g_card_node_array[id] = NULL;

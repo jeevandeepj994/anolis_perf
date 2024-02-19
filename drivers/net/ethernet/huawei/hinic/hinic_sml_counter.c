@@ -20,20 +20,12 @@
 #include "hinic_hwdev.h"
 #include "hinic_sml_counter.h"
 
-#ifndef HTONL
-#define HTONL(x) \
-	((((x) & 0x000000ff) << 24) \
-	| (((x) & 0x0000ff00) << 8) \
-	| (((x) & 0x00ff0000) >> 8) \
-	| (((x) & 0xff000000) >> 24))
-#endif
-
 static void sml_ctr_htonl_n(u32 *node, u32 ulLen)
 {
 	u32 i;
 
 	for (i = 0; i < ulLen; i++) {
-		*node = HTONL(*node);
+		*node = cpu_to_be32(*node);
 		node++;
 	}
 }
@@ -46,10 +38,10 @@ static void hinic_sml_ctr_read_build_req(chipif_sml_ctr_rd_req_s *msg,
 	msg->head.bs.instance = instance_id;
 	msg->head.bs.op_id = op_id;
 	msg->head.bs.ack = ack;
-	msg->head.value = HTONL(msg->head.value);
+	msg->head.value = cpu_to_be32(msg->head.value);
 
 	msg->ctr_id = ctr_id;
-	msg->ctr_id = HTONL(msg->ctr_id);
+	msg->ctr_id = cpu_to_be32(msg->ctr_id);
 
 	msg->initial = init_val;
 }
@@ -63,10 +55,10 @@ static void hinic_sml_ctr_write_build_req(chipif_sml_ctr_wr_req_s *msg,
 	msg->head.bs.instance = instance_id;
 	msg->head.bs.op_id = op_id;
 	msg->head.bs.ack = ack;
-	msg->head.value = HTONL(msg->head.value);
+	msg->head.value = cpu_to_be32(msg->head.value);
 
 	msg->ctr_id = ctr_id;
-	msg->ctr_id = HTONL(msg->ctr_id);
+	msg->ctr_id = cpu_to_be32(msg->ctr_id);
 
 	msg->value1_h = val1 >> 32;
 	msg->value1_l = val1 & 0xFFFFFFFF;
@@ -253,9 +245,19 @@ int hinic_sm_ctr_rd64_pair(void *hwdev, u8 node, u8 instance,
 	ctr_rd_rsp_u rsp;
 	int ret;
 
-	if (!hwdev || (0 != (ctr_id & 0x1)) || !value1 || !value2) {
-		pr_err("Hwdev(0x%p) or value1(0x%p) or value2(0x%p) is NULL or ctr_id(%d) is odd number\n",
-		       hwdev, value1, value2, ctr_id);
+	if (!value1) {
+		pr_err("value1 is NULL for read 64 bit pair\n");
+		return -EFAULT;
+	}
+
+	if (!value2) {
+		pr_err("value2 is NULL for read 64 bit pair\n");
+		return -EFAULT;
+	}
+
+	if (!hwdev || (0 != (ctr_id & 0x1))) {
+		pr_err("Hwdev is NULL or ctr_id(%d) is odd number for read 64 bit pair\n",
+		       ctr_id);
 		return -EFAULT;
 	}
 

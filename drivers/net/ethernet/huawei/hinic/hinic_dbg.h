@@ -79,9 +79,11 @@ int hinic_api_csr_wr32(void *hwdev, u8 dest, u32 addr, u32 val);
 
 int hinic_api_csr_rd64(void *hwdev, u8 dest, u32 addr, u64 *val);
 
+int hinic_api_csr_wr64(void *hwdev, u8 dest, u32 addr, u64 val);
+
 int hinic_dbg_get_hw_stats(const void *hwdev, u8 *hw_stats, u16 *out_size);
 
-u16 hinic_dbg_clear_hw_stats(void *hwdev);
+u16 hinic_dbg_clear_hw_stats(void *hwdev, u32 *out_size);
 
 void hinic_get_chip_fault_stats(const void *hwdev,
 				u8 *chip_fault_stats, int offset);

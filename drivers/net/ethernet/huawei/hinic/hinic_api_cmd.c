@@ -129,7 +129,7 @@ static void dump_api_chain_reg(struct hinic_api_cmd_chain *chain)
 	addr = HINIC_CSR_API_CMD_STATUS_0_ADDR(chain->chain_type);
 	val  = hinic_hwif_read_reg(chain->hwdev->hwif, addr);
 
-	sdk_err(dev, "Chain type: 0x%x, cpld error: 0x%x, check error: 0x%x,  current fsm: 0x%x\n",
+	sdk_err(dev, "Chain type: 0x%x, cpld error: 0x%x, check error: 0x%x, current fsm: 0x%x\n",
 		chain->chain_type, HINIC_API_CMD_STATUS_GET(val, CPLD_ERR),
 		HINIC_API_CMD_STATUS_GET(val, CHKSUM_ERR),
 		HINIC_API_CMD_STATUS_GET(val, FSM));
@@ -161,7 +161,7 @@ static int chain_busy(struct hinic_api_cmd_chain *chain)
 		resp_header = be64_to_cpu(ctxt->resp->header);
 		if (ctxt->status &&
 		    !HINIC_API_CMD_RESP_HEADER_VALID(resp_header)) {
-			sdk_err(dev, "Context(0x%x) busy!, pi: %d, resp_header: 0x%08x%08x\n",
+			sdk_err(dev, "Context(0x%x) busy, pi: %d, resp_header: 0x%08x%08x\n",
 				ctxt->status, chain->prod_idx,
 				upper_32_bits(resp_header),
 				lower_32_bits(resp_header));
@@ -203,9 +203,9 @@ static u16 get_cell_data_size(enum hinic_api_cmd_chain_type type, u16 cmd_size)
 	switch (type) {
 	case HINIC_API_CMD_POLL_READ:
 		cell_data_size = ALIGN(API_CMD_CELL_DESC_SIZE +
-				    API_CMD_CELL_WB_ADDR_SIZE +
-				    API_CMD_CELL_DATA_ADDR_SIZE,
-				    API_CHAIN_CELL_ALIGNMENT);
+				       API_CMD_CELL_WB_ADDR_SIZE +
+				       API_CMD_CELL_DATA_ADDR_SIZE,
+				       API_CHAIN_CELL_ALIGNMENT);
 		break;
 
 	case HINIC_API_CMD_WRITE_TO_MGMT_CPU:
@@ -253,9 +253,9 @@ static void prepare_cell_ctrl(u64 *cell_ctrl, u16 cell_len)
  * @cmd_size: the command size
  */
 static void prepare_api_cmd(struct hinic_api_cmd_chain *chain,
-			struct hinic_api_cmd_cell *cell,
-			enum hinic_node_id dest,
-			const void *cmd, u16 cmd_size)
+			    struct hinic_api_cmd_cell *cell,
+			    enum hinic_node_id dest,
+			    const void *cmd, u16 cmd_size)
 {
 	struct hinic_api_cmd_cell_ctxt	*cell_ctxt;
 	u32 priv;
@@ -299,7 +299,7 @@ static void prepare_api_cmd(struct hinic_api_cmd_chain *chain,
 		      HINIC_API_CMD_DESC_SET(SIZE_4BYTES(cmd_size), SIZE);
 
 	cell->desc |= HINIC_API_CMD_DESC_SET(xor_chksum_set(&cell->desc),
-						XOR_CHKSUM);
+					     XOR_CHKSUM);
 
 	/* The data in the HW should be in Big Endian Format */
 	cell->desc = cpu_to_be64(cell->desc);
@@ -559,7 +559,7 @@ int hinic_api_cmd_write(struct hinic_api_cmd_chain *chain,
 
 int hinic_api_cmd_read(struct hinic_api_cmd_chain *chain,
 		       enum hinic_node_id dest,
-			void *cmd, u16 size, void *ack, u16 ack_size)
+		       void *cmd, u16 size, void *ack, u16 ack_size)
 {
 	return api_cmd(chain, dest, cmd, size, ack, ack_size);
 }
@@ -971,15 +971,13 @@ static int api_chain_init(struct hinic_api_cmd_chain *chain,
 	cell_ctxt_size = chain->num_cells * sizeof(*chain->cell_ctxt);
 	if (!cell_ctxt_size) {
 		sdk_err(dev, "Api chain cell size cannot be zero\n");
-		err = -EINVAL;
-		goto alloc_cell_ctxt_err;
+		return -EINVAL;
 	}
 
 	chain->cell_ctxt = kzalloc(cell_ctxt_size, GFP_KERNEL);
 	if (!chain->cell_ctxt) {
 		sdk_err(dev, "Failed to allocate cell contexts for a chain\n");
-		err = -ENOMEM;
-		goto alloc_cell_ctxt_err;
+		return -ENOMEM;
 	}
 
 	chain->wb_status = dma_zalloc_coherent(dev,
@@ -1032,13 +1030,6 @@ alloc_cells_buf_err:
 alloc_wb_status_err:
 	kfree(chain->cell_ctxt);
 
-/*lint -save -e548*/
-alloc_cell_ctxt_err:
-	if (chain->chain_type == HINIC_API_CMD_WRITE_ASYNC_TO_MGMT_CPU)
-		spin_lock_deinit(&chain->async_lock);
-	else
-		sema_deinit(&chain->sem);
-/*lint -restore*/
 	return err;
 }
 
@@ -1055,13 +1046,6 @@ static void api_chain_free(struct hinic_api_cmd_chain *chain)
 	dma_free_coherent(dev, sizeof(*chain->wb_status),
 			  chain->wb_status, chain->wb_status_paddr);
 	kfree(chain->cell_ctxt);
-
-/*lint -save -e548*/
-	if (chain->chain_type == HINIC_API_CMD_WRITE_ASYNC_TO_MGMT_CPU)
-		spin_lock_deinit(&chain->async_lock);
-	else
-		sema_deinit(&chain->sem);
-/*lint -restore*/
 }
 
 /**

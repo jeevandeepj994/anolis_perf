@@ -30,7 +30,7 @@
 #define HINIC_DRV_NAME		"hinic"
 #define HINIC_CHIP_NAME		"hinic"
 
-#define HINIC_DRV_VERSION	"2.3.2.11"
+#define HINIC_DRV_VERSION	"2.3.2.18"
 struct vf_data_storage;
 
 #define HINIC_FUNC_IS_VF(hwdev)	(hinic_func_type(hwdev) == TYPE_VF)
@@ -41,7 +41,6 @@ enum hinic_flags {
 	HINIC_LP_TEST,
 	HINIC_RSS_ENABLE,
 	HINIC_DCB_ENABLE,
-	HINIC_BP_ENABLE,
 	HINIC_SAME_RXTX,
 	HINIC_INTR_ADAPT,
 	HINIC_UPDATE_MAC_FILTER,
@@ -135,11 +134,11 @@ struct hinic_intr_coal_info {
 	u8	user_set_intr_coal_flag;
 };
 
-#define HINIC_NIC_STATS_INC(nic_dev, field)		\
-{							\
-	u64_stats_update_begin(&nic_dev->stats.syncp);	\
-	nic_dev->stats.field++;				\
-	u64_stats_update_end(&nic_dev->stats.syncp);	\
+#define HINIC_NIC_STATS_INC(nic_dev, field)			\
+{								\
+	u64_stats_update_begin(&(nic_dev)->stats.syncp);	\
+	(nic_dev)->stats.field++;				\
+	u64_stats_update_end(&(nic_dev)->stats.syncp);		\
 }
 
 struct hinic_nic_stats {
@@ -149,11 +148,7 @@ struct hinic_nic_stats {
 	u64	tx_carrier_off_drop;
 	u64	tx_invalid_qid;
 
-#ifdef HAVE_NDO_GET_STATS64
 	struct u64_stats_sync	syncp;
-#else
-	struct u64_stats_sync_empty syncp;
-#endif
 };
 
 struct hinic_nic_dev {
@@ -223,8 +218,6 @@ struct hinic_nic_dev {
 	/* lock for disable or enable traffic flow */
 	struct semaphore	dcb_sem;
 
-	u16			bp_lower_thd;
-	u16			bp_upper_thd;
 	bool			heart_status;
 
 	struct hinic_intr_coal_info *intr_coalesce;
@@ -235,10 +228,7 @@ struct hinic_nic_dev {
 	/* interrupt coalesce must be different in virtual machine */
 	bool			in_vm;
 	bool			is_vm_slave;
-
-#ifndef HAVE_NETDEV_STATS_IN_NETDEV
-	struct net_device_stats net_stats;
-#endif
+	int			is_bm_slave;
 	struct hinic_nic_stats	stats;
 	/* lock for nic resource */
 	struct mutex		nic_mutex;
@@ -256,6 +246,8 @@ struct hinic_nic_dev {
 	u32			lro_replenish_thld;
 	u16			rx_buff_len;
 	u32			page_order;
+
+	struct bpf_prog		*xdp_prog;
 };
 
 extern struct hinic_uld_info nic_uld_info;
@@ -276,14 +268,17 @@ void hinic_link_status_change(struct hinic_nic_dev *nic_dev, bool status);
 int hinic_disable_func_rss(struct hinic_nic_dev *nic_dev);
 int hinic_enable_func_rss(struct hinic_nic_dev *nic_dev);
 
+bool hinic_is_xdp_enable(struct hinic_nic_dev *nic_dev);
+int hinic_xdp_max_mtu(struct hinic_nic_dev *nic_dev);
+
 #define hinic_msg(level, nic_dev, msglvl, format, arg...)	\
 do {								\
-	if (nic_dev->netdev && nic_dev->netdev->reg_state	\
+	if ((nic_dev)->netdev && (nic_dev)->netdev->reg_state	\
 	    == NETREG_REGISTERED)				\
-		nicif_##level(nic_dev, msglvl, nic_dev->netdev,	\
+		nicif_##level((nic_dev), msglvl, (nic_dev)->netdev,	\
 			      format, ## arg);			\
 	else							\
-		nic_##level(&nic_dev->pdev->dev,		\
+		nic_##level(&(nic_dev)->pdev->dev,		\
 			    format, ## arg);			\
 } while (0)
 

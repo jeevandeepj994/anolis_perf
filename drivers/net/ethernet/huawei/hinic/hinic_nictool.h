@@ -17,9 +17,6 @@
 #define HINIC_NICTOOL_H_
 
 #include "hinic_dfx_def.h"
-#ifndef IFNAMSIZ
-#define IFNAMSIZ    16
-#endif
 /* completion timeout interval, unit is jiffies*/
 #define UP_COMP_TIME_OUT_VAL		10000U
 
@@ -53,11 +50,11 @@ struct ipsurx_stats_info {
 struct ucode_cmd_st {
 	union {
 		struct {
-			u32 comm_mod_type:8;
-			u32 ucode_cmd_type:4;
-			u32 cmdq_ack_type:3;
-			u32 ucode_imm:1;
-			u32 len:16;
+			u32 comm_mod_type : 8;
+			u32 ucode_cmd_type : 4;
+			u32 cmdq_ack_type : 3;
+			u32 ucode_imm : 1;
+			u32 len : 16;
 		} ucode_db;
 		u32 value;
 	};
@@ -66,9 +63,9 @@ struct ucode_cmd_st {
 struct up_cmd_st {
 	union {
 		struct {
-			u32 comm_mod_type:8;
-			u32 chipif_cmd:8;
-			u32 up_api_type:16;
+			u32 comm_mod_type : 8;
+			u32 chipif_cmd : 8;
+			u32 up_api_type : 16;
 		} up_db;
 		u32 value;
 	};
@@ -100,11 +97,11 @@ union _pfc {
 
 union _flag_com {
 	struct _ets_flag {
-		u8 flag_ets_enable:1;
-		u8 flag_ets_percent:1;
-		u8 flag_ets_cos:1;
-		u8 flag_ets_strict:1;
-		u8 rev:4;
+		u8 flag_ets_enable : 1;
+		u8 flag_ets_percent : 1;
+		u8 flag_ets_cos : 1;
+		u8 flag_ets_strict : 1;
+		u8 rev : 4;
 	} ets_flag;
 	u8 data;
 };
@@ -132,9 +129,9 @@ struct msg_module {
 	};
 
 	struct {
-		u32 inBuffLen;
-		u32 outBuffLen;
-	} lenInfo;
+		u32 in_buff_len;
+		u32 out_buff_len;
+	} len_info;
 	u32 res;
 	void *in_buff;
 	void *out_buf;
@@ -169,8 +166,8 @@ struct hinic_tx_hw_page {
 struct hinic_dbg_sq_info {
 	u16	q_id;
 	u16	pi;
-	u16	ci;/* sw_ci */
-	u16	fi;/* hw_ci */
+	u16	ci; /* sw_ci */
+	u16	fi; /* hw_ci */
 
 	u32	q_depth;
 	u16	pi_reverse;
@@ -207,18 +204,14 @@ struct hinic_dbg_rq_info {
 	u32	msix_vector;
 };
 
-#ifndef BUSINFO_LEN
-#define BUSINFO_LEN (32)
-#endif
+#define BUSINFO_LEN 32
 struct pf_info {
 	char name[IFNAMSIZ];
 	char bus_info[BUSINFO_LEN];
 	u32 pf_type;
 };
 
-#ifndef MAX_SIZE
-#define MAX_SIZE (16)
-#endif
+#define MAX_SIZE 16
 struct card_info {
 	struct pf_info pf[MAX_SIZE];
 	u32 pf_num;
@@ -242,13 +235,7 @@ struct hinic_card_func_info {
 	struct func_pdev_info pdev_info[MAX_SIZE];
 };
 
-#ifndef NIC_UP_CMD_UPDATE_FW
-#define NIC_UP_CMD_UPDATE_FW (114)
-#endif
-
-#ifndef MAX_CARD_NUM
-#define MAX_CARD_NUM (64)
-#endif
+#define MAX_CARD_NUM 64
 extern void *g_card_node_array[MAX_CARD_NUM];
 extern void *g_card_vir_addr[MAX_CARD_NUM];
 extern u64 g_card_phy_addr[MAX_CARD_NUM];
@@ -281,8 +268,10 @@ struct hinic_pf_info {
 int nictool_k_init(void);
 void nictool_k_uninit(void);
 
-extern u32 hinic_get_io_stats_size(struct hinic_nic_dev *nic_dev);
-extern void hinic_get_io_stats(struct hinic_nic_dev *nic_dev,
-			       struct hinic_show_item *items);
+u32 hinic_get_io_stats_size(struct hinic_nic_dev *nic_dev);
+void hinic_get_io_stats(struct hinic_nic_dev *nic_dev,
+			struct hinic_show_item *items);
+
+#define TOOL_COUNTER_MAX_LEN			512
 
 #endif

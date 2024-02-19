@@ -18,38 +18,22 @@
 
 #include "ossl_knl_linux.h"
 
-#if defined(__WIN__) || defined(__VMWARE__)
-#define __WIN_OR_VMWARE__
-#endif
-
-#if defined(__WIN__) || defined(__VMWARE__) || defined(__UEFI__)
-#define __WIN_OR_VMWARE_OR_UEFI__
-#endif
-
-#if (defined(__WIN__) || defined(__VMWARE__)) && !defined(__HIFC__)
-#define __WIN_OR_VMWARE_AND_NONHIFC__
-#endif
-
-#if defined(__WIN__) || defined(__UEFI__)
-#define __WIN_OR_UEFI__
-#endif
-
 #define sdk_err(dev, format, ...)		\
-	dev_err(dev, "[COMM]"format, ##__VA_ARGS__)
+	dev_err(dev, "[COMM]" format, ##__VA_ARGS__)
 #define sdk_warn(dev, format, ...)		\
-	dev_warn(dev, "[COMM]"format, ##__VA_ARGS__)
+	dev_warn(dev, "[COMM]" format, ##__VA_ARGS__)
 #define sdk_notice(dev, format, ...)		\
-	dev_notice(dev, "[COMM]"format, ##__VA_ARGS__)
+	dev_notice(dev, "[COMM]" format, ##__VA_ARGS__)
 #define sdk_info(dev, format, ...)		\
-	dev_info(dev, "[COMM]"format, ##__VA_ARGS__)
+	dev_info(dev, "[COMM]" format, ##__VA_ARGS__)
 
 #define nic_err(dev, format, ...)		\
-	dev_err(dev, "[NIC]"format, ##__VA_ARGS__)
+	dev_err(dev, "[NIC]" format, ##__VA_ARGS__)
 #define nic_warn(dev, format, ...)		\
-	dev_warn(dev, "[NIC]"format, ##__VA_ARGS__)
+	dev_warn(dev, "[NIC]" format, ##__VA_ARGS__)
 #define nic_notice(dev, format, ...)		\
-	dev_notice(dev, "[NIC]"format, ##__VA_ARGS__)
+	dev_notice(dev, "[NIC]" format, ##__VA_ARGS__)
 #define nic_info(dev, format, ...)		\
-	dev_info(dev, "[NIC]"format, ##__VA_ARGS__)
+	dev_info(dev, "[NIC]" format, ##__VA_ARGS__)
 
 #endif /* OSSL_KNL_H */
