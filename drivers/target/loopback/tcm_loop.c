@@ -315,6 +315,21 @@ static struct scsi_host_template tcm_loop_driver_template = {
 	.track_queue_depth	= 1,
 };
 
+module_param_named(can_queue, tcm_loop_driver_template.can_queue,
+		   int, 0444);
+MODULE_PARM_DESC(can_queue,
+		 "Maximum number of commands per adapter");
+
+module_param_named(sg_tablesize, tcm_loop_driver_template.sg_tablesize,
+		   ushort, 0444);
+MODULE_PARM_DESC(sg_tablesize,
+		 "Maximum number of entries in a scatter/gather table");
+
+module_param_named(cmd_per_lun, tcm_loop_driver_template.cmd_per_lun,
+		   short, 0444);
+MODULE_PARM_DESC(cmd_per_lun,
+		 "Maximum number of commands per lun");
+
 static int tcm_loop_driver_probe(struct device *dev)
 {
 	struct tcm_loop_hba *tl_hba;
