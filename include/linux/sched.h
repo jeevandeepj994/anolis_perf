@@ -506,8 +506,16 @@ struct sched_statistics {
 
 	CK_KABI_USE(1, unsigned long forceidled_sum)
 	CK_KABI_USE(2, unsigned long forceidled_sum_base)
+#ifdef CONFIG_SCHED_CORE
+	CK_KABI_USE(3, unsigned long core_forceidle_task_sum)
+#else
 	CK_KABI_RESERVE(3)
+#endif
+#if defined(CONFIG_SCHED_ACPU) || defined(CONFIG_SCHED_CORE)
+	CK_KABI_USE(4, unsigned long core_sibidle_task_sum)
+#else
 	CK_KABI_RESERVE(4)
+#endif
 	CK_KABI_RESERVE(5)
 	CK_KABI_RESERVE(6)
 	CK_KABI_RESERVE(7)
