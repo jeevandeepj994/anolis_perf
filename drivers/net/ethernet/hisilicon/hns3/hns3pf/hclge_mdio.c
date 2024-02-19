@@ -2,19 +2,12 @@
 // Copyright (c) 2016-2017 Hisilicon Limited.
 
 #include <linux/etherdevice.h>
+#include <linux/marvell_phy.h>
 #include <linux/kernel.h>
-
+#include "kcompat.h"
 #include "hclge_cmd.h"
 #include "hclge_main.h"
 #include "hclge_mdio.h"
-
-#define HCLGE_PHY_SUPPORTED_FEATURES	(SUPPORTED_Autoneg | \
-					 SUPPORTED_TP | \
-					 SUPPORTED_Pause | \
-					 SUPPORTED_Asym_Pause | \
-					 PHY_10BT_FEATURES | \
-					 PHY_100BT_FEATURES | \
-					 PHY_1000BT_FEATURES)
 
 enum hclge_mdio_c22_op_seq {
 	HCLGE_MDIO_C22_WRITE = 1,
@@ -62,9 +55,9 @@ static int hclge_mdio_write(struct mii_bus *bus, int phyid, int regnum,
 	mdio_cmd = (struct hclge_mdio_cfg_cmd *)desc.data;
 
 	hnae3_set_field(mdio_cmd->phyid, HCLGE_MDIO_PHYID_M,
-			HCLGE_MDIO_PHYID_S, phyid);
+			HCLGE_MDIO_PHYID_S, (u32)phyid);
 	hnae3_set_field(mdio_cmd->phyad, HCLGE_MDIO_PHYREG_M,
-			HCLGE_MDIO_PHYREG_S, regnum);
+			HCLGE_MDIO_PHYREG_S, (u32)regnum);
 
 	hnae3_set_bit(mdio_cmd->ctrl_bit, HCLGE_MDIO_CTRL_START_B, 1);
 	hnae3_set_field(mdio_cmd->ctrl_bit, HCLGE_MDIO_CTRL_ST_M,
@@ -100,9 +93,9 @@ static int hclge_mdio_read(struct mii_bus *bus, int phyid, int regnum)
 	mdio_cmd = (struct hclge_mdio_cfg_cmd *)desc.data;
 
 	hnae3_set_field(mdio_cmd->phyid, HCLGE_MDIO_PHYID_M,
-			HCLGE_MDIO_PHYID_S, phyid);
+			HCLGE_MDIO_PHYID_S, (u32)phyid);
 	hnae3_set_field(mdio_cmd->phyad, HCLGE_MDIO_PHYREG_M,
-			HCLGE_MDIO_PHYREG_S, regnum);
+			HCLGE_MDIO_PHYREG_S, (u32)regnum);
 
 	hnae3_set_bit(mdio_cmd->ctrl_bit, HCLGE_MDIO_CTRL_START_B, 1);
 	hnae3_set_field(mdio_cmd->ctrl_bit, HCLGE_MDIO_CTRL_ST_M,
@@ -129,13 +122,19 @@ static int hclge_mdio_read(struct mii_bus *bus, int phyid, int regnum)
 
 int hclge_mac_mdio_config(struct hclge_dev *hdev)
 {
+#define PHY_INEXISTENT	255
+
 	struct hclge_mac *mac = &hdev->hw.mac;
 	struct phy_device *phydev;
 	struct mii_bus *mdio_bus;
 	int ret;
 
-	if (hdev->hw.mac.phy_addr >= PHY_MAX_ADDR) {
-		dev_err(&hdev->pdev->dev, "phy_addr(%d) is too large.\n",
+	if (hdev->hw.mac.phy_addr == PHY_INEXISTENT) {
+		dev_info(&hdev->pdev->dev,
+			 "no phy device is connected to mdio bus\n");
+		return 0;
+	} else if (hdev->hw.mac.phy_addr >= PHY_MAX_ADDR) {
+		dev_err(&hdev->pdev->dev, "phy_addr(%u) is too large.\n",
 			hdev->hw.mac.phy_addr);
 		return -EINVAL;
 	}
@@ -181,6 +180,10 @@ static void hclge_mac_adjust_link(struct net_device *netdev)
 	int duplex, speed;
 	int ret;
 
+	/* When phy link down, do nothing */
+	if (netdev->phydev->link == 0)
+		return;
+
 	speed = netdev->phydev->speed;
 	duplex = netdev->phydev->duplex;
 
@@ -193,15 +196,44 @@ static void hclge_mac_adjust_link(struct net_device *netdev)
 		netdev_err(netdev, "failed to configure flow control.\n");
 }
 
-int hclge_mac_connect_phy(struct hclge_dev *hdev)
+int hclge_mac_connect_phy(struct hnae3_handle *handle)
 {
+	struct hclge_vport *vport = hclge_get_vport(handle);
+	struct hclge_dev *hdev = vport->back;
 	struct net_device *netdev = hdev->vport[0].nic.netdev;
 	struct phy_device *phydev = hdev->hw.mac.phydev;
+#ifdef HAS_LINK_MODE_OPS
+	__ETHTOOL_DECLARE_LINK_MODE_MASK(mask) = { 0, };
+#endif
 	int ret;
 
 	if (!phydev)
 		return 0;
 
+	phydev->dev_flags |= MARVELL_PHY_LED0_LINK_LED1_ACTIVE;
+
+#ifdef HAS_LINK_MODE_OPS
+	linkmode_clear_bit(ETHTOOL_LINK_MODE_FIBRE_BIT, phydev->supported);
+
+	ret = phy_connect_direct(netdev, phydev,
+				 hclge_mac_adjust_link,
+				 PHY_INTERFACE_MODE_SGMII);
+	if (ret) {
+		netdev_err(netdev, "phy_connect_direct err.\n");
+		return ret;
+	}
+
+	linkmode_copy(mask, hdev->hw.mac.supported);
+	linkmode_and(phydev->supported, phydev->supported, mask);
+	linkmode_copy(phydev->advertising, phydev->supported);
+
+	/* supported flag is Pause and Asym Pause, but default advertising
+	 * should be rx on, tx on, so need clear Asym Pause in advertising
+	 * flag
+	 */
+	linkmode_clear_bit(ETHTOOL_LINK_MODE_Asym_Pause_BIT,
+			   phydev->advertising);
+#else
 	phydev->supported &= ~SUPPORTED_FIBRE;
 
 	ret = phy_connect_direct(netdev, phydev,
@@ -212,14 +244,25 @@ int hclge_mac_connect_phy(struct hclge_dev *hdev)
 		return ret;
 	}
 
-	phydev->supported &= HCLGE_PHY_SUPPORTED_FEATURES;
+	phydev->supported &= *hdev->hw.mac.supported;
 	phydev->advertising = phydev->supported;
+
+	/* supported flag is Pause and Asym Pause, but default advertising
+	 * should be rx on, tx on, so need clear Asym Pause in advertising
+	 * flag
+	 */
+	phydev->advertising &= ~ADVERTISED_Asym_Pause;
+#endif
+
+	phy_attached_info(phydev);
 
 	return 0;
 }
 
-void hclge_mac_disconnect_phy(struct hclge_dev *hdev)
+void hclge_mac_disconnect_phy(struct hnae3_handle *handle)
 {
+	struct hclge_vport *vport = hclge_get_vport(handle);
+	struct hclge_dev *hdev = vport->back;
 	struct phy_device *phydev = hdev->hw.mac.phydev;
 
 	if (!phydev)
@@ -234,6 +277,8 @@ void hclge_mac_start_phy(struct hclge_dev *hdev)
 
 	if (!phydev)
 		return;
+
+	phy_loopback(phydev, false);
 
 	phy_start(phydev);
 }
