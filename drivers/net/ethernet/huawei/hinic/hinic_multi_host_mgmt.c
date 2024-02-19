@@ -44,6 +44,18 @@
 			(((u8)(enable) & 1U) << (host_id))
 #define SLAVE_HOST_STATUS_GET(host_id, val)	(!!((val) & (1U << (host_id))))
 
+#define MULTI_HOST_PPF_GET(host_id, val) (((val) >> ((host_id) * 4 + 16)) & 0xf)
+
+static inline u8 get_master_host_ppf_idx(struct hinic_hwdev *hwdev)
+{
+	u32 reg_val;
+
+	reg_val = hinic_hwif_read_reg(hwdev->hwif,
+				      HINIC_MULT_HOST_SLAVE_STATUS_ADDR);
+	/* master host sets host_id to 0 */
+	return MULTI_HOST_PPF_GET(0, reg_val);
+}
+
 void set_slave_host_enable(struct hinic_hwdev *hwdev, u8 host_id, bool enable)
 {
 	u32 reg_val;
@@ -148,6 +160,16 @@ bool is_multi_vm_slave(void *hwdev)
 		return false;
 
 	return (hw_dev->func_mode == FUNC_MOD_MULTI_VM_SLAVE) ? true : false;
+}
+
+bool is_multi_bm_slave(void *hwdev)
+{
+	struct hinic_hwdev *hw_dev = hwdev;
+
+	if (!hwdev)
+		return false;
+
+	return (hw_dev->func_mode == FUNC_MOD_MULTI_BM_SLAVE) ? true : false;
 }
 
 int rectify_host_mode(struct hinic_hwdev *hwdev)
@@ -262,7 +284,7 @@ int __mbox_to_host(struct hinic_hwdev *hwdev, enum hinic_mod_type mod,
 
 	if (!mbox_hwdev->mhost_mgmt) {
 		/* send to master host in default */
-		dst_host_func_idx = 0;
+		dst_host_func_idx = get_master_host_ppf_idx(hwdev);
 	} else {
 		dst_host_func_idx = IS_MASTER_HOST(hwdev) ?
 				mbox_hwdev->mhost_mgmt->shost_ppf_idx :
@@ -428,7 +450,8 @@ static int multi_host_event_handler(struct hinic_hwdev *hwdev,
 }
 
 static int sw_fwd_msg_to_vf(struct hinic_hwdev *hwdev,
-	void *buf_in, u16 in_size, void *buf_out, u16 *out_size)
+			    void *buf_in, u16 in_size, void *buf_out,
+			    u16 *out_size)
 {
 	struct hinic_host_fwd_head *fwd_head;
 	u16 fwd_head_len;
@@ -439,9 +462,9 @@ static int sw_fwd_msg_to_vf(struct hinic_hwdev *hwdev,
 	fwd_head_len = sizeof(struct hinic_host_fwd_head);
 	msg = (void *)((u8 *)buf_in + fwd_head_len);
 	err = hinic_mbox_ppf_to_vf(hwdev, fwd_head->mod,
-				fwd_head->dst_glb_func_idx, fwd_head->cmd,
-				msg, (in_size - fwd_head_len),
-				buf_out, out_size, 0);
+				   fwd_head->dst_glb_func_idx, fwd_head->cmd,
+				   msg, in_size - fwd_head_len,
+				   buf_out, out_size, 0);
 	if (err)
 		nic_err(hwdev->dev_hdl,
 			"Fwd msg to func %u failed, err: %d\n",
@@ -449,6 +472,7 @@ static int sw_fwd_msg_to_vf(struct hinic_hwdev *hwdev,
 
 	return err;
 }
+
 static int __slave_host_sw_func_handler(struct hinic_hwdev *hwdev, u16 pf_idx,
 					u8 cmd, void *buf_in, u16 in_size,
 					void *buf_out, u16 *out_size)
@@ -483,7 +507,7 @@ static int __slave_host_sw_func_handler(struct hinic_hwdev *hwdev, u16 pf_idx,
 
 	case HINIC_SW_CMD_SEND_MSG_TO_VF:
 		err = sw_fwd_msg_to_vf(hwdev, buf_in, in_size,
-				buf_out, out_size);
+				       buf_out, out_size);
 		break;
 
 	case HINIC_SW_CMD_MIGRATE_READY:
@@ -528,7 +552,8 @@ int __ppf_process_mbox_msg(struct hinic_hwdev *hwdev, u16 pf_idx, u16 vf_id,
 
 	if (IS_SLAVE_HOST(hwdev)) {
 		err = hinic_mbox_to_host_sync(hwdev, mod, cmd,
-				buf_in, in_size, buf_out, out_size, 0);
+					      buf_in, in_size, buf_out,
+					      out_size, 0);
 		if (err)
 			sdk_err(hwdev->dev_hdl, "send to mpf failed, err: %d\n",
 				err);
@@ -871,21 +896,13 @@ int hinic_multi_host_mgmt_init(struct hinic_hwdev *hwdev)
 		return -ENOMEM;
 	}
 
+	hwdev->mhost_mgmt->mhost_ppf_idx = get_master_host_ppf_idx(hwdev);
+	hwdev->mhost_mgmt->shost_ppf_idx = 0;
+	hwdev->mhost_mgmt->shost_host_idx = 2;
+
 	err = hinic_get_hw_pf_infos(hwdev, &hwdev->mhost_mgmt->pf_infos);
 	if (err)
 		goto out_free_mhost_mgmt;
-
-	/* master ppf idx fix to 0 */
-	hwdev->mhost_mgmt->mhost_ppf_idx = 0;
-	if (IS_BMGW_MASTER_HOST(hwdev) || IS_BMGW_SLAVE_HOST(hwdev)) {
-		/* fix slave host ppf 6 and host 2 in bmwg mode
-		 */
-		hwdev->mhost_mgmt->shost_ppf_idx = 6;
-		hwdev->mhost_mgmt->shost_host_idx = 2;
-	} else {
-		hwdev->mhost_mgmt->shost_ppf_idx = 7;
-		hwdev->mhost_mgmt->shost_host_idx = 2;
-	}
 
 	hinic_register_ppf_mbox_cb(hwdev, HINIC_MOD_COMM,
 				   comm_ppf_mbox_handler);

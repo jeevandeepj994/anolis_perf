@@ -16,12 +16,6 @@
 #ifndef __HINIC_DFX_DEF_H__
 #define __HINIC_DFX_DEF_H__
 
-#ifdef __cplusplus
-    #if __cplusplus
-extern "C"{
-    #endif
-#endif /* __cplusplus */
-
 enum module_name {
 	SEND_TO_NIC_DRIVER = 1,
 	SEND_TO_HW_DRIVER,
@@ -108,6 +102,8 @@ enum driver_cmd_type {
 	WIN_CSR_WRITE = 0x62,
 	WIN_API_CMD_RD = 0x63,
 
+	GET_NICTOOL_CAP = 0x74,
+
 	VM_COMPAT_TEST = 0xFF
 };
 
@@ -120,7 +116,9 @@ enum hinic_nic_link_mode {
 
 enum api_chain_cmd_type {
 	API_CSR_READ,
-	API_CSR_WRITE
+	API_CSR_WRITE,
+	API_CSR_READ_8B,
+	API_CSR_WRITE_8B,
 };
 
 enum sm_cmd_type {
@@ -141,13 +139,12 @@ struct hinic_show_item {
 	u64	value;
 };
 
-#define UP_UPDATEFW_TIME_OUT_VAL		20000U
+#define UP_UPDATEFW_TIME_OUT_VAL	20000U
 #define UCODE_COMP_TIME_OUT_VAL		0xFF00000
-#define NIC_TOOL_MAGIC					'x'
+#define NIC_TOOL_MAGIC			'x'
 
-#ifdef __cplusplus
-    #if __cplusplus
-}
-    #endif
-#endif /* __cplusplus */
+enum hinic_nictool_drv_cap {
+	NICTOOL_SUPPORT_API_CSR = 0x1,
+};
+
 #endif /* __HINIC_DFX_DEF_H__ */

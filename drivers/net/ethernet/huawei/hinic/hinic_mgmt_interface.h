@@ -462,7 +462,7 @@ struct hinic_set_rq_iq_mapping {
 
 	u16	func_id;
 	u16	rsvd1;
-	u8	map[HINIC_MAX_NUM_RQ];
+	u8	map[64];
 	u32	num_rqs;
 	u32	rq_depth;
 };
@@ -680,6 +680,25 @@ struct hinic_capture_info {
 	u32 data_vlan;
 };
 
+struct hinic_port_rt_cmd {
+	u8	status;
+	u8	version;
+	u8	rsvd0[6];
+
+	u8	pf_id;
+	u8	enable;
+	u8	rsvd1[6];
+};
+
+struct fw_support_func {
+	u8	status;
+	u8	version;
+	u8	rsvd0[6];
+
+	u64	flag;
+	u64	rsvd;
+};
+
 struct hinic_vf_dcb_state {
 	u8	status;
 	u8	version;
@@ -731,11 +750,15 @@ int hinic_init_function_table(void *hwdev, u16 rx_buf_sz);
 
 int hinic_get_base_qpn(void *hwdev, u16 *global_qpn);
 
+int hinic_get_fw_support_func(void *hwdev);
+
 int hinic_vf_func_init(struct hinic_hwdev *hwdev);
 
 void hinic_vf_func_free(struct hinic_hwdev *hwdev);
 
 void hinic_unregister_vf_msg_handler(void *hwdev, u16 vf_id);
+
+int hinic_set_port_routine_cmd_report(void *hwdev, bool enable);
 
 int hinic_refresh_nic_cfg(void *hwdev, struct nic_port_info *port_info);
 
@@ -916,10 +939,12 @@ struct hinic_link_ksettings_info {
 	u8	fec;		/* 0 - RSFEC; 1 - BASEFEC; 2 - NOFEC */
 	u8	rsvd2[18];	/* reserved for duplex, port, etc. */
 };
+
 enum hinic_tx_promsic {
 	HINIC_TX_PROMISC_ENABLE	= 0,
 	HINIC_TX_PROMISC_DISABLE	= 1,
 };
+
 struct hinic_promsic_info {
 	u8	status;
 	u8	version;

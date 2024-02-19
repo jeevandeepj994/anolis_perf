@@ -92,12 +92,12 @@
 		(pg_num) * HINIC_CSR_EQ_PAGE_OFF_STRIDE + 4)
 
 #define HINIC_EQ_HI_PHYS_ADDR_REG(type, q_id, pg_num)	\
-		((u32)((type == HINIC_AEQ) ? \
+		((u32)(((type) == HINIC_AEQ) ? \
 		HINIC_AEQ_HI_PHYS_ADDR_REG(q_id, pg_num) : \
 		HINIC_CEQ_HI_PHYS_ADDR_REG(q_id, pg_num)))
 
 #define HINIC_EQ_LO_PHYS_ADDR_REG(type, q_id, pg_num)	\
-		((u32)((type == HINIC_AEQ) ? \
+		((u32)(((type) == HINIC_AEQ) ? \
 		HINIC_AEQ_LO_PHYS_ADDR_REG(q_id, pg_num) : \
 		HINIC_CEQ_LO_PHYS_ADDR_REG(q_id, pg_num)))
 
@@ -125,6 +125,10 @@
 #define HINIC_CEQ_CONS_IDX_0_ADDR_BASE			0x1008
 #define HINIC_CEQ_CONS_IDX_1_ADDR_BASE			0x100C
 
+/* For multi-host mgmt
+ * CEQ_CTRL_0_ADDR: bit26~29: uP write vf mode is normal(0x0),bmgw(0x1),
+ * vmgw(0x2)
+ */
 #define HINIC_CSR_CEQ_CTRL_0_ADDR(idx) \
 	(HINIC_CEQ_CTRL_0_ADDR_BASE + (idx) * HINIC_EQ_OFF_STRIDE)
 

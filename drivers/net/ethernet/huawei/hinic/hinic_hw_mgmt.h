@@ -73,6 +73,7 @@ struct nic_service_cap {
 	u8 tso_sz;      /* TSO context space: n*16B */
 
 	u16 max_queue_allowed;
+	u16 dynamic_qp; /* support dynamic queue */
 };
 
 struct dev_roce_svc_own_cap {
@@ -358,6 +359,7 @@ struct dev_ovs_svc_cap {
 	/* PF resources */
 	u32 max_pctxs; /* Parent Context: max specifications 1M */
 	u32 max_cqs;
+	u8 dynamic_qp_en;
 
 	/* VF resources */
 	u32 vf_max_pctxs; /* Parent Context: max specifications 1M */
@@ -393,6 +395,12 @@ struct acl_service_cap {
 	u32 scqc_sz;    /* 64B */
 };
 
+enum hinic_chip_mode {
+	CHIP_MODE_NORMAL,
+	CHIP_MODE_BMGW,
+	CHIP_MODE_VMGW,
+};
+
 bool hinic_support_nic(void *hwdev, struct nic_service_cap *cap);
 bool hinic_support_roce(void *hwdev, struct rdma_service_cap *cap);
 bool hinic_support_fcoe(void *hwdev, struct fcoe_service_cap *cap);
@@ -406,6 +414,7 @@ bool hinic_support_acl(void *hwdev, struct acl_service_cap *cap);
 bool hinic_support_rdma(void *hwdev, struct rdma_service_cap *cap);
 bool hinic_support_ft(void *hwdev);
 bool hinic_func_for_mgmt(void *hwdev);
+bool hinic_support_dynamic_q(void *hwdev);
 
 int hinic_set_toe_enable(void *hwdev, bool enable);
 bool hinic_get_toe_enable(void *hwdev);
@@ -485,6 +494,7 @@ enum hinic_msix_state {
 
 void hinic_set_msix_state(void *hwdev, u16 msix_idx,
 			  enum hinic_msix_state flag);
+enum hinic_msix_state hinic_get_msix_state(void *hwdev, u16 msix_idx);
 
 /* Define the version information structure */
 struct dev_version_info {
@@ -517,11 +527,13 @@ int hinic_alloc_ceqs(void *hwdev, enum hinic_service_type type, int req_num,
 		     int *ceq_id_array, int *resp_num);
 void hinic_free_ceq(void *hwdev, enum hinic_service_type type, int ceq_id);
 int hinic_sync_time(void *hwdev, u64 time);
+void hinic_sync_time_async(void *hwdev, u64 time);
 
 struct hinic_micro_log_info {
 	int (*init)(void *hwdev);
 	void (*deinit)(void *hwdev);
 };
+
 int hinic_register_micro_log(struct hinic_micro_log_info *micro_log_info);
 void hinic_unregister_micro_log(struct hinic_micro_log_info *micro_log_info);
 
@@ -553,4 +565,5 @@ u16 hinic_pf_id_of_vf_hw(void *hwdev);
 u16 hinic_global_func_id_hw(void *hwdev);
 bool hinic_func_for_pt(void *hwdev);
 bool hinic_func_for_hwpt(void *hwdev);
+u32 hinic_get_db_size(void *cfg_reg_base, enum hinic_chip_mode *chip_mode);
 #endif

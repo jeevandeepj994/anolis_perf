@@ -16,12 +16,6 @@
 #ifndef __HINIC_PORT_CMD_H__
 #define __HINIC_PORT_CMD_H__
 
-#ifdef __cplusplus
-    #if __cplusplus
-extern "C"{
-    #endif
-#endif /* __cplusplus */
-
 /* cmd of mgmt CPU message for NIC module */
 enum hinic_port_cmd {
 	HINIC_PORT_CMD_VF_REGISTER		= 0x0,
@@ -99,7 +93,7 @@ enum hinic_port_cmd {
 	HINIC_PORT_CMD_SET_JUMBO_FRAME_SIZE,
 
 	/* 0x4c ~ 0x57 have defined in base line */
-	HINIC_PORT_CMD_DISABLE_PROMISIC		= 0x4c,
+	HINIC_PORT_CMD_DISABLE_PROMISC		= 0x4c,
 	HINIC_PORT_CMD_ENABLE_SPOOFCHK		= 0x4e,
 	HINIC_PORT_CMD_GET_MGMT_VERSION		= 0x58,
 	HINIC_PORT_CMD_GET_BOOT_VERSION,
@@ -146,6 +140,10 @@ enum hinic_port_cmd {
 	HINIC_PORT_CMD_SET_PORT_LINK_STATUS	= 0x76,
 	HINIC_PORT_CMD_SET_CGE_PAUSE_TIME_CFG	= 0x77,
 
+	HINIC_PORT_CMD_GET_FW_SUPPORT_FLAG	= 0x79,
+
+	HINIC_PORT_CMD_SET_PORT_REPORT		= 0x7B,
+
 	HINIC_PORT_CMD_LINK_STATUS_REPORT	= 0xa0,
 
 	HINIC_PORT_CMD_SET_LOSSLESS_ETH		= 0xa3,
@@ -162,6 +160,13 @@ enum hinic_port_cmd {
 	/* not defined in base line */
 
 	HINIC_PORT_CMD_GET_SFP_INFO		= 0xad,
+	HINIC_PORT_CMD_UP_TC_ADD_FLOW		= 0xAF,
+	HINIC_PORT_CMD_UP_TC_DEL_FLOW		= 0xB0,
+	HINIC_PORT_CMD_UP_TC_GET_FLOW		= 0xB1,
+	HINIC_PORT_CMD_UP_TC_FLUSH_TCAM		= 0xB2,
+	HINIC_PORT_CMD_UP_TC_CTRL_TCAM_BLOCK	= 0xB3,
+	HINIC_PORT_CMD_UP_TC_ENABLE		= 0xB4,
+	HINIC_PORT_CMD_UP_TC_GET_TCAM_BLOCK	= 0xB5,
 
 	HINIC_PORT_CMD_SET_NETQ			= 0xc1,
 	HINIC_PORT_CMD_ADD_RQ_FILTER		= 0xc2,
@@ -200,6 +205,7 @@ enum hinic_port_cmd {
 	HINIC_PORT_CMD_SET_LINK_FOLLOW		= 0xF8,
 	HINIC_PORT_CMD_SET_VF_MAX_MIN_RATE	= 0xF9,
 	HINIC_PORT_CMD_SET_RXQ_LRO_ADPT		= 0xFA,
+	HINIC_PORT_CMD_GET_SFP_ABS		= 0xFB,
 	HINIC_PORT_CMD_Q_FILTER			= 0xFC,
 	HINIC_PORT_CMD_TCAM_FILTER		= 0xFE,
 	HINIC_PORT_CMD_SET_VLAN_FILTER		= 0xFF,
@@ -279,7 +285,7 @@ enum hinic_mgmt_cmd {
 	HINIC_MGMT_CMD_GET_HW_PF_INFOS		= 0x6D,
 	HINIC_MGMT_CMD_GET_SDI_MODE		= 0x6E,
 
-	HINIC_MGMT_CMD_ENABLE_MIGRATE	= 0x6F,
+	HINIC_MGMT_CMD_ENABLE_MIGRATE		= 0x6F,
 };
 
 /* uCode relates commands */
@@ -344,8 +350,8 @@ enum sq_tunnel_l4_type {
 	TUNNEL_UDP_CSUM,
 };
 
-#define NIC_RSS_CMD_TEMP_ALLOC  0x01
-#define NIC_RSS_CMD_TEMP_FREE   0x02
+#define NIC_RSS_CMD_TEMP_ALLOC				0x01
+#define NIC_RSS_CMD_TEMP_FREE				0x02
 
 #define HINIC_RSS_TYPE_VALID_SHIFT			23
 #define HINIC_RSS_TYPE_TCP_IPV6_EXT_SHIFT		24
@@ -496,7 +502,7 @@ enum {
 
 #define DB_IDX(db, db_base)	\
 	((u32)(((ulong)(db) - (ulong)(db_base)) /	\
-	HINIC_DB_PAGE_SIZE))
+	       HINIC_DB_PAGE_SIZE))
 
 enum hinic_pcie_nosnoop {
 	HINIC_PCIE_SNOOP = 0,
@@ -519,27 +525,24 @@ enum hinic_doorbell_ctrl {
 };
 
 enum hinic_pf_status {
-	HINIC_PF_STATUS_INIT = 0X0,
+	HINIC_PF_STATUS_INIT = 0x0,
 	HINIC_PF_STATUS_ACTIVE_FLAG = 0x11,
 	HINIC_PF_STATUS_FLR_START_FLAG = 0x12,
 	HINIC_PF_STATUS_FLR_FINISH_FLAG = 0x13,
 };
 
 /* total doorbell or direct wqe size is 512kB, db num: 128, dwqe: 128 */
-#define HINIC_DB_DWQE_SIZE       0x00080000
+#define HINIC_DB_DWQE_SIZE      0x00080000
+/* BMGW & VMGW VF db size 256k, have no dwqe space */
+#define HINIC_GW_VF_DB_SIZE	0x00040000
 
 /* db/dwqe page size: 4K */
-#define HINIC_DB_PAGE_SIZE		0x00001000ULL
+#define HINIC_DB_PAGE_SIZE	0x00001000ULL
 
-#define HINIC_DB_MAX_AREAS         (HINIC_DB_DWQE_SIZE / HINIC_DB_PAGE_SIZE)
+#define HINIC_DB_MAX_AREAS	(HINIC_DB_DWQE_SIZE / HINIC_DB_PAGE_SIZE)
 
 #define HINIC_PCI_MSIX_ENTRY_SIZE			16
 #define HINIC_PCI_MSIX_ENTRY_VECTOR_CTRL		12
 #define HINIC_PCI_MSIX_ENTRY_CTRL_MASKBIT		1
 
-#ifdef __cplusplus
-    #if __cplusplus
-}
-    #endif
-#endif /* __cplusplus */
 #endif /* __HINIC_PORT_CMD_H__ */

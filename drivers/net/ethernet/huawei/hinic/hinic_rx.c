@@ -48,9 +48,9 @@ static void hinic_clear_rss_config_user(struct hinic_nic_dev *nic_dev);
 
 #define RXQ_STATS_INC(rxq, field)			\
 {							\
-	u64_stats_update_begin(&rxq->rxq_stats.syncp);	\
-	rxq->rxq_stats.field++;				\
-	u64_stats_update_end(&rxq->rxq_stats.syncp);	\
+	u64_stats_update_begin(&(rxq)->rxq_stats.syncp);	\
+	(rxq)->rxq_stats.field++;				\
+	u64_stats_update_end(&(rxq)->rxq_stats.syncp);	\
 }
 
 static bool rx_alloc_mapped_page(struct hinic_rxq *rxq,
@@ -67,11 +67,9 @@ static bool rx_alloc_mapped_page(struct hinic_rxq *rxq,
 		return true;
 
 	/* alloc new page for storage */
-	page = alloc_pages_node(NUMA_NO_NODE, GFP_ATOMIC | __GFP_COLD |
-				__GFP_COMP, nic_dev->page_order);
+	page = dev_alloc_pages(nic_dev->page_order);
 	if (unlikely(!page)) {
-		nicif_err(nic_dev, drv, netdev, "Alloc rxq: %d page failed\n",
-			  rxq->q_id);
+		RXQ_STATS_INC(rxq, alloc_rx_buf_err);
 		return false;
 	}
 
@@ -83,7 +81,7 @@ static bool rx_alloc_mapped_page(struct hinic_rxq *rxq,
 	 * there isn't much point in holding memory we can't use
 	 */
 	if (unlikely(dma_mapping_error(&pdev->dev, dma))) {
-		nicif_err(nic_dev, drv, netdev, "Failed to map page to rx buffer\n");
+		RXQ_STATS_INC(rxq, map_rx_buf_err);
 		__free_pages(page, nic_dev->page_order);
 		return false;
 	}
@@ -163,9 +161,8 @@ static int hinic_rx_fill_buffers(struct hinic_rxq *rxq)
 				      rxq->next_to_update);
 		rxq->delta -= i;
 		rxq->next_to_alloc = rxq->next_to_update;
-	} else {
-		nicif_err(nic_dev, drv, netdev, "Failed to allocate rx buffers, rxq id: %d\n",
-			  rxq->q_id);
+	} else if (free_wqebbs == rxq->q_depth - 1) {
+		RXQ_STATS_INC(rxq, rx_buf_empty);
 	}
 
 	return i;
@@ -265,11 +262,7 @@ static bool hinic_add_rx_frag(struct hinic_rxq *rxq,
 	/* flip page offset to other buffer */
 	rx_info->page_offset ^= rxq->buf_len;
 
-#ifdef HAVE_PAGE_COUNT
-	atomic_add(1, &page->_count);
-#else
 	page_ref_inc(page);
-#endif
 
 	return true;
 }
@@ -389,8 +382,9 @@ void hinic_rxq_get_stats(struct hinic_rxq *rxq,
 				rxq_stats->other_errors;
 		stats->csum_errors = rxq_stats->csum_errors;
 		stats->other_errors = rxq_stats->other_errors;
-		stats->unlock_bp = rxq_stats->unlock_bp;
 		stats->dropped = rxq_stats->dropped;
+		stats->xdp_dropped = rxq_stats->xdp_dropped;
+		stats->rx_buf_empty = rxq_stats->rx_buf_empty;
 	} while (u64_stats_fetch_retry(&rxq_stats->syncp, start));
 	u64_stats_update_end(&stats->syncp);
 }
@@ -402,11 +396,15 @@ void hinic_rxq_clean_stats(struct hinic_rxq_stats *rxq_stats)
 	rxq_stats->packets = 0;
 	rxq_stats->errors = 0;
 	rxq_stats->csum_errors = 0;
-	rxq_stats->unlock_bp = 0;
 	rxq_stats->other_errors = 0;
 	rxq_stats->dropped = 0;
+	rxq_stats->xdp_dropped = 0;
 
 	rxq_stats->alloc_skb_err = 0;
+	rxq_stats->alloc_rx_buf_err = 0;
+	rxq_stats->map_rx_buf_err = 0;
+	rxq_stats->rx_buf_empty = 0;
+	rxq_stats->xdp_large_pkt = 0;
 	u64_stats_update_end(&rxq_stats->syncp);
 }
 
@@ -446,6 +444,7 @@ static void hinic_rx_csum(struct hinic_rxq *rxq, u32 status,
 	u32 csum_err;
 
 	csum_err = HINIC_GET_RX_CSUM_ERR(status);
+
 	if (unlikely(csum_err == HINIC_RX_CSUM_IPSU_OTHER_ERR))
 		rxq->rxq_stats.other_errors++;
 
@@ -462,9 +461,8 @@ static void hinic_rx_csum(struct hinic_rxq *rxq, u32 status,
 
 		skb->ip_summed = CHECKSUM_NONE;
 	}
- }
+}
 
-#ifdef HAVE_SKBUFF_CSUM_LEVEL
 static void hinic_rx_gro(struct hinic_rxq *rxq, u32 offload_type,
 			 struct sk_buff *skb)
 {
@@ -481,35 +479,6 @@ static void hinic_rx_gro(struct hinic_rxq *rxq, u32 offload_type,
 		/* If we checked the outer header let the stack know */
 		skb->csum_level = 1;
 }
-#endif /* HAVE_SKBUFF_CSUM_LEVEL */
-
-#define HINIC_RX_BP_THD		128
-
-static void hinic_unlock_bp(struct hinic_rxq *rxq, bool bp_en, bool force_en)
-{
-	struct net_device *netdev = rxq->netdev;
-	struct hinic_nic_dev *nic_dev = netdev_priv(netdev);
-	int free_wqebbs, err;
-
-	if (bp_en)
-		set_bit(HINIC_RX_STATUS_BP_EN, &rxq->status);
-
-	free_wqebbs = rxq->delta - 1;
-	if (test_bit(HINIC_RX_STATUS_BP_EN, &rxq->status) &&
-	    (nic_dev->rq_depth - free_wqebbs) >= nic_dev->bp_upper_thd &&
-		(rxq->bp_cnt >= HINIC_RX_BP_THD || force_en)) {
-		err = hinic_set_iq_enable_mgmt(nic_dev->hwdev, rxq->q_id,
-					       nic_dev->bp_lower_thd,
-					       rxq->next_to_update);
-		if (!err) {
-			clear_bit(HINIC_RX_STATUS_BP_EN, &rxq->status);
-			rxq->bp_cnt = 0;
-			rxq->rxq_stats.unlock_bp++;
-		} else {
-			nicif_err(nic_dev, drv, netdev, "Failed to set iq enable\n");
-		}
-	}
-}
 
 static void hinic_copy_lp_data(struct hinic_nic_dev *nic_dev,
 			       struct sk_buff *skb)
@@ -522,11 +491,11 @@ static void hinic_copy_lp_data(struct hinic_nic_dev *nic_dev,
 
 	if (nic_dev->lb_test_rx_idx == LP_PKT_CNT) {
 		nic_dev->lb_test_rx_idx = 0;
-		nicif_warn(nic_dev, drv, netdev, "Loopback test warning, recive too more test pkt\n");
+		nicif_warn(nic_dev, rx_err, netdev, "Loopback test warning, recive too more test pkt\n");
 	}
 
 	if (skb->len != nic_dev->lb_pkt_len) {
-		nicif_warn(nic_dev, drv, netdev, "Wrong packet length\n");
+		nicif_warn(nic_dev, rx_err, netdev, "Wrong packet length\n");
 		nic_dev->lb_test_rx_idx++;
 		return;
 	}
@@ -544,6 +513,87 @@ static void hinic_copy_lp_data(struct hinic_nic_dev *nic_dev,
 	nic_dev->lb_test_rx_idx++;
 }
 
+enum hinic_xdp_pkt {
+	HINIC_XDP_PKT_PASS,
+	HINIC_XDP_PKT_DROP,
+};
+
+static inline void update_drop_rx_info(struct hinic_rxq *rxq, u16 weqbb_num)
+{
+	struct hinic_rx_info *rx_info = NULL;
+
+	while (weqbb_num) {
+		rx_info = &rxq->rx_info[rxq->cons_idx & rxq->q_mask];
+		if (likely(page_to_nid(rx_info->page) == numa_node_id()))
+			hinic_reuse_rx_page(rxq, rx_info);
+
+		rx_info->buf_dma_addr = 0;
+		rx_info->page = NULL;
+		rxq->cons_idx++;
+		rxq->delta++;
+
+		weqbb_num--;
+	}
+}
+
+int hinic_run_xdp(struct hinic_rxq *rxq, u32 pkt_len)
+{
+	struct bpf_prog *xdp_prog = NULL;
+	struct hinic_rx_info *rx_info = NULL;
+	struct xdp_buff xdp;
+	int result = HINIC_XDP_PKT_PASS;
+	u16 weqbb_num = 1; /* xdp can only use one rx_buff */
+	u8 *va = NULL;
+	u32 act;
+
+	rcu_read_lock();
+	xdp_prog = READ_ONCE(rxq->xdp_prog);
+	if (!xdp_prog)
+		goto unlock_rcu;
+
+	if (unlikely(pkt_len > rxq->buf_len)) {
+		RXQ_STATS_INC(rxq, xdp_large_pkt);
+		weqbb_num = (u16)(pkt_len >> rxq->rx_buff_shift) +
+				((pkt_len & (rxq->buf_len - 1)) ? 1 : 0);
+		result = HINIC_XDP_PKT_DROP;
+		goto xdp_out;
+	}
+
+	rx_info = &rxq->rx_info[rxq->cons_idx & rxq->q_mask];
+	va = (u8 *)page_address(rx_info->page) + rx_info->page_offset;
+	prefetch(va);
+	dma_sync_single_range_for_cpu(rxq->dev, rx_info->buf_dma_addr,
+				      rx_info->page_offset, rxq->buf_len,
+				      DMA_FROM_DEVICE);
+	xdp.data = va;
+	xdp.data_hard_start = xdp.data;
+	xdp.data_end = xdp.data + pkt_len;
+	xdp_set_data_meta_invalid(&xdp);
+	prefetchw(xdp.data_hard_start);
+	act = bpf_prog_run_xdp(xdp_prog, &xdp);
+	switch (act) {
+	case XDP_PASS:
+		break;
+	default:
+		bpf_warn_invalid_xdp_action(act);
+		/* fallthrough */
+	case XDP_DROP:
+		result = HINIC_XDP_PKT_DROP;
+		break;
+	}
+
+xdp_out:
+	if (result == HINIC_XDP_PKT_DROP) {
+		RXQ_STATS_INC(rxq, xdp_dropped);
+		update_drop_rx_info(rxq, weqbb_num);
+	}
+
+unlock_rcu:
+	rcu_read_unlock();
+
+	return result;
+}
+
 int recv_one_pkt(struct hinic_rxq *rxq, struct hinic_rq_cqe *rx_cqe,
 		 u32 pkt_len, u32 vlan_len, u32 status)
 {
@@ -551,6 +601,11 @@ int recv_one_pkt(struct hinic_rxq *rxq, struct hinic_rq_cqe *rx_cqe,
 	struct net_device *netdev = rxq->netdev;
 	struct hinic_nic_dev *nic_dev = netdev_priv(netdev);
 	u32 offload_type;
+	u32 xdp_status;
+
+	xdp_status = hinic_run_xdp(rxq, pkt_len);
+	if (xdp_status == HINIC_XDP_PKT_DROP)
+		return 0;
 
 	skb = hinic_fetch_rx_buffer(rxq, pkt_len);
 	if (unlikely(!skb)) {
@@ -565,17 +620,10 @@ int recv_one_pkt(struct hinic_rxq *rxq, struct hinic_rq_cqe *rx_cqe,
 	hinic_rx_csum(rxq, status, skb);
 
 	offload_type = be32_to_cpu(rx_cqe->offload_type);
-#ifdef HAVE_SKBUFF_CSUM_LEVEL
 	hinic_rx_gro(rxq, offload_type, skb);
-#endif
 
-#if defined(NETIF_F_HW_VLAN_CTAG_RX)
 	if ((netdev->features & NETIF_F_HW_VLAN_CTAG_RX) &&
 	    HINIC_GET_RX_VLAN_OFFLOAD_EN(offload_type)) {
-#else
-	if ((netdev->features & NETIF_F_HW_VLAN_RX) &&
-	    HINIC_GET_RX_VLAN_OFFLOAD_EN(offload_type)) {
-#endif
 		u16 vid = HINIC_GET_RX_VLAN_TAG(vlan_len);
 
 		/* if the packet is a vlan pkt, the vid may be 0 */
@@ -589,11 +637,7 @@ int recv_one_pkt(struct hinic_rxq *rxq, struct hinic_rq_cqe *rx_cqe,
 	skb->protocol = eth_type_trans(skb, netdev);
 
 	if (skb_has_frag_list(skb)) {
-#ifdef HAVE_NAPI_GRO_FLUSH_OLD
 		napi_gro_flush(&rxq->irq_cfg->napi, false);
-#else
-		napi_gro_flush(&rxq->irq_cfg->napi);
-#endif
 		netif_receive_skb(skb);
 	} else {
 		napi_gro_receive(&rxq->irq_cfg->napi, skb);
@@ -615,6 +659,7 @@ void rx_pass_super_cqe(struct hinic_rxq *rxq, u32 index, u32 pkt_num,
 				((pkt_len & (rxq->buf_len - 1)) ? 1 : 0);
 		index++;
 	}
+
 	rxq->cons_idx += sge_num;
 	rxq->delta += sge_num;
 }
@@ -669,7 +714,6 @@ int hinic_rx_poll(struct hinic_rxq *rxq, int budget)
 	u64 rx_bytes = 0;
 	u16 sw_ci, num_lro;
 	int pkts = 0, nr_pkts = 0;
-	bool bp_en = false;
 	u16 num_wqe = 0;
 
 	while (likely(pkts < budget)) {
@@ -704,16 +748,12 @@ int hinic_rx_poll(struct hinic_rxq *rxq, int budget)
 			num_lro = HINIC_GET_RX_NUM_LRO(status);
 			if (num_lro) {
 				rx_bytes += ((num_lro - 1) *
-					    LRO_PKT_HDR_LEN(rx_cqe));
+					     LRO_PKT_HDR_LEN(rx_cqe));
 
 				num_wqe +=
 				(u16)(pkt_len >> rxq->rx_buff_shift) +
 				((pkt_len & (rxq->buf_len - 1)) ? 1 : 0);
 			}
-		}
-		if (unlikely(HINIC_GET_RX_BP_EN(status))) {
-			rxq->bp_cnt++;
-			bp_en = true;
 		}
 
 		rx_cqe->status = 0;
@@ -724,9 +764,6 @@ int hinic_rx_poll(struct hinic_rxq *rxq, int budget)
 
 	if (rxq->delta >= HINIC_RX_BUFFER_WRITE)
 		hinic_rx_fill_buffers(rxq);
-
-	if (unlikely(bp_en || test_bit(HINIC_RX_STATUS_BP_EN, &rxq->status)))
-		hinic_unlock_bp(rxq, bp_en, pkts < budget);
 
 	u64_stats_update_begin(&rxq->rxq_stats.syncp);
 	rxq->rxq_stats.packets += nr_pkts;
@@ -1014,51 +1051,6 @@ static void hinic_rss_deinit(struct hinic_nic_dev *nic_dev)
 	hinic_rss_cfg(nic_dev->hwdev, 0, nic_dev->rss_tmpl_idx, 0, prio_tc);
 }
 
-/* In rx, iq means cos */
-static u8 hinic_get_iqmap_by_tc(u8 *prio_tc, u8 num_iq, u8 tc)
-{
-	u8 i, map = 0;
-
-	for (i = 0; i < num_iq; i++) {
-		if (prio_tc[i] == tc)
-			map |= (u8)(1U << ((num_iq - 1) - i));
-	}
-
-	return map;
-}
-
-static u8 hinic_get_tcid_by_rq(u32 *indir_tbl, u8 num_tcs, u16 rq_id)
-{
-	u16 tc_group_size;
-	int i;
-
-	tc_group_size = HINIC_RSS_INDIR_SIZE / num_tcs;
-	for (i = 0; i < HINIC_RSS_INDIR_SIZE; i++) {
-		if (indir_tbl[i] == rq_id)
-			return (u8)(i / tc_group_size);
-	}
-	return 0xFF;	/* Invalid TC */
-}
-
-#define HINIC_NUM_IQ_PER_FUNC	8
-static void hinic_get_rq2iq_map(struct hinic_nic_dev *nic_dev,
-				u16 num_rq, u8 num_tcs, u8 *prio_tc,
-				u32 *indir_tbl, u8 *map)
-{
-	u16 qid;
-	u8 tc_id;
-
-	if (!num_tcs)
-		num_tcs = 1;
-
-	for (qid = 0; qid < num_rq; qid++) {
-		tc_id = hinic_get_tcid_by_rq(indir_tbl, num_tcs, qid);
-		map[qid] = hinic_get_iqmap_by_tc(prio_tc,
-						 HINIC_NUM_IQ_PER_FUNC, tc_id);
-	}
-
-}
-
 int hinic_set_hw_rss_parameters(struct net_device *netdev, u8 rss_en, u8 num_tc,
 				u8 *prio_tc)
 {
@@ -1098,19 +1090,6 @@ int hinic_set_hw_rss_parameters(struct net_device *netdev, u8 rss_en, u8 num_tc,
 	else
 		hinic_fillout_indir_tbl(nic_dev, num_tc, indir_tbl);
 
-	hinic_maybe_reconfig_rss_indir(netdev);
-	indir_tbl = kzalloc(sizeof(u32) * HINIC_RSS_INDIR_SIZE, GFP_KERNEL);
-	if (!indir_tbl) {
-		nicif_err(nic_dev, drv, netdev, "Failed to allocate set hw rss indir_tbl\n");
-		return -ENOMEM;
-	}
-
-	if (nic_dev->rss_indir_user)
-		memcpy(indir_tbl, nic_dev->rss_indir_user,
-		       sizeof(u32) * HINIC_RSS_INDIR_SIZE);
-	else
-		hinic_fillout_indir_tbl(nic_dev, num_tc, indir_tbl);
-
 	err = hinic_rss_set_indir_tbl(nic_dev->hwdev, tmpl_idx, indir_tbl);
 	if (err)
 		goto out;
@@ -1136,7 +1115,7 @@ out:
 	return err;
 }
 
-static int hinic_rss_init(struct hinic_nic_dev *nic_dev, u8 *rq2iq_map)
+static int hinic_rss_init(struct hinic_nic_dev *nic_dev)
 {
 	struct net_device *netdev = nic_dev->netdev;
 	u32 *indir_tbl;
@@ -1173,9 +1152,6 @@ static int hinic_rss_init(struct hinic_nic_dev *nic_dev, u8 *rq2iq_map)
 		return err;
 	}
 
-	hinic_get_rq2iq_map(nic_dev, nic_dev->num_qps, num_tc,
-			    prio_tc, indir_tbl, rq2iq_map);
-
 	kfree(indir_tbl);
 	return 0;
 }
@@ -1192,13 +1168,10 @@ int hinic_update_hw_tc_map(struct net_device *netdev, u8 num_tc, u8 *prio_tc)
 int hinic_rx_configure(struct net_device *netdev)
 {
 	struct hinic_nic_dev *nic_dev = netdev_priv(netdev);
-	u8 rq2iq_map[HINIC_MAX_NUM_RQ];
 	int err;
 
-	/* Set all rq mapping to all iq in default */
-	memset(rq2iq_map, 0xFF, sizeof(rq2iq_map));
 	if (test_bit(HINIC_RSS_ENABLE, &nic_dev->flags)) {
-		err = hinic_rss_init(nic_dev, rq2iq_map);
+		err = hinic_rss_init(nic_dev);
 		if (err) {
 			nicif_err(nic_dev, drv, netdev, "Failed to init rss\n");
 			return -EFAULT;
@@ -1207,7 +1180,7 @@ int hinic_rx_configure(struct net_device *netdev)
 
 	err = hinic_dcb_set_rq_iq_mapping(nic_dev->hwdev,
 					  hinic_func_max_qnum(nic_dev->hwdev),
-					  rq2iq_map);
+					  NULL);
 	if (err) {
 		nicif_err(nic_dev, drv, netdev, "Failed to set rq_iq mapping\n");
 		goto set_rq_cos_mapping_err;
