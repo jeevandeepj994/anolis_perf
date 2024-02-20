@@ -1994,7 +1994,7 @@ int vprintk_store(int facility, int level,
 	enum log_flags lflags = 0;
 
 #ifdef CONFIG_SW64_RRK
-	extern int sw64_printk(const char *fmt, va_list args);
+	extern void sw64_printk(const char *fmt, va_list args);
 	sw64_printk(fmt, args);
 #endif
 
