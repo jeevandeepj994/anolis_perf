@@ -16,7 +16,10 @@
 
 #if IS_ENABLED(CONFIG_LIVEPATCH)
 
+#ifdef CONFIG_ARM64
+/* workaround for arm64, see comments in klp_ftrace_handler(). */
 #include <asm/livepatch.h>
+#endif
 
 /* task patch states */
 #define KLP_UNDEFINED	-1
