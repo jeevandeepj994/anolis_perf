@@ -71,6 +71,16 @@ static inline bool resctrl_arch_is_mbm_total_enabled(void)
 	return false;
 }
 
+static inline bool resctrl_arch_is_hwdrc_mb_capable(void)
+{
+	return false;
+}
+
+static inline int resctrl_arch_set_hwdrc_enabled(enum resctrl_res_level ignored, bool hwdrc_mb)
+{
+	return hwdrc_mb ? -EINVAL : 0;
+}
+
 /* reset cached configurations, then all devices */
 void resctrl_arch_reset_resources(void);
 
