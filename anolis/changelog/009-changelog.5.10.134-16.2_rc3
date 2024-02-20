@@ -1,0 +1,16 @@
+* Tue Feb 20 2024 Qinyun Tan <qinyuntan@linux.alibaba.com> [5.10.134-16.2_rc3%%DIST%%]
+- anolis:driver/virt/coco: Only load CSV Guest dirver in CSV guest VM. (fangbaoshun)
+- anolis: mm: hugetlb: Remove flag __GFP_THISNODE to avoid failures (yangge)
+- anolis: fs/resctrl: Fix dom_data_init() error when the machine does not have any rmid (Shawn Wang)
+- anolis: mm: use __GFP_NOKFENCE explicitly in hugetlb_vmemmap_alloc (Xu Yu)
+- anolis: ACPICA: Events: remove the global lock initialization (Ming Wang)
+- anolis: config: loongarch: add enable debug_info for loongarch. (Ming Wang)
+- anolis: config:loongarch: enable missing configure for anolis-debug_defconfig. (Ming Wang)
+- anolis: LoongArch: default IPMI related defconfig to m (Hongchen Zhang)
+- anolis: LoongArch: disable 40bit user space by default (Hongchen Zhang)
+- anolis: LoongArch: Add support for 64_PCREL relocation type (Hongchen Zhang)
+- anolis: LoongArch: Add support for 32_PCREL relocation type (Hongchen Zhang)
+- anolis: LoongArch: Define relocation types for ABI v2.10 (Hongchen Zhang)
+- mm: hugetlb_vmemmap: fix hugetlb page number decrease failed on movable nodes (Yuan Can)
+- anolis: drivers/iommu: Fixed a huge page leak on a virtual machine (xianglai li)
+
