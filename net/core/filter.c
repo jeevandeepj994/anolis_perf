@@ -1747,6 +1747,28 @@ static const struct bpf_func_proto bpf_skb_load_bytes_proto = {
 	.arg4_type	= ARG_CONST_SIZE,
 };
 
+/* Currently, only fentry/fexit is not allowed to use bpf_skb_load_bytes
+ * considering safety, e.g., fexit/__kfree_skb.
+ */
+static bool bpf_skb_load_bytes_trace_allowed(const struct bpf_prog *prog)
+{
+	return prog->expected_attach_type == BPF_TRACE_RAW_TP;
+}
+
+BTF_ID_LIST_SINGLE(bpf_skb_load_bytes_btf_ids, struct, sk_buff)
+
+const struct bpf_func_proto bpf_skb_load_bytes_trace_proto = {
+	.func		= bpf_skb_load_bytes,
+	.gpl_only	= false,
+	.ret_type	= RET_INTEGER,
+	.arg1_type	= ARG_PTR_TO_BTF_ID,
+	.arg1_btf_id	= &bpf_skb_load_bytes_btf_ids[0],
+	.arg2_type	= ARG_ANYTHING,
+	.arg3_type	= ARG_PTR_TO_UNINIT_MEM,
+	.arg4_type	= ARG_CONST_SIZE,
+	.allowed	= bpf_skb_load_bytes_trace_allowed,
+};
+
 BPF_CALL_4(bpf_flow_dissector_load_bytes,
 	   const struct bpf_flow_dissector *, ctx, u32, offset,
 	   void *, to, u32, len)
