@@ -213,6 +213,8 @@ ftrace_func_t ftrace_ops_get_func(struct ftrace_ops *ops);
  *             ftrace_enabled.
  * DIRECT - Used by the direct ftrace_ops helper for direct functions
  *            (internal ftrace only, should not be used by others)
+ * OPS_FUNC_CK_RESERVED - A workaround instead of ops->ops_func. If set, we need to
+ *                        call bpf_tramp_ftrace_ops_func().
  */
 enum {
 	FTRACE_OPS_FL_ENABLED			= BIT(0),
@@ -233,6 +235,7 @@ enum {
 	FTRACE_OPS_FL_TRACE_ARRAY		= BIT(15),
 	FTRACE_OPS_FL_PERMANENT                 = BIT(16),
 	FTRACE_OPS_FL_DIRECT			= BIT(17),
+	FTRACE_OPS_FL_OPS_FUNC_CK_RESERVED	= BIT(63),
 };
 
 /*
@@ -271,6 +274,15 @@ enum ftrace_ops_cmd {
  *        callback.
  */
 typedef int (*ftrace_ops_func_t)(struct ftrace_ops *op, enum ftrace_ops_cmd cmd);
+
+#if defined(CONFIG_BPF_JIT) && defined(CONFIG_DYNAMIC_FTRACE_WITH_DIRECT_CALLS)
+int bpf_tramp_ftrace_ops_func(struct ftrace_ops *ops, enum ftrace_ops_cmd cmd);
+#else
+static inline int bpf_tramp_ftrace_ops_func(struct ftrace_ops *ops, enum ftrace_ops_cmd cmd)
+{
+	return -EBUSY;
+}
+#endif
 
 #ifdef CONFIG_DYNAMIC_FTRACE
 /* The hash used to know what functions callbacks trace */
@@ -311,7 +323,6 @@ struct ftrace_ops {
 	unsigned long			trampoline;
 	unsigned long			trampoline_size;
 	struct list_head		list;
-	ftrace_ops_func_t		ops_func;
 #endif
 
 	CK_KABI_RESERVE(1)
