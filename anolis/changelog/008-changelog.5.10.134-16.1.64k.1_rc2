@@ -1,0 +1,9 @@
+* Thu Feb 22 2024 Qinyun Tan <qinyuntan@linux.alibaba.com> [5.10.134-16.1.64k.1_rc2%%DIST%%]
+- selftests/bpf: Add exception handling selftests for tp_bpf program (Alan Maguire)
+- anolis: bpf: add a macro from upstream for time_tai selftest (Philo Lu)
+- arm64/bpf: Remove 128MB limit for BPF JIT programs (Russell King)
+- bpf: Use prog->jited_len in bpf_prog_ksym_set_addr() (Song Liu)
+- bpf: Use size instead of pages in bpf_binary_header (Song Liu)
+- bpf: Use bytes instead of pages for bpf_jit_[charge|uncharge]_modmem (Song Liu)
+- anolis: arm64: disable THP in cmdline (Yuanhe Shu)
+
