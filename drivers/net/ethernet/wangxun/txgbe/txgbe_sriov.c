@@ -899,7 +899,9 @@ static int txgbe_set_vf_vlan_msg(struct txgbe_adapter *adapter,
 		 * is cleared if the PF only added itself to the pool
 		 * because the PF is in promiscuous mode.
 		 */
-		if ((vlvf & VLAN_VID_MASK) == vid && !bits)
+		if ((vlvf & VLAN_VID_MASK) == vid &&
+		    !test_bit(vid, adapter->active_vlans) &&
+			!bits)
 			txgbe_set_vf_vlan(adapter, add, vid, VMDQ_P(0));
 	}
 
