@@ -35,6 +35,7 @@ typedef __u16 __sum16;
 #include <sys/ioctl.h>
 #include <sys/wait.h>
 #include <sys/types.h>
+#include <sys/stat.h>
 #include <sys/time.h>
 #include <sys/uio.h>
 #include <sys/socket.h>
@@ -94,6 +95,17 @@ static struct {
 	.tcp.urg_ptr = 123,
 	.tcp.doff = 5,
 };
+
+#define CHECK_FAIL(condition) ({					\
+	int __ret = !!(condition);					\
+	int __save_errno = errno;					\
+	if (__ret) {							\
+		error_cnt++;						\
+		fprintf(stdout, "%s:FAIL:%d\n", __func__, __LINE__);	\
+	}								\
+	errno = __save_errno;						\
+	__ret;								\
+})
 
 #define _CHECK(condition, tag, duration, format...) ({			\
 	int __ret = !!(condition);					\
@@ -3885,15 +3897,38 @@ struct ipv6_packet {
        struct tcphdr tcp;
 } __packed;
 
+struct meta {
+	int ifindex;
+	__u32 cb32_0;
+	__u8 cb8_0;
+};
+
+static union {
+	__u32 cb32[5];
+	__u8 cb8[20];
+} cb = {
+	.cb32[0] = 0x81828384,
+};
+
 static void on_sample_kfree_skb(void *ctx, int cpu, void *data, __u32 size)
 {
-	int ifindex = *(int *)data, duration = 0;
-	struct ipv6_packet *pkt_v6 = data + 4;
+	struct meta *meta = (struct meta *)data;
+	struct ipv6_packet *pkt_v6 = data + sizeof(*meta);
+	int duration = 0;
 
-	if (ifindex != 1)
+	if (CHECK(size != 72 + sizeof(*meta), "check_size", "size %u != %zu\n",
+		  size, 72 + sizeof(*meta)))
+		return;
+	if (CHECK(meta->ifindex != 1, "check_meta_ifindex",
+		  "meta->ifindex = %d\n", meta->ifindex))
 		/* spurious kfree_skb not on loopback device */
 		return;
-	if (CHECK(size != 76, "check_size", "size %u != 76\n", size))
+	if (CHECK(meta->cb8_0 != cb.cb8[0], "check_cb8_0", "cb8_0 %x != %x\n",
+		  meta->cb8_0, cb.cb8[0]))
+		return;
+	if (CHECK(meta->cb32_0 != cb.cb32[0], "check_cb32_0",
+		  "cb32_0 %x != %x\n",
+		  meta->cb32_0, cb.cb32[0]))
 		return;
 	if (CHECK(pkt_v6->eth.h_proto != 0xdd86, "check_eth",
 		  "h_proto %x\n", pkt_v6->eth.h_proto))
@@ -3910,6 +3945,13 @@ static void on_sample_kfree_skb(void *ctx, int cpu, void *data, __u32 size)
 
 static void test_kfree_skb(void)
 {
+	struct __sk_buff skb = {};
+	struct bpf_prog_test_run_attr tattr = {
+		.data_in = &pkt_v6,
+		.data_size_in = sizeof(pkt_v6),
+		.ctx_in = &skb,
+		.ctx_size_in = sizeof(skb),
+	};
 	struct bpf_prog_load_attr attr = {
 		.file = "./kfree_skb.o",
 	};
@@ -3920,11 +3962,12 @@ static void test_kfree_skb(void)
 	struct bpf_link *link = NULL;
 	struct bpf_map *perf_buf_map;
 	struct bpf_program *prog;
-	__u32 duration, retval;
-	int err, pkt_fd, kfree_skb_fd;
+	int err, kfree_skb_fd;
 	bool passed = false;
+	__u32 duration = 0;
 
-	err = bpf_prog_load("./test_pkt_access.o", BPF_PROG_TYPE_SCHED_CLS, &obj, &pkt_fd);
+	err = bpf_prog_load("./test_pkt_access.o", BPF_PROG_TYPE_SCHED_CLS,
+			    &obj, &tattr.prog_fd);
 	if (CHECK(err, "prog_load sched cls", "err %d errno %d\n", err, errno))
 		return;
 
@@ -3950,11 +3993,12 @@ static void test_kfree_skb(void)
 	if (CHECK(IS_ERR(pb), "perf_buf__new", "err %ld\n", PTR_ERR(pb)))
 		goto close_prog;
 
-	err = bpf_prog_test_run(pkt_fd, 1, &pkt_v6, sizeof(pkt_v6),
-				NULL, NULL, &retval, &duration);
-	CHECK(err || retval, "ipv6",
+	memcpy(skb.cb, &cb, sizeof(cb));
+	err = bpf_prog_test_run_xattr(&tattr);
+	duration = tattr.duration;
+	CHECK(err || tattr.retval, "ipv6",
 	      "err %d errno %d retval %d duration %d\n",
-	      err, errno, retval, duration);
+	      err, errno, tattr.retval, duration);
 
 	/* read perf buffer */
 	err = perf_buffer__poll(pb, 100);
@@ -3971,6 +4015,224 @@ close_prog:
 		bpf_link__destroy(link);
 	bpf_object__close(obj);
 	bpf_object__close(obj2);
+}
+
+static __u32 get_map_id(struct bpf_object *obj, const char *name)
+{
+	struct bpf_map_info map_info = {};
+	__u32 map_info_len, duration = 0;
+	struct bpf_map *map;
+	int err;
+
+	map_info_len = sizeof(map_info);
+
+	map = bpf_object__find_map_by_name(obj, name);
+	if (CHECK(!map, "find map", "NULL map"))
+		return 0;
+
+	err = bpf_obj_get_info_by_fd(bpf_map__fd(map),
+				     &map_info, &map_info_len);
+	CHECK(err, "get map info", "err %d errno %d", err, errno);
+	return map_info.id;
+}
+
+static void test_pinning(void)
+{
+	const char *file_invalid = "./test_pinning_invalid.o";
+	const char *custpinpath = "/sys/fs/bpf/custom/pinmap";
+	const char *nopinpath = "/sys/fs/bpf/nopinmap";
+	const char *nopinpath2 = "/sys/fs/bpf/nopinmap2";
+	const char *custpath = "/sys/fs/bpf/custom";
+	const char *pinpath = "/sys/fs/bpf/pinmap";
+	const char *file = "./test_pinning.o";
+	__u32 map_id, map_id2, duration = 0;
+	struct stat statbuf = {};
+	struct bpf_object *obj;
+	struct bpf_map *map;
+	int err;
+	DECLARE_LIBBPF_OPTS(bpf_object_open_opts, opts,
+		.pin_root_path = custpath,
+	);
+
+	/* check that opening fails with invalid pinning value in map def */
+	obj = bpf_object__open_file(file_invalid, NULL);
+	err = libbpf_get_error(obj);
+	if (CHECK(err != -EINVAL, "invalid open", "err %d errno %d\n", err, errno)) {
+		obj = NULL;
+		goto out;
+	}
+
+	/* open the valid object file  */
+	obj = bpf_object__open_file(file, NULL);
+	err = libbpf_get_error(obj);
+	if (CHECK(err, "default open", "err %d errno %d\n", err, errno)) {
+		obj = NULL;
+		goto out;
+	}
+
+	err = bpf_object__load(obj);
+	if (CHECK(err, "default load", "err %d errno %d\n", err, errno))
+		goto out;
+
+	/* check that pinmap was pinned */
+	err = stat(pinpath, &statbuf);
+	if (CHECK(err, "stat pinpath", "err %d errno %d\n", err, errno))
+		goto out;
+
+	/* check that nopinmap was *not* pinned */
+	err = stat(nopinpath, &statbuf);
+	if (CHECK(!err || errno != ENOENT, "stat nopinpath",
+		  "err %d errno %d\n", err, errno))
+		goto out;
+
+	/* check that nopinmap2 was *not* pinned */
+	err = stat(nopinpath2, &statbuf);
+	if (CHECK(!err || errno != ENOENT, "stat nopinpath2",
+		  "err %d errno %d\n", err, errno))
+		goto out;
+
+	map_id = get_map_id(obj, "pinmap");
+	if (!map_id)
+		goto out;
+
+	bpf_object__close(obj);
+
+	obj = bpf_object__open_file(file, NULL);
+	if (CHECK_FAIL(libbpf_get_error(obj))) {
+		obj = NULL;
+		goto out;
+	}
+
+	err = bpf_object__load(obj);
+	if (CHECK(err, "default load", "err %d errno %d\n", err, errno))
+		goto out;
+
+	/* check that same map ID was reused for second load */
+	map_id2 = get_map_id(obj, "pinmap");
+	if (CHECK(map_id != map_id2, "check reuse",
+		  "err %d errno %d id %d id2 %d\n", err, errno, map_id, map_id2))
+		goto out;
+
+	/* should be no-op to re-pin same map */
+	map = bpf_object__find_map_by_name(obj, "pinmap");
+	if (CHECK(!map, "find map", "NULL map"))
+		goto out;
+
+	err = bpf_map__pin(map, NULL);
+	if (CHECK(err, "re-pin map", "err %d errno %d\n", err, errno))
+		goto out;
+
+	/* but error to pin at different location */
+	err = bpf_map__pin(map, "/sys/fs/bpf/other");
+	if (CHECK(!err, "pin map different", "err %d errno %d\n", err, errno))
+		goto out;
+
+	/* unpin maps with a pin_path set */
+	err = bpf_object__unpin_maps(obj, NULL);
+	if (CHECK(err, "unpin maps", "err %d errno %d\n", err, errno))
+		goto out;
+
+	/* and re-pin them... */
+	err = bpf_object__pin_maps(obj, NULL);
+	if (CHECK(err, "pin maps", "err %d errno %d\n", err, errno))
+		goto out;
+
+	/* set pinning path of other map and re-pin all */
+	map = bpf_object__find_map_by_name(obj, "nopinmap");
+	if (CHECK(!map, "find map", "NULL map"))
+		goto out;
+
+	err = bpf_map__set_pin_path(map, custpinpath);
+	if (CHECK(err, "set pin path", "err %d errno %d\n", err, errno))
+		goto out;
+
+	/* should only pin the one unpinned map */
+	err = bpf_object__pin_maps(obj, NULL);
+	if (CHECK(err, "pin maps", "err %d errno %d\n", err, errno))
+		goto out;
+
+	/* check that nopinmap was pinned at the custom path */
+	err = stat(custpinpath, &statbuf);
+	if (CHECK(err, "stat custpinpath", "err %d errno %d\n", err, errno))
+		goto out;
+
+	/* remove the custom pin path to re-test it with auto-pinning below */
+	err = unlink(custpinpath);
+	if (CHECK(err, "unlink custpinpath", "err %d errno %d\n", err, errno))
+		goto out;
+
+	err = rmdir(custpath);
+	if (CHECK(err, "rmdir custpindir", "err %d errno %d\n", err, errno))
+		goto out;
+
+	bpf_object__close(obj);
+
+	/* open the valid object file again */
+	obj = bpf_object__open_file(file, NULL);
+	err = libbpf_get_error(obj);
+	if (CHECK(err, "default open", "err %d errno %d\n", err, errno)) {
+		obj = NULL;
+		goto out;
+	}
+
+	/* set pin paths so that nopinmap2 will attempt to reuse the map at
+	 * pinpath (which will fail), but not before pinmap has already been
+	 * reused
+	 */
+	bpf_object__for_each_map(map, obj) {
+		if (!strcmp(bpf_map__name(map), "nopinmap"))
+			err = bpf_map__set_pin_path(map, nopinpath2);
+		else if (!strcmp(bpf_map__name(map), "nopinmap2"))
+			err = bpf_map__set_pin_path(map, pinpath);
+		else
+			continue;
+
+		if (CHECK(err, "set pin path", "err %d errno %d\n", err, errno))
+			goto out;
+	}
+
+	/* should fail because of map parameter mismatch */
+	err = bpf_object__load(obj);
+	if (CHECK(err != -EINVAL, "param mismatch load", "err %d errno %d\n", err, errno))
+		goto out;
+
+	/* nopinmap2 should have been pinned and cleaned up again */
+	err = stat(nopinpath2, &statbuf);
+	if (CHECK(!err || errno != ENOENT, "stat nopinpath2",
+		  "err %d errno %d\n", err, errno))
+		goto out;
+
+	/* pinmap should still be there */
+	err = stat(pinpath, &statbuf);
+	if (CHECK(err, "stat pinpath", "err %d errno %d\n", err, errno))
+		goto out;
+
+	bpf_object__close(obj);
+
+	/* test auto-pinning at custom path with open opt */
+	obj = bpf_object__open_file(file, &opts);
+	if (CHECK_FAIL(libbpf_get_error(obj))) {
+		obj = NULL;
+		goto out;
+	}
+
+	err = bpf_object__load(obj);
+	if (CHECK(err, "custom load", "err %d errno %d\n", err, errno))
+		goto out;
+
+	/* check that pinmap was pinned at the custom path */
+	err = stat(custpinpath, &statbuf);
+	if (CHECK(err, "stat custpinpath", "err %d errno %d\n", err, errno))
+		goto out;
+
+out:
+	unlink(pinpath);
+	unlink(nopinpath);
+	unlink(nopinpath2);
+	unlink(custpinpath);
+	rmdir(custpath);
+	if (obj)
+		bpf_object__close(obj);
 }
 
 int main(int ac, char **av)
@@ -4017,6 +4279,7 @@ int main(int ac, char **av)
 	test_perf_buffer();
 	test_core_reloc();
 	test_kfree_skb();
+	test_pinning();
 
 	printf("Summary: %d PASSED, %d FAILED\n", pass_cnt, error_cnt);
 	return error_cnt ? EXIT_FAILURE : EXIT_SUCCESS;
