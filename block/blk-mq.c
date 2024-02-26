@@ -1022,6 +1022,10 @@ static inline void blk_account_io_done(struct request *req, u64 now)
 		update_io_ticks(req->part, jiffies, true);
 		part_stat_inc(req->part, ios[sgrp]);
 		part_stat_add(req->part, nsecs[sgrp], now - req->start_time_ns);
+		if (req->rq_flags & RQF_STATS) {
+			part_stat_add(req->part, d2c_nsecs[sgrp],
+				      now - req->io_start_time_ns);
+		}
 		part_stat_unlock();
 	}
 }
