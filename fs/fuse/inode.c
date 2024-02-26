@@ -1012,6 +1012,11 @@ static struct dentry *fuse_get_parent(struct dentry *child)
 	return parent;
 }
 
+/* only for fid encoding; no support for file handle */
+static const struct export_operations fuse_export_fid_operations = {
+	.encode_fh	= fuse_encode_fh,
+};
+
 static const struct export_operations fuse_export_operations = {
 	.fh_to_dentry	= fuse_fh_to_dentry,
 	.fh_to_parent	= fuse_fh_to_parent,
@@ -1194,6 +1199,8 @@ static void process_init_reply(struct fuse_mount *fm, struct fuse_args *args,
 				fc->invaldir_allentry = 1;
 			if (flags & FUSE_DELETE_STALE)
 				fc->delete_stale = 1;
+			if (flags & FUSE_NO_EXPORT_SUPPORT)
+				fm->sb->s_export_op = &fuse_export_fid_operations;
 		} else {
 			ra_pages = fc->max_read / PAGE_SIZE;
 			fc->no_lock = 1;
@@ -1239,7 +1246,7 @@ static void fuse_prepare_send_init(struct fuse_mount *fm,
 		FUSE_HANDLE_KILLPRIV_V2 | FUSE_INIT_EXT | FUSE_PASSTHROUGH |
 		FUSE_INVAL_CACHE_INFAIL | FUSE_CLOSE_TO_OPEN |
 		FUSE_INVALDIR_ALLENTRY | FUSE_DELETE_STALE |
-		FUSE_DIRECT_IO_ALLOW_MMAP;
+		FUSE_DIRECT_IO_ALLOW_MMAP | FUSE_NO_EXPORT_SUPPORT;
 #ifdef CONFIG_FUSE_DAX
 	if (fm->fc->dax)
 		flags |= FUSE_MAP_ALIGNMENT;
@@ -1469,6 +1476,7 @@ int fuse_fill_super_submount(struct super_block *sb,
 	sb->s_bdi = bdi_get(parent_sb->s_bdi);
 
 	sb->s_xattr = parent_sb->s_xattr;
+	sb->s_export_op = parent_sb->s_export_op;
 	sb->s_time_gran = parent_sb->s_time_gran;
 	sb->s_blocksize = parent_sb->s_blocksize;
 	sb->s_blocksize_bits = parent_sb->s_blocksize_bits;
