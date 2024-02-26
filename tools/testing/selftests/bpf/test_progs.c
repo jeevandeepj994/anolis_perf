@@ -3492,18 +3492,79 @@ out_close:
 	.fails = true,							\
 }
 
-#define EXISTENCE_DATA(struct_name) STRUCT_TO_CHAR_PTR(struct_name) {	\
-	.a = 42,							\
-}
-
 #define EXISTENCE_CASE_COMMON(name)					\
 	.case_name = #name,						\
 	.bpf_obj_file = "test_core_reloc_existence.o",			\
 	.btf_src_file = "btf__core_reloc_" #name ".o",			\
-	.relaxed_core_relocs = true					\
+	.relaxed_core_relocs = true
 
 #define EXISTENCE_ERR_CASE(name) {					\
 	EXISTENCE_CASE_COMMON(name),					\
+	.fails = true,							\
+}
+
+#define BITFIELDS_CASE_COMMON(objfile, test_name_prefix,  name)		\
+	.case_name = test_name_prefix#name,				\
+	.bpf_obj_file = objfile,					\
+	.btf_src_file = "btf__core_reloc_" #name ".o"
+
+#define BITFIELDS_CASE(name, ...) {					\
+	BITFIELDS_CASE_COMMON("test_core_reloc_bitfields_probed.o",	\
+			      "direct:", name),				\
+	.input = STRUCT_TO_CHAR_PTR(core_reloc_##name) __VA_ARGS__,	\
+	.input_len = sizeof(struct core_reloc_##name),			\
+	.output = STRUCT_TO_CHAR_PTR(core_reloc_bitfields_output)	\
+		__VA_ARGS__,						\
+	.output_len = sizeof(struct core_reloc_bitfields_output),	\
+}, {									\
+	BITFIELDS_CASE_COMMON("test_core_reloc_bitfields_direct.o",	\
+			      "probed:", name),				\
+	.input = STRUCT_TO_CHAR_PTR(core_reloc_##name) __VA_ARGS__,	\
+	.input_len = sizeof(struct core_reloc_##name),			\
+	.output = STRUCT_TO_CHAR_PTR(core_reloc_bitfields_output)	\
+		__VA_ARGS__,						\
+	.output_len = sizeof(struct core_reloc_bitfields_output),	\
+	.direct_raw_tp = true,						\
+}
+
+
+#define BITFIELDS_ERR_CASE(name) {					\
+	BITFIELDS_CASE_COMMON("test_core_reloc_bitfields_probed.o",	\
+			      "probed:", name),				\
+	.fails = true,							\
+}, {									\
+	BITFIELDS_CASE_COMMON("test_core_reloc_bitfields_direct.o",	\
+			      "direct:", name),				\
+	.direct_raw_tp = true,						\
+	.fails = true,							\
+}
+
+#define SIZE_CASE_COMMON(name)						\
+	.case_name = #name,						\
+	.bpf_obj_file = "test_core_reloc_size.o",			\
+	.btf_src_file = "btf__core_reloc_" #name ".o",			\
+	.relaxed_core_relocs = true
+
+#define SIZE_OUTPUT_DATA(type)						\
+	STRUCT_TO_CHAR_PTR(core_reloc_size_output) {			\
+		.int_sz = sizeof(((type *)0)->int_field),		\
+		.struct_sz = sizeof(((type *)0)->struct_field),		\
+		.union_sz = sizeof(((type *)0)->union_field),		\
+		.arr_sz = sizeof(((type *)0)->arr_field),		\
+		.arr_elem_sz = sizeof(((type *)0)->arr_field[0]),	\
+		.ptr_sz = sizeof(((type *)0)->ptr_field),		\
+		.enum_sz = sizeof(((type *)0)->enum_field),	\
+	}
+
+#define SIZE_CASE(name) {						\
+	SIZE_CASE_COMMON(name),						\
+	.input_len = 0,							\
+	.output = SIZE_OUTPUT_DATA(struct core_reloc_##name),		\
+	.output_len = sizeof(struct core_reloc_size_output),		\
+}
+
+#define SIZE_ERR_CASE(name) {						\
+	SIZE_CASE_COMMON(name),						\
 	.fails = true,							\
 }
 
@@ -3517,6 +3578,7 @@ struct core_reloc_test_case {
 	int output_len;
 	bool fails;
 	bool relaxed_core_relocs;
+	bool direct_raw_tp;
 };
 
 static struct core_reloc_test_case test_cases[] = {
@@ -3529,8 +3591,8 @@ static struct core_reloc_test_case test_cases[] = {
 		.input_len = 0,
 		.output = STRUCT_TO_CHAR_PTR(core_reloc_kernel_output) {
 			.valid = { 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, },
-			.comm = "test_progs\0\0\0\0\0",
-			.comm_len = 11,
+			.comm = "test_progs",
+			.comm_len = sizeof("test_progs"),
 		},
 		.output_len = sizeof(struct core_reloc_kernel_output),
 	},
@@ -3592,12 +3654,6 @@ static struct core_reloc_test_case test_cases[] = {
 	INTS_CASE(ints),
 	INTS_CASE(ints___bool),
 	INTS_CASE(ints___reverse_sign),
-
-	INTS_ERR_CASE(ints___err_bitfield),
-	INTS_ERR_CASE(ints___err_wrong_sz_8),
-	INTS_ERR_CASE(ints___err_wrong_sz_16),
-	INTS_ERR_CASE(ints___err_wrong_sz_32),
-	INTS_ERR_CASE(ints___err_wrong_sz_64),
 
 	/* validate edge cases of capturing relocations */
 	{
@@ -3670,6 +3726,44 @@ static struct core_reloc_test_case test_cases[] = {
 	EXISTENCE_ERR_CASE(existence__err_arr_kind),
 	EXISTENCE_ERR_CASE(existence__err_arr_value_type),
 	EXISTENCE_ERR_CASE(existence__err_struct_type),
+
+	/* bitfield relocation checks */
+	BITFIELDS_CASE(bitfields, {
+		.ub1 = 1,
+		.ub2 = 2,
+		.ub7 = 96,
+		.sb4 = -7,
+		.sb20 = -0x76543,
+		.u32 = 0x80000000,
+		.s32 = -0x76543210,
+	}),
+	BITFIELDS_CASE(bitfields___bit_sz_change, {
+		.ub1 = 6,
+		.ub2 = 0xABCDE,
+		.ub7 = 1,
+		.sb4 = -1,
+		.sb20 = -0x17654321,
+		.u32 = 0xBEEF,
+		.s32 = -0x3FEDCBA987654321,
+	}),
+	BITFIELDS_CASE(bitfields___bitfield_vs_int, {
+		.ub1 = 0xFEDCBA9876543210,
+		.ub2 = 0xA6,
+		.ub7 = -0x7EDCBA987654321,
+		.sb4 = -0x6123456789ABCDE,
+		.sb20 = 0xD00D,
+		.u32 = -0x76543,
+		.s32 = 0x0ADEADBEEFBADB0B,
+	}),
+	BITFIELDS_CASE(bitfields___just_big_enough, {
+		.ub1 = 0xF,
+		.ub2 = 0x0812345678FEDCBA,
+	}),
+	BITFIELDS_ERR_CASE(bitfields___err_too_big_bitfield),
+
+	/* size relocation checks */
+	SIZE_CASE(size),
+	SIZE_CASE(size___diff_sz),
 };
 
 struct data {
@@ -3679,9 +3773,9 @@ struct data {
 
 static void test_core_reloc(void)
 {
-	const char *probe_name = "raw_tracepoint/sys_enter";
 	struct bpf_object_load_attr load_attr = {};
 	struct core_reloc_test_case *test_case;
+	const char *tp_name, *probe_name;
 	int err, duration = 0, i, equal;
 	struct bpf_link *link = NULL;
 	struct bpf_map *data_map;
@@ -3693,7 +3787,7 @@ static void test_core_reloc(void)
 	for (i = 0; i < ARRAY_SIZE(test_cases); i++) {
 		test_case = &test_cases[i];
 
-		LIBBPF_OPTS(bpf_object_open_opts, opts,
+		DECLARE_LIBBPF_OPTS(bpf_object_open_opts, opts,
 			.relaxed_core_relocs = test_case->relaxed_core_relocs,
 		);
 
@@ -3703,11 +3797,19 @@ static void test_core_reloc(void)
 			  test_case->bpf_obj_file, PTR_ERR(obj)))
 			continue;
 
+		/* for typed raw tracepoints, NULL should be specified */
+		if (test_case->direct_raw_tp) {
+			probe_name = "tp_btf/sys_enter";
+			tp_name = NULL;
+		} else {
+			probe_name = "raw_tracepoint/sys_enter";
+			tp_name = "sys_enter";
+		}
+
 		prog = bpf_object__find_program_by_title(obj, probe_name);
 		if (CHECK(!prog, "find_probe",
 			  "prog '%s' not found\n", probe_name))
 			goto cleanup;
-		bpf_program__set_type(prog, BPF_PROG_TYPE_RAW_TRACEPOINT);
 
 		load_attr.obj = obj;
 		load_attr.log_level = 0;
@@ -3724,7 +3826,7 @@ static void test_core_reloc(void)
 				goto cleanup;
 		}
 
-		link = bpf_program__attach_raw_tracepoint(prog, "sys_enter");
+		link = bpf_program__attach_raw_tracepoint(prog, tp_name);
 		if (CHECK(IS_ERR(link), "attach_raw_tp", "err %ld\n",
 			  PTR_ERR(link)))
 			goto cleanup;
