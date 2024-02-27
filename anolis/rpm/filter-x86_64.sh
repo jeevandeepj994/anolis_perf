@@ -10,3 +10,4 @@
 # all arches, remove it in the default instead of per-arch.
 
 # Defaults work so no need to override
+singlemods="$singlemods intel_rapl_tpmi"
