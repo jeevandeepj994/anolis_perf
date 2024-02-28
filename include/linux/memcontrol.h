@@ -518,8 +518,6 @@ struct mem_cgroup {
 #ifdef CONFIG_LRU_GEN
 	/* per-memcg mm_struct list */
 	struct lru_gen_mm_list mm_list;
-	unsigned long mglru_batch_size;
-	unsigned long mglru_reclaim_pages;
 #endif
 
 #ifdef CONFIG_PGTABLE_BIND
@@ -527,8 +525,13 @@ struct mem_cgroup {
 	bool allow_pgtable_bind;
 #endif
 
+#ifdef CONFIG_LRU_GEN
+	CK_KABI_USE(1, unsigned long mglru_batch_size)
+	CK_KABI_USE(2, unsigned long mglru_reclaim_pages)
+#else
 	CK_KABI_RESERVE(1)
 	CK_KABI_RESERVE(2)
+#endif
 	CK_KABI_RESERVE(3)
 	CK_KABI_RESERVE(4)
 	CK_KABI_RESERVE(5)
