@@ -208,6 +208,8 @@ static int ioasids_can_attach(struct cgroup_taskset *tset)
 		struct ioasids_cgroup *old_ioasids;
 		struct mm_struct *mm = get_task_mm(leader);
 
+		if (!mm)
+			continue;
 		set = ioasid_find_mm_set(mm);
 		mmput(mm);
 		if (!set)
