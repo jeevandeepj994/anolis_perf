@@ -444,9 +444,9 @@ retry:
 	if (unlikely(pmd_bad(*pmd)))
 		return no_page_table(vma, flags);
 
-	if (async_fork_staging()) {
-		async_fork_fixup_pmd(vma, pmd, address);
-		if (is_pmd_async_fork(*pmd))
+	if (is_pmd_transient(*pmd)) {
+		fixup_pmd(vma, pmd, address);
+		if (is_pmd_transient(*pmd))
 			return no_page_table(vma, flags);
 	}
 
@@ -2196,7 +2196,7 @@ static int gup_pte_range(pmd_t pmd, unsigned long addr, unsigned long end,
 	int nr_start = *nr, ret = 0;
 	pte_t *ptep, *ptem;
 
-	if (is_pmd_async_fork(pmd))
+	if (is_pmd_transient(pmd))
 		return 0;
 
 	ptem = ptep = pte_offset_map(&pmd, addr);

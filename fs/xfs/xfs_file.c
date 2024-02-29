@@ -816,9 +816,18 @@ xfs_break_dax_layouts(
 	struct inode		*inode,
 	bool			*retry)
 {
+	struct xfs_inode	*ip = XFS_I(inode);
 	struct page		*page;
 
-	ASSERT(xfs_isilocked(XFS_I(inode), XFS_MMAPLOCK_EXCL));
+	ASSERT(xfs_isilocked(ip, XFS_MMAPLOCK_EXCL));
+
+	/*
+	 * For inodes flagged with XFS_REFLINK_{PRIMARY, SECONDARY}, users
+	 * can ensure there are no inflight dio operations on these inodes,
+	 * so we can bypass xfs_break_dax_layouts(BREAK_UNMAP) safely.
+	 */
+	if (ip->i_reflink_flags & (XFS_REFLINK_PRIMARY | XFS_REFLINK_SECONDARY))
+		return 0;
 
 	page = dax_layout_busy_page(inode->i_mapping);
 	if (!page)

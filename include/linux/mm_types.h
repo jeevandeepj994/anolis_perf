@@ -399,7 +399,8 @@ struct vm_area_struct {
 	CK_KABI_RESERVE(1)
 #endif
 
-	CK_KABI_RESERVE(2)
+	CK_KABI_USE_SPLIT(2, bool fast_reflink);
+
 	CK_KABI_RESERVE(3)
 	CK_KABI_RESERVE(4)
 } __randomize_layout;

@@ -514,7 +514,7 @@ int mlock_fixup(struct vm_area_struct *vma, struct vm_area_struct **prev,
 		/* don't set VM_LOCKED or VM_LOCKONFAULT and don't count */
 		goto out;
 
-	async_fork_fixup_vma(vma);
+	fixup_vma(vma);
 	if (unlikely(vma_is_pgtable_shared(vma)))
 		goto out;
 

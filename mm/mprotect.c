@@ -580,7 +580,7 @@ static int do_mprotect_pkey(unsigned long start, size_t len,
 		unsigned long newflags;
 		int new_vma_pkey;
 
-		async_fork_fixup_vma(vma);
+		fixup_vma(vma);
 		/* Here we know that vma->vm_start <= nstart < vma->vm_end. */
 
 		if (unlikely(vma_is_pgtable_shared(vma))) {

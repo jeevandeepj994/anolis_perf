@@ -27,6 +27,8 @@
 #include "xfs_quota.h"
 #include "xfs_reflink.h"
 #include "xfs_iomap.h"
+#include "xfs_rmap.h"
+#include "xfs_rmap_btree.h"
 #include "xfs_sb.h"
 #include "xfs_ag_resv.h"
 
@@ -342,6 +344,225 @@ xfs_find_trim_cow_extent(
 	return 0;
 }
 
+struct xfs_rmap_info {
+	bool			found;		/* output */
+	uint64_t		owner;		/* intput */
+	xfs_agblock_t		startblock;	/* input */;
+	struct xfs_rmap_irec	rec;		/* output */
+};
+
+STATIC int
+xfs_reflink_query_rmap_owner_helper(
+	struct xfs_btree_cur	*cur,
+	struct xfs_rmap_irec	*rec,
+	void			*priv)
+{
+	struct xfs_rmap_info *info = priv;
+
+	if ((rec->rm_owner != info->owner) &&
+	    (info->startblock >= rec->rm_startblock) &&
+	    (info->startblock < (rec->rm_startblock + rec->rm_blockcount))) {
+		info->rec = *rec;
+		info->found = true;
+		return -ECANCELED;
+	}
+	return 0;
+}
+
+STATIC int
+xfs_reflink_unshare_range(
+	struct xfs_mount	*mp,
+	struct xfs_bmbt_irec	*oimap,
+	struct xfs_rmap_irec	*rmap)
+{
+	struct xfs_inode	*ip;
+	xfs_fileoff_t		offset_fsb = oimap->br_startoff;
+	xfs_filblks_t		count_fsb = oimap->br_blockcount;
+	struct xfs_trans	*tp;
+	int			nimaps, error = 0;
+	bool			shared, found;
+	xfs_filblks_t		resaligned;
+	xfs_extlen_t		resblks = 0;
+	uint			lockmode = XFS_ILOCK_EXCL | XFS_IOLOCK_EXCL | XFS_MMAPLOCK_EXCL;
+	struct xfs_bmbt_irec	imap = *oimap;
+	struct xfs_bmbt_irec	cmap;
+
+	error = xfs_iget(mp, NULL, rmap->rm_owner, 0, 0, &ip);
+	if (error < 0)
+		return error;
+
+	xfs_ilock(ip, lockmode);
+	xfs_flush_unmap_range(ip, XFS_FSB_TO_B(mp, imap.br_startoff),
+			XFS_FSB_TO_B(mp, imap.br_blockcount));
+
+	error = xfs_find_trim_cow_extent(ip, &imap, &cmap, &shared, &found);
+	if (error || !shared)
+		goto error;
+
+	if (found)
+		goto convert;
+
+	resaligned = xfs_aligned_fsb_count(imap.br_startoff,
+		imap.br_blockcount, xfs_get_cowextsz_hint(ip));
+	resblks = XFS_DIOSTRAT_SPACE_RES(mp, resaligned);
+
+	xfs_iunlock(ip, XFS_ILOCK_EXCL);
+	error = xfs_trans_alloc(mp, &M_RES(mp)->tr_write, resblks, 0, 0, &tp);
+	if (error) {
+		lockmode = XFS_IOLOCK_EXCL | XFS_MMAPLOCK_EXCL;
+		goto error;
+	}
+
+	xfs_ilock(ip, XFS_ILOCK_EXCL);
+
+	error = xfs_qm_dqattach_locked(ip, false);
+	if (error)
+		goto out_trans_cancel;
+
+	/*
+	 * Check for an overlapping extent again now that we dropped the ilock.
+	 */
+	error = xfs_find_trim_cow_extent(ip, &imap, &cmap, &shared, &found);
+	if (error || !shared)
+		goto out_trans_cancel;
+	if (found) {
+		xfs_trans_cancel(tp);
+		goto convert;
+	}
+
+	error = xfs_trans_reserve_quota_nblks(tp, ip, resblks, 0,
+			XFS_QMOPT_RES_REGBLKS);
+	if (error)
+		goto out_trans_cancel;
+
+	xfs_trans_ijoin(tp, ip, 0);
+
+	/* Allocate the entire reservation as zeroed blocks. */
+	nimaps = 1;
+	error = xfs_bmapi_write(tp, ip, imap.br_startoff, imap.br_blockcount,
+			XFS_BMAPI_COWFORK | XFS_BMAPI_ZERO, resblks, &cmap, &nimaps);
+	if (error)
+		goto out_unreserve;
+
+	xfs_inode_set_cowblocks_tag(ip);
+	error = xfs_trans_commit(tp);
+	if (error)
+		goto error;
+
+	/*
+	 * Allocation succeeded but the requested range was not even partially
+	 * satisfied?  Bail out!
+	 */
+	if (nimaps == 0) {
+		error = -ENOSPC;
+		goto error;
+	}
+convert:
+	xfs_trim_extent(&cmap, offset_fsb, count_fsb);
+	trace_xfs_reflink_convert_cow(ip, &cmap);
+	error = xfs_reflink_convert_cow_locked(ip, offset_fsb, count_fsb);
+	if (error)
+		goto error;
+	cmap.br_state = XFS_EXT_NORM;
+	dax_copy_range(xfs_inode_buftarg(ip)->bt_bdev,
+			xfs_inode_buftarg(ip)->bt_daxdev,
+			BBTOB(xfs_fsb_to_db(ip, oimap->br_startblock)),
+			BBTOB(xfs_fsb_to_db(ip, cmap.br_startblock)),
+			XFS_FSB_TO_B(mp, cmap.br_blockcount));
+	xfs_iunlock(ip, XFS_ILOCK_EXCL);
+	xfs_reflink_end_cow(ip, XFS_FSB_TO_B(mp, cmap.br_startoff),
+			XFS_FSB_TO_B(mp, cmap.br_blockcount));
+	xfs_iunlock(ip, XFS_IOLOCK_EXCL | XFS_MMAPLOCK_EXCL);
+	xfs_irele(ip);
+	return error;
+
+out_unreserve:
+	xfs_trans_unreserve_quota_nblks(tp, ip, (long)resblks, 0,
+			XFS_QMOPT_RES_REGBLKS);
+out_trans_cancel:
+	xfs_trans_cancel(tp);
+
+error:
+	xfs_iunlock(ip, lockmode);
+	xfs_irele(ip);
+	return error;
+}
+
+STATIC int
+xfs_reflink_query_rmap_owner(
+	struct xfs_inode	*ip,
+	struct xfs_mount	*mp,
+	struct xfs_bmbt_irec	*imap,
+	struct xfs_rmap_info	*info)
+{
+	struct xfs_trans	*tp = NULL;
+	struct xfs_btree_cur	*cur = NULL;
+	struct xfs_rmap_irec	rmap_low, rmap_high;
+	struct xfs_buf		*agf_bp = NULL;
+	xfs_fsblock_t		fsbno = imap->br_startblock;
+	xfs_filblks_t		bcnt = imap->br_blockcount;
+	xfs_agnumber_t		agno = XFS_FSB_TO_AGNO(mp, fsbno);
+	xfs_agblock_t		agbno = XFS_FSB_TO_AGBNO(mp, fsbno);
+	int			error = 0;
+
+	error = xfs_trans_alloc_empty(mp, &tp);
+	if (error)
+		return error;
+
+	error = xfs_alloc_read_agf(mp, tp, agno, 0, &agf_bp);
+	if (error)
+		goto out_cancel_tp;
+
+	cur = xfs_rmapbt_init_cursor(mp, tp, agf_bp, agno);
+
+	/* Construct a range for rmap query */
+	memset(&rmap_low, 0, sizeof(rmap_low));
+	memset(&rmap_high, 0xFF, sizeof(rmap_high));
+	rmap_low.rm_startblock = rmap_high.rm_startblock = agbno;
+	rmap_low.rm_blockcount = rmap_high.rm_blockcount = bcnt;
+
+	error = xfs_rmap_query_range(cur, &rmap_low, &rmap_high,
+			xfs_reflink_query_rmap_owner_helper, info);
+	if (error == -ECANCELED)
+		error = 0;
+
+	xfs_btree_del_cursor(cur, error);
+	xfs_trans_brelse(tp, agf_bp);
+
+out_cancel_tp:
+	xfs_trans_cancel(tp);
+	return error;
+}
+
+STATIC int
+xfs_reflink_unshare_other_owners(
+	struct xfs_inode	*ip,
+	struct xfs_mount	*mp,
+	struct xfs_bmbt_irec	*imap)
+{
+	int			error;
+	struct xfs_rmap_info	info;
+	int i = 0;
+
+	do {
+		info.found = false;
+		info.owner = ip->i_ino;
+		info.startblock = XFS_FSB_TO_AGBNO(mp, imap->br_startblock);
+		error = xfs_reflink_query_rmap_owner(ip, mp, imap, &info);
+		if (error < 0 || !info.found)
+			return error;
+
+		xfs_reflink_unshare_range(mp, imap, &info.rec);
+		/*
+		 * FIXME: 64 is chosen as limition intentionally, in case there
+		 * are too many snapshot files, unshare operations here will take
+		 * too much time, needs a better solution.
+		 */
+	} while (++i <= 64);
+
+	return 0;
+}
+
 /* Allocate all CoW reservations covering a range of blocks in a file. */
 int
 xfs_reflink_allocate_cow(
@@ -378,6 +599,10 @@ xfs_reflink_allocate_cow(
 	resblks = XFS_DIOSTRAT_SPACE_RES(mp, resaligned);
 
 	xfs_iunlock(ip, *lockmode);
+
+	if (ip->i_reflink_flags & XFS_REFLINK_PRIMARY)
+		xfs_reflink_unshare_other_owners(ip, mp, imap);
+
 	error = xfs_trans_alloc(mp, &M_RES(mp)->tr_write, resblks, 0, 0, &tp);
 	*lockmode = XFS_ILOCK_EXCL;
 	xfs_ilock(ip, *lockmode);
@@ -1326,6 +1551,15 @@ xfs_reflink_remap_prep(
 	/* Don't share DAX file data with non-DAX file. */
 	if (IS_DAX(inode_in) != IS_DAX(inode_out))
 		goto out_unlock;
+
+	/*
+	 * For inodes flagged with XFS_REFLINK_{PRIMARY, SECONDARY},
+	 * users do not need persistence, so we can apply fast reflink,
+	 * i.e., write protect without flushing dirty.
+	 */
+	if (src->i_reflink_flags & (XFS_REFLINK_PRIMARY |
+				    XFS_REFLINK_SECONDARY))
+		remap_flags |= REMAP_FILE_FAST_REFLINK;
 
 	if (!IS_DAX(inode_in))
 		ret = generic_remap_file_range_prep(file_in, pos_in, file_out,
