@@ -4607,6 +4607,10 @@ static int kvm_stat_data_get(void *data, u64 *val)
 		r = kvm_get_stat_per_vcpu(stat_data->kvm,
 					  stat_data->dbgfs_item->offset, val);
 		break;
+#ifdef CONFIG_SW64
+	case KVM_STAT_DFX_SW64:
+		break;
+#endif
 	}
 
 	return r;
@@ -4629,6 +4633,10 @@ static int kvm_stat_data_clear(void *data, u64 val)
 		r = kvm_clear_stat_per_vcpu(stat_data->kvm,
 					    stat_data->dbgfs_item->offset);
 		break;
+#ifdef CONFIG_SW64
+	case KVM_STAT_DFX_SW64:
+		break;
+#endif
 	}
 
 	return r;
