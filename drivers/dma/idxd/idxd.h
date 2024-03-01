@@ -104,6 +104,8 @@ struct idxd_group {
 	u8 rdbufs_reserved;
 	int tc_a;
 	int tc_b;
+	int desc_progress_limit;
+	int batch_progress_limit;
 };
 
 struct idxd_pmu {
@@ -142,6 +144,7 @@ enum idxd_wq_state {
 enum idxd_wq_flag {
 	WQ_FLAG_DEDICATED = 0,
 	WQ_FLAG_BLOCK_ON_FAULT,
+	WQ_FLAG_ATS_DISABLE,
 	WQ_FLAG_MODE_1,
 };
 
@@ -206,6 +209,8 @@ struct idxd_wq {
 	enum idxd_wq_state state;
 	unsigned long flags;
 	union wqcfg *wqcfg;
+	unsigned long *opcap_bmap;
+
 	struct dsa_hw_desc **hw_descs;
 	int num_descs;
 	union {
@@ -220,7 +225,6 @@ struct idxd_wq {
 	char name[WQ_NAME_SIZE + 1];
 	u64 max_xfer_bytes;
 	u32 max_batch_size;
-	bool ats_dis;
 	char driver_name[WQ_NAME_SIZE + 1];
 
 	struct list_head vdcm_list;
@@ -243,6 +247,7 @@ struct idxd_hw {
 	union engine_cap_reg engine_cap;
 	struct opcap opcap;
 	u32 cmd_cap;
+	union iaa_cap_reg iaa_cap;
 };
 
 enum idxd_device_state {
@@ -332,6 +337,8 @@ struct idxd_device {
 	struct kref mdev_kref;
 	struct mutex kref_lock;
 	bool mdev_host_init;
+
+	unsigned long *opcap_bmap;
 };
 
 /**
@@ -644,6 +651,7 @@ int idxd_register_driver(void);
 void idxd_unregister_driver(void);
 void idxd_wqs_quiesce(struct idxd_device *idxd);
 bool idxd_queue_int_handle_resubmit(struct idxd_desc *desc);
+void multi_u64_to_bmap(unsigned long *bmap, u64 *val, int count);
 
 /* device interrupt control */
 irqreturn_t idxd_misc_thread(int vec, void *data);
