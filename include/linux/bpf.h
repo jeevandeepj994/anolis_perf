@@ -39,6 +39,7 @@ struct bpf_iter_aux_info;
 struct bpf_local_storage;
 struct bpf_local_storage_map;
 struct bpf_func_state;
+struct ftrace_ops;
 
 extern struct idr btf_idr;
 extern spinlock_t btf_idr_lock;
@@ -630,6 +631,16 @@ struct btf_func_model {
 /* Return the return value of fentry prog. Only used by bpf_struct_ops. */
 #define BPF_TRAMP_F_RET_FENTRY_RET	BIT(4)
 
+/* Get original function from stack instead of from provided direct address.
+ * Makes sense for trampolines with fexit or fmod_ret programs.
+ */
+#define BPF_TRAMP_F_ORIG_STACK		BIT(5)
+
+/* This trampoline is on a function with another ftrace_ops with IPMODIFY,
+ * e.g., a live patch. This flag is set and cleared by ftrace call backs,
+ */
+#define BPF_TRAMP_F_SHARE_IPMODIFY	BIT(6)
+
 /* Each call __bpf_prog_enter + call bpf_func + call __bpf_prog_exit is ~50
  * bytes on x86.  Pick a number to fit into BPF_IMAGE_SIZE / 2
  */
@@ -731,8 +742,8 @@ struct bpf_trampoline {
 	struct bpf_tramp_image *cur_image;
 	u64 selector;
 
-	CK_KABI_RESERVE(1)
-	CK_KABI_RESERVE(2)
+	CK_KABI_USE(1, struct ftrace_ops *fops)
+	CK_KABI_USE_SPLIT(2, u32 flags)
 };
 
 struct bpf_attach_target_info {
