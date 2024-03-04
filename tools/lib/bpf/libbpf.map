@@ -204,3 +204,8 @@ LIBBPF_0.0.6 {
 		bpf_program__set_tracing;
 		bpf_program__size;
 } LIBBPF_0.0.5;
+
+LIBBPF_0.0.7 {
+	global:
+		bpf_prog_attach_xattr;
+} LIBBPF_0.0.6;
