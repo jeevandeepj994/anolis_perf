@@ -3251,7 +3251,7 @@ static struct shrinker deferred_split_shrinker = {
 	.scan_objects = deferred_split_scan,
 	.seeks = DEFAULT_SEEKS,
 	.flags = SHRINKER_NUMA_AWARE | SHRINKER_MEMCG_AWARE |
-		 SHRINKER_NONSLAB,
+		 SHRINKER_NONSLAB | SHRINKER_MGLRU_BACKGROUND,
 };
 
 #ifdef CONFIG_DEBUG_FS

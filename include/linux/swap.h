@@ -38,6 +38,11 @@ static inline int current_is_kswapd(void)
 	return current->flags & PF_KSWAPD;
 }
 
+static inline int background_proactive_reclaim(void)
+{
+	return current->flags & PF_PROACTIVE;
+}
+
 /*
  * MAX_SWAPFILES defines the maximum number of swaptypes: things which can
  * be swapped to.  The swap type and the offset into that swap type are

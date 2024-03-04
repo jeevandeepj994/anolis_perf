@@ -4131,6 +4131,7 @@ enum {
 	RES_SOFT_LIMIT,
 	WMARK_HIGH_LIMIT,
 	WMARK_LOW_LIMIT,
+	RES_RECLAIM,
 };
 
 static u64 mem_cgroup_read_u64(struct cgroup_subsys_state *css,
@@ -4377,6 +4378,40 @@ out:
 	return ret;
 }
 
+static unsigned long mem_cgroup_reclaim_pages(struct mem_cgroup *memcg,
+					   unsigned long nr_pages,
+					   gfp_t gfp_mask,
+					   bool may_swap)
+{
+	unsigned long reclaimed = 0;
+	int nr_retries = MAX_RECLAIM_RETRIES;
+	bool drained = false;
+
+	while (nr_retries &&
+		    (memcg == root_mem_cgroup || page_counter_read(&memcg->memory))) {
+		unsigned long progress;
+
+		if (signal_pending(current))
+			return -EINTR;
+
+		progress = try_to_free_mem_cgroup_pages(memcg, 1, gfp_mask, may_swap);
+		reclaimed += progress;
+		if (progress >= nr_pages)
+			break;
+		nr_pages -= progress;
+
+		if (!progress) {
+			if (!drained) {
+				drained = true;
+				drain_all_stock(memcg);
+			}
+			nr_retries--;
+		}
+	}
+
+	return reclaimed;
+}
+
 /*
  * The user of this function is...
  * RES_LIMIT.
@@ -4419,6 +4454,10 @@ static ssize_t mem_cgroup_write(struct kernfs_open_file *of,
 		break;
 	case RES_SOFT_LIMIT:
 		memcg->soft_limit = nr_pages;
+		ret = 0;
+		break;
+	case RES_RECLAIM:
+		mem_cgroup_reclaim_pages(memcg, nr_pages, GFP_KERNEL, true);
 		ret = 0;
 		break;
 	}
@@ -6671,6 +6710,60 @@ static int memcg_pgtable_misplaced_write(struct cgroup_subsys_state *css,
 }
 #endif /* CONFIG_PGTABLE_BIND */
 
+#ifdef CONFIG_LRU_GEN
+static bool mglru_size_valid_check(struct mem_cgroup *memcg)
+{
+	struct mem_cgroup *parent;
+
+	while ((parent = parent_mem_cgroup(memcg)) != NULL) {
+		if (unlikely(parent->mglru_batch_size))
+			return false;
+
+		memcg = parent;
+	}
+
+	return true;
+}
+
+static ssize_t mem_cgroup_mglru_size_write(struct kernfs_open_file *of,
+			 char *buf, size_t nbytes, loff_t off)
+{
+	struct mem_cgroup *memcg = mem_cgroup_from_css(of_css(of));
+	char *end;
+	unsigned long batch_size;
+
+	if (!mglru_size_valid_check(memcg)) {
+		pr_err("Failed to set the mglru batch size.\n");
+		return -EINVAL;
+	}
+
+	buf = strstrip(buf);
+	batch_size = memparse(buf, &end);
+	if (*end != '\0')
+		return -EINVAL;
+
+	WRITE_ONCE(memcg->mglru_batch_size, batch_size);
+	return nbytes;
+}
+
+static u64 mem_cgroup_mglru_size_read(struct cgroup_subsys_state *css,
+			struct cftype *cft)
+{
+	struct mem_cgroup *memcg = mem_cgroup_from_css(css);
+
+	return READ_ONCE(memcg->mglru_batch_size);
+}
+
+static int memcg_mglru_reclaim_kbytes_show(struct seq_file *m, void *v)
+{
+	struct mem_cgroup *memcg = mem_cgroup_from_css(seq_css(m));
+	unsigned long reclaim_kbytes = memcg->mglru_reclaim_pages << (PAGE_SHIFT - 10);
+
+	seq_printf(m, "%lu\n", reclaim_kbytes);
+	return 0;
+}
+#endif
+
 #ifdef CONFIG_TRANSPARENT_HUGEPAGE
 static int memcg_thp_reclaim_show(struct seq_file *m, void *v)
 {
@@ -7005,6 +7098,18 @@ static struct cftype mem_cgroup_legacy_files[] = {
 		.seq_show =  memcg_lat_stat_show,
 	},
 #endif /* CONFIG_MEMSLI */
+
+#ifdef CONFIG_LRU_GEN
+	{
+		.name = "mglru_batch_size",
+		.write = mem_cgroup_mglru_size_write,
+		.read_u64 = mem_cgroup_mglru_size_read,
+	},
+	{
+		.name = "mglru_reclaim_kbytes",
+		.seq_show = memcg_mglru_reclaim_kbytes_show,
+	},
+#endif
 	{
 		.name = "exstat",
 		.seq_show = memcg_exstat_show,
@@ -7264,6 +7369,11 @@ static struct cftype mem_cgroup_legacy_files[] = {
 		.write = memcg_thp_control_write,
 	},
 #endif
+	{
+		.name = "reclaim_caches",
+		.private = MEMFILE_PRIVATE(_MEM, RES_RECLAIM),
+		.write = mem_cgroup_write,
+	},
 #ifdef CONFIG_PGTABLE_BIND
 	{
 		.name = "pgtable_bind",

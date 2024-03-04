@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0
+#include <linux/module.h>
 #include <linux/mm.h>
 #include <linux/mmzone.h>
 #include <linux/page_reporting.h>
@@ -6,9 +7,16 @@
 #include <linux/export.h>
 #include <linux/delay.h>
 #include <linux/scatterlist.h>
+#include <linux/atomic.h>
+#include <linux/vmstat.h>
 
 #include "page_reporting.h"
 #include "internal.h"
+
+int reporting_min_order = pageblock_order;
+static int reporting_factor = 100;
+static atomic64_t reclaim_pages;
+static int reclaim_level;
 
 #define PAGE_REPORTING_DELAY	(2 * HZ)
 static struct page_reporting_dev_info __rcu *pr_dev_info __read_mostly;
@@ -66,7 +74,8 @@ void __page_reporting_notify(void)
 
 static void
 page_reporting_drain(struct page_reporting_dev_info *prdev,
-		     struct scatterlist *sgl, unsigned int nents, bool reported)
+		     struct scatterlist *sgl, struct zone *zone,
+		     unsigned int nents, bool reported)
 {
 	struct scatterlist *sg = sgl;
 
@@ -92,8 +101,13 @@ page_reporting_drain(struct page_reporting_dev_info *prdev,
 		 * report on the new larger page when we make our way
 		 * up to that higher order.
 		 */
-		if (PageBuddy(page) && buddy_order(page) == order)
+		if (PageBuddy(page) && buddy_order(page) == order) {
 			__SetPageReported(page);
+			zone->reported_pages += (1 << order);
+
+			__count_vm_events(REPORT_PAGE, 1 << order);
+			atomic64_add(-(1 << order), &reclaim_pages);
+		}
 	} while ((sg = sg_next(sg)));
 
 	/* reinitialize scatterlist now that it is empty */
@@ -114,6 +128,7 @@ page_reporting_cycle(struct page_reporting_dev_info *prdev, struct zone *zone,
 	struct list_head *list = &area->free_list[mt];
 	unsigned int page_len = PAGE_SIZE << order;
 	struct page *page, *next;
+	unsigned long threshold;
 	long budget;
 	int err = 0;
 
@@ -124,6 +139,7 @@ page_reporting_cycle(struct page_reporting_dev_info *prdev, struct zone *zone,
 	if (list_empty(list))
 		return err;
 
+	threshold = zone_managed_pages(zone)  * reporting_factor / 100;
 	spin_lock_irq(&zone->lock);
 
 	/*
@@ -144,8 +160,11 @@ page_reporting_cycle(struct page_reporting_dev_info *prdev, struct zone *zone,
 
 	/* loop through free list adding unreported pages to sg list */
 	list_for_each_entry_safe(page, next, list, lru) {
-		/* We are going to skip over the reported pages. */
-		if (PageReported(page))
+		/*
+		 * We are going to skip over the initialized and reported
+		 * pages.
+		 */
+		if (PageInited(page) || PageReported(page))
 			continue;
 
 		/*
@@ -161,6 +180,8 @@ page_reporting_cycle(struct page_reporting_dev_info *prdev, struct zone *zone,
 
 		/* Attempt to pull page from list and place in scatterlist */
 		if (*offset) {
+			unsigned long nr_pages;
+
 			if (!__isolate_free_page(page, order)) {
 				next = page;
 				break;
@@ -169,6 +190,13 @@ page_reporting_cycle(struct page_reporting_dev_info *prdev, struct zone *zone,
 			/* Add page to scatter list */
 			--(*offset);
 			sg_set_page(&sgl[*offset], page, page_len, 0);
+
+			nr_pages = (PAGE_REPORTING_CAPACITY - *offset) << order;
+			if (zone->reported_pages + nr_pages >= threshold &&
+				atomic64_read(&reclaim_pages) <= 0) {
+				err = 1;
+				break;
+			}
 
 			continue;
 		}
@@ -197,7 +225,8 @@ page_reporting_cycle(struct page_reporting_dev_info *prdev, struct zone *zone,
 		spin_lock_irq(&zone->lock);
 
 		/* flush reported pages from the sg list */
-		page_reporting_drain(prdev, sgl, PAGE_REPORTING_CAPACITY, !err);
+		page_reporting_drain(prdev, sgl, zone,
+				PAGE_REPORTING_CAPACITY, !err);
 
 		/*
 		 * Reset next to first entry, the old next isn't valid
@@ -224,12 +253,17 @@ page_reporting_process_zone(struct page_reporting_dev_info *prdev,
 			    struct scatterlist *sgl, struct zone *zone)
 {
 	unsigned int order, mt, leftover, offset = PAGE_REPORTING_CAPACITY;
-	unsigned long watermark;
+	unsigned long watermark, threshold;
+	int min_order = reporting_min_order;
 	int err = 0;
+
+	threshold = zone_managed_pages(zone) * reporting_factor / 100;
+	if (zone->reported_pages >= threshold && atomic64_read(&reclaim_pages) <= 0)
+		return err;
 
 	/* Generate minimum watermark to be able to guarantee progress */
 	watermark = low_wmark_pages(zone) +
-		    (PAGE_REPORTING_CAPACITY << PAGE_REPORTING_MIN_ORDER);
+		    (PAGE_REPORTING_CAPACITY << min_order);
 
 	/*
 	 * Cancel request if insufficient free memory or if we failed
@@ -239,7 +273,7 @@ page_reporting_process_zone(struct page_reporting_dev_info *prdev,
 		return err;
 
 	/* Process each free list starting from lowest order/mt */
-	for (order = PAGE_REPORTING_MIN_ORDER; order < MAX_ORDER; order++) {
+	for (order = min_order; order < MAX_ORDER; order++) {
 		for (mt = 0; mt < MIGRATE_TYPES; mt++) {
 			/* We do not pull pages from the isolate free list */
 			if (is_migrate_isolate(mt))
@@ -247,11 +281,18 @@ page_reporting_process_zone(struct page_reporting_dev_info *prdev,
 
 			err = page_reporting_cycle(prdev, zone, order, mt,
 						   sgl, &offset);
+			/* Exceed threshold go to report leftover */
+			if (err > 0) {
+				err = 0;
+				goto leftover;
+			}
+
 			if (err)
 				return err;
 		}
 	}
 
+leftover:
 	/* report the leftover pages before going idle */
 	leftover = PAGE_REPORTING_CAPACITY - offset;
 	if (leftover) {
@@ -260,7 +301,7 @@ page_reporting_process_zone(struct page_reporting_dev_info *prdev,
 
 		/* flush any remaining pages out from the last report */
 		spin_lock_irq(&zone->lock);
-		page_reporting_drain(prdev, sgl, leftover, !err);
+		page_reporting_drain(prdev, sgl, zone, leftover, !err);
 		spin_unlock_irq(&zone->lock);
 	}
 
@@ -362,3 +403,176 @@ void page_reporting_unregister(struct page_reporting_dev_info *prdev)
 	mutex_unlock(&page_reporting_mutex);
 }
 EXPORT_SYMBOL_GPL(page_reporting_unregister);
+
+#ifdef CONFIG_SYSFS
+#define REPORTING_ATTR(_name) \
+	static struct kobj_attribute _name##_attr = \
+		__ATTR(_name, 0644, _name##_show, _name##_store)
+
+#define REPORTING_ATTR_RO(_name) \
+	static struct kobj_attribute _name##_attr = \
+		__ATTR_RO_MODE(_name, 0644)
+
+static unsigned long get_reported_kbytes(void)
+{
+	struct zone *z;
+	unsigned long nr_reported = 0;
+
+	for_each_populated_zone(z)
+		nr_reported += z->reported_pages;
+
+	return nr_reported << (PAGE_SHIFT - 10);
+}
+
+static ssize_t reported_kbytes_show(struct kobject *kobj,
+		struct kobj_attribute *attr, char *buf)
+{
+	return sprintf(buf, "%lu\n", get_reported_kbytes());
+}
+
+REPORTING_ATTR_RO(reported_kbytes);
+
+static ssize_t reporting_factor_show(struct kobject *kobj,
+		struct kobj_attribute *attr, char *buf)
+{
+	return sprintf(buf, "%d\n", reporting_factor);
+}
+
+static ssize_t reporting_factor_store(struct kobject *kobj,
+		struct kobj_attribute *attr,
+		const char *buf, size_t count)
+{
+	int new, old, err;
+	struct page *page;
+	int min_order = reporting_min_order;
+
+	err = kstrtoint(buf, 10, &new);
+	if (err || (new < 0 || new > 100))
+		return -EINVAL;
+
+	old = reporting_factor;
+	reporting_factor = new;
+
+	if (new <= old)
+		goto out;
+
+	/* Trigger reporting with new larger reporting_factor */
+	smp_mb();
+	page = alloc_pages(__GFP_HIGHMEM | __GFP_NOWARN, min_order);
+	if (page)
+		__free_pages(page, min_order);
+
+out:
+	return count;
+}
+REPORTING_ATTR(reporting_factor);
+
+static ssize_t reclaim_memory_show(struct kobject *kobj,
+		struct kobj_attribute *attr, char *buf)
+{
+	long long nr_reclaim_pages = atomic64_read(&reclaim_pages);
+
+	if (nr_reclaim_pages < 0)
+		nr_reclaim_pages = 0;
+	return sprintf(buf, "%lld\n", nr_reclaim_pages << (PAGE_SHIFT - 10));
+}
+
+static ssize_t reclaim_memory_store(struct kobject *kobj,
+		struct kobj_attribute *attr,
+		const char *buf, size_t count)
+{
+	int err;
+	unsigned long long new;
+	struct page *page;
+	int min_order = reporting_min_order;
+
+	err = kstrtoull(buf, 10, &new);
+	if (err)
+		return -EINVAL;
+
+	atomic64_set(&reclaim_pages, new >> (PAGE_SHIFT - 10));
+
+	/* Trigger reporting with new larger reporting_factor */
+	smp_mb();
+	page = alloc_pages(__GFP_HIGHMEM | __GFP_NOWARN, min_order);
+	if (page)
+		__free_pages(page, min_order);
+
+	return count;
+}
+REPORTING_ATTR(reclaim_memory);
+
+static ssize_t reclaim_level_show(struct kobject *kobj,
+		struct kobj_attribute *attr, char *buf)
+{
+	return sprintf(buf, "%d\n", reclaim_level);
+}
+
+static ssize_t reclaim_level_store(struct kobject *kobj,
+		struct kobj_attribute *attr,
+		const char *buf, size_t count)
+{
+	int new, err;
+
+	err = kstrtoint(buf, 10, &new);
+	if (err)
+		return -EINVAL;
+	reclaim_level = new;
+
+	return count;
+}
+REPORTING_ATTR(reclaim_level);
+
+static ssize_t reporting_min_order_show(struct kobject *kobj,
+		struct kobj_attribute *attr, char *buf)
+{
+	return sprintf(buf, "%d\n", reporting_min_order);
+}
+
+static ssize_t reporting_min_order_store(struct kobject *kobj,
+		struct kobj_attribute *attr,
+		const char *buf, size_t count)
+{
+	int new, err;
+
+	err = kstrtoint(buf, 10, &new);
+	if (err || (new < 0 || new > MAX_ORDER - 1))
+		return -EINVAL;
+
+	reporting_min_order = new;
+
+	return count;
+}
+REPORTING_ATTR(reporting_min_order);
+
+static struct attribute *reporting_attrs[] = {
+	&reported_kbytes_attr.attr,
+	&reporting_factor_attr.attr,
+	&reporting_min_order_attr.attr,
+	&reclaim_memory_attr.attr,
+	&reclaim_level_attr.attr,
+	NULL,
+};
+
+static struct attribute_group reporting_attr_group = {
+	.attrs = reporting_attrs,
+	.name = "page_reporting",
+};
+#endif
+
+static int __init page_reporting_init(void)
+{
+#ifdef CONFIG_SYSFS
+	int err;
+
+	err = sysfs_create_group(mm_kobj, &reporting_attr_group);
+	if (err) {
+		pr_err("%s: Unable to populate sysfs files\n", __func__);
+		return err;
+	}
+#endif
+
+	return 0;
+}
+
+module_init(page_reporting_init);
