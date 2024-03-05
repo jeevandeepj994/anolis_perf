@@ -790,7 +790,7 @@ static struct tcmu_cmd *tcmu_alloc_cmd(struct se_cmd *se_cmd)
 	if (zero_copy || !bypass_data_area) {
 		tcmu_cmd_set_block_cnts(tcmu_cmd);
 		tcmu_cmd->dbi = kcalloc(tcmu_cmd->dbi_cnt, sizeof(uint32_t),
-					GFP_KERNEL);
+					GFP_NOIO);
 		if (!tcmu_cmd->dbi) {
 			kmem_cache_free(tcmu_cmd_cache, tcmu_cmd);
 			return NULL;
