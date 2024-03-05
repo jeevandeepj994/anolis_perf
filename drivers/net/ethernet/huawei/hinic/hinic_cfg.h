@@ -18,8 +18,6 @@
 
 #include "hinic_ctx_def.h"
 
-#define CFG_MAX_CMD_TIMEOUT     1000 /* ms */
-
 enum {
 	CFG_FREE = 0,
 	CFG_BUSY = 1
@@ -57,7 +55,7 @@ enum {
 #define L2NIC_SQ_DEPTH      (4 * K_UNIT)
 #define L2NIC_RQ_DEPTH      (4 * K_UNIT)
 
-#define HINIC_CFG_MAX_QP	64
+#define HINIC_CFG_MAX_QP    128
 
 /* RDMA */
 #define RDMA_RSVD_QPS       2
@@ -442,7 +440,8 @@ struct hinic_dev_cap {
 
 	/* OVS */
 	u32 ovs_max_qpc;
-	u32 rsvd6;
+	u8  ovs_dq_en;
+	u8  rsvd5[3];
 
 	/* ToE */
 	u32 toe_max_pctx;

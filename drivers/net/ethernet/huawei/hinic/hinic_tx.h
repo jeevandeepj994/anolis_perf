@@ -42,12 +42,10 @@ struct hinic_txq_stats {
 	u64	alloc_cpy_frag_err;
 	u64	map_cpy_frag_err;
 	u64	map_frag_err;
+	u64	frag_size_err;
+	u64	unknown_tunnel_pkt;
 
-#ifdef HAVE_NDO_GET_STATS64
 	struct u64_stats_sync	syncp;
-#else
-	struct u64_stats_sync_empty syncp;
-#endif
 };
 
 struct hinic_dma_len {
@@ -65,6 +63,7 @@ struct hinic_tx_info {
 	int			num_sge;
 	void			*wqe;
 	u8			*cpy_buff;
+	u16			valid_nr_frags;
 	u16			num_pkts;
 	u64			num_bytes;
 	struct hinic_dma_len	dma_len[MAX_SGE_NUM_PER_WQE];

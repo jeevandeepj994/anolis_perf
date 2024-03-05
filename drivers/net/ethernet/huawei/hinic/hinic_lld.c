@@ -43,14 +43,12 @@
 #define HINIC_PCI_DB_BAR		4
 #define HINIC_PCI_VENDOR_ID		0x19e5
 
-#define HINIC_DB_DWQE_SIZE		0x00080000
-
 #define SELF_TEST_BAR_ADDR_OFFSET	0x883c
 
-#define HINIC_SECOND_BASE (1000)
-#define HINIC_SYNC_YEAR_OFFSET (1900)
-#define HINIC_SYNC_MONTH_OFFSET (1)
-#define HINIC_MINUTE_BASE (60)
+#define HINIC_SECOND_BASE		1000
+#define HINIC_SYNC_YEAR_OFFSET		1900
+#define HINIC_SYNC_MONTH_OFFSET		1
+#define HINIC_MINUTE_BASE		60
 #define HINIC_WAIT_TOOL_CNT_TIMEOUT	10000
 #define HINIC_WAIT_SRIOV_CFG_TIMEOUT	15000
 
@@ -61,25 +59,6 @@ MODULE_AUTHOR("Huawei Technologies CO., Ltd");
 MODULE_DESCRIPTION(HINIC_DRV_DESC);
 MODULE_VERSION(HINIC_DRV_VERSION);
 MODULE_LICENSE("GPL");
-
-#if !(defined(HAVE_SRIOV_CONFIGURE) || defined(HAVE_RHEL6_SRIOV_CONFIGURE))
-static DEVICE_ATTR(sriov_numvfs, 0664,
-			hinic_sriov_numvfs_show, hinic_sriov_numvfs_store);
-static DEVICE_ATTR(sriov_totalvfs, 0444,
-			hinic_sriov_totalvfs_show, NULL);
-#endif /* !(HAVE_SRIOV_CONFIGURE || HAVE_RHEL6_SRIOV_CONFIGURE) */
-
-static struct attribute *hinic_attributes[] = {
-#if !(defined(HAVE_SRIOV_CONFIGURE) || defined(HAVE_RHEL6_SRIOV_CONFIGURE))
-	&dev_attr_sriov_numvfs.attr,
-	&dev_attr_sriov_totalvfs.attr,
-#endif /* !(HAVE_SRIOV_CONFIGURE || HAVE_RHEL6_SRIOV_CONFIGURE) */
-	NULL
-};
-
-static const struct attribute_group hinic_attr_group = {
-	.attrs		= hinic_attributes,
-};
 
 #ifdef CONFIG_PCI_IOV
 static bool disable_vf_load;
@@ -116,7 +95,11 @@ struct hinic_pcidev {
 	u64 db_base_phy;
 	void __iomem *db_base;
 
+#if defined(__aarch64__)
 	void __iomem *dwqe_mapping;
+#else
+	struct io_mapping *dwqe_mapping;
+#endif
 	/* lock for attach/detach uld */
 	struct mutex pdev_mutex;
 	struct hinic_sriov_info sriov_info;
@@ -131,9 +114,13 @@ struct hinic_pcidev {
 	struct work_struct slave_nic_work;
 	struct workqueue_struct *slave_nic_init_workq;
 	struct delayed_work slave_nic_init_dwork;
+	enum hinic_chip_mode chip_mode;
 	bool nic_cur_enable;
 	bool nic_des_enable;
+
+	struct timer_list syncfw_time_timer;
 };
+
 #define HINIC_EVENT_PROCESS_TIMEOUT	10000
 
 #define FIND_BIT(num, n)	(((num) & (1UL << (n))) ? 1 : 0)
@@ -275,6 +262,7 @@ static int attach_uld(struct hinic_pcidev *dev, enum hinic_service_type type,
 {
 	void *uld_dev = NULL;
 	int err;
+
 	mutex_lock(&dev->pdev_mutex);
 
 	if (dev->init_state < HINIC_INIT_STATE_HWDEV_INITED) {
@@ -350,7 +338,6 @@ static void detach_uld(struct hinic_pcidev *dev, enum hinic_service_type type)
 	mutex_unlock(&dev->pdev_mutex);
 }
 
-#ifndef __HIFC_PANGEA__
 static void attach_ulds(struct hinic_pcidev *dev)
 {
 	enum hinic_service_type type;
@@ -360,7 +347,6 @@ static void attach_ulds(struct hinic_pcidev *dev)
 			attach_uld(dev, type, &g_uld_info[type]);
 	}
 }
-#endif
 
 static void detach_ulds(struct hinic_pcidev *dev)
 {
@@ -441,6 +427,49 @@ void hinic_unregister_uld(enum hinic_service_type type)
 	lld_dev_put();
 }
 EXPORT_SYMBOL(hinic_unregister_uld);
+
+#define HINIC_SYNFW_TIME_PERIOD		(60 * 60 * 1000)
+
+static void hinic_syncfw_timer_handler(struct timer_list *t)
+{
+	struct hinic_pcidev *pci_adapter = from_timer(pci_adapter, t,
+						      syncfw_time_timer);
+	struct timeval tv = {0};
+	u64 tv_msec;
+
+	do_gettimeofday(&tv);
+
+	tv_msec = tv.tv_sec * MSEC_PER_SEC +
+			tv.tv_usec / USEC_PER_MSEC;
+
+	hinic_sync_time_async(pci_adapter->hwdev, tv_msec);
+	mod_timer(&pci_adapter->syncfw_time_timer,
+		  jiffies + msecs_to_jiffies(HINIC_SYNFW_TIME_PERIOD));
+}
+
+void hinic_init_syncfw_timer(struct hinic_pcidev *pci_adapter)
+{
+	if (hinic_get_func_mode(pci_adapter->hwdev) != FUNC_MOD_NORMAL_HOST ||
+	    hinic_func_type(pci_adapter->hwdev) != TYPE_PPF)
+		return;
+
+	timer_setup(&pci_adapter->syncfw_time_timer,
+		    hinic_syncfw_timer_handler, 0);
+
+	pci_adapter->syncfw_time_timer.expires =
+		jiffies + msecs_to_jiffies(HINIC_SYNFW_TIME_PERIOD);
+
+	add_timer(&pci_adapter->syncfw_time_timer);
+}
+
+void hinic_destroy_syncfw_timer(struct hinic_pcidev *pci_adapter)
+{
+	if (hinic_get_func_mode(pci_adapter->hwdev) != FUNC_MOD_NORMAL_HOST ||
+	    hinic_func_type(pci_adapter->hwdev) != TYPE_PPF)
+		return;
+
+	del_timer_sync(&pci_adapter->syncfw_time_timer);
+}
 
 static void hinic_sync_time_to_fmw(struct hinic_pcidev *pdev_pri)
 {
@@ -629,6 +658,7 @@ static void hinic_ignore_minor_version(char *version)
 {
 	char ver_split[MAX_VER_SPLIT_NUM][MAX_VER_FIELD_LEN] = { {0} };
 	int max_ver_len, split_num = 0;
+	int err;
 
 	__version_split(version, &split_num, ver_split);
 	if (split_num != MAX_VER_SPLIT_NUM)
@@ -637,8 +667,11 @@ static void hinic_ignore_minor_version(char *version)
 	max_ver_len = (int)strlen(version) + 1;
 	memset(version, 0, max_ver_len);
 
-	snprintf(version, max_ver_len, "%s.%s.%s.0",
-		 ver_split[0], ver_split[1], ver_split[2]);
+	err = snprintf(version, max_ver_len, "%s.%s.%s.0",
+		       ver_split[0], ver_split[1], ver_split[2]);
+	if (err <= 0 || err >= max_ver_len)
+		pr_err("Failed to snprintf version, function return(%d) and dest_len(%d)\n",
+		       err, max_ver_len);
 }
 
 static int hinic_detect_version_compatible(struct hinic_pcidev *pcidev)
@@ -780,8 +813,7 @@ static bool __is_pcidev_match_chip_name(const char *ifname,
 			if (dev->init_state < HINIC_INIT_STATE_HW_PART_INITED)
 				return false;
 		} else {
-			if (dev->init_state >=
-			    HINIC_INIT_STATE_HW_PART_INITED &&
+			if (dev->init_state < HINIC_INIT_STATE_HW_PART_INITED ||
 			    hinic_func_type(dev->hwdev) != type)
 				return false;
 		}
@@ -1056,7 +1088,7 @@ void *hinic_get_uld_dev_by_ifname(char *ifname, enum hinic_service_type type)
 	struct hinic_pcidev *dev;
 
 	if (type >= SERVICE_T_MAX) {
-		pr_err("Service type :%d is error\n", type);
+		pr_err("Service type: %d is error\n", type);
 		return NULL;
 	}
 
@@ -1132,6 +1164,10 @@ void *hinic_get_ppf_hwdev_by_pdev(struct pci_dev *pdev)
 	chip_node = pci_adapter->chip_node;
 	lld_dev_hold();
 	list_for_each_entry(dev, &chip_node->func_list, node) {
+		if (test_bit(HINIC_FUNC_IN_REMOVE, &dev->flag) ||
+		    dev->init_state < HINIC_INIT_STATE_HW_IF_INITED)
+			continue;
+
 		if (dev->hwdev && hinic_func_type(dev->hwdev) == TYPE_PPF) {
 			lld_dev_put();
 			return dev->hwdev;
@@ -1152,7 +1188,7 @@ void hinic_get_all_chip_id(void *id_info)
 	lld_dev_hold();
 	list_for_each_entry(chip_node, &g_hinic_chip_list, node) {
 		err = sscanf(chip_node->chip_name, HINIC_CHIP_NAME "%d", &id);
-		if (err < 0)
+		if (err <= 0)
 			pr_err("Failed to get hinic id\n");
 
 		card_id->id[i] = id;
@@ -1303,8 +1339,6 @@ void hinic_get_card_func_info_by_card_name(const char *chip_name,
 	}
 
 	lld_dev_put();
-
-	return;
 }
 
 int hinic_get_device_id(void *hwdev, u16 *dev_id)
@@ -1346,6 +1380,10 @@ int hinic_get_pf_id(void *hwdev, u32 port_id, u32 *pf_id, u32 *isvalid)
 
 	lld_dev_hold();
 	list_for_each_entry(dev, &chip_node->func_list, node) {
+		if (test_bit(HINIC_FUNC_IN_REMOVE, &dev->flag) ||
+		    dev->init_state < HINIC_INIT_STATE_HWDEV_INITED)
+			continue;
+
 		if (hinic_physical_port_id(dev->hwdev) == port_id) {
 			*pf_id = hinic_global_func_id(dev->hwdev);
 			*isvalid = 1;
@@ -1436,7 +1474,7 @@ struct net_device *hinic_get_netdev_by_lld(struct hinic_lld_dev *lld_dev)
 	nic_dev = pci_adapter->uld_dev[SERVICE_T_NIC];
 	if (!nic_dev) {
 		sdk_err(&pci_adapter->pcidev->dev,
-			"There's no net device attached on the pci device");
+			"There's no net device attached on the pci device\n");
 		return NULL;
 	}
 
@@ -1470,7 +1508,7 @@ struct net_device *hinic_get_netdev_by_pcidev(struct pci_dev *pdev)
 	nic_dev = pci_adapter->uld_dev[SERVICE_T_NIC];
 	if (!nic_dev) {
 		sdk_err(&pci_adapter->pcidev->dev,
-			"There`s no net device attached on the pci device");
+			"There`s no net device attached on the pci device\n");
 		return NULL;
 	}
 
@@ -1641,6 +1679,9 @@ static int __set_nic_func_state(struct hinic_pcidev *pci_adapter)
 	}
 
 	if (enable_nic) {
+		if (is_multi_bm_slave(pci_adapter->hwdev))
+			hinic_set_vf_dev_cap(pci_adapter->hwdev);
+
 		err = attach_uld(pci_adapter, SERVICE_T_NIC,
 				 &g_uld_info[SERVICE_T_NIC]);
 		if (err) {
@@ -1705,7 +1746,7 @@ int hinic_ovs_set_vf_nic_state(struct hinic_lld_dev *lld_dev, u16 vf_func_id,
 
 				if (err) {
 					sdk_err(&des_dev->pcidev->dev,
-						"%s driver Set VF max_queue_num failed, err=%d.\n",
+						"%s driver Set VF max_queue_num failed, err=%d\n",
 						s_uld_name[SERVICE_T_NIC], err);
 
 					break;
@@ -1724,6 +1765,8 @@ int hinic_ovs_set_vf_nic_state(struct hinic_lld_dev *lld_dev, u16 vf_func_id,
 			uld_dev->in_vm = true;
 			uld_dev->is_vm_slave =
 				is_multi_vm_slave(uld_dev->hwdev);
+			uld_dev->is_bm_slave =
+				is_multi_bm_slave(uld_dev->hwdev);
 			if (des_dev->init_state < HINIC_INIT_STATE_NIC_INITED)
 				des_dev->init_state =
 					HINIC_INIT_STATE_NIC_INITED;
@@ -1802,17 +1845,10 @@ static void __multi_host_mgmt(struct hinic_pcidev *dev,
 	}
 }
 
-void hinic_event_process(void *adapter, struct hinic_event_info *event)
+static void send_uld_dev_event(struct hinic_pcidev *dev,
+			       struct hinic_event_info *event)
 {
-	struct hinic_pcidev *dev = adapter;
 	enum hinic_service_type type;
-
-	if (event->type == HINIC_EVENT_FMW_ACT_NTC)
-		return hinic_sync_time_to_fmw(dev);
-	else if (event->type == HINIC_EVENT_MCTP_GET_HOST_INFO)
-		return __mctp_get_host_info(dev, &event->mctp_info);
-	else if (event->type == HINIC_EVENT_MULTI_HOST_MGMT)
-		return __multi_host_mgmt(dev, &event->mhost_mgmt);
 
 	for (type = SERVICE_T_NIC; type < SERVICE_T_MAX; type++) {
 		if (test_and_set_bit(type, &dev->state)) {
@@ -1828,8 +1864,83 @@ void hinic_event_process(void *adapter, struct hinic_event_info *event)
 	}
 }
 
+static void send_event_to_all_pf(struct hinic_pcidev *dev,
+				 struct hinic_event_info *event)
+{
+	struct hinic_pcidev *des_dev = NULL;
+
+	lld_dev_hold();
+	list_for_each_entry(des_dev, &dev->chip_node->func_list, node) {
+		if (test_bit(HINIC_FUNC_IN_REMOVE, &des_dev->flag) ||
+		    des_dev->init_state < HINIC_INIT_STATE_HW_IF_INITED)
+			continue;
+
+		if (hinic_func_type(des_dev->hwdev) == TYPE_VF)
+			continue;
+
+		send_uld_dev_event(des_dev, event);
+	}
+	lld_dev_put();
+}
+
+static void send_event_to_dst_pf(struct hinic_pcidev *dev, u16 func_id,
+				 struct hinic_event_info *event)
+{
+	struct hinic_pcidev *des_dev = NULL;
+
+	lld_dev_hold();
+	list_for_each_entry(des_dev, &dev->chip_node->func_list, node) {
+		if (test_bit(HINIC_FUNC_IN_REMOVE, &des_dev->flag) ||
+		    des_dev->init_state < HINIC_INIT_STATE_HW_IF_INITED)
+			continue;
+
+		if (hinic_func_type(des_dev->hwdev) == TYPE_VF)
+			continue;
+
+		if (hinic_global_func_id(des_dev->hwdev) == func_id) {
+			send_uld_dev_event(des_dev, event);
+			break;
+		}
+	}
+	lld_dev_put();
+}
+
+void hinic_event_process(void *adapter, struct hinic_event_info *event)
+{
+	struct hinic_pcidev *dev = adapter;
+	u16 func_id;
+
+	switch (event->type) {
+	case HINIC_EVENT_FMW_ACT_NTC:
+		hinic_sync_time_to_fmw(dev);
+		break;
+	case HINIC_EVENT_MCTP_GET_HOST_INFO:
+		__mctp_get_host_info(dev, &event->mctp_info);
+		break;
+	case HINIC_EVENT_MULTI_HOST_MGMT:
+		__multi_host_mgmt(dev, &event->mhost_mgmt);
+		break;
+	case HINIC_EVENT_FAULT:
+		if (event->info.fault_level == FAULT_LEVEL_SERIOUS_FLR &&
+		    event->info.event.chip.func_id < HINIC_MAX_PF_NUM) {
+			func_id = event->info.event.chip.func_id;
+			send_event_to_dst_pf(adapter, func_id, event);
+		} else {
+			send_uld_dev_event(adapter, event);
+		}
+		break;
+	case HINIC_EVENT_MGMT_WATCHDOG_EVENT:
+		send_event_to_all_pf(adapter, event);
+		break;
+	default:
+		send_uld_dev_event(adapter, event);
+		break;
+	}
+}
+
 static int mapping_bar(struct pci_dev *pdev, struct hinic_pcidev *pci_adapter)
 {
+	u32 db_dwqe_size;
 	u64 dwqe_addr;
 
 	pci_adapter->cfg_reg_base =
@@ -1848,20 +1959,32 @@ static int mapping_bar(struct pci_dev *pdev, struct hinic_pcidev *pci_adapter)
 		goto map_intr_bar_err;
 	}
 
+	db_dwqe_size = hinic_get_db_size(pci_adapter->cfg_reg_base,
+					 &pci_adapter->chip_mode);
+
 	pci_adapter->db_base_phy = pci_resource_start(pdev, HINIC_PCI_DB_BAR);
 	pci_adapter->db_base = ioremap(pci_adapter->db_base_phy,
-				       HINIC_DB_DWQE_SIZE);
+				       db_dwqe_size);
 	if (!pci_adapter->db_base) {
 		sdk_err(&pci_adapter->pcidev->dev,
 			"Failed to map doorbell regs\n");
 		goto map_db_err;
 	}
 
-	dwqe_addr = pci_adapter->db_base_phy + HINIC_DB_DWQE_SIZE;
+	if (pci_adapter->chip_mode != CHIP_MODE_NORMAL)
+		return 0;
 
+	dwqe_addr = pci_adapter->db_base_phy + db_dwqe_size;
+
+#if defined(__aarch64__)
 	/* arm do not support call ioremap_wc() */
-	pci_adapter->dwqe_mapping = __ioremap(dwqe_addr, HINIC_DB_DWQE_SIZE,
+	pci_adapter->dwqe_mapping = __ioremap(dwqe_addr, db_dwqe_size,
 					      __pgprot(PROT_DEVICE_nGnRnE));
+#else
+	pci_adapter->dwqe_mapping = io_mapping_create_wc(dwqe_addr,
+							 db_dwqe_size);
+
+#endif
 	if (!pci_adapter->dwqe_mapping) {
 		sdk_err(&pci_adapter->pcidev->dev, "Failed to io_mapping_create_wc\n");
 		goto mapping_dwqe_err;
@@ -1883,7 +2006,13 @@ map_intr_bar_err:
 
 static void unmapping_bar(struct hinic_pcidev *pci_adapter)
 {
-	iounmap(pci_adapter->dwqe_mapping);
+	if (pci_adapter->chip_mode == CHIP_MODE_NORMAL) {
+#if defined(__aarch64__)
+		iounmap(pci_adapter->dwqe_mapping);
+#else
+		io_mapping_free(pci_adapter->dwqe_mapping);
+#endif
+	}
 
 	iounmap(pci_adapter->db_base);
 	iounmap(pci_adapter->intr_reg_base);
@@ -1895,6 +2024,7 @@ static int alloc_chip_node(struct hinic_pcidev *pci_adapter)
 	struct card_node *chip_node;
 	unsigned char i;
 	unsigned char parent_bus_number = 0;
+	int err;
 
 	if  (!pci_is_root_bus(pci_adapter->pcidev->bus))
 		parent_bus_number = pci_adapter->pcidev->bus->parent->number;
@@ -1931,27 +2061,39 @@ static int alloc_chip_node(struct hinic_pcidev *pci_adapter)
 
 	chip_node = kzalloc(sizeof(*chip_node), GFP_KERNEL);
 	if (!chip_node) {
-		card_bit_map = CLEAR_BIT(card_bit_map, i);
 		sdk_err(&pci_adapter->pcidev->dev,
 			"Failed to alloc chip node\n");
-		return -ENOMEM;
+		goto alloc_chip_err;
 	}
 
 	chip_node->dbgtool_attr_file.name = kzalloc(IFNAMSIZ, GFP_KERNEL);
 	if (!(chip_node->dbgtool_attr_file.name)) {
-		kfree(chip_node);
-		card_bit_map = CLEAR_BIT(card_bit_map, i);
 		sdk_err(&pci_adapter->pcidev->dev,
 			"Failed to alloc dbgtool attr file name\n");
-		return -ENOMEM;
+		goto alloc_dbgtool_attr_file_err;
 	}
 
 	/* parent bus number */
 	chip_node->dp_bus_num = parent_bus_number;
 
-	snprintf(chip_node->chip_name, IFNAMSIZ, "%s%d", HINIC_CHIP_NAME, i);
-	snprintf((char *)chip_node->dbgtool_attr_file.name,
-		 IFNAMSIZ, "%s%d", HINIC_CHIP_NAME, i);
+	err = snprintf(chip_node->chip_name, IFNAMSIZ, "%s%d",
+		       HINIC_CHIP_NAME, i);
+	if (err <= 0 || err >= IFNAMSIZ) {
+		sdk_err(&pci_adapter->pcidev->dev,
+			"Failed to snprintf chip_name, function return(%d) and dest_len(%d)\n",
+			err, IFNAMSIZ);
+		goto alloc_dbgtool_attr_file_err;
+	}
+
+	err = snprintf((char *)chip_node->dbgtool_attr_file.name,
+		       IFNAMSIZ, "%s%d", HINIC_CHIP_NAME, i);
+	if (err <= 0 || err >= IFNAMSIZ) {
+		sdk_err(&pci_adapter->pcidev->dev,
+			"Failed to snprintf dbgtool_attr_file_name, function return(%d) and dest_len(%d)\n",
+			err, IFNAMSIZ);
+		goto alloc_dbgtool_attr_file_err;
+	}
+
 	sdk_info(&pci_adapter->pcidev->dev,
 		 "Add new chip %s to global list succeed\n",
 		 chip_node->chip_name);
@@ -1961,7 +2103,16 @@ static int alloc_chip_node(struct hinic_pcidev *pci_adapter)
 	INIT_LIST_HEAD(&chip_node->func_list);
 	pci_adapter->chip_node = chip_node;
 
+	mutex_init(&chip_node->sfp_mutex);
+
 	return 0;
+
+alloc_dbgtool_attr_file_err:
+	kfree(chip_node);
+
+alloc_chip_err:
+	card_bit_map = CLEAR_BIT(card_bit_map, i);
+	return -ENOMEM;
 }
 
 static void free_chip_node(struct hinic_pcidev *pci_adapter)
@@ -1976,7 +2127,7 @@ static void free_chip_node(struct hinic_pcidev *pci_adapter)
 			 "Delete chip %s from global list succeed\n",
 			 chip_node->chip_name);
 		err = sscanf(chip_node->chip_name, HINIC_CHIP_NAME "%u", &id);
-		if (err < 0)
+		if (err <= 0)
 			sdk_err(&pci_adapter->pcidev->dev, "Failed to get hinic id\n");
 
 		card_bit_map = CLEAR_BIT(card_bit_map, id);
@@ -2027,6 +2178,10 @@ static void hinic_set_vf_load_state(struct hinic_pcidev *pci_adapter,
 	if (hinic_func_type(pci_adapter->hwdev) == TYPE_VF)
 		return;
 
+	/* The VF on the BM slave side must be probed */
+	if (is_multi_bm_slave(pci_adapter->hwdev))
+		vf_load_state = false;
+
 	func_id = hinic_global_func_id_hw(pci_adapter->hwdev);
 
 	chip_node = pci_adapter->chip_node;
@@ -2041,14 +2196,15 @@ static void hinic_set_vf_load_state(struct hinic_pcidev *pci_adapter,
 int hinic_ovs_set_vf_load_state(struct pci_dev *pdev)
 {
 	struct hinic_pcidev *pci_adapter;
+
 	if (!pdev) {
-		pr_err("pdev is null.\n");
+		pr_err("pdev is null\n");
 		return -EINVAL;
 	}
 
 	pci_adapter = pci_get_drvdata(pdev);
 	if (!pci_adapter) {
-		pr_err("pci_adapter is null.\n");
+		pr_err("pci_adapter is null\n");
 		return -EFAULT;
 	}
 
@@ -2278,6 +2434,7 @@ static int hinic_func_init(struct pci_dev *pdev,
 			true : disable_vf_load;
 
 	hinic_set_vf_load_state(pci_adapter, vf_load_state);
+	hinic_qps_num_set(pci_adapter->hwdev, 0);
 
 	pci_adapter->lld_dev.pdev = pdev;
 	pci_adapter->lld_dev.hwdev = pci_adapter->hwdev;
@@ -2289,6 +2446,7 @@ static int hinic_func_init(struct pci_dev *pdev,
 
 	if (!HINIC_FUNC_IS_VF(pci_adapter->hwdev))
 		hinic_sync_time_to_fmw(pci_adapter);
+	hinic_init_syncfw_timer(pci_adapter);
 
 	/* dbgtool init */
 	lld_lock_chip_node();
@@ -2296,6 +2454,7 @@ static int hinic_func_init(struct pci_dev *pdev,
 	if (err) {
 		lld_unlock_chip_node();
 		sdk_err(&pdev->dev, "Failed to initialize dbgtool\n");
+		hinic_destroy_syncfw_timer(pci_adapter);
 		hinic_event_unregister(pci_adapter->hwdev);
 		return err;
 	}
@@ -2318,25 +2477,7 @@ static int hinic_func_init(struct pci_dev *pdev,
 	if (err)
 		return err;
 
-#ifndef __HIFC_PANGEA__
 	attach_ulds(pci_adapter);
-#else
-	if (g_uld_info[SERVICE_T_FC].probe) {
-		err = attach_uld(pci_adapter, SERVICE_T_FC,
-				 &g_uld_info[SERVICE_T_FC]);
-		if (err) {
-			sdk_err(&pdev->dev, "Failed to initialize FC\n");
-			return err;
-		}
-	}
-#endif
-	if (!HINIC_FUNC_IS_VF(pci_adapter->hwdev)) {
-		err = sysfs_create_group(&pdev->dev.kobj, &hinic_attr_group);
-		if (err) {
-			sdk_err(&pdev->dev, "Failed to create sysfs group\n");
-			return -EFAULT;
-		}
-	}
 
 #ifdef CONFIG_X86
 	cfg_order_reg(pci_adapter);
@@ -2370,6 +2511,7 @@ static void hinic_func_deinit(struct pci_dev *pdev)
 		lld_lock_chip_node();
 		dbgtool_knl_deinit(pci_adapter->hwdev, pci_adapter->chip_node);
 		lld_unlock_chip_node();
+		hinic_destroy_syncfw_timer(pci_adapter);
 		hinic_event_unregister(pci_adapter->hwdev);
 	}
 
@@ -2443,8 +2585,6 @@ static void hinic_remove(struct pci_dev *pdev)
 
 	switch (pci_adapter->init_state) {
 	case HINIC_INIT_STATE_ALL_INITED:
-		if (!HINIC_FUNC_IS_VF(pci_adapter->hwdev))
-			sysfs_remove_group(&pdev->dev.kobj, &hinic_attr_group);
 		/*lint -fallthrough*/
 	case HINIC_INIT_STATE_NIC_INITED:
 		/* Don't support hotplug when SR-IOV is enabled now.
@@ -2517,8 +2657,11 @@ static void slave_host_init_delay_work(struct work_struct *work)
 	/* Make sure the PPF must be the first one */
 	lld_dev_hold();
 	list_for_each_entry(ppf_pcidev, &chip_node->func_list, node) {
-		if (ppf_pcidev &&
-		    hinic_func_type(ppf_pcidev->hwdev) == TYPE_PPF) {
+		if (test_bit(HINIC_FUNC_IN_REMOVE, &ppf_pcidev->flag) ||
+		    ppf_pcidev->init_state < HINIC_INIT_STATE_HW_IF_INITED)
+			continue;
+
+		if (hinic_func_type(ppf_pcidev->hwdev) == TYPE_PPF) {
 			found = 1;
 			break;
 		}
@@ -2529,12 +2672,10 @@ static void slave_host_init_delay_work(struct work_struct *work)
 		clear_bit(HINIC_FUNC_PRB_DELAY, &pci_adapter->flag);
 		if (err)
 			set_bit(HINIC_FUNC_PRB_ERR, &pci_adapter->flag);
-		return;
 	} else {
 		queue_delayed_work(pci_adapter->slave_nic_init_workq,
 				   &pci_adapter->slave_nic_init_dwork,
 				   HINIC_SLAVE_NIC_DELAY_TIME);
-		return;
 	}
 }
 
@@ -2569,7 +2710,7 @@ static int hinic_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 		create_singlethread_workqueue(HINIC_SLAVE_NIC_DELAY);
 	if (!pci_adapter->slave_nic_init_workq) {
 		sdk_err(&pdev->dev,
-			"Failed to create work queue:%s\n",
+			"Failed to create work queue: %s\n",
 			HINIC_SLAVE_NIC_DELAY);
 		goto ceate_nic_delay_work_fail;
 	}
@@ -2615,8 +2756,10 @@ init_nictool_err:
 
 alloc_chip_node_fail:
 	lld_unlock_chip_node();
-	unmapping_bar(pci_adapter);
+
 ceate_nic_delay_work_fail:
+	unmapping_bar(pci_adapter);
+
 map_bar_failed:
 	hinic_pci_deinit(pdev);
 
@@ -2686,13 +2829,10 @@ static void hinic_shutdown(struct pci_dev *pdev)
 		hinic_shutdown_hwdev(pci_adapter->hwdev);
 
 	pci_disable_device(pdev);
-}
 
-#ifdef HAVE_RHEL6_SRIOV_CONFIGURE
-static struct pci_driver_rh hinic_driver_rh = {
-	.sriov_configure = hinic_pci_sriov_configure,
-};
-#endif
+	if (pci_adapter)
+		hinic_set_api_stop(pci_adapter->hwdev);
+}
 
 /* Cause we only need error detecting not error handling, so only error_detected
  * callback is enough.
@@ -2707,13 +2847,7 @@ static struct pci_driver hinic_driver = {
 	.probe		 = hinic_probe,
 	.remove		 = hinic_remove,
 	.shutdown	 = hinic_shutdown,
-
-#if defined(HAVE_SRIOV_CONFIGURE)
 	.sriov_configure = hinic_pci_sriov_configure,
-#elif defined(HAVE_RHEL6_SRIOV_CONFIGURE)
-	.rh_reserved = &hinic_driver_rh,
-#endif
-
 	.err_handler	 = &hinic_err_handler
 };
 
@@ -2738,10 +2872,11 @@ static void __exit hinic_lld_exit(void)
 	pci_unregister_driver(&hinic_driver);
 
 	hinic_unregister_uld(SERVICE_T_NIC);
-
 }
+
 module_init(hinic_lld_init);
 module_exit(hinic_lld_exit);
+
 int hinic_register_micro_log(struct hinic_micro_log_info *micro_log_info)
 {
 	struct card_node *chip_node;
@@ -2756,7 +2891,8 @@ int hinic_register_micro_log(struct hinic_micro_log_info *micro_log_info)
 	lld_dev_hold();
 	list_for_each_entry(chip_node, &g_hinic_chip_list, node) {
 		list_for_each_entry(dev, &chip_node->func_list, node) {
-			if (test_bit(HINIC_FUNC_IN_REMOVE, &dev->flag))
+			if (test_bit(HINIC_FUNC_IN_REMOVE, &dev->flag) ||
+			    dev->init_state < HINIC_INIT_STATE_HW_IF_INITED)
 				continue;
 
 			if (hinic_func_type(dev->hwdev) == TYPE_PPF) {
@@ -2786,7 +2922,8 @@ void hinic_unregister_micro_log(struct hinic_micro_log_info *micro_log_info)
 	lld_dev_hold();
 	list_for_each_entry(chip_node, &g_hinic_chip_list, node) {
 		list_for_each_entry(dev, &chip_node->func_list, node) {
-			if (test_bit(HINIC_FUNC_IN_REMOVE, &dev->flag))
+			if (test_bit(HINIC_FUNC_IN_REMOVE, &dev->flag) ||
+			    dev->init_state < HINIC_INIT_STATE_HW_IF_INITED)
 				continue;
 
 			if (hinic_func_type(dev->hwdev) == TYPE_PPF)

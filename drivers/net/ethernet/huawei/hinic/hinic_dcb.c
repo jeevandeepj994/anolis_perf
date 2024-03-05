@@ -120,8 +120,6 @@ void hinic_init_ieee_settings(struct hinic_nic_dev *nic_dev)
 		if (dcb_cfg->tc_cfg[i].pfc_en)
 			pfc->pfc_en |= (u8)BIT(i);
 	}
-
-	return;
 }
 
 static int hinic_set_up_cos_map(struct hinic_nic_dev *nic_dev,
@@ -338,8 +336,8 @@ u8 hinic_setup_dcb_tool(struct net_device *netdev, u8 *dcb_en, bool wr_flag)
 
 	if (wr_flag) {
 		if (nic_dev->max_qps < nic_dev->dcb_cfg.pg_tcs && *dcb_en) {
-			netif_err(nic_dev, drv, netdev,
-				  "max_qps:%d is less than %d\n",
+			nicif_err(nic_dev, drv, netdev,
+				  "max_qps: %d is less than %d\n",
 				  nic_dev->max_qps, nic_dev->dcb_cfg.pg_tcs);
 			return 1;
 		}
@@ -357,7 +355,7 @@ u8 hinic_setup_dcb_tool(struct net_device *netdev, u8 *dcb_en, bool wr_flag)
 		mutex_lock(&nic_dev->nic_mutex);
 
 		if (!err)
-			netif_info(nic_dev, drv, netdev, "%s DCB\n",
+			nicif_info(nic_dev, drv, netdev, "%s DCB\n",
 				   *dcb_en ? "Enable" : "Disable");
 	} else {
 		*dcb_en = (u8)test_bit(HINIC_DCB_ENABLE, &nic_dev->flags);
@@ -386,15 +384,15 @@ static u8 hinic_dcbnl_set_state(struct net_device *netdev, u8 state)
 		return 0;
 
 	if (nic_dev->max_qps < nic_dev->dcb_cfg.pg_tcs && state) {
-		netif_err(nic_dev, drv, netdev,
-			  "max_qps:%d is less than %d\n",
+		nicif_err(nic_dev, drv, netdev,
+			  "max_qps: %d is less than %d\n",
 			  nic_dev->max_qps, nic_dev->dcb_cfg.pg_tcs);
 		return 1;
 	}
 
 	err = hinic_setup_tc(netdev, state ? nic_dev->dcb_cfg.pg_tcs : 0);
 	if (!err)
-		netif_info(nic_dev, drv, netdev, "%s DCB\n",
+		nicif_info(nic_dev, drv, netdev, "%s DCB\n",
 			   state ? "Enable" : "Disable");
 
 	return !!err;
@@ -1062,12 +1060,12 @@ static int __set_hw_ets(struct hinic_nic_dev *nic_dev)
 	err = hinic_dcb_set_ets(nic_dev->hwdev, up_tc, pg_bw, up_pgid,
 				up_bw, up_strict);
 	if (err) {
-		hinic_err(nic_dev, drv, "Failed to set ets with mode:%d\n",
+		hinic_err(nic_dev, drv, "Failed to set ets with mode: %d\n",
 			  nic_dev->dcbx_cap);
 		return err;
 	}
 
-	hinic_info(nic_dev, drv, "Set ets to hw done with mode:%d\n",
+	hinic_info(nic_dev, drv, "Set ets to hw done with mode: %d\n",
 		   nic_dev->dcbx_cap);
 
 	return 0;
@@ -1273,7 +1271,7 @@ out:
 }
 
 static int hinic_dcbnl_ieee_get_ets(struct net_device *netdev,
-				   struct ieee_ets *ets)
+				    struct ieee_ets *ets)
 {
 	struct hinic_nic_dev *nic_dev = netdev_priv(netdev);
 	struct ieee_ets *my_ets = &nic_dev->hinic_ieee_ets;
@@ -1288,7 +1286,7 @@ static int hinic_dcbnl_ieee_get_ets(struct net_device *netdev,
 }
 
 static int hinic_dcbnl_ieee_set_ets(struct net_device *netdev,
-				   struct ieee_ets *ets)
+				    struct ieee_ets *ets)
 {
 	struct hinic_nic_dev *nic_dev = netdev_priv(netdev);
 	struct hinic_dcb_config *dcb_cfg = &nic_dev->dcb_cfg;
@@ -1332,8 +1330,8 @@ static int hinic_dcbnl_ieee_set_ets(struct net_device *netdev,
 	if (max_tc != netdev_get_num_tc(netdev)) {
 		err = hinic_setup_tc(netdev, max_tc);
 		if (err) {
-			netif_err(nic_dev, drv, netdev,
-				  "Failed to setup tc with max_tc:%d, err:%d\n",
+			nicif_err(nic_dev, drv, netdev,
+				  "Failed to setup tc with max_tc: %d, err: %d\n",
 				  max_tc, err);
 			memcpy(my_ets, &back_ets, sizeof(struct ieee_ets));
 			return err;
@@ -1354,7 +1352,7 @@ static int hinic_dcbnl_ieee_set_ets(struct net_device *netdev,
 }
 
 static int hinic_dcbnl_ieee_get_pfc(struct net_device *netdev,
-				   struct ieee_pfc *pfc)
+				    struct ieee_pfc *pfc)
 {
 	struct hinic_nic_dev *nic_dev = netdev_priv(netdev);
 	struct ieee_pfc *my_pfc = &nic_dev->hinic_ieee_pfc;
@@ -1366,7 +1364,7 @@ static int hinic_dcbnl_ieee_get_pfc(struct net_device *netdev,
 }
 
 static int hinic_dcbnl_ieee_set_pfc(struct net_device *netdev,
-				   struct ieee_pfc *pfc)
+				    struct ieee_pfc *pfc)
 {
 	struct hinic_nic_dev *nic_dev = netdev_priv(netdev);
 	struct hinic_dcb_config *dcb_cfg = &nic_dev->dcb_cfg;
@@ -1386,7 +1384,7 @@ static int hinic_dcbnl_ieee_set_pfc(struct net_device *netdev,
 	pfc_map = pfc->pfc_en & nic_dev->up_valid_bitmap;
 	outof_range_pfc = pfc->pfc_en & (~nic_dev->up_valid_bitmap);
 	if (outof_range_pfc)
-		netif_info(nic_dev, drv, netdev,
+		nicif_info(nic_dev, drv, netdev,
 			   "pfc setting out of range, 0x%x will be ignored\n",
 			   outof_range_pfc);
 
@@ -1407,7 +1405,7 @@ static int hinic_dcbnl_ieee_set_pfc(struct net_device *netdev,
 	err = hinic_dcb_set_pfc(nic_dev->hwdev, pfc_en, pfc_map);
 	if (err) {
 		hinic_info(nic_dev, drv,
-			   "Failed to set pfc to hw with pfc_map:0x%x err:%d\n",
+			   "Failed to set pfc to hw with pfc_map: 0x%x err: %d\n",
 			   pfc_map, err);
 		hinic_start_port_traffic_flow(nic_dev);
 		return err;
@@ -1416,17 +1414,13 @@ static int hinic_dcbnl_ieee_set_pfc(struct net_device *netdev,
 	hinic_start_port_traffic_flow(nic_dev);
 	my_pfc->pfc_en = pfc->pfc_en;
 	hinic_info(nic_dev, drv,
-		   "Set pfc successfully with pfc_map:0x%x, pfc_en:%d\n",
+		   "Set pfc successfully with pfc_map: 0x%x, pfc_en: %d\n",
 		   pfc_map, pfc_en);
 
 	return 0;
 }
 
-#ifdef NUMTCS_RETURNS_U8
-static u8 hinic_dcbnl_getnumtcs(struct net_device *netdev, int tcid, u8 *num)
-#else
 static int hinic_dcbnl_getnumtcs(struct net_device *netdev, int tcid, u8 *num)
-#endif
 {
 	struct hinic_nic_dev *nic_dev = netdev_priv(netdev);
 	struct hinic_dcb_config *dcb_cfg = &nic_dev->dcb_cfg;
@@ -1448,11 +1442,7 @@ static int hinic_dcbnl_getnumtcs(struct net_device *netdev, int tcid, u8 *num)
 	return 0;
 }
 
-#ifdef NUMTCS_RETURNS_U8
-static u8 hinic_dcbnl_setnumtcs(struct net_device *netdev, int tcid, u8 num)
-#else
 static int hinic_dcbnl_setnumtcs(struct net_device *netdev, int tcid, u8 num)
-#endif
 {
 	return -EINVAL;
 }
@@ -1487,7 +1477,7 @@ static u8 hinic_dcbnl_setdcbx(struct net_device *netdev, u8 mode)
 	    ((mode & DCB_CAP_DCBX_LLD_MANAGED) &&
 	    (!(mode & DCB_CAP_DCBX_HOST)))) {
 		nicif_info(nic_dev, drv, netdev,
-			   "Set dcbx failed with invalid mode:%d\n", mode);
+			   "Set dcbx failed with invalid mode: %d\n", mode);
 		return 1;
 	}
 
@@ -1505,7 +1495,7 @@ static u8 hinic_dcbnl_setdcbx(struct net_device *netdev, u8 mode)
 			err = hinic_setup_tc(netdev, 0);
 			if (err) {
 				nicif_err(nic_dev, drv, netdev,
-					  "Failed to setup tc with mode:%d\n",
+					  "Failed to setup tc with mode: %d\n",
 					  mode);
 				return 1;
 			}
@@ -1517,7 +1507,7 @@ static u8 hinic_dcbnl_setdcbx(struct net_device *netdev, u8 mode)
 		err = hinic_setup_tc(netdev, 0);
 		if (err) {
 			nicif_err(nic_dev, drv, netdev,
-				  "Failed to setup tc with mode:%d\n", mode);
+				  "Failed to setup tc with mode: %d\n", mode);
 			return 1;
 		}
 	}
@@ -1625,7 +1615,7 @@ int __set_cos_up_map(struct hinic_nic_dev *nic_dev, u8 *cos_up)
 		return -EFAULT;
 	}
 
-	nicif_info(nic_dev, drv, netdev, "Set cos2up:%d%d%d%d%d%d%d%d\n",
+	nicif_info(nic_dev, drv, netdev, "Set cos2up: %d%d%d%d%d%d%d%d\n",
 		   cos_up[0], cos_up[1], cos_up[2], cos_up[3],
 		   cos_up[4], cos_up[5], cos_up[6], cos_up[7]);
 

@@ -114,10 +114,15 @@ static struct hinic_stats hinic_rx_queue_stats[] = {
 	HINIC_RXQ_STAT(csum_errors),
 	HINIC_RXQ_STAT(other_errors),
 	HINIC_RXQ_STAT(dropped),
+	HINIC_RXQ_STAT(xdp_dropped),
+	HINIC_RXQ_STAT(rx_buf_empty),
 };
 
 static struct hinic_stats hinic_rx_queue_stats_extern[] = {
 	HINIC_RXQ_STAT(alloc_skb_err),
+	HINIC_RXQ_STAT(alloc_rx_buf_err),
+	HINIC_RXQ_STAT(map_rx_buf_err),
+	HINIC_RXQ_STAT(xdp_large_pkt),
 };
 
 static struct hinic_stats hinic_tx_queue_stats[] = {
@@ -140,6 +145,8 @@ static struct hinic_stats hinic_tx_queue_stats_extern[] = {
 	HINIC_TXQ_STAT(alloc_cpy_frag_err),
 	HINIC_TXQ_STAT(map_cpy_frag_err),
 	HINIC_TXQ_STAT(map_frag_err),
+	HINIC_TXQ_STAT(frag_size_err),
+	HINIC_TXQ_STAT(unknown_tunnel_pkt),
 };/*lint -restore*/
 
 #define HINIC_FUNC_STAT(_stat_item) {	\
@@ -293,12 +300,15 @@ u32 hinic_get_io_stats_size(struct hinic_nic_dev *nic_dev)
 }
 
 #define QUEUE_STATS_PACK(items, item_idx, array, stats_ptr, qid) {	\
-	int j;								\
+	int j, err;							\
 	for (j = 0; j < ARRAY_LEN(array); j++) {			\
 		memcpy((items)[item_idx].name, (array)[j].name,		\
 		       HINIC_SHOW_ITEM_LEN);				\
-		snprintf((items)[item_idx].name, HINIC_SHOW_ITEM_LEN,	\
+		err = snprintf((items)[item_idx].name, HINIC_SHOW_ITEM_LEN,\
 			 (array)[j].name, (qid));			\
+		if (err <= 0 || err >= HINIC_SHOW_ITEM_LEN)		\
+			pr_err("Failed snprintf: func_ret(%d), dest_len(%d)\n",\
+				err, HINIC_SHOW_ITEM_LEN);		\
 		(items)[item_idx].hexadecimal = 0;			\
 		(items)[item_idx].value =				\
 			GET_VALUE_OF_PTR((array)[j].size,		\
@@ -332,10 +342,12 @@ void hinic_get_io_stats(struct hinic_nic_dev *nic_dev,
 	}
 }
 
-#define LP_DEFAULT_TIME                 (5) /* seconds */
-#define LP_PKT_LEN                      (1514)
+#define LP_DEFAULT_TIME			5 /* seconds */
+#define LP_PKT_LEN			1514
+#define OBJ_STR_MAX_LEN			32
+#define SET_LINK_STR_MAX_LEN		128
 
-#define PORT_DOWN_ERR_IDX  0
+#define PORT_DOWN_ERR_IDX		0
 enum diag_test_index {
 	INTERNAL_LP_TEST = 0,
 	EXTERNAL_LP_TEST = 1,
@@ -676,26 +688,24 @@ static int hinic_get_settings(struct net_device *netdev,
 	return 0;
 }
 
-#ifdef ETHTOOL_GLINKSETTINGS
-#ifndef XENSERVER_HAVE_NEW_ETHTOOL_OPS
 static int hinic_get_link_ksettings(struct net_device *netdev,
-				struct ethtool_link_ksettings *link_settings)
+				    struct ethtool_link_ksettings *cmd)
 {
 	struct cmd_link_settings settings = {0};
-	struct ethtool_link_settings *base = &link_settings->base;
+	struct ethtool_link_settings *base = &cmd->base;
 	int err;
 
-	ethtool_link_ksettings_zero_link_mode(link_settings, supported);
-	ethtool_link_ksettings_zero_link_mode(link_settings, advertising);
+	ethtool_link_ksettings_zero_link_mode(cmd, supported);
+	ethtool_link_ksettings_zero_link_mode(cmd, advertising);
 
 	err = get_link_settings(netdev, &settings);
 	if (err)
 		return err;
 
-	bitmap_copy(link_settings->link_modes.supported,
+	bitmap_copy(cmd->link_modes.supported,
 		    (unsigned long *)&settings.supported,
 		    __ETHTOOL_LINK_MODE_MASK_NBITS);
-	bitmap_copy(link_settings->link_modes.advertising,
+	bitmap_copy(cmd->link_modes.advertising,
 		    (unsigned long *)&settings.advertising,
 		    __ETHTOOL_LINK_MODE_MASK_NBITS);
 
@@ -706,8 +716,6 @@ static int hinic_get_link_ksettings(struct net_device *netdev,
 
 	return 0;
 }
-#endif
-#endif
 
 static int hinic_is_speed_legal(struct hinic_nic_dev *nic_dev, u32 speed)
 {
@@ -742,16 +750,28 @@ static int hinic_set_settings_to_hw(struct hinic_nic_dev *nic_dev,
 	struct net_device *netdev = nic_dev->netdev;
 	struct hinic_link_ksettings settings = {0};
 	enum nic_speed_level speed_level = 0;
-	char set_link_str[128] = {0};
+	char set_link_str[SET_LINK_STR_MAX_LEN] = {0};
 	int err = 0;
 
-	snprintf(set_link_str, sizeof(set_link_str), "%s",
-		 (set_settings & HILINK_LINK_SET_AUTONEG) ?
-		 (autoneg ? "autong enable " : "autong disable ") : "");
+	err = snprintf(set_link_str, sizeof(set_link_str), "%s",
+		       (set_settings & HILINK_LINK_SET_AUTONEG) ?
+		       (autoneg ? "autong enable " : "autong disable ") : "");
+	if (err < 0 || err >= SET_LINK_STR_MAX_LEN) {
+		nicif_err(nic_dev, drv, netdev,
+			  "Failed to snprintf link state, function return(%d) and dest_len(%d)\n",
+			  err, SET_LINK_STR_MAX_LEN);
+		return -EFAULT;
+	}
 	if (set_settings & HILINK_LINK_SET_SPEED) {
 		speed_level = hinic_ethtool_to_hw_speed_level(speed);
-		snprintf(set_link_str, sizeof(set_link_str),
-			 "%sspeed %d ", set_link_str, speed);
+		err = snprintf(set_link_str, sizeof(set_link_str),
+			       "%sspeed %d ", set_link_str, speed);
+		if (err <= 0 || err >= SET_LINK_STR_MAX_LEN) {
+			nicif_err(nic_dev, drv, netdev,
+				  "Failed to snprintf link speed, function return(%d) and dest_len(%d)\n",
+				  err, SET_LINK_STR_MAX_LEN);
+			return -EFAULT;
+		}
 	}
 
 	settings.valid_bitmap = set_settings;
@@ -852,17 +872,13 @@ static int hinic_set_settings(struct net_device *netdev,
 				 ethtool_cmd_speed(link_settings));
 }
 
-#ifdef ETHTOOL_GLINKSETTINGS
-#ifndef XENSERVER_HAVE_NEW_ETHTOOL_OPS
 static int hinic_set_link_ksettings(struct net_device *netdev,
-			const struct ethtool_link_ksettings *link_settings)
+				    const struct ethtool_link_ksettings *cmd)
 {
 	/* Only support to set autoneg and speed */
-	return set_link_settings(netdev, link_settings->base.autoneg,
-				 link_settings->base.speed);
+	return set_link_settings(netdev, cmd->base.autoneg,
+				 cmd->base.speed);
 }
-#endif
-#endif
 
 static void hinic_get_drvinfo(struct net_device *netdev,
 			      struct ethtool_drvinfo *info)
@@ -882,7 +898,12 @@ static void hinic_get_drvinfo(struct net_device *netdev,
 		return;
 	}
 
-	snprintf(info->fw_version, sizeof(info->fw_version), "%s", mgmt_ver);
+	err = snprintf(info->fw_version, sizeof(info->fw_version),
+		       "%s", mgmt_ver);
+	if (err <= 0 || err >= (int)sizeof(info->fw_version))
+		nicif_err(nic_dev, drv, netdev,
+			  "Failed to snprintf fw_version, function return(%d) and dest_len(%d)\n",
+			  err, (int)sizeof(info->fw_version));
 }
 
 static u32 hinic_get_msglevel(struct net_device *netdev)
@@ -981,7 +1002,7 @@ static int hinic_set_ringparam(struct net_device *netdev,
 	    ring->rx_pending > HINIC_MAX_QUEUE_DEPTH ||
 	    ring->rx_pending < HINIC_MIN_QUEUE_DEPTH) {
 		nicif_err(nic_dev, drv, netdev,
-			  "Queue depth out of rang [%d-%d]\n",
+			  "Queue depth out of range [%d-%d]\n",
 			  HINIC_MIN_QUEUE_DEPTH, HINIC_MAX_QUEUE_DEPTH);
 		return -EINVAL;
 	}
@@ -992,14 +1013,6 @@ static int hinic_set_ringparam(struct net_device *netdev,
 	if (new_sq_depth == nic_dev->sq_depth &&
 	    new_rq_depth == nic_dev->rq_depth)
 		return 0;
-
-	if (test_bit(HINIC_BP_ENABLE, &nic_dev->flags) &&
-	    new_rq_depth <= nic_dev->bp_upper_thd) {
-		nicif_err(nic_dev, drv, netdev,
-			  "BP is enable, rq_depth must be larger than upper threshold: %d\n",
-			  nic_dev->bp_upper_thd);
-		return -EINVAL;
-	}
 
 	nicif_info(nic_dev, drv, netdev,
 		   "Change Tx/Rx ring depth from %d/%d to %d/%d\n",
@@ -1147,10 +1160,12 @@ static int hinic_get_sset_count(struct net_device *netdev, int sset)
 	case ETH_SS_STATS:
 		q_num = nic_dev->num_qps;
 		count = ARRAY_LEN(hinic_netdev_stats) +
-		    ARRAY_LEN(hinic_nic_dev_stats) +
-			ARRAY_LEN(hinic_function_stats) +
+			ARRAY_LEN(hinic_nic_dev_stats) +
 			(ARRAY_LEN(hinic_tx_queue_stats) +
 			ARRAY_LEN(hinic_rx_queue_stats)) * q_num;
+
+		if (!HINIC_FUNC_IS_VF(nic_dev->hwdev))
+			count += ARRAY_LEN(hinic_function_stats);
 
 		if (!HINIC_FUNC_IS_VF(nic_dev->hwdev) &&
 		    FUNC_SUPPORT_PORT_SETTING(nic_dev->hwdev))
@@ -1377,27 +1392,27 @@ static int is_coalesce_legal(struct net_device *netdev,
 
 #define CHECK_COALESCE_ALIGN(coal, item, unit)				\
 do {									\
-	if (coal->item % (unit))					\
+	if ((coal)->item % (unit))					\
 		nicif_warn(nic_dev, drv, netdev,			\
 			   "%s in %d units, change to %d\n",		\
-			   #item, (unit), ALIGN_DOWN(coal->item, unit));\
+			   #item, (unit), ALIGN_DOWN((coal)->item, unit));\
 } while (0)
 
 #define CHECK_COALESCE_CHANGED(coal, item, unit, ori_val, obj_str)	\
 do {									\
-	if ((coal->item / (unit)) != (ori_val))				\
+	if (((coal)->item / (unit)) != (ori_val))			\
 		nicif_info(nic_dev, drv, netdev,			\
 			   "Change %s from %d to %d %s\n",		\
 			   #item, (ori_val) * (unit),			\
-			   ALIGN_DOWN(coal->item, unit), (obj_str));	\
+			   ALIGN_DOWN((coal)->item, unit), (obj_str));\
 } while (0)
 
 #define CHECK_PKT_RATE_CHANGED(coal, item, ori_val, obj_str)		\
 do {									\
-	if (coal->item != (ori_val))					\
+	if ((coal)->item != (ori_val))					\
 		nicif_info(nic_dev, drv, netdev,			\
 			   "Change %s from %llu to %u %s\n",		\
-			   #item, (ori_val), coal->item, (obj_str));	\
+			   #item, (ori_val), (coal)->item, (obj_str));\
 } while (0)
 
 static int __hinic_set_coalesce(struct net_device *netdev,
@@ -1406,7 +1421,7 @@ static int __hinic_set_coalesce(struct net_device *netdev,
 	struct hinic_nic_dev *nic_dev = netdev_priv(netdev);
 	struct hinic_intr_coal_info intr_coal = {0};
 	struct hinic_intr_coal_info *ori_intr_coal;
-	char obj_str[32] = {0};
+	char obj_str[OBJ_STR_MAX_LEN] = {0};
 	u16 i;
 	int err = 0;
 
@@ -1428,10 +1443,22 @@ static int __hinic_set_coalesce(struct net_device *netdev,
 
 	if (queue == COALESCE_ALL_QUEUE) {
 		ori_intr_coal = &nic_dev->intr_coalesce[0];
-		snprintf(obj_str, sizeof(obj_str), "for netdev");
+		err = snprintf(obj_str, sizeof(obj_str), "for netdev");
+		if (err <= 0 || err >= OBJ_STR_MAX_LEN) {
+			nicif_err(nic_dev, drv, netdev,
+				  "Failed to snprintf string, function return(%d) and dest_len(%d)\n",
+				  err, OBJ_STR_MAX_LEN);
+			return -EFAULT;
+		}
 	} else {
 		ori_intr_coal = &nic_dev->intr_coalesce[queue];
-		snprintf(obj_str, sizeof(obj_str), "for queue %d", queue);
+		err = snprintf(obj_str, sizeof(obj_str), "for queue %d", queue);
+		if (err <= 0 || err >= OBJ_STR_MAX_LEN) {
+			nicif_err(nic_dev, drv, netdev,
+				  "Failed to snprintf string, function return(%d) and dest_len(%d)\n",
+				  err, OBJ_STR_MAX_LEN);
+			return -EFAULT;
+		}
 	}
 	CHECK_COALESCE_CHANGED(coal, rx_coalesce_usecs, COALESCE_TIMER_CFG_UNIT,
 			       ori_intr_coal->coalesce_timer_cfg, obj_str);
@@ -1508,7 +1535,6 @@ static int hinic_set_coalesce(struct net_device *netdev,
 	return __hinic_set_coalesce(netdev, coal, COALESCE_ALL_QUEUE);
 }
 
-#if defined(ETHTOOL_PERQUEUE) && defined(ETHTOOL_GCOALESCE)
 static int hinic_get_per_queue_coalesce(struct net_device *netdev, u32 queue,
 					struct ethtool_coalesce *coal)
 {
@@ -1520,7 +1546,6 @@ static int hinic_set_per_queue_coalesce(struct net_device *netdev, u32 queue,
 {
 	return __hinic_set_coalesce(netdev, coal, queue);
 }
-#endif
 
 static void get_drv_queue_stats(struct hinic_nic_dev *nic_dev, u64 *data)
 {
@@ -1560,12 +1585,8 @@ static void hinic_get_ethtool_stats(struct net_device *netdev,
 				    struct ethtool_stats *stats, u64 *data)
 {
 	struct hinic_nic_dev *nic_dev = netdev_priv(netdev);
-#ifdef HAVE_NDO_GET_STATS64
 	struct rtnl_link_stats64 temp;
 	const struct rtnl_link_stats64 *net_stats;
-#else
-	const struct net_device_stats *net_stats;
-#endif
 	struct hinic_phy_port_stats *port_stats;
 	struct hinic_nic_stats *nic_stats;
 	struct hinic_vport_stats vport_stats = {0};
@@ -1573,11 +1594,7 @@ static void hinic_get_ethtool_stats(struct net_device *netdev,
 	char *p;
 	int err;
 
-#ifdef HAVE_NDO_GET_STATS64
 	net_stats = dev_get_stats(netdev, &temp);
-#else
-	net_stats = dev_get_stats(netdev);
-#endif
 	for (j = 0; j < ARRAY_LEN(hinic_netdev_stats); j++, i++) {
 		p = (char *)(net_stats) + hinic_netdev_stats[j].offset;
 		data[i] = (hinic_netdev_stats[j].size ==
@@ -1590,15 +1607,19 @@ static void hinic_get_ethtool_stats(struct net_device *netdev,
 		data[i] = (hinic_nic_dev_stats[j].size ==
 				sizeof(u64)) ? *(u64 *)p : *(u32 *)p;
 	}
-	err = hinic_get_vport_stats(nic_dev->hwdev, &vport_stats);
-	if (err)
-		nicif_err(nic_dev, drv, netdev,
-			  "Failed to get function stats from fw\n");
 
-	for (j = 0; j < ARRAY_LEN(hinic_function_stats); j++, i++) {
-		p = (char *)(&vport_stats) + hinic_function_stats[j].offset;
-		data[i] = (hinic_function_stats[j].size ==
-				sizeof(u64)) ? *(u64 *)p : *(u32 *)p;
+	if (!HINIC_FUNC_IS_VF(nic_dev->hwdev)) {
+		err = hinic_get_vport_stats(nic_dev->hwdev, &vport_stats);
+		if (err)
+			nicif_err(nic_dev, drv, netdev,
+				  "Failed to get function stats from fw\n");
+
+		for (j = 0; j < ARRAY_LEN(hinic_function_stats); j++, i++) {
+			p = (char *)(&vport_stats) +
+					hinic_function_stats[j].offset;
+			data[i] = (hinic_function_stats[j].size ==
+					sizeof(u64)) ? *(u64 *)p : *(u32 *)p;
+		}
 	}
 
 	if (!HINIC_FUNC_IS_VF(nic_dev->hwdev) &&
@@ -1654,10 +1675,12 @@ static void hinic_get_strings(struct net_device *netdev,
 			p += ETH_GSTRING_LEN;
 		}
 
-		for (i = 0; i < ARRAY_LEN(hinic_function_stats); i++) {
-			memcpy(p, hinic_function_stats[i].name,
-			       ETH_GSTRING_LEN);
-			p += ETH_GSTRING_LEN;
+		if (!HINIC_FUNC_IS_VF(nic_dev->hwdev)) {
+			for (i = 0; i < ARRAY_LEN(hinic_function_stats); i++) {
+				memcpy(p, hinic_function_stats[i].name,
+				       ETH_GSTRING_LEN);
+				p += ETH_GSTRING_LEN;
+			}
 		}
 
 		if (!HINIC_FUNC_IS_VF(nic_dev->hwdev) &&
@@ -1686,12 +1709,11 @@ static void hinic_get_strings(struct net_device *netdev,
 		return;
 	default:
 		nicif_err(nic_dev, drv, netdev,
-			  "Invalid string set %d.", stringset);
+			  "Invalid string set %d", stringset);
 		return;
 	}
 }
 
-#ifdef HAVE_ETHTOOL_SET_PHYS_ID
 static int hinic_set_phys_id(struct net_device *netdev,
 			     enum ethtool_phys_id_state state)
 {
@@ -1739,16 +1761,6 @@ static int hinic_set_phys_id(struct net_device *netdev,
 	else
 		return 0;
 }
-#else
-static int hinic_phys_id(struct net_device *netdev, u32 data)
-{
-	struct hinic_nic_dev *nic_dev = netdev_priv(netdev);
-
-	nicif_err(nic_dev, drv, netdev, "Not support to set phys id\n");
-
-	return -EOPNOTSUPP;
-}
-#endif
 
 static void hinic_get_pauseparam(struct net_device *netdev,
 				 struct ethtool_pauseparam *pause)
@@ -1781,14 +1793,6 @@ static int hinic_set_pauseparam(struct net_device *netdev,
 		return -EOPNOTSUPP;
 	}
 
-	if (test_bit(HINIC_BP_ENABLE, &nic_dev->flags) && pause->tx_pause &&
-	    nic_dev->rq_depth <= nic_dev->bp_upper_thd) {
-		nicif_err(nic_dev, drv, netdev,
-			  "Can not set tx pause enable, rq depth is less than bp upper threshold: %d\n",
-			  nic_dev->bp_upper_thd);
-		return -EINVAL;
-	}
-
 	err = hinic_get_port_info(nic_dev->hwdev, &port_info);
 	if (err) {
 		nicif_err(nic_dev, drv, netdev,
@@ -1809,7 +1813,7 @@ static int hinic_set_pauseparam(struct net_device *netdev,
 	err = hinic_set_pause_info(nic_dev->hwdev, nic_pause);
 	if (err) {
 		nicif_err(nic_dev, drv, netdev, "Failed to set pauseparam\n");
-		return -EFAULT;
+		return err;
 	}
 
 	nicif_info(nic_dev, drv, netdev, "Set pause options, tx: %s, rx: %s\n",
@@ -1898,7 +1902,7 @@ static int hinic_run_lp_test(struct hinic_nic_dev *nic_dev, u32 test_time)
 	}
 
 	dev_kfree_skb_any(skb_tmp);
-	nicif_info(nic_dev, drv, netdev, "Loopback test succeed.\n");
+	nicif_info(nic_dev, drv, netdev, "Loopback test succeed\n");
 	return 0;
 }
 
@@ -1929,6 +1933,7 @@ void hinic_lp_test(struct net_device *netdev, struct ethtool_test *eth_test,
 		test_time = LP_DEFAULT_TIME;
 
 	netif_carrier_off(netdev);
+	netif_tx_disable(netdev);
 
 	if (!(test.flags & ETH_TEST_FL_EXTERNAL_LB)) {
 		test_index = INTERNAL_LP_TEST;
@@ -1946,7 +1951,7 @@ void hinic_lp_test(struct net_device *netdev, struct ethtool_test *eth_test,
 	lb_test_rx_buf = vmalloc(LP_PKT_CNT * LP_PKT_LEN);
 	if (!lb_test_rx_buf) {
 		nicif_err(nic_dev, drv, netdev,
-			  "Failed to alloc rx buffer for loopback test.\n");
+			  "Failed to alloc rx buffer for loopback test\n");
 		err = 1;
 	} else {
 		nic_dev->lb_test_rx_buf = lb_test_rx_buf;
@@ -1965,7 +1970,7 @@ void hinic_lp_test(struct net_device *netdev, struct ethtool_test *eth_test,
 	if (!(test.flags & ETH_TEST_FL_EXTERNAL_LB)) {
 		if (hinic_set_loopback_mode(nic_dev->hwdev, false)) {
 			nicif_err(nic_dev, drv, netdev,
-				  "Failed to cancel port loopback mode after loopback test.\n");
+				  "Failed to cancel port loopback mode after loopback test\n");
 			err = 1;
 
 			goto resume_link;
@@ -1978,6 +1983,7 @@ resume_link:
 		data[test_index] = 1;
 	}
 
+	netif_tx_wake_all_queues(netdev);
 	err = hinic_get_link_state(nic_dev->hwdev, &link_status);
 	if (!err && link_status)
 		netif_carrier_on(netdev);
@@ -1994,6 +2000,72 @@ static void hinic_diag_test(struct net_device *netdev,
 	}
 
 	hinic_lp_test(netdev, eth_test, data, 0);
+}
+
+static int hinic_get_module_info(struct net_device *netdev,
+				 struct ethtool_modinfo *modinfo)
+{
+	struct hinic_nic_dev *nic_dev = netdev_priv(netdev);
+	u8 sfp_type;
+	u8 sfp_type_ext;
+	int err;
+
+	err = hinic_get_sfp_type(nic_dev->hwdev, &sfp_type, &sfp_type_ext);
+	if (err)
+		return err;
+
+	switch (sfp_type) {
+	case MODULE_TYPE_SFP:
+		modinfo->type = ETH_MODULE_SFF_8472;
+		modinfo->eeprom_len = ETH_MODULE_SFF_8472_LEN;
+		break;
+	case MODULE_TYPE_QSFP:
+		modinfo->type = ETH_MODULE_SFF_8436;
+		modinfo->eeprom_len = STD_SFP_INFO_MAX_SIZE;
+		break;
+	case MODULE_TYPE_QSFP_PLUS:
+		if (sfp_type_ext >= 0x3) {
+			modinfo->type = ETH_MODULE_SFF_8636;
+			modinfo->eeprom_len = STD_SFP_INFO_MAX_SIZE;
+
+		} else {
+			modinfo->type = ETH_MODULE_SFF_8436;
+			modinfo->eeprom_len = STD_SFP_INFO_MAX_SIZE;
+		}
+		break;
+	case MODULE_TYPE_QSFP28:
+		modinfo->type = ETH_MODULE_SFF_8636;
+		modinfo->eeprom_len = STD_SFP_INFO_MAX_SIZE;
+		break;
+	default:
+		nicif_warn(nic_dev, drv, netdev,
+			   "Optical module unknown: 0x%x\n", sfp_type);
+		return -EINVAL;
+	}
+
+	return 0;
+}
+
+static int hinic_get_module_eeprom(struct net_device *netdev,
+				   struct ethtool_eeprom *ee, u8 *data)
+{
+	struct hinic_nic_dev *nic_dev = netdev_priv(netdev);
+	u8 sfp_data[STD_SFP_INFO_MAX_SIZE];
+	u16 len;
+	int err;
+
+	if (!ee->len || ((ee->len + ee->offset) > STD_SFP_INFO_MAX_SIZE))
+		return -EINVAL;
+
+	memset(data, 0, ee->len);
+
+	err = hinic_get_sfp_eeprom(nic_dev->hwdev, sfp_data, &len);
+	if (err)
+		return err;
+
+	memcpy(data, sfp_data + ee->offset, ee->len);
+
+	return 0;
 }
 
 static int set_l4_rss_hash_ops(struct ethtool_rxnfc *cmd,
@@ -2186,12 +2258,10 @@ static int hinic_set_rxnfc(struct net_device *netdev, struct ethtool_rxnfc *cmd)
 	return err;
 }
 
-#ifndef NOT_HAVE_GET_RXFH_INDIR_SIZE
 static u32 hinic_get_rxfh_indir_size(struct net_device *netdev)
 {
 	return HINIC_RSS_INDIR_SIZE;
 }
-#endif
 
 static int __set_rss_rxfh(struct net_device *netdev,
 			  const u32 *indir, const u8 *key)
@@ -2267,18 +2337,13 @@ static int __set_rss_rxfh(struct net_device *netdev,
 	return 0;
 }
 
-#if defined(ETHTOOL_GRSSH) && defined(ETHTOOL_SRSSH)
 static u32 hinic_get_rxfh_key_size(struct net_device *netdev)
 {
 	return HINIC_RSS_KEY_SIZE;
 }
 
-#ifdef HAVE_RXFH_HASHFUNC
 static int hinic_get_rxfh(struct net_device *netdev,
 			  u32 *indir, u8 *key, u8 *hfunc)
-#else
-static int hinic_get_rxfh(struct net_device *netdev, u32 *indir, u8 *key)
-#endif
 {
 	struct hinic_nic_dev *nic_dev = netdev_priv(netdev);
 	int err = 0;
@@ -2286,7 +2351,6 @@ static int hinic_get_rxfh(struct net_device *netdev, u32 *indir, u8 *key)
 	if (!test_bit(HINIC_RSS_ENABLE, &nic_dev->flags))
 		return -EOPNOTSUPP;
 
-#ifdef HAVE_RXFH_HASHFUNC
 	if (hfunc) {
 		u8 hash_engine_type = 0;
 
@@ -2298,7 +2362,6 @@ static int hinic_get_rxfh(struct net_device *netdev, u32 *indir, u8 *key)
 
 		*hfunc = hash_engine_type ? ETH_RSS_HASH_TOP : ETH_RSS_HASH_XOR;
 	}
-#endif
 
 	if (indir) {
 		err = hinic_rss_get_indir_tbl(nic_dev->hwdev,
@@ -2314,17 +2377,8 @@ static int hinic_get_rxfh(struct net_device *netdev, u32 *indir, u8 *key)
 	return err;
 }
 
-#ifdef HAVE_RXFH_HASHFUNC
 static int hinic_set_rxfh(struct net_device *netdev, const u32 *indir,
 			  const u8 *key, const u8 hfunc)
-#else
-#ifdef HAVE_RXFH_NONCONST
-static int hinic_set_rxfh(struct net_device *netdev, u32 *indir, u8 *key)
-#else
-static int hinic_set_rxfh(struct net_device *netdev, const u32 *indir,
-			  const u8 *key)
-#endif
-#endif /* HAVE_RXFH_HASHFUNC */
 {
 	struct hinic_nic_dev *nic_dev = netdev_priv(netdev);
 	int err = 0;
@@ -2341,7 +2395,6 @@ static int hinic_set_rxfh(struct net_device *netdev, const u32 *indir,
 		return -EOPNOTSUPP;
 	}
 
-#ifdef HAVE_RXFH_HASHFUNC
 	if (hfunc != ETH_RSS_HASH_NO_CHANGE) {
 		if (hfunc != ETH_RSS_HASH_TOP && hfunc != ETH_RSS_HASH_XOR) {
 			nicif_err(nic_dev, drv, netdev,
@@ -2362,99 +2415,15 @@ static int hinic_set_rxfh(struct net_device *netdev, const u32 *indir,
 			   "Change hfunc to RSS_HASH_%s success\n",
 			   (hfunc == ETH_RSS_HASH_XOR) ? "XOR" : "TOP");
 	}
-#endif
 
 	err = __set_rss_rxfh(netdev, indir, key);
 
 	return err;
 }
 
-#else /* !(defined(ETHTOOL_GRSSH) && defined(ETHTOOL_SRSSH)) */
-
-#ifdef NOT_HAVE_GET_RXFH_INDIR_SIZE
-static int hinic_get_rxfh_indir(struct net_device *netdev,
-				struct ethtool_rxfh_indir *indir1)
-#else
-static int hinic_get_rxfh_indir(struct net_device *netdev, u32 *indir)
-#endif
-{
-	struct hinic_nic_dev *nic_dev = netdev_priv(netdev);
-	int err = 0;
-#ifdef NOT_HAVE_GET_RXFH_INDIR_SIZE
-	u32 *indir;
-
-	/* In a low version kernel(eg:suse 11.2), call the interface twice.
-	 * First call to get the size value,
-	 * and second call to get the rxfh indir according to the size value.
-	 */
-	if (indir1->size == 0) {
-		indir1->size = HINIC_RSS_INDIR_SIZE;
-		return 0;
-	}
-
-	if (indir1->size < HINIC_RSS_INDIR_SIZE) {
-		nicif_err(nic_dev, drv, nic_dev->netdev,
-			  "Failed to get rss indir, hinic rss size(%d) is more than system rss size(%u).\n",
-			  HINIC_RSS_INDIR_SIZE, indir1->size);
-		return -EINVAL;
-	}
-
-	indir = indir1->ring_index;
-#endif
-	if (!test_bit(HINIC_RSS_ENABLE, &nic_dev->flags))
-		return -EOPNOTSUPP;
-
-	if (indir)
-		err = hinic_rss_get_indir_tbl(nic_dev->hwdev,
-					      nic_dev->rss_tmpl_idx, indir);
-
-	return err;
-}
-
-#ifdef NOT_HAVE_GET_RXFH_INDIR_SIZE
-static int hinic_set_rxfh_indir(struct net_device *netdev,
-				const struct ethtool_rxfh_indir *indir1)
-#else
-static int hinic_set_rxfh_indir(struct net_device *netdev, const u32 *indir)
-#endif
-{
-	struct hinic_nic_dev *nic_dev = netdev_priv(netdev);
-#ifdef NOT_HAVE_GET_RXFH_INDIR_SIZE
-	const u32 *indir;
-
-	if (indir1->size != HINIC_RSS_INDIR_SIZE) {
-		nicif_err(nic_dev, drv, nic_dev->netdev,
-			  "Failed to set rss indir, hinic rss size(%d) is more than system rss size(%u).\n",
-			  HINIC_RSS_INDIR_SIZE, indir1->size);
-		return -EINVAL;
-	}
-
-	indir = indir1->ring_index;
-#endif
-
-	if (!test_bit(HINIC_RSS_ENABLE, &nic_dev->flags)) {
-		nicif_err(nic_dev, drv, nic_dev->netdev,
-			  "Not support to set rss indir when rss is disable\n");
-		return -EOPNOTSUPP;
-	}
-
-	if (test_bit(HINIC_DCB_ENABLE, &nic_dev->flags) && indir) {
-		nicif_err(nic_dev, drv, netdev,
-			  "Not support to set indir when DCB is enabled\n");
-		return -EOPNOTSUPP;
-	}
-
-	return __set_rss_rxfh(netdev, indir, NULL);
-}
-#endif /* defined(ETHTOOL_GRSSH) && defined(ETHTOOL_SRSSH) */
-
 static const struct ethtool_ops hinic_ethtool_ops = {
-#ifdef ETHTOOL_GLINKSETTINGS
-#ifndef XENSERVER_HAVE_NEW_ETHTOOL_OPS
 	.get_link_ksettings = hinic_get_link_ksettings,
 	.set_link_ksettings = hinic_set_link_ksettings,
-#endif
-#endif
 	.get_settings = hinic_get_settings,
 	.set_settings = hinic_set_settings,
 	.get_drvinfo = hinic_get_drvinfo,
@@ -2469,68 +2438,26 @@ static const struct ethtool_ops hinic_ethtool_ops = {
 	.get_sset_count = hinic_get_sset_count,
 	.get_coalesce = hinic_get_coalesce,
 	.set_coalesce = hinic_set_coalesce,
-#if defined(ETHTOOL_PERQUEUE) && defined(ETHTOOL_GCOALESCE)
 	.get_per_queue_coalesce = hinic_get_per_queue_coalesce,
 	.set_per_queue_coalesce = hinic_set_per_queue_coalesce,
-#endif
 	.get_ethtool_stats = hinic_get_ethtool_stats,
 	.get_strings = hinic_get_strings,
-#ifndef HAVE_RHEL6_ETHTOOL_OPS_EXT_STRUCT
-#ifdef HAVE_ETHTOOL_SET_PHYS_ID
 	.set_phys_id = hinic_set_phys_id,
-#else
-	.phys_id = hinic_phys_id,
-#endif
-#endif
 	.self_test = hinic_diag_test,
 	.get_rxnfc = hinic_get_rxnfc,
 	.set_rxnfc = hinic_set_rxnfc,
-
-#ifndef HAVE_RHEL6_ETHTOOL_OPS_EXT_STRUCT
 	.get_channels = hinic_get_channels,
 	.set_channels = hinic_set_channels,
-#ifndef NOT_HAVE_GET_RXFH_INDIR_SIZE
+	.get_module_info = hinic_get_module_info,
+	.get_module_eeprom = hinic_get_module_eeprom,
 	.get_rxfh_indir_size = hinic_get_rxfh_indir_size,
-#endif
-#if defined(ETHTOOL_GRSSH) && defined(ETHTOOL_SRSSH)
 	.get_rxfh_key_size = hinic_get_rxfh_key_size,
 	.get_rxfh = hinic_get_rxfh,
 	.set_rxfh = hinic_set_rxfh,
-#else
-	.get_rxfh_indir = hinic_get_rxfh_indir,
-	.set_rxfh_indir = hinic_set_rxfh_indir,
-#endif
-#endif /* HAVE_RHEL6_ETHTOOL_OPS_EXT_STRUCT */
 };
-
-#ifdef HAVE_RHEL6_ETHTOOL_OPS_EXT_STRUCT
-static const struct ethtool_ops_ext hinic_ethtool_ops_ext = {
-	.size	= sizeof(struct ethtool_ops_ext),
-	.set_phys_id = hinic_set_phys_id,
-	.get_channels = hinic_get_channels,
-	.set_channels = hinic_set_channels,
-#ifndef NOT_HAVE_GET_RXFH_INDIR_SIZE
-	.get_rxfh_indir_size = hinic_get_rxfh_indir_size,
-#endif
-#if defined(ETHTOOL_GRSSH) && defined(ETHTOOL_SRSSH)
-	.get_rxfh_key_size = hinic_get_rxfh_key_size,
-	.get_rxfh = hinic_get_rxfh,
-	.set_rxfh = hinic_set_rxfh,
-#else
-	.get_rxfh_indir = hinic_get_rxfh_indir,
-	.set_rxfh_indir = hinic_set_rxfh_indir,
-#endif
-};
-#endif /* HAVE_RHEL6_ETHTOOL_OPS_EXT_STRUCT */
 
 static const struct ethtool_ops hinicvf_ethtool_ops = {
-#ifdef ETHTOOL_GLINKSETTINGS
-#ifndef XENSERVER_HAVE_NEW_ETHTOOL_OPS
 	.get_link_ksettings = hinic_get_link_ksettings,
-#endif
-#else
-	.get_settings = hinic_get_settings,
-#endif
 	.get_drvinfo = hinic_get_drvinfo,
 	.get_msglevel = hinic_get_msglevel,
 	.set_msglevel = hinic_set_msglevel,
@@ -2540,63 +2467,27 @@ static const struct ethtool_ops hinicvf_ethtool_ops = {
 	.get_sset_count = hinic_get_sset_count,
 	.get_coalesce = hinic_get_coalesce,
 	.set_coalesce = hinic_set_coalesce,
-#if defined(ETHTOOL_PERQUEUE) && defined(ETHTOOL_GCOALESCE)
 	.get_per_queue_coalesce = hinic_get_per_queue_coalesce,
 	.set_per_queue_coalesce = hinic_set_per_queue_coalesce,
-#endif
 	.get_ethtool_stats = hinic_get_ethtool_stats,
 	.get_strings = hinic_get_strings,
 	.get_rxnfc = hinic_get_rxnfc,
 	.set_rxnfc = hinic_set_rxnfc,
 
-#ifndef HAVE_RHEL6_ETHTOOL_OPS_EXT_STRUCT
 	.get_channels = hinic_get_channels,
 	.set_channels = hinic_set_channels,
-#ifndef NOT_HAVE_GET_RXFH_INDIR_SIZE
 	.get_rxfh_indir_size = hinic_get_rxfh_indir_size,
-#endif
-#if defined(ETHTOOL_GRSSH) && defined(ETHTOOL_SRSSH)
 	.get_rxfh_key_size = hinic_get_rxfh_key_size,
 	.get_rxfh = hinic_get_rxfh,
 	.set_rxfh = hinic_set_rxfh,
-#else
-	.get_rxfh_indir = hinic_get_rxfh_indir,
-	.set_rxfh_indir = hinic_set_rxfh_indir,
-#endif
-#endif /* HAVE_RHEL6_ETHTOOL_OPS_EXT_STRUCT */
 };
-
-#ifdef HAVE_RHEL6_ETHTOOL_OPS_EXT_STRUCT
-static const struct ethtool_ops_ext hinicvf_ethtool_ops_ext = {
-	.size	= sizeof(struct ethtool_ops_ext),
-	.get_channels = hinic_get_channels,
-	.set_channels = hinic_set_channels,
-#ifndef NOT_HAVE_GET_RXFH_INDIR_SIZE
-	.get_rxfh_indir_size = hinic_get_rxfh_indir_size,
-#endif
-#if defined(ETHTOOL_GRSSH) && defined(ETHTOOL_SRSSH)
-	.get_rxfh_key_size = hinic_get_rxfh_key_size,
-	.get_rxfh = hinic_get_rxfh,
-	.set_rxfh = hinic_set_rxfh,
-#else
-	.get_rxfh_indir = hinic_get_rxfh_indir,
-	.set_rxfh_indir = hinic_set_rxfh_indir,
-#endif
-};
-#endif /* HAVE_RHEL6_ETHTOOL_OPS_EXT_STRUCT */
 
 void hinic_set_ethtool_ops(struct net_device *netdev)
 {
 	SET_ETHTOOL_OPS(netdev, &hinic_ethtool_ops);
-#ifdef HAVE_RHEL6_ETHTOOL_OPS_EXT_STRUCT
-	set_ethtool_ops_ext(netdev, &hinic_ethtool_ops_ext);
-#endif /* HAVE_RHEL6_ETHTOOL_OPS_EXT_STRUCT */
 }
 
 void hinicvf_set_ethtool_ops(struct net_device *netdev)
 {
 	SET_ETHTOOL_OPS(netdev, &hinicvf_ethtool_ops);
-#ifdef HAVE_RHEL6_ETHTOOL_OPS_EXT_STRUCT
-	set_ethtool_ops_ext(netdev, &hinicvf_ethtool_ops_ext);
-#endif /* HAVE_RHEL6_ETHTOOL_OPS_EXT_STRUCT */
 } /*lint -e766*/

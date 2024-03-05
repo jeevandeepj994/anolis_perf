@@ -31,7 +31,7 @@
 #include "hinic_nic.h"
 #include "hinic_dbg.h"
 
-#define INVALID_PI (0xFFFF)
+#define INVALID_PI	0xFFFF
 
 u16 hinic_dbg_get_qp_num(void *hwdev)
 {
@@ -101,7 +101,7 @@ u16 hinic_dbg_get_rq_hw_pi(void *hwdev, u16 q_id)
 	if (qp)
 		return cpu_to_be16(*qp->rq.pi_virt_addr);
 
-	nic_err(((struct hinic_hwdev *)hwdev)->dev_hdl, "Get rq hw pi failed!\n");
+	nic_err(((struct hinic_hwdev *)hwdev)->dev_hdl, "Get rq hw pi failed\n");
 
 	return INVALID_PI;
 }
@@ -184,7 +184,7 @@ static int get_wqe_info(struct hinic_wq *wq, u16 idx, u16 wqebb_cnt,
 		return -EFAULT;
 
 	if (*wqe_size != (u16)(wq->wqebb_size * wqebb_cnt)) {
-		pr_err("Unexpect out buf size from user :%d, expect: %d\n",
+		pr_err("Unexpect out buf size from user: %d, expect: %d\n",
 		       *wqe_size, (u16)(wq->wqebb_size * wqebb_cnt));
 		return -EFAULT;
 	}
@@ -231,7 +231,7 @@ int hinic_dbg_get_rq_wqe_info(void *hwdev, u16 q_id, u16 idx, u16 wqebb_cnt,
 int hinic_dbg_get_hw_stats(const void *hwdev, u8 *hw_stats, u16 *out_size)
 {
 	if (!hw_stats || *out_size != sizeof(struct hinic_hw_stats)) {
-		pr_err("Unexpect out buf size from user :%d, expect: %lu\n",
+		pr_err("Unexpect out buf size from user: %d, expect: %lu\n",
 		       *out_size, sizeof(struct hinic_hw_stats));
 		return -EFAULT;
 	}
@@ -241,20 +241,25 @@ int hinic_dbg_get_hw_stats(const void *hwdev, u8 *hw_stats, u16 *out_size)
 	return 0;
 }
 
-u16 hinic_dbg_clear_hw_stats(void *hwdev)
+u16 hinic_dbg_clear_hw_stats(void *hwdev, u32 *out_size)
 {
+	if (*out_size != sizeof(struct hinic_hw_stats)) {
+		pr_err("Unexpect out buf size from user :%d, expect: %lu\n",
+		       *out_size, sizeof(struct hinic_hw_stats));
+		return -EFAULT;
+	}
+
 	memset((void *)&((struct hinic_hwdev *)hwdev)->hw_stats, 0,
 	       sizeof(struct hinic_hw_stats));
 	memset((void *)((struct hinic_hwdev *)hwdev)->chip_fault_stats, 0,
 	       HINIC_CHIP_FAULT_SIZE);
-	return sizeof(struct hinic_hw_stats);
+
+	return 0;
 }
 
 void hinic_get_chip_fault_stats(const void *hwdev,
 				u8 *chip_fault_stats, int offset)
 {
-	int copy_len = offset + MAX_DRV_BUF_SIZE - HINIC_CHIP_FAULT_SIZE;
-
 	if (offset < 0 || offset > HINIC_CHIP_FAULT_SIZE) {
 		pr_err("Invalid chip offset value: %d\n", offset);
 		return;
@@ -267,7 +272,7 @@ void hinic_get_chip_fault_stats(const void *hwdev,
 	else
 		memcpy(chip_fault_stats,
 		       ((struct hinic_hwdev *)hwdev)->chip_fault_stats + offset,
-		       copy_len);
+		       HINIC_CHIP_FAULT_SIZE - offset);
 }
 
 int hinic_dbg_get_pf_bw_limit(void *hwdev, u32 *pf_bw_limit)
