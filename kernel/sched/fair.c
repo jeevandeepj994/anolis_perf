@@ -1345,12 +1345,25 @@ out:
 	return 0;
 }
 
+static void __update_identity(struct task_group *tg, int flags);
+static int tg_clear_identity_down(struct task_group *tg, void *data)
+{
+	if (tg->bvt_warp_ns || tg->id_flags) {
+		__update_identity(tg, 0);
+		tg->bvt_warp_ns = 0;
+	}
+
+	return 0;
+}
+
 static inline void group_identity_flip(bool enable)
 {
 	int cpu;
 
 	cpus_read_lock();
 
+	if (!enable)
+		walk_tg_tree(tg_clear_identity_down, tg_nop, NULL);
 	stop_machine(__group_identity_flip, &enable, cpu_online_mask);
 
 	for_each_cpu_not(cpu, cpu_online_mask)
@@ -1409,6 +1422,7 @@ int sched_group_identity_enable_handler(struct ctl_table *table, int write,
 {
 	int ret;
 	unsigned int old, new;
+	unsigned int identity_count;
 
 	mutex_lock(&identity_mutex);
 
@@ -1417,10 +1431,11 @@ int sched_group_identity_enable_handler(struct ctl_table *table, int write,
 		goto out;
 	}
 
-	if (atomic_read(&group_identity_count)) {
-		ret = -EBUSY;
-		goto out;
-	}
+	identity_count = atomic_read(&group_identity_count);
+	if (identity_count)
+		pr_info("Group Identity switch: There are still %d cgroups with non-zero identiy.\n",
+			identity_count);
+
 	old = sysctl_sched_group_indentity_enabled;
 	ret = proc_dointvec_minmax(table, write, buffer, lenp, ppos);
 	new = sysctl_sched_group_indentity_enabled;
@@ -1525,15 +1540,22 @@ static void __update_identity(struct task_group *tg, int flags)
 int update_bvt_warp_ns(struct task_group *tg, s64 val)
 {
 	int flags = 0;
+	int ret = 0;
 
-	if (group_identity_disabled())
-		return -EINVAL;
+	mutex_lock(&identity_mutex);
+
+	if (group_identity_disabled()) {
+		ret = -EINVAL;
+		goto unlock;
+	}
 
 	/*
 	 * We can't change the bvt type of the root cgroup.
 	 */
-	if (!tg->se[0])
-		return -EINVAL;
+	if (!tg->se[0]) {
+		ret = -EINVAL;
+		goto unlock;
+	}
 
 	switch (val) {
 	case TYPE_IDLE:
@@ -1551,43 +1573,55 @@ int update_bvt_warp_ns(struct task_group *tg, s64 val)
 		flags = ID_HIGHCLASS | ID_IDLE_SEEKER | ID_SMT_EXPELLER;
 		break;
 	default:
-		return -ERANGE;
+		ret = -ERANGE;
+		goto unlock;
 	}
 
-	mutex_lock(&identity_mutex);
 	if (tg->bvt_warp_ns != val) {
 		__update_identity(tg, flags);
 		tg->bvt_warp_ns = val;
 	}
+unlock:
 	mutex_unlock(&identity_mutex);
 
-	return 0;
+	return ret;
 }
 
 int update_identity(struct task_group *tg, s64 val)
 {
+	int ret = 0;
 
-	if (group_identity_disabled())
-		return -EINVAL;
+	mutex_lock(&identity_mutex);
+
+	if (group_identity_disabled()) {
+		ret = -EINVAL;
+		goto unlock;
+	}
 
 	/*
 	 * We can't change the flags of the root cgroup.
 	 */
-	if (!tg->se[0])
-		return -EINVAL;
+	if (!tg->se[0]) {
+		ret = -EINVAL;
+		goto unlock;
+	}
 
-	if (val & ~IDENTITY_FLAGS_MASK)
-		return -ERANGE;
+	if (val & ~IDENTITY_FLAGS_MASK) {
+		ret = -ERANGE;
+		goto unlock;
+	}
 
-	if (val & ID_HIGHCLASS && val & ID_UNDERCLASS)
-		return -EINVAL;
+	if (val & ID_HIGHCLASS && val & ID_UNDERCLASS) {
+		ret = -EINVAL;
+		goto unlock;
+	}
 
-	mutex_lock(&identity_mutex);
 	if (tg->id_flags != val)
 		__update_identity(tg, val);
+unlock:
 	mutex_unlock(&identity_mutex);
 
-	return 0;
+	return ret;
 }
 
 int clear_identity(struct task_group *tg)
