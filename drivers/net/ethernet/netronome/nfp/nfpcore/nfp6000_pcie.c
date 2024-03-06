@@ -29,6 +29,7 @@
 
 #include "nfp_cpp.h"
 #include "nfp_dev.h"
+#include "../nfp_main.h"
 
 #include "nfp6000/nfp6000.h"
 
@@ -532,7 +533,8 @@ static int bar_cmp(const void *aptr, const void *bptr)
  * BAR1.0-BAR1.7: --
  * BAR2.0-BAR2.7: --
  */
-static int enable_bars(struct nfp6000_pcie *nfp, u16 interface)
+static int enable_bars(struct nfp6000_pcie *nfp, u16 interface,
+		       struct nfp_pf *pf)
 {
 	const u32 barcfg_msix_general =
 		NFP_PCIE_BAR_PCIE2CPP_MapType(
@@ -609,7 +611,7 @@ static int enable_bars(struct nfp6000_pcie *nfp, u16 interface)
 		bar->iomem = ioremap(nfp_bar_resource_start(bar),
 					     nfp_bar_resource_len(bar));
 	if (bar->iomem) {
-		int pf;
+		int pf_id;
 
 		msg += scnprintf(msg, end - msg, "0.0: General/MSI-X SRAM, ");
 		atomic_inc(&bar->refcnt);
@@ -622,8 +624,8 @@ static int enable_bars(struct nfp6000_pcie *nfp, u16 interface)
 
 		switch (nfp->pdev->device) {
 		case PCI_DEVICE_ID_NFP3800:
-			pf = nfp->pdev->devfn & 7;
-			nfp->iomem.csr = bar->iomem + NFP_PCIE_BAR(pf);
+			pf_id = pf->multi_pf.id;
+			nfp->iomem.csr = bar->iomem + NFP_PCIE_BAR(pf_id);
 			break;
 		case PCI_DEVICE_ID_NFP4000:
 		case PCI_DEVICE_ID_NFP5000:
@@ -1307,7 +1309,8 @@ static const struct nfp_cpp_operations nfp6000_pcie_ops = {
  * Return: NFP CPP handle
  */
 struct nfp_cpp *
-nfp_cpp_from_nfp6000_pcie(struct pci_dev *pdev, const struct nfp_dev_info *dev_info)
+nfp_cpp_from_nfp6000_pcie(struct pci_dev *pdev, const struct nfp_dev_info *dev_info,
+			  struct nfp_pf *pf)
 {
 	struct nfp6000_pcie *nfp;
 	u16 interface;
@@ -1351,7 +1354,7 @@ nfp_cpp_from_nfp6000_pcie(struct pci_dev *pdev, const struct nfp_dev_info *dev_i
 		goto err_free_nfp;
 	}
 
-	err = enable_bars(nfp, interface);
+	err = enable_bars(nfp, interface, pf);
 	if (err)
 		goto err_free_nfp;
 
