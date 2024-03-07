@@ -132,7 +132,7 @@ void nvme_queue_scan(struct nvme_ctrl *ctrl)
 	/*
 	 * Only new queue scan work when admin and IO queues are both alive
 	 */
-	if (ctrl->state == NVME_CTRL_LIVE && ctrl->tagset)
+	if (nvme_ctrl_state(ctrl) == NVME_CTRL_LIVE && ctrl->tagset)
 		queue_work(nvme_wq, &ctrl->scan_work);
 }
 
@@ -144,7 +144,7 @@ void nvme_queue_scan(struct nvme_ctrl *ctrl)
  */
 int nvme_try_sched_reset(struct nvme_ctrl *ctrl)
 {
-	if (ctrl->state != NVME_CTRL_RESETTING)
+	if (nvme_ctrl_state(ctrl) != NVME_CTRL_RESETTING)
 		return -EBUSY;
 	if (!queue_work(nvme_reset_wq, &ctrl->reset_work))
 		return -EBUSY;
@@ -157,7 +157,7 @@ static void nvme_failfast_work(struct work_struct *work)
 	struct nvme_ctrl *ctrl = container_of(to_delayed_work(work),
 			struct nvme_ctrl, failfast_work);
 
-	if (ctrl->state != NVME_CTRL_CONNECTING)
+	if (nvme_ctrl_state(ctrl) != NVME_CTRL_CONNECTING)
 		return;
 
 	set_bit(NVME_CTRL_FAILFAST_EXPIRED, &ctrl->flags);
@@ -201,7 +201,7 @@ int nvme_reset_ctrl_sync(struct nvme_ctrl *ctrl)
 	ret = nvme_reset_ctrl(ctrl);
 	if (!ret) {
 		flush_work(&ctrl->reset_work);
-		if (ctrl->state != NVME_CTRL_LIVE)
+		if (nvme_ctrl_state(ctrl) != NVME_CTRL_LIVE)
 			ret = -ENETRESET;
 	}
 
@@ -212,7 +212,7 @@ EXPORT_SYMBOL_GPL(nvme_reset_ctrl_sync);
 static void nvme_do_delete_ctrl(struct nvme_ctrl *ctrl)
 {
 	dev_info(ctrl->device,
-		 "Removing ctrl: NQN \"%s\"\n", ctrl->opts->subsysnqn);
+		 "Removing ctrl: NQN \"%s\"\n", nvmf_ctrl_subsysnqn(ctrl));
 
 	flush_work(&ctrl->reset_work);
 	nvme_stop_ctrl(ctrl);
@@ -432,7 +432,7 @@ bool nvme_change_ctrl_state(struct nvme_ctrl *ctrl,
 
 	spin_lock_irqsave(&ctrl->lock, flags);
 
-	old_state = ctrl->state;
+	old_state = nvme_ctrl_state(ctrl);
 	switch (new_state) {
 	case NVME_CTRL_LIVE:
 		switch (old_state) {
@@ -500,7 +500,7 @@ bool nvme_change_ctrl_state(struct nvme_ctrl *ctrl,
 	}
 
 	if (changed) {
-		ctrl->state = new_state;
+		WRITE_ONCE(ctrl->state, new_state);
 		wake_up_all(&ctrl->state_wq);
 	}
 
@@ -508,11 +508,11 @@ bool nvme_change_ctrl_state(struct nvme_ctrl *ctrl,
 	if (!changed)
 		return false;
 
-	if (ctrl->state == NVME_CTRL_LIVE) {
+	if (new_state == NVME_CTRL_LIVE) {
 		if (old_state == NVME_CTRL_CONNECTING)
 			nvme_stop_failfast_work(ctrl);
 		nvme_kick_requeue_lists(ctrl);
-	} else if (ctrl->state == NVME_CTRL_CONNECTING &&
+	} else if (new_state == NVME_CTRL_CONNECTING &&
 		old_state == NVME_CTRL_RESETTING) {
 		nvme_start_failfast_work(ctrl);
 	}
@@ -525,7 +525,7 @@ EXPORT_SYMBOL_GPL(nvme_change_ctrl_state);
  */
 static bool nvme_state_terminal(struct nvme_ctrl *ctrl)
 {
-	switch (ctrl->state) {
+	switch (nvme_ctrl_state(ctrl)) {
 	case NVME_CTRL_NEW:
 	case NVME_CTRL_LIVE:
 	case NVME_CTRL_RESETTING:
@@ -536,7 +536,7 @@ static bool nvme_state_terminal(struct nvme_ctrl *ctrl)
 	case NVME_CTRL_DEAD:
 		return true;
 	default:
-		WARN_ONCE(1, "Unhandled ctrl state:%d", ctrl->state);
+		WARN_ONCE(1, "Unhandled ctrl state:%d", nvme_ctrl_state(ctrl));
 		return true;
 	}
 }
@@ -550,7 +550,7 @@ bool nvme_wait_reset(struct nvme_ctrl *ctrl)
 	wait_event(ctrl->state_wq,
 		   nvme_change_ctrl_state(ctrl, NVME_CTRL_RESETTING) ||
 		   nvme_state_terminal(ctrl));
-	return ctrl->state == NVME_CTRL_RESETTING;
+	return nvme_ctrl_state(ctrl) == NVME_CTRL_RESETTING;
 }
 EXPORT_SYMBOL_GPL(nvme_wait_reset);
 
@@ -628,9 +628,11 @@ EXPORT_SYMBOL_GPL(nvme_init_request);
 blk_status_t nvme_fail_nonready_command(struct nvme_ctrl *ctrl,
 		struct request *rq)
 {
-	if (ctrl->state != NVME_CTRL_DELETING_NOIO &&
-	    ctrl->state != NVME_CTRL_DELETING &&
-	    ctrl->state != NVME_CTRL_DEAD &&
+	enum nvme_ctrl_state state = nvme_ctrl_state(ctrl);
+
+	if (state != NVME_CTRL_DELETING_NOIO &&
+	    state != NVME_CTRL_DELETING &&
+	    state != NVME_CTRL_DEAD &&
 	    !test_bit(NVME_CTRL_FAILFAST_EXPIRED, &ctrl->flags) &&
 	    !blk_noretry_request(rq) && !(rq->cmd_flags & REQ_NVME_MPATH))
 		return BLK_STS_RESOURCE;
@@ -660,7 +662,7 @@ bool __nvme_check_ready(struct nvme_ctrl *ctrl, struct request *rq,
 		 * command, which is require to set the queue live in the
 		 * appropinquate states.
 		 */
-		switch (ctrl->state) {
+		switch (nvme_ctrl_state(ctrl)) {
 		case NVME_CTRL_CONNECTING:
 			if (blk_rq_is_passthrough(rq) && nvme_is_fabrics(req->cmd) &&
 			    req->cmd->fabrics.fctype == nvme_fabrics_type_connect)
@@ -1195,8 +1197,8 @@ static void nvme_keep_alive_end_io(struct request *rq, blk_status_t status)
 
 	ctrl->comp_seen = false;
 	spin_lock_irqsave(&ctrl->lock, flags);
-	if (ctrl->state == NVME_CTRL_LIVE ||
-	    ctrl->state == NVME_CTRL_CONNECTING)
+	if (nvme_ctrl_state(ctrl) == NVME_CTRL_LIVE ||
+	    nvme_ctrl_state(ctrl) == NVME_CTRL_CONNECTING)
 		startka = true;
 	spin_unlock_irqrestore(&ctrl->lock, flags);
 	if (startka)
@@ -2379,7 +2381,7 @@ static void nvme_set_latency_tolerance(struct device *dev, s32 val)
 
 	if (ctrl->ps_max_latency_us != latency) {
 		ctrl->ps_max_latency_us = latency;
-		if (ctrl->state == NVME_CTRL_LIVE)
+		if (nvme_ctrl_state(ctrl) == NVME_CTRL_LIVE)
 			nvme_configure_apst(ctrl);
 	}
 }
@@ -2964,7 +2966,7 @@ static int nvme_dev_open(struct inode *inode, struct file *file)
 	struct nvme_ctrl *ctrl =
 		container_of(inode->i_cdev, struct nvme_ctrl, cdev);
 
-	switch (ctrl->state) {
+	switch (nvme_ctrl_state(ctrl)) {
 	case NVME_CTRL_LIVE:
 		break;
 	default:
@@ -3266,9 +3268,9 @@ static ssize_t nvme_sysfs_show_state(struct device *dev,
 		[NVME_CTRL_DEAD]	= "dead",
 	};
 
-	if ((unsigned)ctrl->state < ARRAY_SIZE(state_name) &&
-	    state_name[ctrl->state])
-		return sysfs_emit(buf, "%s\n", state_name[ctrl->state]);
+	if ((unsigned)nvme_ctrl_state(ctrl) < ARRAY_SIZE(state_name) &&
+	    state_name[nvme_ctrl_state(ctrl)])
+		return sysfs_emit(buf, "%s\n", state_name[nvme_ctrl_state(ctrl)]);
 
 	return sysfs_emit(buf, "unknown state\n");
 }
@@ -4040,7 +4042,7 @@ static void nvme_scan_work(struct work_struct *work)
 		container_of(work, struct nvme_ctrl, scan_work);
 
 	/* No tagset on a live ctrl means IO queues could not created */
-	if (ctrl->state != NVME_CTRL_LIVE || !ctrl->tagset)
+	if (nvme_ctrl_state(ctrl) != NVME_CTRL_LIVE || !ctrl->tagset)
 		return;
 
 	if (test_and_clear_bit(NVME_AER_NOTICE_NS_CHANGED, &ctrl->events)) {
@@ -4080,7 +4082,7 @@ void nvme_remove_namespaces(struct nvme_ctrl *ctrl)
 	 * removing the namespaces' disks; fail all the queues now to avoid
 	 * potentially having to clean up the failed sync later.
 	 */
-	if (ctrl->state == NVME_CTRL_DEAD)
+	if (nvme_ctrl_state(ctrl) == NVME_CTRL_DEAD)
 		nvme_kill_queues(ctrl);
 
 	/* this is a no-op when called from the controller reset handler */
@@ -4150,7 +4152,7 @@ static void nvme_async_event_work(struct work_struct *work)
 	 * flushing ctrl async_event_work after changing the controller state
 	 * from LIVE and before freeing the admin queue.
 	*/
-	if (ctrl->state == NVME_CTRL_LIVE)
+	if (nvme_ctrl_state(ctrl) == NVME_CTRL_LIVE)
 		ctrl->ops->submit_async_event(ctrl);
 }
 
@@ -4361,7 +4363,7 @@ int nvme_init_ctrl(struct nvme_ctrl *ctrl, struct device *dev,
 {
 	int ret;
 
-	ctrl->state = NVME_CTRL_NEW;
+	WRITE_ONCE(ctrl->state, NVME_CTRL_NEW);
 	clear_bit(NVME_CTRL_FAILFAST_EXPIRED, &ctrl->flags);
 	spin_lock_init(&ctrl->lock);
 	mutex_init(&ctrl->scan_lock);
