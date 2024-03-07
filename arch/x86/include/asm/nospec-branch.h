@@ -171,6 +171,13 @@
 #endif
 .endm
 
+.macro CALL_DEPTH_ACCOUNT
+#ifdef CONFIG_CALL_DEPTH_TRACKING
+	 ALTERNATIVE "",						\
+		     __stringify(ASM_INCREMENT_CALL_DEPTH), X86_FEATURE_CALL_DEPTH
+#endif
+.endm
+
 #else /* __ASSEMBLY__ */
 
 #define ANNOTATE_RETPOLINE_SAFE					\

@@ -9,6 +9,7 @@
 
 #include <linux/arm_sdei.h>
 #include <linux/sched.h>
+#include <linux/ftrace.h>
 #include <linux/mm.h>
 #include <linux/dma-mapping.h>
 #include <linux/kvm_host.h>
@@ -84,6 +85,9 @@ int main(void)
   DEFINE(FREGS_LR,		offsetof(struct ftrace_regs, lr));
   DEFINE(FREGS_SP,		offsetof(struct ftrace_regs, sp));
   DEFINE(FREGS_PC,		offsetof(struct ftrace_regs, pc));
+#ifdef CONFIG_DYNAMIC_FTRACE_WITH_DIRECT_CALLS
+  DEFINE(FREGS_DIRECT_TRAMP,	offsetof(struct ftrace_regs, direct_tramp));
+#endif
   DEFINE(FREGS_SIZE,		sizeof(struct ftrace_regs));
   BLANK();
 #endif
@@ -155,6 +159,12 @@ int main(void)
   DEFINE(PTRAUTH_USER_KEY_APGA,		offsetof(struct ptrauth_keys_user, apga));
   DEFINE(PTRAUTH_KERNEL_KEY_APIA,	offsetof(struct ptrauth_keys_kernel, apia));
   BLANK();
+#endif
+#ifdef CONFIG_FUNCTION_TRACER
+  DEFINE(FTRACE_OPS_FUNC,		offsetof(struct ftrace_ops, func));
+#ifdef CONFIG_DYNAMIC_FTRACE_WITH_DIRECT_CALLS
+  DEFINE(FTRACE_OPS_DIRECT_CALL,	offsetof(struct ftrace_ops, direct_call));
+#endif
 #endif
   return 0;
 }

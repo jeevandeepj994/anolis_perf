@@ -373,6 +373,7 @@ __AARCH64_INSN_FUNCS(eret_auth,	0xFFFFFBFF, 0xD69F0BFF)
 __AARCH64_INSN_FUNCS(mrs,	0xFFF00000, 0xD5300000)
 __AARCH64_INSN_FUNCS(msr_imm,	0xFFF8F01F, 0xD500401F)
 __AARCH64_INSN_FUNCS(msr_reg,	0xFFF00000, 0xD5100000)
+__AARCH64_INSN_FUNCS(bti,	0xFFFFFF3F, 0xD503241f)
 
 #undef	__AARCH64_INSN_FUNCS
 
@@ -386,6 +387,9 @@ static inline bool aarch64_insn_is_adr_adrp(u32 insn)
 
 int aarch64_insn_read(void *addr, u32 *insnp);
 int aarch64_insn_write(void *addr, u32 insn);
+
+int aarch64_insn_write_literal_u64(void *addr, u64 val);
+
 enum aarch64_insn_encoding_class aarch64_get_insn_class(u32 insn);
 bool aarch64_insn_uses_literal(u32 insn);
 bool aarch64_insn_is_branch(u32 insn);
