@@ -138,6 +138,8 @@ struct io_defer_entry {
 	u32			seq;
 };
 
+extern struct io_sq_data __percpu **percpu_sqd;
+
 /* requests with any of those set should undergo io_disarm_next() */
 #define IO_DISARM_MASK (REQ_F_ARM_LTIMEOUT | REQ_F_LINK_TIMEOUT | REQ_F_FAIL)
 #define IO_REQ_LINK_FLAGS (REQ_F_LINK | REQ_F_HARDLINK)
@@ -1744,11 +1746,12 @@ static void io_iopoll_req_issued(struct io_kiocb *req, unsigned int issue_flags)
 	if (unlikely(needs_lock)) {
 		/*
 		 * If IORING_SETUP_SQPOLL is enabled, sqes are either handle
-		 * in sq thread task context or in io worker task context. If
-		 * current task context is sq thread, we don't need to check
-		 * whether should wake up sq thread.
+		 * in sq thread task context or in io worker task context or
+		 * in original context. If current task context is sq thread,
+		 * we don't need to check whether should wake up sq thread.
 		 */
 		if ((ctx->flags & IORING_SETUP_SQPOLL) &&
+		    (current != ctx->sq_data->thread) &&
 		    wq_has_sleeper(&ctx->sq_data->wait))
 			wake_up(&ctx->sq_data->wait);
 
@@ -3612,6 +3615,7 @@ SYSCALL_DEFINE6(io_uring_enter, unsigned int, fd, u32, to_submit,
 
 	if (unlikely(flags & ~(IORING_ENTER_GETEVENTS | IORING_ENTER_SQ_WAKEUP |
 			       IORING_ENTER_SQ_WAIT | IORING_ENTER_EXT_ARG |
+			       IORING_ENTER_SQ_SUBMIT_ON_IDLE |
 			       IORING_ENTER_REGISTERED_RING)))
 		return -EINVAL;
 
@@ -3656,8 +3660,18 @@ SYSCALL_DEFINE6(io_uring_enter, unsigned int, fd, u32, to_submit,
 			ret = -EOWNERDEAD;
 			goto out;
 		}
-		if (flags & IORING_ENTER_SQ_WAKEUP)
+		if (flags & IORING_ENTER_SQ_WAKEUP) {
 			wake_up(&ctx->sq_data->wait);
+			if (flags & IORING_ENTER_SQ_SUBMIT_ON_IDLE) {
+				bool has_lock;
+
+				has_lock = mutex_trylock(&ctx->uring_lock);
+				if (has_lock) {
+					io_submit_sqes(ctx, min(to_submit, 8U));
+					mutex_unlock(&ctx->uring_lock);
+				}
+			}
+		}
 		if (flags & IORING_ENTER_SQ_WAIT)
 			io_sqpoll_wait_sq(ctx);
 
@@ -4083,7 +4097,8 @@ static long io_uring_setup(u32 entries, struct io_uring_params __user *params)
 			IORING_SETUP_SQE128 | IORING_SETUP_CQE32 |
 			IORING_SETUP_SINGLE_ISSUER | IORING_SETUP_DEFER_TASKRUN |
 			IORING_SETUP_NO_MMAP | IORING_SETUP_REGISTERED_FD_ONLY |
-			IORING_SETUP_NO_SQARRAY))
+			IORING_SETUP_NO_SQARRAY | IORING_SETUP_SQPOLL_PERCPU |
+			IORING_SETUP_IDLE_US))
 		return -EINVAL;
 
 	return io_uring_create(entries, &p, params);
@@ -4371,7 +4386,7 @@ static __cold int io_register_iowq_max_workers(struct io_ring_ctx *ctx,
 
 	if (sqd) {
 		mutex_unlock(&sqd->lock);
-		io_put_sq_data(sqd);
+		io_put_sq_data(ctx, sqd);
 	}
 
 	if (copy_to_user(arg, new_count, sizeof(new_count)))
@@ -4397,7 +4412,7 @@ static __cold int io_register_iowq_max_workers(struct io_ring_ctx *ctx,
 err:
 	if (sqd) {
 		mutex_unlock(&sqd->lock);
-		io_put_sq_data(sqd);
+		io_put_sq_data(ctx, sqd);
 	}
 	return ret;
 }
@@ -4618,6 +4633,8 @@ out_fput:
 
 static int __init io_uring_init(void)
 {
+	int cpu;
+
 #define __BUILD_BUG_VERIFY_OFFSET_SIZE(stype, eoffset, esize, ename) do { \
 	BUILD_BUG_ON(offsetof(stype, ename) != eoffset); \
 	BUILD_BUG_ON(sizeof_field(stype, ename) != esize); \
@@ -4705,6 +4722,10 @@ static int __init io_uring_init(void)
 				SLAB_ACCOUNT | SLAB_TYPESAFE_BY_RCU,
 				offsetof(struct io_kiocb, cmd.data),
 				sizeof_field(struct io_kiocb, cmd.data), NULL);
+
+	percpu_sqd = alloc_percpu(struct io_sq_data *);
+	for_each_possible_cpu(cpu)
+		*per_cpu_ptr(percpu_sqd, cpu) = NULL;
 
 #ifdef CONFIG_SYSCTL
 	register_sysctl_init("kernel", kernel_io_uring_disabled_table);
