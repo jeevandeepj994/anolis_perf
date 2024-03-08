@@ -121,6 +121,14 @@ static __maybe_unused struct page *try_grab_compound_head(struct page *page,
 		int orig_refs = refs;
 
 		/*
+		* Don't take a pin on the zero page - it's not going anywhere
+		* and it is used in a *lot* of places.
+		*/
+		if (is_zero_page(page))
+			return compound_head(page);
+
+
+		/*
 		 * Can't do FOLL_LONGTERM + FOLL_PIN with CMA in the gup fast
 		 * path, so fail and let the caller fall back to the slow path.
 		 */
@@ -162,6 +170,8 @@ static __maybe_unused struct page *try_grab_compound_head(struct page *page,
 static void put_compound_head(struct page *page, int refs, unsigned int flags)
 {
 	if (flags & FOLL_PIN) {
+		if (is_zero_page(page))
+			return;
 		mod_node_page_state(page_pgdat(page), NR_FOLL_PIN_RELEASED,
 				    refs);
 
@@ -205,6 +215,13 @@ bool __must_check try_grab_page(struct page *page, unsigned int flags)
 		int refs = 1;
 
 		page = compound_head(page);
+
+		/*
+                 * Don't take a pin on the zero page - it's not going anywhere
+                 * and it is used in a *lot* of places.
+                 */
+                if (is_zero_page(page))
+                        return true;
 
 		if (WARN_ON_ONCE(page_ref_count(page) <= 0))
 			return false;
@@ -2909,6 +2926,9 @@ EXPORT_SYMBOL_GPL(get_user_pages_fast);
  *
  * FOLL_PIN means that the pages must be released via unpin_user_page(). Please
  * see Documentation/core-api/pin_user_pages.rst for further details.
+ *
+ * Note that if a zero_page is amongst the returned pages, it will not have
+ * pins in it and unpin_user_page() will not remove pins from it.
  */
 int pin_user_pages_fast(unsigned long start, int nr_pages,
 			unsigned int gup_flags, struct page **pages)
@@ -2980,6 +3000,9 @@ EXPORT_SYMBOL_GPL(pin_user_pages_fast_only);
  *
  * FOLL_PIN means that the pages must be released via unpin_user_page(). Please
  * see Documentation/core-api/pin_user_pages.rst for details.
+ *
+ * Note that if a zero_page is amongst the returned pages, it will not have
+ * pins in it and unpin_user_page*() will not remove pins from it.
  */
 long pin_user_pages_remote(struct mm_struct *mm,
 			   unsigned long start, unsigned long nr_pages,
@@ -3013,6 +3036,9 @@ EXPORT_SYMBOL(pin_user_pages_remote);
  *
  * FOLL_PIN means that the pages must be released via unpin_user_page(). Please
  * see Documentation/core-api/pin_user_pages.rst for details.
+ *
+ * Note that if a zero_page is amongst the returned pages, it will not have
+ * pins in it and unpin_user_page*() will not remove pins from it.
  */
 long pin_user_pages(unsigned long start, unsigned long nr_pages,
 		    unsigned int gup_flags, struct page **pages,
@@ -3032,6 +3058,9 @@ EXPORT_SYMBOL(pin_user_pages);
  * pin_user_pages_unlocked() is the FOLL_PIN variant of
  * get_user_pages_unlocked(). Behavior is the same, except that this one sets
  * FOLL_PIN and rejects FOLL_GET.
+ *
+ * Note that if a zero_page is amongst the returned pages, it will not have
+ * pins in it and unpin_user_page*() will not remove pins from it.
  */
 long pin_user_pages_unlocked(unsigned long start, unsigned long nr_pages,
 			     struct page **pages, unsigned int gup_flags)
