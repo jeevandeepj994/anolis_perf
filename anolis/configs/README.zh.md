@@ -79,9 +79,17 @@ ANCK 认为它们的变更不会对现有使用场景造成严重影响，可以
 # 子目录说明
 ANCK 目前支持 x86、arm64架构，每个架构分为标准配置和 debug 配置，其中 debug 配置用于测试，标准配置是正式上线时使用的。
 因此，每一层级中的 kconfig 的组织形式如下：
-- generic，当各个架构的标准配置都相同时，将 kconfig 存放至该目录
-- x86/x86-debug，对应 x86 架构的标准配置和 debug 配置。
-- arm64/arm64-debug，同上
+- default，当各个架构的标准配置都相同时，将 kconfig 存放至该目录
+- x86/arm64，当各个架构的标准配置不同时，将 kconfig 分别存放至对应目录。
+- x86-debug/arm64-debug，当各个架构的标准配置与其 debug 配置不同时，将 debug 配置存放至该目录
+
+举例，如果我们想查看 CONFIG_FOO 在 x86 debug 的配置，则查找路径如下：
+1. 查看 x86-debug 目录下是否存在 CONFIG_FOO 文件，若有，则使用该配置
+2. 若无，查看 x86 目录下是否存在 CONFIG_FOO 文件，若有，则使用该配置
+3. 若无，查看 default 目录是否存在 CONFIG_FOO 文件，若有，则使用该配置
+4. 若无，则该配置为 not set
+如果想查看 CONFIG_FOO 在 x86 的配置，查找顺序也与上文相同，但是查找时从第 2 步开始。
+
 
 ## 如何更新 kconfig
 请参考 How-To-Modify-Kconfig.zh.md
