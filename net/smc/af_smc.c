@@ -4301,6 +4301,10 @@ int smc_inet_release(struct socket *sock)
 
 	sock_hold(sk);	/* sock put bellow */
 
+	/* we can not decide it during smc_destruct */
+	if (smc_sk_state(sk) == SMC_LISTEN)
+		smc_sock_cleanup_negotiator_ops(smc, 0);
+
 	smc_inet_sock_try_disable_smc(sk, SMC_NEGOTIATION_ABORT_FLAG);
 
 	/* check fallback ? */
