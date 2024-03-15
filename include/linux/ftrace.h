@@ -32,6 +32,7 @@
 #endif
 
 struct dyn_ftrace;
+struct ftrace_regs;
 
 /*
  * If the arch's mcount caller does not support all of ftrace's
