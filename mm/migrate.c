@@ -1047,26 +1047,31 @@ out:
 	return rc;
 }
 
+enum {
+	PAGE_WAS_MAPPED = BIT(0),
+	PAGE_WAS_MLOCKED = BIT(1),
+	PAGE_OLD_STATES = PAGE_WAS_MAPPED | PAGE_WAS_MLOCKED,
+};
+
 /*
- * To record some information during migration, we use some unused
- * fields (mapping and private) of struct page of the newly allocated
- * destination page.
+ * To record some information during migration, we use unused private
+ * field of struct page of the newly allocated destination page.
  */
 static void __migrate_page_record(struct page *dst,
-				  unsigned long page_was_mapped,
+				  int old_page_state,
 				  struct anon_vma *anon_vma)
 {
-	dst->mapping = (void *)anon_vma;
-	dst->private = page_was_mapped;
+	dst->private = (unsigned long)((void *)anon_vma + old_page_state);
 }
 
 static void __migrate_page_extract(struct page *dst,
-				   int *page_was_mappedp,
+				   int *old_page_state,
 				   struct anon_vma **anon_vmap)
 {
-	*anon_vmap = (void *)dst->mapping;
-	*page_was_mappedp = dst->private;
-	dst->mapping = NULL;
+	unsigned long private = (unsigned long)dst->private;
+
+	*anon_vmap = (struct anon_vma *)(private & ~PAGE_OLD_STATES);
+	*old_page_state = private & PAGE_OLD_STATES;
 	dst->private = 0;
 }
 
@@ -1128,7 +1133,7 @@ static int migrate_page_unmap(new_page_t get_new_page, free_page_t put_new_page,
 {
 	int rc = -EAGAIN;
 	struct page *dst = NULL;
-	int page_was_mapped = 0;
+	int old_page_state = 0;
 	struct anon_vma *anon_vma = NULL;
 	bool is_lru = !__PageMovable(src);
 	bool locked = false;
@@ -1237,7 +1242,7 @@ static int migrate_page_unmap(new_page_t get_new_page, free_page_t put_new_page,
 	dst_locked = true;
 
 	if (unlikely(!is_lru)) {
-		__migrate_page_record(dst, page_was_mapped, anon_vma);
+		__migrate_page_record(dst, old_page_state, anon_vma);
 		return MIGRATEPAGE_UNMAP;
 	}
 
@@ -1266,11 +1271,11 @@ static int migrate_page_unmap(new_page_t get_new_page, free_page_t put_new_page,
 		try_to_unmap(src, mode == MIGRATE_ASYNC ?
 			     TTU_MIGRATION|TTU_IGNORE_MLOCK|TTU_BATCH_FLUSH :
 			     TTU_MIGRATION|TTU_IGNORE_MLOCK);
-		page_was_mapped = 1;
+		old_page_state |= PAGE_WAS_MAPPED;
 	}
 
 	if (!page_mapped(src)) {
-		__migrate_page_record(dst, page_was_mapped, anon_vma);
+		__migrate_page_record(dst, old_page_state, anon_vma);
 		return MIGRATEPAGE_UNMAP;
 	}
 
@@ -1282,7 +1287,8 @@ out:
 	if (rc == -EAGAIN)
 		ret = NULL;
 
-	migrate_page_undo_src(src, page_was_mapped, anon_vma, locked, ret);
+	migrate_page_undo_src(src, old_page_state & PAGE_WAS_MAPPED,
+			      anon_vma, locked, ret);
 	migrate_page_undo_dst(dst, dst_locked, put_new_page, private);
 
 	return rc;
@@ -1295,12 +1301,12 @@ static int migrate_page_move(free_page_t put_new_page, unsigned long private,
 			     struct list_head *ret)
 {
 	int rc;
-	int page_was_mapped = 0;
+	int old_page_state = 0;
 	struct anon_vma *anon_vma = NULL;
 	bool is_lru = !__PageMovable(src);
 	struct list_head *prev;
 
-	__migrate_page_extract(dst, &page_was_mapped, &anon_vma);
+	__migrate_page_extract(dst, &old_page_state, &anon_vma);
 	prev = dst->lru.prev;
 	list_del(&dst->lru);
 
@@ -1312,7 +1318,7 @@ static int migrate_page_move(free_page_t put_new_page, unsigned long private,
 	if (unlikely(!is_lru))
 		goto out_unlock_both;
 
-	if (page_was_mapped)
+	if (old_page_state & PAGE_WAS_MAPPED)
 		remove_migration_ptes(src, dst, false);
 
 out_unlock_both:
@@ -1351,11 +1357,12 @@ out:
 	 */
 	if (rc == -EAGAIN) {
 		list_add(&dst->lru, prev);
-		__migrate_page_record(dst, page_was_mapped, anon_vma);
+		__migrate_page_record(dst, old_page_state, anon_vma);
 		return rc;
 	}
 
-	migrate_page_undo_src(src, page_was_mapped, anon_vma, true, ret);
+	migrate_page_undo_src(src, old_page_state & PAGE_WAS_MAPPED,
+			      anon_vma, true, ret);
 	migrate_page_undo_dst(dst, true, put_new_page, private);
 
 	return rc;
@@ -1879,12 +1886,12 @@ out:
 	dst = list_first_entry(&new_pages, struct page, lru);
 	dst2 = list_next_entry(dst, lru);
 	list_for_each_entry_safe(page, page2, &unmap_pages, lru) {
-		int page_was_mapped = 0;
+		int old_page_state = 0;
 		struct anon_vma *anon_vma = NULL;
 
-		__migrate_page_extract(dst, &page_was_mapped, &anon_vma);
-		migrate_page_undo_src(page, page_was_mapped, anon_vma,
-				       true, ret_pages);
+		__migrate_page_extract(dst, &old_page_state, &anon_vma);
+		migrate_page_undo_src(page, old_page_state & PAGE_WAS_MAPPED,
+				      anon_vma, true, ret_pages);
 		list_del(&dst->lru);
 		migrate_page_undo_dst(dst, true, put_new_page, private);
 		dst = dst2;
