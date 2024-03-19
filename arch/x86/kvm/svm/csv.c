@@ -1131,8 +1131,10 @@ static int csv_pin_shared_memory(struct kvm_vcpu *vcpu,
 	if (unlikely(is_error_pfn(tmp_pfn)))
 		return -ENOMEM;
 
-	if (csv_is_mmio_pfn(tmp_pfn))
+	if (csv_is_mmio_pfn(tmp_pfn)) {
+		*pfn = tmp_pfn;
 		return 0;
+	}
 
 	if (!page_maybe_dma_pinned(pfn_to_page(tmp_pfn))) {
 		kvm_release_pfn_clean(tmp_pfn);
@@ -1243,7 +1245,7 @@ static int csv_page_fault(struct kvm_vcpu *vcpu, struct kvm_memory_slot *slot,
 	int ret = 0;
 	int psp_ret = 0;
 	int level;
-	kvm_pfn_t pfn;
+	kvm_pfn_t pfn = KVM_PFN_NOSLOT;
 	struct kvm_csv_info *csv = &to_kvm_svm_csv(vcpu->kvm)->csv_info;
 
 	if (error_code & PFERR_PRESENT_MASK)
