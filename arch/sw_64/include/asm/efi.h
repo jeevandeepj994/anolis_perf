@@ -39,4 +39,8 @@ extern unsigned long entSuspend;
 
 #define efi_call_early(f, ...) sys_table_arg->boottime->f(__VA_ARGS__)
 
+static inline void efifb_setup_from_dmi(struct screen_info *si, const char *opt)
+{
+}
+
 #endif /* _ASM_SW64_EFI_H */
