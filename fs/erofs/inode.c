@@ -11,11 +11,6 @@
 const struct file_operations rafs_v6_file_ro_fops;
 const struct address_space_operations rafs_v6_aops;
 
-/*
- * if inode is successfully read, return its inode page (or sometimes
- * the inode payload page if it's an extended inode) in order to fill
- * inline data if possible.
- */
 static void *erofs_read_inode(struct erofs_buf *buf,
 			      struct inode *inode, unsigned int *ofs)
 {
