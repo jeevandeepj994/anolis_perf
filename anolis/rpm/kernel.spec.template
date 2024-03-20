@@ -1555,9 +1555,9 @@ fi\
 %{expand:%%posttrans %{?1:%{1}-}modules}\
 /bin/kernel-install add %{KVERREL}%{?1:+%{1}} /lib/modules/%{KVERREL}%{?1:+%{1}}/vmlinuz || exit $?\
 %ifarch aarch64  \
-grubby --update-kernel /boot/vmlinuz-%{KVERREL}%{?1:+%{1}} --args="cgroup.memory=nokmem crashkernel=0M-2G:0M,2G-64G:256M,64G-:384M iommu.passthrough=1 iommu.strict=0 nospectre_bhb ssbd=force-off"\
+grubby --update-kernel /boot/vmlinuz-%{KVERREL}%{?1:+%{1}} --args="%%ARM_CMDLINE%%"\
 %else \
-grubby --update-kernel /boot/vmlinuz-%{KVERREL}%{?1:+%{1}} --args="cgroup.memory=nokmem crashkernel=0M-2G:0M,2G-8G:192M,8G-:256M"\
+grubby --update-kernel /boot/vmlinuz-%{KVERREL}%{?1:+%{1}} --args="%%X86_CMDLINE%%"\
 %endif  \
 %{nil}
 
@@ -1573,9 +1573,9 @@ then\
 fi\
 /bin/kernel-install add %{KVERREL}%{?1:+%{1}} /lib/modules/%{KVERREL}%{?1:+%{1}}/vmlinuz || exit $?\
 %ifarch aarch64  \
-grubby --update-kernel /boot/vmlinuz-%{KVERREL}%{?1:+%{1}} --args="cgroup.memory=nokmem crashkernel=0M-2G:0M,2G-64G:256M,64G-:384M iommu.passthrough=1 iommu.strict=0 nospectre_bhb ssbd=force-off kfence.sample_interval=100 kfence.booting_max=0-2G:0,2G-32G:2M,32G-:32M"\
+grubby --update-kernel /boot/vmlinuz-%{KVERREL}%{?1:+%{1}} --args="%%ARM_CMDLINE%%"\
 %else \
-grubby --update-kernel /boot/vmlinuz-%{KVERREL}%{?1:+%{1}} --args="cgroup.memory=nokmem crashkernel=0M-2G:0M,2G-8G:192M,8G-:256M kfence.sample_interval=100 kfence.booting_max=0-2G:0,2G-32G:2M,32G-:32M"\
+grubby --update-kernel /boot/vmlinuz-%{KVERREL}%{?1:+%{1}} --args="%%X86_CMDLINE%%"\
 %endif  \
 %{nil}
 
