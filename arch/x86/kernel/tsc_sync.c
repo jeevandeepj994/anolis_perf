@@ -20,6 +20,7 @@
 #include <linux/kernel.h>
 #include <linux/smp.h>
 #include <linux/nmi.h>
+#include <linux/delay.h>
 #include <asm/tsc.h>
 
 struct tsc_adjust {
@@ -207,7 +208,10 @@ bool tsc_store_and_check_tsc_adjust(bool bootcpu)
 	 */
 	mask = topology_core_cpumask(cpu);
 	refcpu = mask ? cpumask_any_but(mask, cpu) : nr_cpu_ids;
-
+	#ifdef CONFIG_DRAGONBALL_DRIVERS
+	if (sync_clock)
+		refcpu = nr_cpu_ids;
+	#endif
 	if (refcpu >= nr_cpu_ids) {
 		tsc_sanitize_first_cpu(cur, bootval, smp_processor_id(),
 				       bootcpu);
@@ -322,6 +326,9 @@ static cycles_t check_tsc_warp(unsigned int timeout)
 			cur_warps = nr_warps;
 			arch_spin_unlock(&sync_lock);
 		}
+
+		/* sleep 20ns to let peer have chance to hold the sync_lock */
+		ndelay(20);
 	}
 	WARN(!(now-start),
 		"Warning: zero tsc calibration delta: %Ld [max: %Ld]\n",
@@ -371,7 +378,7 @@ void check_tsc_sync_source(int cpu)
 	if (!boot_cpu_has(X86_FEATURE_TSC_ADJUST))
 		atomic_set(&test_runs, 1);
 	else
-		atomic_set(&test_runs, 3);
+		atomic_set(&test_runs, 10);
 retry:
 	/*
 	 * Wait for the target to start or to skip the test:

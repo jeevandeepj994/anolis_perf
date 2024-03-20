@@ -586,6 +586,23 @@ static bool msi_check_reservation_mode(struct irq_domain *domain,
 	return desc->msi_attrib.is_msix || desc->msi_attrib.maskbit;
 }
 
+/* This function is used for check whether the cpu affinity belongs to the
+ * online cpus. When we passthrough the nvme devices, the kernel will allocate
+ * maxcpus+1 MSI irqs and then activate them. In vcpu hotplug situations, it
+ * may happen that kernel activates the offline cpus when bootcpus < maxcpus.
+ * To avoid this conflict, this function check the affinities.
+ */
+static inline bool check_affinity_mask_online(struct irq_affinity_desc *affinity)
+{
+	int cpu;
+
+	for_each_cpu(cpu, &affinity->mask)
+		if (cpu_online(cpu))
+			return true;
+
+	return false;
+}
+
 int __msi_domain_alloc_irqs(struct irq_domain *domain, struct device *dev,
 			    int nvec)
 {
@@ -652,6 +669,9 @@ int __msi_domain_alloc_irqs(struct irq_domain *domain, struct device *dev,
 		goto skip_activate;
 
 	__for_each_new_msi_vector(desc, i, msi_last_list, msi_list) {
+		if (desc->affinity
+			&& !check_affinity_mask_online(desc->affinity))
+			continue;
 		if (desc->irq == i) {
 			virq = desc->irq;
 			dev_dbg(dev, "irq [%d-%d] for MSI\n",
