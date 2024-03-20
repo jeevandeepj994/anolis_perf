@@ -1993,6 +1993,11 @@ int vprintk_store(int facility, int level,
 	size_t text_len;
 	enum log_flags lflags = 0;
 
+#ifdef CONFIG_SW64_RRK
+	extern int sw64_printk(const char *fmt, va_list args);
+	sw64_printk(fmt, args);
+#endif
+
 	/*
 	 * The printf needs to come first; we need the syslog
 	 * prefix which might be passed-in as a parameter.
