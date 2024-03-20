@@ -22,19 +22,16 @@ typedef bool (*smp_cond_func_t)(int cpu, void *info);
  * structure shares (partial) layout with struct irq_work
  */
 struct __call_single_data {
-	CK_KABI_REPLACE(
-		union {
-			struct __call_single_node node;
-			struct {
-				struct llist_node llist;
-				unsigned int flags;
+	union {
+		struct __call_single_node node;
+		struct {
+			struct llist_node llist;
+			unsigned int flags;
 #ifdef CONFIG_64BIT
-				u16 src;
-				u16 dst;
+			u16 src, dst;
 #endif
-			};
-		},
-		struct __call_single_node node)
+		}; /* Not used any more! */
+	};
 	smp_call_func_t func;
 	void *info;
 };
