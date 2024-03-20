@@ -215,8 +215,8 @@ struct iommu_iotlb_gather {
 	size_t			pgsize;
 	struct page		*freelist;
 
-	bool            queued;
-	CK_KABI_RESERVE(1)
+	CK_KABI_USE(1, bool	queued)
+	CK_KABI_RESERVE(2)
 };
 
 /**
