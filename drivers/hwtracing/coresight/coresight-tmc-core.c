@@ -638,7 +638,7 @@ static int __init tmc_init(void)
 		return ret;
 	}
 
-	tmc_class = class_create(THIS_MODULE, "tmc");
+	tmc_class = class_create("tmc");
 	if (IS_ERR(tmc_class)) {
 		pr_err("tmc: failed to create class\n");
 		unregister_chrdev_region(tmc_major, TMC_DEV_MAX);
