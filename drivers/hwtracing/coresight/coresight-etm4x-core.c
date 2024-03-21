@@ -20,6 +20,7 @@
 #include <linux/stat.h>
 #include <linux/clk.h>
 #include <linux/cpu.h>
+#include <linux/acpi.h>
 #include <linux/cpu_pm.h>
 #include <linux/coresight.h>
 #include <linux/coresight-pmu.h>
@@ -644,7 +645,7 @@ static int etm4_parse_event_config(struct coresight_device *csdev,
 	struct etmv4_config *config = &drvdata->config;
 	struct perf_event_attr *attr = &event->attr;
 	unsigned long cfg_hash;
-	int preset;
+	int preset, cc_threshold;
 
 	/* Clear configuration from previous run */
 	memset(config, 0, sizeof(struct etmv4_config));
@@ -667,7 +668,12 @@ static int etm4_parse_event_config(struct coresight_device *csdev,
 	if (attr->config & BIT(ETM_OPT_CYCACC)) {
 		config->cfg |= TRCCONFIGR_CCI;
 		/* TRM: Must program this for cycacc to work */
-		config->ccctlr = ETM_CYC_THRESHOLD_DEFAULT;
+               cc_threshold = attr->config3 & ETM_CYC_THRESHOLD_MASK;
+               if (!cc_threshold)
+                       cc_threshold = ETM_CYC_THRESHOLD_DEFAULT;
+               if (cc_threshold < drvdata->ccitmin)
+                       cc_threshold = drvdata->ccitmin;
+               config->ccctlr = cc_threshold;
 	}
 	if (attr->config & BIT(ETM_OPT_TS)) {
 		/*
@@ -1098,7 +1104,8 @@ static bool etm4_init_iomem_access(struct etmv4_drvdata *drvdata,
 	 * with MMIO. But we cannot touch the OSLK until we are
 	 * sure this is an ETM. So rely only on the TRCDEVARCH.
 	 */
-	if ((devarch & ETM_DEVARCH_ID_MASK) != ETM_DEVARCH_ETMv4x_ARCH) {
+	if ((devarch & ETM_DEVARCH_ID_MASK) != ETM_DEVARCH_ETMv4x_ARCH &&
+		(devarch & ETM_DEVARCH_ID_MASK) != ETM_DEVARCH_ETE_ARCH) {
 		pr_warn_once("TRCDEVARCH doesn't match ETMv4 architecture\n");
 		return false;
 	}
@@ -2295,6 +2302,7 @@ static const struct amba_id etm4_ids[] = {
 	CS_AMBA_UCI_ID(0x000cc0af, uci_id_etm4),/* Marvell ThunderX2 */
 	CS_AMBA_UCI_ID(0x000b6d01, uci_id_etm4),/* HiSilicon-Hip08 */
 	CS_AMBA_UCI_ID(0x000b6d02, uci_id_etm4),/* HiSilicon-Hip09 */
+	CS_AMBA_UCI_ID(0x000bbd49, uci_id_etm4),/* YiTian710 */
 	/*
 	 * Match all PIDs with ETM4 DEVARCH. No need for adding any of the new
 	 * CPUs to the list here.
@@ -2351,6 +2359,7 @@ static const struct of_device_id etm4_sysreg_match[] = {
 #ifdef CONFIG_ACPI
 static const struct acpi_device_id etm4x_acpi_ids[] = {
 	{"ARMHC500", 0}, /* ARM CoreSight ETM4x */
+	{ "BABA6000", 0 },
 	{}
 };
 MODULE_DEVICE_TABLE(acpi, etm4x_acpi_ids);
