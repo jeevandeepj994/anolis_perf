@@ -35,6 +35,7 @@
 
 #define DEVICE_NAME		"sev"
 #define SEV_FW_FILE		"amd/sev.fw"
+#define CSV_FW_FILE		"hygon/csv.fw"
 #define SEV_FW_NAME_SIZE	64
 
 static DEFINE_MUTEX(sev_cmd_mutex);
@@ -98,6 +99,11 @@ static inline bool sev_version_greater_or_equal(u8 maj, u8 min)
 		return true;
 
 	return false;
+}
+
+static inline bool csv_version_greater_or_equal(u32 build)
+{
+	return hygon_csv_build >= build;
 }
 
 static void sev_irq_handler(int irq, void *data, unsigned int status)
@@ -750,6 +756,14 @@ static int sev_get_firmware(struct device *dev,
 	char fw_name_specific[SEV_FW_NAME_SIZE];
 	char fw_name_subset[SEV_FW_NAME_SIZE];
 
+	if (boot_cpu_data.x86_vendor == X86_VENDOR_HYGON) {
+		/* Check for CSV FW to using generic name: csv.fw */
+		if (firmware_request_nowarn(firmware, CSV_FW_FILE, dev) >= 0)
+			return 0;
+		else
+			return -ENOENT;
+	}
+
 	snprintf(fw_name_specific, sizeof(fw_name_specific),
 		 "amd/amd_sev_fam%.2xh_model%.2xh.sbin",
 		 boot_cpu_data.x86, boot_cpu_data.x86_model);
@@ -788,7 +802,9 @@ static int sev_update_firmware(struct device *dev)
 	struct page *p;
 	u64 data_size;
 
-	if (!sev_version_greater_or_equal(0, 15)) {
+	if (!sev_version_greater_or_equal(0, 15) &&
+	    (boot_cpu_data.x86_vendor != X86_VENDOR_HYGON ||
+	     !csv_version_greater_or_equal(1667))) {
 		dev_dbg(dev, "DOWNLOAD_FIRMWARE not supported\n");
 		return -1;
 	}
@@ -834,9 +850,14 @@ static int sev_update_firmware(struct device *dev)
 		ret = sev_do_cmd(SEV_CMD_DOWNLOAD_FIRMWARE, data, &error);
 
 	if (ret)
-		dev_dbg(dev, "Failed to update SEV firmware: %#x\n", error);
+		dev_dbg(dev, "Failed to update %s firmware: %#x\n",
+			(boot_cpu_data.x86_vendor == X86_VENDOR_HYGON)
+				? "CSV" : "SEV",
+			error);
 	else
-		dev_info(dev, "SEV firmware update successful\n");
+		dev_info(dev, "%s firmware update successful\n",
+			 (boot_cpu_data.x86_vendor == X86_VENDOR_HYGON)
+				? "CSV" : "SEV");
 
 	__free_pages(p, order);
 
@@ -1088,6 +1109,73 @@ e_free_pdh:
 	return ret;
 }
 
+static int csv_ioctl_do_download_firmware(struct sev_issue_cmd *argp)
+{
+	struct sev_data_download_firmware *data = NULL;
+	struct csv_user_data_download_firmware input;
+	int ret, order;
+	struct page *p;
+	u64 data_size;
+
+	/* Only support DOWNLOAD_FIRMWARE if build greater or equal 1667 */
+	if (!csv_version_greater_or_equal(1667)) {
+		pr_err("DOWNLOAD_FIRMWARE not supported\n");
+		return -EIO;
+	}
+
+	if (copy_from_user(&input, (void __user *)argp->data, sizeof(input)))
+		return -EFAULT;
+
+	if (!input.address) {
+		argp->error = SEV_RET_INVALID_ADDRESS;
+		return -EINVAL;
+	}
+
+	if (!input.length || input.length > CSV_FW_MAX_SIZE) {
+		argp->error = SEV_RET_INVALID_LEN;
+		return -EINVAL;
+	}
+
+	/*
+	 * CSV FW expects the physical address given to it to be 32
+	 * byte aligned. Memory allocated has structure placed at the
+	 * beginning followed by the firmware being passed to the CSV
+	 * FW. Allocate enough memory for data structure + alignment
+	 * padding + CSV FW.
+	 */
+	data_size = ALIGN(sizeof(struct sev_data_download_firmware), 32);
+
+	order = get_order(input.length + data_size);
+	p = alloc_pages(GFP_KERNEL, order);
+	if (!p)
+		return -ENOMEM;
+
+	/*
+	 * Copy firmware data to a kernel allocated contiguous
+	 * memory region.
+	 */
+	data = page_address(p);
+	if (copy_from_user((void *)(page_address(p) + data_size),
+			   (void *)input.address, input.length)) {
+		ret = -EFAULT;
+		goto err_free_page;
+	}
+
+	data->address = __psp_pa(page_address(p) + data_size);
+	data->len = input.length;
+
+	ret = __sev_do_cmd_locked(SEV_CMD_DOWNLOAD_FIRMWARE, data, &argp->error);
+	if (ret)
+		pr_err("Failed to update CSV firmware: %#x\n", argp->error);
+	else
+		pr_info("CSV firmware update successful\n");
+
+err_free_page:
+	__free_pages(p, order);
+
+	return ret;
+}
+
 static int csv_ioctl_do_hgsc_import(struct sev_issue_cmd *argp)
 {
 	struct csv_user_data_hgsc_cert_import input;
@@ -1160,6 +1248,15 @@ static long sev_ioctl(struct file *file, unsigned int ioctl, unsigned long arg)
 
 	if (boot_cpu_data.x86_vendor == X86_VENDOR_HYGON) {
 		switch (input.cmd) {
+		case CSV_PLATFORM_INIT:
+			ret = __sev_platform_init_locked(&input.error);
+			goto result_to_user;
+		case CSV_PLATFORM_SHUTDOWN:
+			ret = __sev_platform_shutdown_locked(&input.error);
+			goto result_to_user;
+		case CSV_DOWNLOAD_FIRMWARE:
+			ret = csv_ioctl_do_download_firmware(&input);
+			goto result_to_user;
 		case CSV_HGSC_CERT_IMPORT:
 			ret = csv_ioctl_do_hgsc_import(&input);
 			goto result_to_user;
