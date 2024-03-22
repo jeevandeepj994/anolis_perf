@@ -1880,6 +1880,7 @@ static void free_slab(struct kmem_cache *s, struct page *page)
 
 static void discard_slab(struct kmem_cache *s, struct page *page)
 {
+	WARN_ON_ONCE(s->flags & SLAB_OOT);
 	dec_slabs_node(s, page_to_nid(page), page->objects);
 	free_slab(s, page);
 }
@@ -2405,7 +2406,8 @@ static void put_cpu_partial(struct kmem_cache *s, struct page *page, int drain)
 		if (oldpage) {
 			pobjects = oldpage->pobjects;
 			pages = oldpage->pages;
-			if (drain && pobjects > slub_cpu_partial(s)) {
+			if (drain && pobjects > slub_cpu_partial(s)
+					&& !(s->flags & SLAB_OOT)) {
 				unsigned long flags;
 				/*
 				 * partial array is full. Move the existing
@@ -3068,7 +3070,8 @@ static void __slab_free(struct kmem_cache *s, struct page *page,
 		return;
 	}
 
-	if (unlikely(!new.inuse && n->nr_partial >= s->min_partial))
+	if (unlikely(!new.inuse && n->nr_partial >= s->min_partial)
+				&& !(s->flags & SLAB_OOT))
 		goto slab_empty;
 
 	/*
@@ -4010,6 +4013,47 @@ void *__kmalloc(size_t size, gfp_t flags)
 }
 EXPORT_SYMBOL(__kmalloc);
 
+#define DEFINE_OOT_FUNC___kmalloc(index)				\
+void *oot___kmalloc_ ## index(size_t size, gfp_t flags)			\
+{									\
+	struct kmem_cache *s;						\
+	void *ret;							\
+									\
+	if (unlikely(size > KMALLOC_MAX_CACHE_SIZE))			\
+		return kmalloc_large(size, flags);			\
+									\
+	s = oot_kmalloc_slab(index, size, flags);			\
+									\
+	if (unlikely(ZERO_OR_NULL_PTR(s)))				\
+		return s;						\
+									\
+	ret = slab_alloc(s, flags, _RET_IP_, size);			\
+									\
+	trace_kmalloc(_RET_IP_, ret, size, s->size, flags);		\
+									\
+	ret = kasan_kmalloc(s, ret, size, flags);			\
+									\
+	return ret;							\
+}									\
+EXPORT_SYMBOL(oot___kmalloc_ ## index)
+
+DEFINE_OOT_FUNC___kmalloc(0);
+DEFINE_OOT_FUNC___kmalloc(1);
+DEFINE_OOT_FUNC___kmalloc(2);
+DEFINE_OOT_FUNC___kmalloc(3);
+DEFINE_OOT_FUNC___kmalloc(4);
+DEFINE_OOT_FUNC___kmalloc(5);
+DEFINE_OOT_FUNC___kmalloc(6);
+DEFINE_OOT_FUNC___kmalloc(7);
+DEFINE_OOT_FUNC___kmalloc(8);
+DEFINE_OOT_FUNC___kmalloc(9);
+DEFINE_OOT_FUNC___kmalloc(10);
+DEFINE_OOT_FUNC___kmalloc(11);
+DEFINE_OOT_FUNC___kmalloc(12);
+DEFINE_OOT_FUNC___kmalloc(13);
+DEFINE_OOT_FUNC___kmalloc(14);
+DEFINE_OOT_FUNC___kmalloc(15);
+
 #ifdef CONFIG_NUMA
 static void *kmalloc_large_node(size_t size, gfp_t flags, int node)
 {
@@ -4057,6 +4101,55 @@ void *__kmalloc_node(size_t size, gfp_t flags, int node)
 	return ret;
 }
 EXPORT_SYMBOL(__kmalloc_node);
+
+#define DEFINE_OOT_FUNC___kmalloc_node(index)				\
+void *oot___kmalloc_node_ ## index(size_t size, gfp_t flags, int node)	\
+{									\
+	struct kmem_cache *s;						\
+	void *ret;							\
+									\
+	if (unlikely(size > KMALLOC_MAX_CACHE_SIZE)) {			\
+		ret = kmalloc_large_node(size, flags, node);		\
+									\
+		trace_kmalloc_node(_RET_IP_, ret,			\
+				   size, PAGE_SIZE << get_order(size),	\
+				   flags, node);			\
+									\
+		return ret;						\
+	}								\
+									\
+	s = oot_kmalloc_slab(index, size, flags);			\
+									\
+	if (unlikely(ZERO_OR_NULL_PTR(s)))				\
+		return s;						\
+									\
+	ret = slab_alloc_node(s, flags, node, _RET_IP_, size);		\
+									\
+	trace_kmalloc_node(_RET_IP_, ret, size, s->size, flags, node);	\
+									\
+	ret = kasan_kmalloc(s, ret, size, flags);			\
+									\
+	return ret;							\
+}									\
+EXPORT_SYMBOL(oot___kmalloc_node_ ## index)
+
+DEFINE_OOT_FUNC___kmalloc_node(0);
+DEFINE_OOT_FUNC___kmalloc_node(1);
+DEFINE_OOT_FUNC___kmalloc_node(2);
+DEFINE_OOT_FUNC___kmalloc_node(3);
+DEFINE_OOT_FUNC___kmalloc_node(4);
+DEFINE_OOT_FUNC___kmalloc_node(5);
+DEFINE_OOT_FUNC___kmalloc_node(6);
+DEFINE_OOT_FUNC___kmalloc_node(7);
+DEFINE_OOT_FUNC___kmalloc_node(8);
+DEFINE_OOT_FUNC___kmalloc_node(9);
+DEFINE_OOT_FUNC___kmalloc_node(10);
+DEFINE_OOT_FUNC___kmalloc_node(11);
+DEFINE_OOT_FUNC___kmalloc_node(12);
+DEFINE_OOT_FUNC___kmalloc_node(13);
+DEFINE_OOT_FUNC___kmalloc_node(14);
+DEFINE_OOT_FUNC___kmalloc_node(15);
+
 #endif	/* CONFIG_NUMA */
 
 #ifdef CONFIG_HARDENED_USERCOPY
@@ -4427,6 +4520,7 @@ void __init kmem_cache_init(void)
 	/* Now we can use the kmem_cache to allocate kmalloc slabs */
 	setup_kmalloc_cache_index_table();
 	create_kmalloc_caches(0);
+	create_oot_kmalloc_caches(SLAB_OOT);
 
 	/* Setup random freelists for each cache */
 	init_freelist_randomization();
