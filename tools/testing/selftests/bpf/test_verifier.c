@@ -1183,7 +1183,7 @@ static struct bpf_test tests[] = {
 			BPF_ST_MEM(BPF_DW, BPF_REG_10, 8, 0),
 			BPF_EXIT_INSN(),
 		},
-		.errstr = "invalid stack",
+		.errstr = "invalid write to stack",
 		.result = REJECT,
 	},
 	{
@@ -2859,7 +2859,7 @@ static struct bpf_test tests[] = {
 			BPF_EXIT_INSN(),
 		},
 		.result = REJECT,
-		.errstr = "invalid stack off=-79992 size=8",
+		.errstr = "invalid write to stack R1 off=-79992 size=8",
 		.errstr_unpriv = "R1 stack pointer arithmetic goes out of range",
 	},
 	{
@@ -2872,7 +2872,7 @@ static struct bpf_test tests[] = {
 			BPF_EXIT_INSN(),
 		},
 		.result = REJECT,
-		.errstr = "invalid stack off=0 size=8",
+		.errstr = "invalid write to stack R1 off=0 size=8",
 	},
 	{
 		"unpriv: return pointer",
@@ -2987,8 +2987,9 @@ static struct bpf_test tests[] = {
 			BPF_EXIT_INSN(),
 		},
 		.fixup_map_hash_8b = { 3 },
-		.errstr = "invalid indirect read from stack off -8+0 size 8",
-		.result = REJECT,
+		.errstr_unpriv = "invalid indirect read from stack R2 off -8+0 size 8",
+		.result_unpriv = REJECT,
+		.result = ACCEPT,
 	},
 	{
 		"unpriv: mangle pointer on stack 1",
@@ -3539,7 +3540,7 @@ static struct bpf_test tests[] = {
 			BPF_EXIT_INSN(),
 		},
 		.result = REJECT,
-		.errstr = "invalid read from stack off -8+0 size 8",
+		.errstr = "invalid read from stack R6 off=-8 size=8",
 		.prog_type = BPF_PROG_TYPE_SCHED_CLS,
 	},
 	{
@@ -3590,7 +3591,7 @@ static struct bpf_test tests[] = {
 			BPF_EXIT_INSN(),
 		},
 		.result = REJECT,
-		.errstr = "invalid stack type R3",
+		.errstr = "invalid zero-sized read",
 		.prog_type = BPF_PROG_TYPE_SCHED_CLS,
 	},
 	{
@@ -3743,7 +3744,7 @@ static struct bpf_test tests[] = {
 			BPF_EXIT_INSN(),
 		},
 		.result = REJECT,
-		.errstr = "invalid stack type R3 off=-513 access_size=8",
+		.errstr = "invalid indirect access to stack R3 off=-513 size=8",
 		.prog_type = BPF_PROG_TYPE_SCHED_CLS,
 	},
 	{
@@ -3760,7 +3761,7 @@ static struct bpf_test tests[] = {
 			BPF_EXIT_INSN(),
 		},
 		.result = REJECT,
-		.errstr = "invalid stack type R3 off=-1 access_size=8",
+		.errstr = "invalid indirect access to stack R3 off=-1 size=8",
 		.prog_type = BPF_PROG_TYPE_SCHED_CLS,
 	},
 	{
@@ -3828,7 +3829,7 @@ static struct bpf_test tests[] = {
 			BPF_EXIT_INSN(),
 		},
 		.result = REJECT,
-		.errstr = "invalid stack type R3 off=-512 access_size=0",
+		.errstr = "invalid zero-sized read",
 		.prog_type = BPF_PROG_TYPE_SCHED_CLS,
 	},
 	{
@@ -6066,6 +6067,25 @@ static struct bpf_test tests[] = {
 		.flags = F_NEEDS_EFFICIENT_UNALIGNED_ACCESS,
 	},
 	{
+		"map lookup and null branch prediction",
+		.insns = {
+		BPF_MOV64_IMM(BPF_REG_1, 10),
+		BPF_STX_MEM(BPF_DW, BPF_REG_10, BPF_REG_1, -8),
+		BPF_MOV64_REG(BPF_REG_2, BPF_REG_10),
+		BPF_ALU64_IMM(BPF_ADD, BPF_REG_2, -8),
+		BPF_LD_MAP_FD(BPF_REG_1, 0),
+		BPF_RAW_INSN(BPF_JMP | BPF_CALL, 0, 0, 0, BPF_FUNC_map_lookup_elem),
+		BPF_MOV64_REG(BPF_REG_6, BPF_REG_0),
+		BPF_JMP_IMM(BPF_JEQ, BPF_REG_6, 0, 2),
+		BPF_JMP_IMM(BPF_JNE, BPF_REG_6, 0, 1),
+		BPF_ALU64_IMM(BPF_ADD, BPF_REG_10, 10),
+		BPF_EXIT_INSN(),
+		},
+		.fixup_map_hash_8b = { 4 },
+		.prog_type = BPF_PROG_TYPE_SCHED_CLS,
+		.result = ACCEPT,
+	},
+	{
 		"constant register |= constant should keep constant type",
 		.insns = {
 			BPF_MOV64_REG(BPF_REG_1, BPF_REG_10),
@@ -6090,7 +6110,7 @@ static struct bpf_test tests[] = {
 			BPF_EMIT_CALL(BPF_FUNC_probe_read),
 			BPF_EXIT_INSN(),
 		},
-		.errstr = "invalid stack type R1 off=-48 access_size=58",
+		.errstr = "invalid indirect access to stack R1 off=-48 size=58",
 		.result = REJECT,
 		.prog_type = BPF_PROG_TYPE_TRACEPOINT,
 	},
@@ -6121,7 +6141,7 @@ static struct bpf_test tests[] = {
 			BPF_EMIT_CALL(BPF_FUNC_probe_read),
 			BPF_EXIT_INSN(),
 		},
-		.errstr = "invalid stack type R1 off=-48 access_size=58",
+		.errstr = "invalid indirect access to stack R1 off=-48 size=58",
 		.result = REJECT,
 		.prog_type = BPF_PROG_TYPE_TRACEPOINT,
 	},
@@ -7556,6 +7576,7 @@ static struct bpf_test tests[] = {
 			BPF_EXIT_INSN(),
 		},
 		.fixup_map_hash_48b = { 3 },
+		.errstr_unpriv = "leaking pointer from stack off -8",
 		.errstr = "R0 invalid mem access 'inv'",
 		.result = REJECT,
 		.flags = F_NEEDS_EFFICIENT_UNALIGNED_ACCESS,
@@ -7626,7 +7647,7 @@ static struct bpf_test tests[] = {
 			BPF_EMIT_CALL(BPF_FUNC_probe_read),
 			BPF_EXIT_INSN(),
 		},
-		.errstr = "invalid indirect read from stack off -64+0 size 64",
+		.errstr = "invalid indirect read from stack R1 off -64+0 size 64",
 		.result = REJECT,
 		.prog_type = BPF_PROG_TYPE_TRACEPOINT,
 	},
@@ -7646,7 +7667,7 @@ static struct bpf_test tests[] = {
 			BPF_MOV64_IMM(BPF_REG_0, 0),
 			BPF_EXIT_INSN(),
 		},
-		.errstr = "invalid stack type R1 off=-64 access_size=65",
+		.errstr = "invalid indirect access to stack R1 off=-64 size=65",
 		.result = REJECT,
 		.prog_type = BPF_PROG_TYPE_TRACEPOINT,
 	},
@@ -7723,7 +7744,7 @@ static struct bpf_test tests[] = {
 			BPF_MOV64_IMM(BPF_REG_0, 0),
 			BPF_EXIT_INSN(),
 		},
-		.errstr = "invalid stack type R1 off=-64 access_size=65",
+		.errstr = "invalid indirect access to stack R1 off=-64 size=65",
 		.result = REJECT,
 		.prog_type = BPF_PROG_TYPE_TRACEPOINT,
 	},
@@ -7743,7 +7764,7 @@ static struct bpf_test tests[] = {
 			BPF_MOV64_IMM(BPF_REG_0, 0),
 			BPF_EXIT_INSN(),
 		},
-		.errstr = "invalid stack type R1 off=-64 access_size=65",
+		.errstr = "invalid indirect access to stack R1 off=-64 size=65",
 		.result = REJECT,
 		.prog_type = BPF_PROG_TYPE_TRACEPOINT,
 	},
@@ -7781,7 +7802,7 @@ static struct bpf_test tests[] = {
 			BPF_MOV64_IMM(BPF_REG_0, 0),
 			BPF_EXIT_INSN(),
 		},
-		.errstr = "invalid indirect read from stack off -64+0 size 64",
+		.errstr = "invalid indirect read from stack R1 off -64+0 size 64",
 		.result = REJECT,
 		.prog_type = BPF_PROG_TYPE_TRACEPOINT,
 	},
@@ -8178,7 +8199,7 @@ static struct bpf_test tests[] = {
 			BPF_LDX_MEM(BPF_DW, BPF_REG_1, BPF_REG_10, -16),
 			BPF_EXIT_INSN(),
 		},
-		.errstr = "invalid indirect read from stack off -64+32 size 64",
+		.errstr = "invalid indirect read from stack R1 off -64+32 size 64",
 		.result = REJECT,
 		.prog_type = BPF_PROG_TYPE_TRACEPOINT,
 	},
@@ -9531,7 +9552,7 @@ static struct bpf_test tests[] = {
 		.prog_type = BPF_PROG_TYPE_LWT_IN,
 	},
 	{
-		"variable-offset stack access",
+		"variable-offset stack read, priv vs unpriv",
 		.insns = {
 			/* Fill the top 8 bytes of the stack */
 			BPF_ST_MEM(BPF_DW, BPF_REG_10, -8, 0),
@@ -9544,13 +9565,108 @@ static struct bpf_test tests[] = {
 			 * we don't know which
 			 */
 			BPF_ALU64_REG(BPF_ADD, BPF_REG_2, BPF_REG_10),
-			/* dereference it */
+			/* dereference it for a stack read */
 			BPF_LDX_MEM(BPF_W, BPF_REG_0, BPF_REG_2, 0),
+			BPF_MOV64_IMM(BPF_REG_0, 0),
 			BPF_EXIT_INSN(),
 		},
-		.errstr = "variable stack access var_off=(0xfffffffffffffff8; 0x4)",
+		.result = ACCEPT,
+		.result_unpriv = REJECT,
+		.errstr_unpriv = "R2 variable stack access prohibited for !root",
+		.prog_type = BPF_PROG_TYPE_CGROUP_SKB,
+	},
+	{
+		"variable-offset stack read, uninitialized",
+		.insns = {
+		/* Get an unknown value */
+		BPF_LDX_MEM(BPF_W, BPF_REG_2, BPF_REG_1, 0),
+		/* Make it small and 4-byte aligned */
+		BPF_ALU64_IMM(BPF_AND, BPF_REG_2, 4),
+		BPF_ALU64_IMM(BPF_SUB, BPF_REG_2, 8),
+		/* add it to fp.  We now have either fp-4 or fp-8, but
+		 * we don't know which
+		 */
+		BPF_ALU64_REG(BPF_ADD, BPF_REG_2, BPF_REG_10),
+		/* dereference it for a stack read */
+		BPF_LDX_MEM(BPF_W, BPF_REG_0, BPF_REG_2, 0),
+		BPF_MOV64_IMM(BPF_REG_0, 0),
+		BPF_EXIT_INSN(),
+		},
 		.result = REJECT,
+		.errstr = "invalid variable-offset read from stack R2",
 		.prog_type = BPF_PROG_TYPE_LWT_IN,
+	},
+	{
+		"variable-offset stack write, priv vs unpriv",
+		.insns = {
+		/* Get an unknown value */
+		BPF_LDX_MEM(BPF_W, BPF_REG_2, BPF_REG_1, 0),
+		/* Make it small and 8-byte aligned */
+		BPF_ALU64_IMM(BPF_AND, BPF_REG_2, 8),
+		BPF_ALU64_IMM(BPF_SUB, BPF_REG_2, 16),
+		/* Add it to fp.  We now have either fp-8 or fp-16, but
+		 * we don't know which
+		 */
+		BPF_ALU64_REG(BPF_ADD, BPF_REG_2, BPF_REG_10),
+		/* Dereference it for a stack write */
+		BPF_ST_MEM(BPF_DW, BPF_REG_2, 0, 0),
+		/* Now read from the address we just wrote. This shows
+		 * that, after a variable-offset write, a priviledged
+		 * program can read the slots that were in the range of
+		 * that write (even if the verifier doesn't actually know
+		 * if the slot being read was really written to or not.
+		 */
+		BPF_LDX_MEM(BPF_DW, BPF_REG_3, BPF_REG_2, 0),
+		BPF_MOV64_IMM(BPF_REG_0, 0),
+		BPF_EXIT_INSN(),
+		},
+		/* Variable stack access is rejected for unprivileged.
+		 */
+		.errstr_unpriv = "R2 variable stack access prohibited for !root",
+		.result_unpriv = REJECT,
+		.result = ACCEPT,
+	},
+	{
+		"variable-offset stack write clobbers spilled regs",
+		.insns = {
+		/* Dummy instruction; needed because we need to patch the next one
+		 * and we can't patch the first instruction.
+		 */
+		BPF_MOV64_IMM(BPF_REG_6, 0),
+		/* Make R0 a map ptr */
+		BPF_LD_MAP_FD(BPF_REG_0, 0),
+		/* Get an unknown value */
+		BPF_LDX_MEM(BPF_W, BPF_REG_2, BPF_REG_1, 0),
+		/* Make it small and 8-byte aligned */
+		BPF_ALU64_IMM(BPF_AND, BPF_REG_2, 8),
+		BPF_ALU64_IMM(BPF_SUB, BPF_REG_2, 16),
+		/* Add it to fp. We now have either fp-8 or fp-16, but
+		 * we don't know which.
+		 */
+		BPF_ALU64_REG(BPF_ADD, BPF_REG_2, BPF_REG_10),
+		/* Spill R0(map ptr) into stack */
+		BPF_STX_MEM(BPF_DW, BPF_REG_10, BPF_REG_0, -8),
+		/* Dereference the unknown value for a stack write */
+		BPF_ST_MEM(BPF_DW, BPF_REG_2, 0, 0),
+		/* Fill the register back into R2 */
+		BPF_LDX_MEM(BPF_DW, BPF_REG_2, BPF_REG_10, -8),
+		/* Try to dereference R2 for a memory load */
+		BPF_LDX_MEM(BPF_DW, BPF_REG_0, BPF_REG_2, 8),
+		BPF_EXIT_INSN(),
+		},
+		.fixup_map_hash_8b = { 1 },
+		/* The unpriviledged case is not too interesting; variable
+		 * stack access is rejected.
+		 */
+		.errstr_unpriv = "R2 variable stack access prohibited for !root",
+		.result_unpriv = REJECT,
+		/* In the priviledged case, dereferencing a spilled-and-then-filled
+		 * register is rejected because the previous variable offset stack
+		 * write might have overwritten the spilled pointer (i.e. we lose track
+		 * of the spilled register when we analyze the write).
+		 */
+		.errstr = "R2 invalid mem access 'inv'",
+		.result = REJECT,
 	},
 	{
 		"indirect variable-offset stack access, uninitialized",
@@ -9575,7 +9691,7 @@ static struct bpf_test tests[] = {
 		BPF_MOV64_IMM(BPF_REG_0, 0),
 		BPF_EXIT_INSN(),
 		},
-		.errstr = "invalid indirect read from stack var_off",
+		.errstr = "invalid indirect read from stack R4 var_off",
 		.result = REJECT,
 		.prog_type = BPF_PROG_TYPE_SOCK_OPS,
 	},
@@ -9603,7 +9719,7 @@ static struct bpf_test tests[] = {
 		BPF_MOV64_IMM(BPF_REG_0, 0),
 		BPF_EXIT_INSN(),
 		},
-		.errstr = "R4 unbounded indirect variable offset stack access",
+		.errstr = "invalid unbounded variable-offset indirect access to stack R4",
 		.result = REJECT,
 		.prog_type = BPF_PROG_TYPE_SOCK_OPS,
 	},
@@ -9629,7 +9745,7 @@ static struct bpf_test tests[] = {
 			BPF_EXIT_INSN(),
 		},
 		.fixup_map_hash_8b = { 5 },
-		.errstr = "R2 max value is outside of stack bound",
+		.errstr = "invalid variable-offset indirect access to stack R2",
 		.result = REJECT,
 		.prog_type = BPF_PROG_TYPE_LWT_IN,
 	},
@@ -9654,7 +9770,7 @@ static struct bpf_test tests[] = {
 		BPF_EXIT_INSN(),
 		},
 		.fixup_map_hash_8b = { 5 },
-		.errstr = "R2 min value is outside of stack bound",
+		.errstr = "invalid variable-offset indirect access to stack R2",
 		.result = REJECT,
 		.prog_type = BPF_PROG_TYPE_LWT_IN,
 	},
@@ -9679,7 +9795,7 @@ static struct bpf_test tests[] = {
 		BPF_EXIT_INSN(),
 		},
 		.fixup_map_hash_8b = { 5 },
-		.errstr = "invalid indirect read from stack var_off",
+		.errstr = "invalid indirect read from stack R2 var_off",
 		.result = REJECT,
 		.prog_type = BPF_PROG_TYPE_LWT_IN,
 	},
@@ -9704,7 +9820,7 @@ static struct bpf_test tests[] = {
 		BPF_EXIT_INSN(),
 		},
 		.fixup_map_hash_8b = { 5 },
-		.errstr = "invalid indirect read from stack var_off",
+		.errstr = "invalid indirect read from stack R2 var_off",
 		.result = REJECT,
 		.prog_type = BPF_PROG_TYPE_LWT_IN,
 	},
@@ -9730,7 +9846,7 @@ static struct bpf_test tests[] = {
 		BPF_EXIT_INSN(),
 		},
 		.fixup_map_hash_8b = { 6 },
-		.errstr_unpriv = "R2 stack pointer arithmetic goes out of range, prohibited for !root",
+		.errstr_unpriv = "R2 variable stack access prohibited for !root",
 		.result_unpriv = REJECT,
 		.result = ACCEPT,
 		.prog_type = BPF_PROG_TYPE_CGROUP_SKB,
@@ -12519,7 +12635,7 @@ static struct bpf_test tests[] = {
 		.prog_type = BPF_PROG_TYPE_XDP,
 		.fixup_map_hash_8b = { 23 },
 		.result = REJECT,
-		.errstr = "invalid read from stack off -16+0 size 8",
+		.errstr = "invalid read from stack R7 off=-16 size=8",
 	},
 	{
 		"calls: two calls that receive map_value via arg=ptr_stack_of_caller. test1",
@@ -13259,7 +13375,7 @@ static struct bpf_test tests[] = {
 			BPF_EXIT_INSN(),
 		},
 		.fixup_map_hash_48b = { 6 },
-		.errstr = "invalid indirect read from stack off -8+0 size 8",
+		.errstr = "invalid indirect read from stack R2 off -8+0 size 8",
 		.result = REJECT,
 		.prog_type = BPF_PROG_TYPE_XDP,
 	},
@@ -14862,6 +14978,39 @@ static struct bpf_test tests[] = {
 		.prog_type = BPF_PROG_TYPE_SCHED_CLS,
 		.result = REJECT,
 		.errstr = "invalid mem access",
+	},
+	{
+		"reference tracking: branch tracking valid pointer null comparison",
+		.insns = {
+		BPF_SK_LOOKUP(sk_lookup_tcp),
+		BPF_MOV64_REG(BPF_REG_6, BPF_REG_0),
+		BPF_MOV64_IMM(BPF_REG_3, 1),
+		BPF_JMP_IMM(BPF_JNE, BPF_REG_6, 0, 1),
+		BPF_MOV64_IMM(BPF_REG_3, 0),
+		BPF_JMP_IMM(BPF_JEQ, BPF_REG_6, 0, 2),
+		BPF_MOV64_REG(BPF_REG_1, BPF_REG_6),
+		BPF_EMIT_CALL(BPF_FUNC_sk_release),
+		BPF_EXIT_INSN(),
+		},
+		.prog_type = BPF_PROG_TYPE_SCHED_CLS,
+		.result = ACCEPT,
+	},
+	{
+		"reference tracking: branch tracking valid pointer value comparison",
+		.insns = {
+		BPF_SK_LOOKUP(sk_lookup_tcp),
+		BPF_MOV64_REG(BPF_REG_6, BPF_REG_0),
+		BPF_MOV64_IMM(BPF_REG_3, 1),
+		BPF_JMP_IMM(BPF_JEQ, BPF_REG_6, 0, 4),
+		BPF_MOV64_IMM(BPF_REG_3, 0),
+		BPF_JMP_IMM(BPF_JEQ, BPF_REG_6, 1234, 2),
+		BPF_MOV64_REG(BPF_REG_1, BPF_REG_6),
+		BPF_EMIT_CALL(BPF_FUNC_sk_release),
+		BPF_EXIT_INSN(),
+		},
+		.prog_type = BPF_PROG_TYPE_SCHED_CLS,
+		.errstr = "Unreleased reference",
+		.result = REJECT,
 	},
 	{
 		"check wire_len is not readable by sockets",
@@ -17336,7 +17485,7 @@ static struct bpf_test tests[] = {
 		},
 		.result = REJECT,
 		.prog_type = BPF_PROG_TYPE_CGROUP_SYSCTL,
-		.errstr = "invalid indirect read from stack off -16+0 size 8",
+		.errstr = "invalid indirect read from stack R4 off -16+0 size 8",
 	},
 	{
 		"ARG_PTR_TO_LONG half-uninitialized",
@@ -17368,7 +17517,7 @@ static struct bpf_test tests[] = {
 		},
 		.result = REJECT,
 		.prog_type = BPF_PROG_TYPE_CGROUP_SYSCTL,
-		.errstr = "invalid indirect read from stack off -16+4 size 8",
+		.errstr = "invalid indirect read from stack R4 off -16+4 size 8",
 	},
 	{
 		"ARG_PTR_TO_LONG misaligned",
@@ -17434,7 +17583,7 @@ static struct bpf_test tests[] = {
 		},
 		.result = REJECT,
 		.prog_type = BPF_PROG_TYPE_CGROUP_SYSCTL,
-		.errstr = "invalid stack type R4 off=-4 access_size=8",
+		.errstr = "invalid indirect access to stack R4 off=-4 size=8",
 	},
 	{
 		"ARG_PTR_TO_LONG initialized",
