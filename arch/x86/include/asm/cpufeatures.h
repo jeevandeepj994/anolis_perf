@@ -468,6 +468,14 @@
 #define X86_FEATURE_SM4			(21*32 + 2) /* SM4 instructions */
 
 /*
+ * Extended auxiliary flags: Linux defined - for features scattered in various
+ * CPUID levels like 0x80000022, etc.
+ *
+ * Reuse free bits when adding new feature flags!
+ */
+#define X86_FEATURE_AMD_LBR_PMC_FREEZE	(21*32+ 0) /* AMD LBR and PMC Freeze */
+
+/*
  * BUG word(s)
  */
 #define X86_BUG(x)			(NCAPINTS*32 + (x))
