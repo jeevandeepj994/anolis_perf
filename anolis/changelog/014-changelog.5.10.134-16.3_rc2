@@ -1,0 +1,3 @@
+* Mon Mar 25 2024 Qinyun Tan <qinyuntan@linux.alibaba.com> [5.10.134-16.3_rc2%%DIST%%]
+- anolis: fix kabi broken in structs (Guixin Liu)
+
