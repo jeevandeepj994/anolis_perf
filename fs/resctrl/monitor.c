@@ -307,6 +307,9 @@ static int __mon_event_count(u32 closid, u32 rmid, struct rmid_read *rr)
 	case QOS_L3_OCCUP_EVENT_ID:
 		rr->val += tval;
 		return 0;
+	case QOS_MC_MBM_BPS_EVENT_ID:
+		rr->val += tval;
+		return 0;
 	case QOS_L3_MBM_TOTAL_EVENT_ID:
 		m = &rr->d->mbm_total[idx];
 		break;
@@ -718,6 +721,11 @@ static struct mon_evt mbm_local_event = {
 	.evtid		= QOS_L3_MBM_LOCAL_EVENT_ID,
 };
 
+static struct mon_evt mbm_bps_event = {
+	.name		= "mbm_local_bytes",
+	.evtid		= QOS_MC_MBM_BPS_EVENT_ID,
+};
+
 /*
  * Initialize the event list for the resource.
  *
@@ -754,6 +762,8 @@ static void mba_mon_evt_init(struct rdt_resource *r)
 		list_add_tail(&mbm_total_event.list, &r->evt_list);
 	if (resctrl_arch_is_mbm_local_enabled())
 		list_add_tail(&mbm_local_event.list, &r->evt_list);
+	if (resctrl_arch_is_mbm_bps_enabled())
+		list_add_tail(&mbm_bps_event.list, &r->evt_list);
 }
 #endif
 

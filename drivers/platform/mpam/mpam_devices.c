@@ -45,6 +45,8 @@ DEFINE_STATIC_KEY_FALSE(mpam_enabled);
 static DEFINE_MUTEX(mpam_list_lock);
 static LIST_HEAD(mpam_all_msc);
 
+enum mpam_machine_type mpam_current_machine;
+
 /* MPAM isn't available until all the MSC have been probed. */
 static u32 mpam_num_msc;
 
@@ -370,10 +372,12 @@ static int get_cpumask_from_cache_id(u32 cache_id, u32 cache_level,
 	u32 iter_cache_id;
 	struct device_node *iter;
 
-	if (!acpi_disabled)
-		return acpi_pptt_get_cpumask_from_cache_id_and_level(cache_id,
-								     cache_level,
-								     affinity);
+	if (!acpi_disabled) {
+		if (mpam_current_machine == MPAM_YITIAN710)
+			return acpi_pptt_get_cpumask_from_cache_id_and_level(
+					cache_id, cache_level, affinity);
+		return acpi_pptt_get_cpumask_from_cache_id(cache_id, affinity);
+	}
 
 	for_each_possible_cpu(cpu) {
 		iter = of_get_cpu_node(cpu, NULL);
@@ -664,6 +668,10 @@ static void mpam_ris_hw_probe(struct mpam_msc_ris *ris)
 		}
 	}
 
+	if (FIELD_GET(MPAMF_IDR_HAS_IMPL_IDR, ris->idr))
+		if (mpam_current_machine == MPAM_YITIAN710 && class->type == MPAM_CLASS_MEMORY)
+			mpam_set_feature(mpam_feat_impl_msmon_mbwu, props);
+
 	/*
 	 * RIS with PARTID narrowing don't have enough storage for one
 	 * configuration per PARTID. If these are in a class we could use,
@@ -677,22 +685,6 @@ static void mpam_ris_hw_probe(struct mpam_msc_ris *ris)
 
 		mpam_set_feature(mpam_feat_partid_nrw, props);
 		msc->partid_max = min(msc->partid_max, partid_max);
-	}
-
-	/*
-	 * FIXME: Yitian does not have MPAMF_MSMON_IDR_MSMON_MBWU register, it
-	 * uses MPAMF_IDR_HAS_IMPL_IDR and some custom registers to get mbwu
-	 * monitor information instead.
-	 */
-	if (FIELD_GET(MPAMF_IDR_HAS_IMPL_IDR, ris->idr) && class->type == MPAM_CLASS_MEMORY) {
-		/*
-		 * resctrl expects the bandwidth counters to be free running,
-		 * which means to expose the files in the filesystem we need
-		 * as many monitors as resctrl has control/monitor groups.
-		 * Here, we set the two values to be equal by default.
-		 */
-		props->num_mbwu_mon = resctrl_arch_system_num_rmid_idx();
-		mpam_set_feature(mpam_feat_msmon_mbwu, props);
 	}
 }
 
@@ -853,12 +845,7 @@ static u64 mpam_msmon_overflow_val(struct mpam_msc_ris *ris)
 	return GENMASK_ULL(30,0);
 }
 
-/*
- * FIXME: Yitian use several custom registers to implement mbwu monitor feature instead
- * of MSMON_MBWU. So we split __ris_msmon_read() into __ris_msmon_csu_read() and
- * __ris_msmon_mbwu_read().
- */
-static void __maybe_unused __ris_msmon_read(void *arg)
+static void __ris_msmon_read(void *arg)
 {
 	bool nrdy = false;
 	unsigned long flags;
@@ -939,57 +926,7 @@ static void __maybe_unused __ris_msmon_read(void *arg)
 	*(m->val) += now;
 }
 
-static void __ris_msmon_csu_read(void *arg)
-{
-	bool nrdy = false;
-	unsigned long flags;
-	bool config_mismatch;
-	struct mon_read *m = arg;
-	u64 now;
-	struct mon_cfg *ctx = m->ctx;
-	struct mpam_msc *msc = m->ris->msc;
-	u32 mon_sel, ctl_val, flt_val, cur_ctl, cur_flt;
-
-	assert_spin_locked(&msc->lock);
-
-	spin_lock_irqsave(&msc->mon_sel_lock, flags);
-	mon_sel = FIELD_PREP(MSMON_CFG_MON_SEL_MON_SEL, ctx->mon) |
-		  FIELD_PREP(MSMON_CFG_MON_SEL_RIS, m->ris->ris_idx);
-	mpam_write_monsel_reg(msc, CFG_MON_SEL, mon_sel);
-
-	/*
-	 * Read the existing configuration to avoid re-writing the same values.
-	 * This saves waiting for 'nrdy' on subsequent reads.
-	 */
-	read_msmon_ctl_flt_vals(m, &cur_ctl, &cur_flt);
-	gen_msmon_ctl_flt_vals(m, &ctl_val, &flt_val);
-	config_mismatch = cur_flt != flt_val ||
-			  cur_ctl != (ctl_val | MSMON_CFG_x_CTL_EN);
-
-	if (config_mismatch)
-		write_msmon_ctl_flt_vals(m, ctl_val, flt_val);
-
-	now = mpam_read_monsel_reg(msc, CSU);
-	nrdy = now & MSMON___NRDY;
-	now = FIELD_GET(MSMON___VALUE, now);
-
-	spin_unlock_irqrestore(&msc->mon_sel_lock, flags);
-
-	if (nrdy) {
-		m->err = -EBUSY;
-		return;
-	}
-
-	*(m->val) += now;
-}
-
-#define MBWU_MASK GENMASK(23, 0)
-#define MBWU_WINWD_MAX GENMASK(22, 0)
-#define MBWU_GET(v) ((v) & MBWU_MASK)
-#define MPAMF_CUST_MBWC_OFFSET 0x08
-#define MPAMF_CUST_WINDW_OFFSET 0x0C
-
-static void __ris_msmon_mbwu_read(void *arg)
+static void __ris_impl_msmon_read(void *arg)
 {
 	unsigned long flags;
 	struct mon_read *m = arg;
@@ -999,6 +936,12 @@ static void __ris_msmon_mbwu_read(void *arg)
 	u32 custom_reg_base_addr, cycle, val;
 
 	assert_spin_locked(&msc->lock);
+	if (m->type != mpam_feat_impl_msmon_mbwu)
+		return;
+
+	/* Other machine can extend this function */
+	if (mpam_current_machine != MPAM_YITIAN710)
+		return;
 
 	spin_lock_irqsave(&msc->part_sel_lock, flags);
 
@@ -1045,21 +988,23 @@ static int _msmon_read(struct mpam_component *comp, struct mon_read *arg)
 		spin_lock(&msc->lock);
 		cpu = get_cpu();
 		if (cpumask_test_cpu(cpu, mask)) {
-			if (arg->type == mpam_feat_msmon_csu) {
-				__ris_msmon_csu_read(arg);
+			if (arg->type == mpam_feat_msmon_csu ||
+			    arg->type == mpam_feat_msmon_mbwu) {
+				__ris_msmon_read(arg);
 				err = 0;
-			} else if (arg->type == mpam_feat_msmon_mbwu) {
-				__ris_msmon_mbwu_read(arg);
+			} else if (arg->type == mpam_feat_impl_msmon_mbwu) {
+				__ris_impl_msmon_read(arg);
 				err = 0;
 			} else
 				err = -EOPNOTSUPP;
 		} else if (!irqs_disabled()) {
-			if (arg->type == mpam_feat_msmon_csu)
+			if (arg->type == mpam_feat_msmon_csu ||
+			    arg->type == mpam_feat_msmon_mbwu)
 				err = smp_call_function_any(&msc->accessibility,
-						__ris_msmon_csu_read, arg, true);
-			else if (arg->type == mpam_feat_msmon_mbwu)
+						__ris_msmon_read, arg, true);
+			else if (arg->type == mpam_feat_impl_msmon_mbwu)
 				err = smp_call_function_any(&msc->accessibility,
-						__ris_msmon_mbwu_read, arg, true);
+						__ris_impl_msmon_read, arg, true);
 			else
 				err = -EOPNOTSUPP;
 		}
@@ -1273,7 +1218,7 @@ static void mpam_restore_mbwu_state(void *_ris)
 			mwbu_arg.ctx = &ris->mbwu_state[i].cfg;
 			mwbu_arg.type = mpam_feat_msmon_mbwu;
 
-			__ris_msmon_mbwu_read(&mwbu_arg);
+			__ris_msmon_read(&mwbu_arg);
 		}
 	}
 }
@@ -1545,6 +1490,12 @@ static int mpam_msc_setup_error_irq(struct mpam_msc *msc)
 	}
 
 	return 0;
+}
+
+static enum mpam_machine_type mpam_dt_get_machine_type(void)
+{
+	/* FIXME: not supported yet */
+	return MPAM_DEFAULT_MACHINE;
 }
 
 static int mpam_dt_count_msc(void)
@@ -2304,6 +2255,11 @@ static int __init mpam_msc_driver_init(void)
 
 	if (!mpam_cpus_have_feature())
 		return -EOPNOTSUPP;
+
+	if (!acpi_disabled)
+		mpam_current_machine = acpi_mpam_get_machine_type();
+	else
+		mpam_current_machine = mpam_dt_get_machine_type();
 
 	if (!acpi_disabled)
 		fw_num_msc = acpi_mpam_count_msc();
