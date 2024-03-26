@@ -161,6 +161,15 @@ static struct ctl_table sched_fair_sysctls[] = {
 		.proc_handler   = proc_dointvec_minmax,
 		.extra1         = SYSCTL_ONE,
 	},
+	{
+		.procname       = "sched_cfs_bw_burst_onset_percent",
+		.data           = &sysctl_sched_cfs_bw_burst_onset_percent,
+		.maxlen         = sizeof(unsigned int),
+		.mode           = 0644,
+		.proc_handler   = proc_dointvec_minmax,
+		.extra1         = SYSCTL_ZERO,
+		.extra2		= SYSCTL_ONE_HUNDRED,
+	},
 #endif
 #ifdef CONFIG_NUMA_BALANCING
 	{
@@ -5479,21 +5488,27 @@ static inline u64 sched_cfs_bandwidth_slice(void)
  *
  * requires cfs_b->lock
  */
-void __refill_cfs_bandwidth_runtime(struct cfs_bandwidth *cfs_b)
+static void __refill_cfs_bandwidth_runtime(struct cfs_bandwidth *cfs_b,
+					   u64 overrun)
 {
-	s64 runtime;
+	u64 refill, runtime;
 
 	if (unlikely(cfs_b->quota == RUNTIME_INF))
 		return;
 
-	cfs_b->runtime += cfs_b->quota;
-	runtime = cfs_b->runtime_snap - cfs_b->runtime;
-	if (runtime > 0) {
-		cfs_b->burst_time += runtime;
-		cfs_b->nr_burst++;
+	if (cfs_b->runtime_snap > cfs_b->runtime) {
+		runtime = cfs_b->runtime_snap - cfs_b->runtime;
+		if (runtime > cfs_b->quota) {
+			cfs_b->burst_time += runtime - cfs_b->quota;
+			cfs_b->nr_burst++;
+		}
 	}
 
-	cfs_b->runtime = min(cfs_b->runtime, cfs_b->quota + cfs_b->burst);
+	cfs_b->current_buffer = max(cfs_b->runtime, cfs_b->buffer);
+	overrun = min(overrun, cfs_b->max_overrun);
+	refill = cfs_b->quota * overrun;
+	cfs_b->runtime += refill;
+	cfs_b->runtime = min(cfs_b->runtime, cfs_b->current_buffer);
 	cfs_b->runtime_snap = cfs_b->runtime;
 }
 
@@ -5516,7 +5531,7 @@ static int __assign_cfs_rq_runtime(struct cfs_bandwidth *cfs_b,
 	if (cfs_b->quota == RUNTIME_INF)
 		amount = min_amount;
 	else {
-		start_cfs_bandwidth(cfs_b);
+		start_cfs_bandwidth(cfs_b, 0);
 
 		if (cfs_b->runtime > 0) {
 			amount = min(cfs_b->runtime, min_amount);
@@ -5986,7 +6001,7 @@ static int do_sched_cfs_period_timer(struct cfs_bandwidth *cfs_b, int overrun, u
 	cfs_b->nr_periods += overrun;
 
 	/* Refill extra burst quota even if cfs_b->idle */
-	__refill_cfs_bandwidth_runtime(cfs_b);
+	__refill_cfs_bandwidth_runtime(cfs_b, overrun);
 
 	/*
 	 * idle depends on !throttled (for the case of a large deficit), and if
@@ -6241,8 +6256,17 @@ static enum hrtimer_restart sched_cfs_period_timer(struct hrtimer *timer)
 			new = old * 2;
 			if (new < max_cfs_quota_period) {
 				cfs_b->period = ns_to_ktime(new);
-				cfs_b->quota *= 2;
-				cfs_b->burst *= 2;
+				cfs_b->quota = min(cfs_b->quota * 2,
+						max_cfs_runtime);
+
+				cfs_b->burst = min(cfs_b->burst * 2,
+						max_cfs_runtime);
+
+				cfs_b->buffer = min(max_cfs_runtime,
+						cfs_b->quota + cfs_b->burst);
+				/* Add 1 in case max_overrun becomes 0. */
+				cfs_b->max_overrun >>= 1;
+				cfs_b->max_overrun++;
 
 				pr_warn_ratelimited(
 	"cfs_period_timer[cpu%d]: period too short, scaling up (new cfs_period_us = %lld, cfs_quota_us = %lld)\n",
@@ -6275,6 +6299,8 @@ void init_cfs_bandwidth(struct cfs_bandwidth *cfs_b, struct cfs_bandwidth *paren
 	cfs_b->quota = RUNTIME_INF;
 	cfs_b->period = ns_to_ktime(default_cfs_period());
 	cfs_b->burst = 0;
+	cfs_b->init_buffer = 0;
+	cfs_b->buffer = RUNTIME_INF;
 	cfs_b->hierarchical_quota = parent ? parent->hierarchical_quota : RUNTIME_INF;
 
 	INIT_LIST_HEAD(&cfs_b->throttled_cfs_rq);
@@ -6298,16 +6324,26 @@ static void init_cfs_rq_runtime(struct cfs_rq *cfs_rq)
 #endif
 }
 
-void start_cfs_bandwidth(struct cfs_bandwidth *cfs_b)
+void start_cfs_bandwidth(struct cfs_bandwidth *cfs_b, int init)
 {
+	u64 overrun;
+
 	lockdep_assert_held(&cfs_b->lock);
 
 	if (cfs_b->period_active)
 		return;
 
 	cfs_b->period_active = 1;
-	hrtimer_forward_now(&cfs_b->period_timer, cfs_b->period);
+	overrun = hrtimer_forward_now(&cfs_b->period_timer, cfs_b->period);
 	hrtimer_start_expires(&cfs_b->period_timer, HRTIMER_MODE_ABS_PINNED);
+
+	/*
+	 * When period timer stops, quota for the following period is not
+	 * refilled, however period timer is already forwarded. We should
+	 * accumulate quota once more than overrun here.
+	 */
+	if (!init)
+		__refill_cfs_bandwidth_runtime(cfs_b, overrun + 1);
 }
 
 static void destroy_cfs_bandwidth(struct cfs_bandwidth *cfs_b)
