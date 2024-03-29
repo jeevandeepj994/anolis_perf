@@ -167,6 +167,7 @@ unsigned int sysctl_sched_cfs_bw_burst_onset_percent;
 #ifdef CONFIG_SCHED_CORE
 
 DEFINE_STATIC_KEY_FALSE(__sched_core_enabled);
+struct workqueue_struct *sched_core_wq;
 
 /* kernel prio, less is more */
 static inline int __task_prio(const struct task_struct *p)
@@ -459,7 +460,7 @@ void sched_core_put(void)
 	 * WORK_STRUCT_PENDING_BIT.
 	 */
 	if (!atomic_add_unless(&sched_core_count, -1, 1))
-		schedule_work(&_work);
+		queue_work(sched_core_wq, &_work);
 }
 
 #else /* !CONFIG_SCHED_CORE */
@@ -10304,6 +10305,10 @@ void __init sched_init(void)
 	preempt_dynamic_init();
 
 	scheduler_running = 1;
+#ifdef CONFIG_SCHED_CORE
+	sched_core_wq = alloc_workqueue("sched_core", 0, 0);
+	BUG_ON(!sched_core_wq);
+#endif
 }
 
 #ifdef CONFIG_DEBUG_ATOMIC_SLEEP
