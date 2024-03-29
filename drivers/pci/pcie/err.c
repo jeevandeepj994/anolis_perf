@@ -61,10 +61,12 @@ static int report_error_detected(struct pci_dev *dev,
 		 * error callbacks of "any" device in the subtree, and will
 		 * exit in the disconnected error state.
 		 */
-		if (dev->hdr_type != PCI_HEADER_TYPE_BRIDGE)
+		if (dev->hdr_type != PCI_HEADER_TYPE_BRIDGE) {
 			vote = PCI_ERS_RESULT_NO_AER_DRIVER;
-		else
+			pci_info(dev, "AER: Can't recover (no error_detected callback)\n");
+		} else {
 			vote = PCI_ERS_RESULT_NONE;
+		}
 	} else {
 		err_handler = dev->driver->err_handler;
 		vote = err_handler->error_detected(dev, state);
@@ -161,8 +163,7 @@ pci_ers_result_t pcie_do_recovery(struct pci_dev *dev,
 	pci_dbg(dev, "broadcast error_detected message\n");
 	if (state == pci_channel_io_frozen) {
 		pci_walk_bus(bus, report_frozen_detected, &status);
-		status = reset_link(dev);
-		if (status != PCI_ERS_RESULT_RECOVERED) {
+		if (reset_link(dev) != PCI_ERS_RESULT_RECOVERED) {
 			pci_warn(dev, "link reset failed\n");
 			goto failed;
 		}
@@ -193,7 +194,8 @@ pci_ers_result_t pcie_do_recovery(struct pci_dev *dev,
 	pci_dbg(dev, "broadcast resume message\n");
 	pci_walk_bus(bus, report_resume, &status);
 
-	pci_aer_clear_device_status(dev);
+	if (pcie_aer_is_native(dev))
+		pci_aer_clear_device_status(dev);
 	pci_cleanup_aer_uncorrect_error_status(dev);
 	pci_info(dev, "AER: Device recovery successful\n");
 	return status;
