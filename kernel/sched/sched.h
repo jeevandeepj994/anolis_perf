@@ -575,9 +575,9 @@ struct cfs_rq {
 #ifdef CONFIG_SCHED_SMT
 	u64			expel_spread;
 	u64			expel_start;
-	unsigned int		h_nr_expel_immune;
 	struct list_head	expel_list;
 #endif
+	unsigned int		h_nr_expel_immune;
 	struct rb_root_cached	under_timeline;
 #endif
 
@@ -1662,7 +1662,7 @@ enum {
  * To support run-time toggling of sched features, all the translation units
  * (but core.c) reference the sysctl_sched_features defined in core.c.
  */
-extern const_debug unsigned int sysctl_sched_features;
+extern const_debug u64 sysctl_sched_features;
 
 #define SCHED_FEAT(name, enabled)					\
 static __always_inline bool static_branch_##name(struct static_key *key) \
@@ -1685,7 +1685,7 @@ extern struct static_key sched_feat_keys[__SCHED_FEAT_NR];
  */
 #define SCHED_FEAT(name, enabled)	\
 	(1UL << __SCHED_FEAT_##name) * enabled |
-static const_debug __maybe_unused unsigned int sysctl_sched_features =
+static const_debug __maybe_unused u64 sysctl_sched_features =
 #include "features.h"
 	0;
 #undef SCHED_FEAT
