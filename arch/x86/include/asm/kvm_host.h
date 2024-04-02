@@ -1337,6 +1337,8 @@ struct kvm_x86_ops {
 
 	int (*control_pre_system_reset)(struct kvm *kvm);
 	int (*control_post_system_reset)(struct kvm *kvm);
+
+	int (*arch_hypercall)(struct kvm *kvm, u64 nr, u64 a0, u64 a1, u64 a2, u64 a3);
 };
 
 struct kvm_x86_nested_ops {
