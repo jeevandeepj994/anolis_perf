@@ -631,6 +631,15 @@ struct csv_data_ring_buffer {
 	u16 int_on_empty;		/* In */
 } __packed;
 
+#ifdef CONFIG_HYGON_PSP2CPU_CMD
+
+typedef int (*p2c_notifier_t)(uint32_t id, uint64_t data);
+
+int psp_register_cmd_notifier(uint32_t cmd_id, int (*notifier)(uint32_t id, uint64_t data));
+
+int psp_unregister_cmd_notifier(uint32_t cmd_id, int (*notifier)(uint32_t id, uint64_t data));
+
+#endif
 /**
  * enum VPSP_CMD_STATUS - virtual psp command status
  *
