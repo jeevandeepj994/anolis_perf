@@ -8657,7 +8657,9 @@ int kvm_emulate_hypercall(struct kvm_vcpu *vcpu)
 			ret = kvm_x86_ops.vm_attestation(vcpu->kvm, a0, a1);
 		break;
 	case KVM_HC_PSP_OP:
-		ret = kvm_pv_psp_op(vcpu->kvm, a0, a1, a2, a3);
+		ret = -KVM_ENOSYS;
+		if (kvm_x86_ops.arch_hypercall)
+			ret = kvm_x86_ops.arch_hypercall(vcpu->kvm, nr, a0, a1, a2, a3);
 		break;
 	default:
 		ret = -KVM_ENOSYS;
