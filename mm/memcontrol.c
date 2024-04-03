@@ -4916,6 +4916,13 @@ static const unsigned int memcg1_stats[] = {
 	NR_FILE_DIRTY,
 	NR_WRITEBACK,
 	MEMCG_SWAP,
+	WORKINGSET_REFAULT_ANON,
+	WORKINGSET_REFAULT_FILE,
+	WORKINGSET_ACTIVATE_ANON,
+	WORKINGSET_ACTIVATE_FILE,
+	WORKINGSET_RESTORE_ANON,
+	WORKINGSET_RESTORE_FILE,
+	WORKINGSET_NODERECLAIM,
 };
 
 static const char *const memcg1_stat_names[] = {
@@ -4929,6 +4936,13 @@ static const char *const memcg1_stat_names[] = {
 	"dirty",
 	"writeback",
 	"swap",
+	"workingset_refault_anon",
+	"workingset_refault_file",
+	"workingset_activate_anon",
+	"workingset_activate_file",
+	"workingset_restore_anon",
+	"workingset_restore_file",
+	"workingset_nodereclaim",
 };
 
 /* Universal VM events cgroup1 shows, original sort order */
@@ -10230,7 +10244,6 @@ void memcg_meminfo(struct mem_cgroup *memcg,
 	unsigned long pagecache, memcg_wmark, swap_size;
 	int i;
 
-	ext->cached = memcg_page_state(memcg, NR_FILE_PAGES);
 	ext->file_dirty = memcg_page_state(memcg, NR_FILE_DIRTY);
 	ext->writeback = memcg_page_state(memcg, NR_WRITEBACK);
 	ext->anon_mapped = memcg_page_state(memcg, NR_ANON_MAPPED);
@@ -10294,5 +10307,20 @@ void memcg_meminfo(struct mem_cgroup *memcg,
 	ext->available = info->freeram + pagecache;
 	ext->available += ext->slab_reclaimable -
 		min(ext->slab_reclaimable / 2, memcg_wmark);
+	ext->cached = usage - ext->lrupages[LRU_INACTIVE_ANON] -
+				  ext->lrupages[LRU_ACTIVE_ANON];
+}
+#endif
+
+#if IS_ENABLED(CONFIG_RECLAIM_COLDPGS)
+void reclaim_coldpgs_stats_mlock_refault(void)
+{
+	struct mem_cgroup *memcg;
+	unsigned int index = RECLIMA_COLDPGS_STAT_MLOCK_REFAULT;
+
+	rcu_read_lock();
+	memcg = mem_cgroup_from_task(current);
+	__this_cpu_add(memcg->coldpgs_stats->counts[index], PAGE_SIZE);
+	rcu_read_unlock();
 }
 #endif
