@@ -2,9 +2,15 @@
 #ifndef _RESCTRL_H
 #define _RESCTRL_H
 
+#include <linux/cpu.h>
 #include <linux/kernel.h>
 #include <linux/list.h>
 #include <linux/pid.h>
+#include <linux/resctrl_types.h>
+
+#ifdef CONFIG_ARCH_HAS_CPU_RESCTRL
+#include <asm/resctrl.h>
+#endif
 
 /* CLOSID, RMID value used by the default control group */
 #define RESCTRL_RESERVED_CLOSID		0
@@ -24,28 +30,57 @@ int proc_resctrl_show(struct seq_file *m,
 /* max value for struct rdt_domain's mbps_val */
 #define MBA_MAX_MBPS   U32_MAX
 
-/**
- * enum resctrl_conf_type - The type of configuration.
- * @CDP_NONE:	No prioritisation, both code and data are controlled or monitored.
- * @CDP_CODE:	Configuration applies to instruction fetches.
- * @CDP_DATA:	Configuration applies to reads and writes.
+/*
+ * Resctrl uses a u32 as a closid bitmap. The maximum closid is 32.
  */
-enum resctrl_conf_type {
-	CDP_NONE,
-	CDP_CODE,
-	CDP_DATA,
-};
-
-#define CDP_NUM_TYPES	(CDP_DATA + 1)
+#define RESCTRL_MAX_CLOSID		32
 
 /*
- * Event IDs, the values match those used to program IA32_QM_EVTSEL before
- * reading IA32_QM_CTR on RDT systems.
+ * Resctrl uses u32 to hold the user-space config. The maximum bitmap size is
+ * 32.
  */
-enum resctrl_event_id {
-	QOS_L3_OCCUP_EVENT_ID		= 0x01,
-	QOS_L3_MBM_TOTAL_EVENT_ID	= 0x02,
-	QOS_L3_MBM_LOCAL_EVENT_ID	= 0x03,
+#define RESCTRL_MAX_CBM			32
+
+extern unsigned int resctrl_rmid_realloc_limit;
+extern unsigned int resctrl_rmid_realloc_threshold;
+
+/**
+ * struct pseudo_lock_region - pseudo-lock region information
+ * @s:			Resctrl schema for the resource to which this
+ *			pseudo-locked region belongs
+ * @closid:		The closid that this pseudo-locked region uses
+ * @d:			RDT domain to which this pseudo-locked region
+ *			belongs
+ * @cbm:		bitmask of the pseudo-locked region
+ * @lock_thread_wq:	waitqueue used to wait on the pseudo-locking thread
+ *			completion
+ * @thread_done:	variable used by waitqueue to test if pseudo-locking
+ *			thread completed
+ * @cpu:		core associated with the cache on which the setup code
+ *			will be run
+ * @line_size:		size of the cache lines
+ * @size:		size of pseudo-locked region in bytes
+ * @kmem:		the kernel memory associated with pseudo-locked region
+ * @minor:		minor number of character device associated with this
+ *			region
+ * @debugfs_dir:	pointer to this region's directory in the debugfs
+ *			filesystem
+ * @pm_reqs:		Power management QoS requests related to this region
+ */
+struct pseudo_lock_region {
+	struct resctrl_schema	*s;
+	u32			closid;
+	struct rdt_domain	*d;
+	u32			cbm;
+	wait_queue_head_t	lock_thread_wq;
+	int			thread_done;
+	int			cpu;
+	unsigned int		line_size;
+	unsigned int		size;
+	void			*kmem;
+	unsigned int		minor;
+	struct dentry		*debugfs_dir;
+	struct list_head	pm_reqs;
 };
 
 /**
@@ -147,9 +182,6 @@ struct resctrl_membw {
 	u32				*mb_map;
 };
 
-struct rdt_parse_data;
-struct resctrl_schema;
-
 /**
  * struct rdt_resource - attributes of a resctrl resource
  * @rid:		The index of the resource
@@ -164,9 +196,10 @@ struct resctrl_schema;
  * @data_width:		Character width of data when displaying
  * @default_ctrl:	Specifies default cache cbm or memory B/W percent.
  * @format_str:		Per resource format string to show domain value
- * @parse_ctrlval:	Per resource function pointer to parse control values
  * @evt_list:		List of monitoring events
  * @fflags:		flags to choose base and info files
+ * @mbm_cfg_mask:	Bandwidth sources that can be tracked when Bandwidth
+ *			Monitoring Event Configuration (BMEC) is supported.
  * @cdp_capable:	Is the CDP feature available on this resource
  */
 struct rdt_resource {
@@ -182,13 +215,18 @@ struct rdt_resource {
 	int			data_width;
 	u32			default_ctrl;
 	const char		*format_str;
-	int			(*parse_ctrlval)(struct rdt_parse_data *data,
-						 struct resctrl_schema *s,
-						 struct rdt_domain *d);
 	struct list_head	evt_list;
 	unsigned long		fflags;
+	unsigned int		mbm_cfg_mask;
 	bool			cdp_capable;
 };
+
+/*
+ * Get the resource that exists at this level. If the level is not supported
+ * a dummy/not-capable resource can be returned. Levels >= RDT_NUM_RESOURCES
+ * will return NULL.
+ */
+struct rdt_resource *resctrl_arch_get_resource(enum resctrl_res_level l);
 
 /**
  * struct resctrl_schema - configuration abilities of a resource presented to
@@ -210,9 +248,67 @@ struct resctrl_schema {
 	u32				num_closid;
 };
 
+struct resctrl_cpu_sync {
+	u32 closid;
+	u32 rmid;
+};
+
+struct resctrl_mon_config_info {
+	struct rdt_resource *r;
+	struct rdt_domain   *d;
+	u32                  evtid;
+	u32                  mon_config;
+	int                  err;
+};
+
+/*
+ * Update and re-load this CPUs defaults. Called via IPI, takes a pointer to
+ * struct resctrl_cpu_sync, or NULL.
+ */
+void resctrl_arch_sync_cpu_defaults(void *info);
+
 /* The number of closid supported by this resource regardless of CDP */
 u32 resctrl_arch_get_num_closid(struct rdt_resource *r);
+
+struct rdt_domain *resctrl_arch_find_domain(struct rdt_resource *r, int id);
 int resctrl_arch_update_domains(struct rdt_resource *r, u32 closid);
+
+bool resctrl_arch_is_evt_configurable(enum resctrl_event_id evt);
+void resctrl_arch_mon_event_config_write(void *info);
+void resctrl_arch_mon_event_config_read(void *info);
+
+/* For use by arch code to remap resctrl's smaller CDP CLOSID range */
+static inline u32 resctrl_get_config_index(u32 closid,
+					   enum resctrl_conf_type type)
+{
+	switch (type) {
+	default:
+	case CDP_NONE:
+		return closid;
+	case CDP_CODE:
+			return (closid * 2) + 1;
+	case CDP_DATA:
+			return (closid * 2);
+	}
+}
+
+/*
+ * Caller must hold the cpuhp read lock to prevent the struct rdt_domain being
+ * freed.
+ */
+static inline struct rdt_domain *
+resctrl_get_domain_from_cpu(int cpu, struct rdt_resource *r)
+{
+	struct rdt_domain *d;
+
+	list_for_each_entry_rcu(d, &r->domains, list) {
+		/* Find the domain that contains this CPU */
+		if (cpumask_test_cpu(cpu, &d->cpu_mask))
+			return d;
+	}
+
+	return NULL;
+}
 
 /*
  * Update the ctrl_val and apply this config right now.
@@ -303,5 +399,8 @@ void resctrl_arch_reset_rmid_all(struct rdt_resource *r, struct rdt_domain *d);
 
 extern unsigned int resctrl_rmid_realloc_threshold;
 extern unsigned int resctrl_rmid_realloc_limit;
+
+int resctrl_init(void);
+void resctrl_exit(void);
 
 #endif /* _RESCTRL_H */
