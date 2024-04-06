@@ -1076,6 +1076,32 @@ int mpam_msmon_read(struct mpam_component *comp, struct mon_cfg *ctx,
 	return err;
 }
 
+void mpam_msmon_reset_all_mbwu(struct mpam_component *comp)
+{
+	int idx, i;
+	unsigned long flags;
+	struct mpam_msc *msc;
+	struct mpam_msc_ris *ris;
+
+	if (!mpam_is_enabled())
+		return;
+
+	idx = srcu_read_lock(&mpam_srcu);
+	list_for_each_entry_rcu(ris, &comp->ris, comp_list) {
+		if (!mpam_has_feature(mpam_feat_msmon_mbwu, &ris->props))
+			continue;
+
+		msc = ris->msc;
+		spin_lock_irqsave(&msc->mon_sel_lock, flags);
+		for (i = 0; i < ris->props.num_mbwu_mon; i++) {
+			ris->mbwu_state[i].correction = 0;
+			ris->mbwu_state[i].reset_on_next_read = true;
+		}
+		spin_unlock_irqrestore(&msc->mon_sel_lock, flags);
+	}
+	srcu_read_unlock(&mpam_srcu, idx);
+}
+
 void mpam_msmon_reset_mbwu(struct mpam_component *comp, struct mon_cfg *ctx)
 {
 	int idx;
@@ -1411,6 +1437,9 @@ static int mpam_cpu_online(unsigned int cpu)
 	}
 	srcu_read_unlock(&mpam_srcu, idx);
 
+	if (mpam_is_enabled())
+		mpam_resctrl_online_cpu(cpu);
+
 	return 0;
 }
 
@@ -1469,6 +1498,9 @@ static int mpam_cpu_offline(unsigned int cpu)
 		mutex_unlock(&msc->lock);
 	}
 	srcu_read_unlock(&mpam_srcu, idx);
+
+	if (mpam_is_enabled())
+		mpam_resctrl_offline_cpu(cpu);
 
 	return 0;
 }
@@ -2140,6 +2172,12 @@ static void mpam_enable_once(void)
 	mutex_unlock(&mpam_list_lock);
 	cpus_read_unlock();
 
+	if (!err) {
+		err = mpam_resctrl_setup();
+		if (err)
+			pr_err("Failed to initialise resctrl: %d\n", err);
+	}
+
 	if (err) {
 		schedule_work(&mpam_broken_work);
 		return;
@@ -2165,7 +2203,7 @@ static void mpam_enable_once(void)
 		READ_ONCE(mpam_partid_max) + 1, mpam_pmg_max + 1);
 }
 
-static void mpam_reset_class(struct mpam_class *class)
+void mpam_reset_class(struct mpam_class *class)
 {
 	int idx;
 	struct mpam_msc_ris *ris;
@@ -2201,6 +2239,8 @@ static irqreturn_t mpam_disable_thread(int irq, void *dev_id)
 		mpam_cpuhp_state = 0;
 	}
 	mutex_unlock(&mpam_cpuhp_state_lock);
+
+	mpam_resctrl_exit();
 
 	static_branch_disable(&mpam_enabled);
 
@@ -2289,6 +2329,9 @@ int mpam_apply_config(struct mpam_component *comp, u16 partid,
 	int idx;
 
 	lockdep_assert_cpus_held();
+
+	if (!memcmp(&comp->cfg[partid], cfg, sizeof(*cfg)))
+		return 0;
 
 	comp->cfg[partid] = *cfg;
 	arg.comp = comp;

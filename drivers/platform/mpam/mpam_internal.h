@@ -17,6 +17,15 @@
 
 DECLARE_STATIC_KEY_FALSE(mpam_enabled);
 
+/* Value to indicate the allocated monitor is derived from the RMID index. */
+#define USE_RMID_IDX	(U16_MAX + 1)
+
+/*
+ * Only these event configuration bits are supported. MPAM can't know if
+ * data is being written back, these will show up as a write.
+ */
+#define MPAM_RESTRL_EVT_CONFIG_VALID	(READS_TO_LOCAL_MEM | NON_TEMP_WRITE_TO_LOCAL_MEM)
+
 static inline bool mpam_is_enabled(void)
 {
 	return static_branch_likely(&mpam_enabled);
@@ -119,12 +128,7 @@ struct mpam_props
 };
 
 #define mpam_has_feature(_feat, x)	((1<<_feat) & (x)->features)
-
-static inline void mpam_set_feature(enum mpam_device_features feat,
-				    struct mpam_props *props)
-{
-	props->features |= (1<<feat);
-}
+#define mpam_set_feature(_feat, x)	((x)->features |= (1<<_feat))
 
 static inline void mpam_clear_feature(enum mpam_device_features feat,
 				      mpam_features_t *supported)
@@ -239,6 +243,18 @@ struct mpam_msc_ris {
 	struct msmon_mbwu_state	*mbwu_state;
 };
 
+struct mpam_resctrl_dom {
+	struct mpam_component	*comp;
+	struct rdt_domain	resctrl_dom;
+
+	u32			mbm_local_evt_cfg;
+};
+
+struct mpam_resctrl_res {
+	struct mpam_class	*class;
+	struct rdt_resource	resctrl_res;
+};
+
 static inline int mpam_alloc_csu_mon(struct mpam_class *class)
 {
 	struct mpam_props *cprops = &class->props;
@@ -283,12 +299,21 @@ extern u8 mpam_pmg_max;
 void mpam_enable(struct work_struct *work);
 void mpam_disable(struct work_struct *work);
 
+void mpam_reset_class(struct mpam_class *class);
+
 int mpam_apply_config(struct mpam_component *comp, u16 partid,
 		      struct mpam_config *cfg);
 
 int mpam_msmon_read(struct mpam_component *comp, struct mon_cfg *ctx,
 		    enum mpam_device_features, u64 *val);
 void mpam_msmon_reset_mbwu(struct mpam_component *comp, struct mon_cfg *ctx);
+void mpam_msmon_reset_all_mbwu(struct mpam_component *comp);
+
+int mpam_resctrl_online_cpu(unsigned int cpu);
+int mpam_resctrl_offline_cpu(unsigned int cpu);
+
+int mpam_resctrl_setup(void);
+void mpam_resctrl_exit(void);
 
 /*
  * MPAM MSCs have the following register layout. See:
