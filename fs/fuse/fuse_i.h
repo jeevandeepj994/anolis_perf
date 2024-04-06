@@ -99,7 +99,7 @@ struct fuse_inode {
 	u64 attr_version;
 
 	union {
-		/* Write related fields (regular file only) */
+		/* read/write io cache (regular file only) */
 		struct {
 			/* Files usable in writepage.  Protected by fi->lock */
 			struct list_head write_files;
@@ -111,8 +111,14 @@ struct fuse_inode {
 			 * (FUSE_NOWRITE) means more writes are blocked */
 			int writectr;
 
+			/** Number of files/maps using page cache */
+			int iocachectr;
+
 			/* Waitq for writepage completion */
 			wait_queue_head_t page_waitq;
+
+			/* waitq for direct-io completion */
+			wait_queue_head_t direct_io_waitq;
 
 			/* List of writepage requestst (pending or sent) */
 			struct rb_root writepages;
@@ -173,6 +179,8 @@ enum {
 	FUSE_I_BAD,
 	/* Has btime */
 	FUSE_I_BTIME,
+	/* Wants or already has page cache IO */
+	FUSE_I_CACHE_IO_MODE,
 };
 
 struct fuse_conn;
@@ -229,6 +237,9 @@ struct fuse_file {
 
 	/** Wait queue head for poll */
 	wait_queue_head_t poll_wait;
+
+	/** Does file hold a fi->iocachectr refcount? */
+	enum { IOM_NONE, IOM_CACHED, IOM_UNCACHED } iomode;
 
 	/** Has flock been performed on this file? */
 	bool flock:1;
@@ -798,8 +809,8 @@ struct fuse_conn {
 	/* Is tmpfile not implemented by fs? */
 	unsigned int no_tmpfile:1;
 
-	/* relax restrictions in FOPEN_DIRECT_IO mode */
-	unsigned int direct_io_relax:1;
+	/* Relax restrictions to allow shared mmap in FOPEN_DIRECT_IO mode */
+	unsigned int direct_io_allow_mmap:1;
 
 	/* Is statx not implemented by fs? */
 	unsigned int no_statx:1;
@@ -1017,14 +1028,9 @@ void fuse_read_args_fill(struct fuse_io_args *ia, struct file *file, loff_t pos,
 			 size_t count, int opcode);
 
 
-/**
- * Send OPEN or OPENDIR request
- */
-int fuse_open_common(struct inode *inode, struct file *file, bool isdir);
-
-struct fuse_file *fuse_file_alloc(struct fuse_mount *fm);
+struct fuse_file *fuse_file_alloc(struct fuse_mount *fm, bool release);
 void fuse_file_free(struct fuse_file *ff);
-void fuse_finish_open(struct inode *inode, struct file *file);
+int fuse_finish_open(struct inode *inode, struct file *file);
 
 void fuse_sync_release(struct fuse_inode *fi, struct fuse_file *ff,
 		       unsigned int flags);
@@ -1334,8 +1340,15 @@ int fuse_fileattr_get(struct dentry *dentry, struct fileattr *fa);
 int fuse_fileattr_set(struct mnt_idmap *idmap,
 		      struct dentry *dentry, struct fileattr *fa);
 
-/* file.c */
+/* iomode.c */
+int fuse_file_cached_io_start(struct inode *inode, struct fuse_file *ff);
+int fuse_file_uncached_io_start(struct inode *inode, struct fuse_file *ff);
+void fuse_file_uncached_io_end(struct inode *inode, struct fuse_file *ff);
 
+int fuse_file_io_open(struct file *file, struct inode *inode);
+void fuse_file_io_release(struct fuse_file *ff, struct inode *inode);
+
+/* file.c */
 struct fuse_file *fuse_file_open(struct fuse_mount *fm, u64 nodeid,
 				 unsigned int open_flags, bool isdir);
 void fuse_file_release(struct inode *inode, struct fuse_file *ff,
