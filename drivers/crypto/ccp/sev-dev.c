@@ -26,12 +26,14 @@
 #include <linux/fs.h>
 #include <linux/fs_struct.h>
 #include <linux/psp.h>
+#include <linux/psp-csv.h>
 
 #include <asm/smp.h>
 #include <asm/cacheflush.h>
 
 #include "psp-dev.h"
 #include "sev-dev.h"
+#include "csv-dev.h"
 
 #define DEVICE_NAME		"sev"
 #define SEV_FW_FILE		"amd/sev.fw"
@@ -186,6 +188,22 @@ static int sev_cmd_buffer_len(int cmd)
 			return sizeof(struct csv_data_hgsc_cert_import);
 		case CSV_CMD_RING_BUFFER:
 			return sizeof(struct csv_data_ring_buffer);
+		case CSV3_CMD_LAUNCH_ENCRYPT_DATA:
+			return sizeof(struct csv3_data_launch_encrypt_data);
+		case CSV3_CMD_LAUNCH_ENCRYPT_VMCB:
+			return sizeof(struct csv3_data_launch_encrypt_vmcb);
+		case CSV3_CMD_UPDATE_NPT:
+			return sizeof(struct csv3_data_update_npt);
+		case CSV3_CMD_SET_SMR:
+			return sizeof(struct csv3_data_set_smr);
+		case CSV3_CMD_SET_SMCR:
+			return sizeof(struct csv3_data_set_smcr);
+		case CSV3_CMD_SET_GUEST_PRIVATE_MEMORY:
+			return sizeof(struct csv3_data_set_guest_private_memory);
+		case CSV3_CMD_DBG_READ_VMSA:
+			return sizeof(struct csv3_data_dbg_read_vmsa);
+		case CSV3_CMD_DBG_READ_MEM:
+			return sizeof(struct csv3_data_dbg_read_mem);
 		default:
 			break;
 		}
@@ -2358,6 +2376,13 @@ static void sev_exit(struct kref *ref)
 	misc_dev = NULL;
 }
 
+/* Code to set all of the function pointers for CSV. */
+static inline void csv_install_hooks(void)
+{
+	/* Install the hook functions for CSV. */
+	csv_hooks.sev_do_cmd = sev_do_cmd;
+}
+
 static int sev_misc_init(struct sev_device *sev)
 {
 	struct device *dev = sev->dev;
@@ -2387,6 +2412,9 @@ static int sev_misc_init(struct sev_device *sev)
 			return ret;
 
 		kref_init(&misc_dev->refcount);
+
+		/* Install the hook functions for CSV */
+		csv_install_hooks();
 	} else {
 		kref_get(&misc_dev->refcount);
 	}
@@ -2548,6 +2576,10 @@ void sev_pci_init(void)
 
 	if (!psp_init_on_probe)
 		return;
+
+	/* Set SMR for HYGON CSV3 */
+	if (boot_cpu_data.x86_vendor == X86_VENDOR_HYGON)
+		csv_platform_cmd_set_secure_memory_region(sev, &error);
 
 	/* Initialize the platform */
 	rc = sev_platform_init(&error);
