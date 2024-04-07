@@ -31,6 +31,7 @@
 #include <linux/swap.h>
 
 #include <linux/uaccess.h>
+#include <linux/sched/mm.h>
 
 #include "delegation.h"
 #include "internal.h"
@@ -427,9 +428,17 @@ static int nfs_release_page(struct page *page, gfp_t gfp)
 {
 	dfprintk(PAGECACHE, "NFS: release_page(%p)\n", page);
 
+	struct address_space *mapping = page->mapping;
 	/* If PagePrivate() is set, then the page is not freeable */
-	if (PagePrivate(page))
-		return 0;
+	if (mapping) {
+		if (PagePrivate(page)) {
+			if ((current_gfp_context(gfp) & GFP_KERNEL) != GFP_KERNEL ||
+				current_is_kswapd())
+				return 0;
+			if (nfs_wb_page(mapping->host, page) < 0)
+				return 0;
+		}
+	}
 	return nfs_fscache_release_page(page, gfp);
 }
 
