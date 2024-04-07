@@ -28,7 +28,8 @@
 int sysctl_rich_container_enable = 1;
 #elif defined(CONFIG_RICH_CONTAINER)
 int sysctl_rich_container_enable;
-int sysctl_rich_container_source; /* 0 - current; 1 - child_reaper */
+/* 0 - current; 1 - child_reaper; 2 - current's parent cgroup */
+int sysctl_rich_container_source;
 
 static int __init rich_container_enable(char *str)
 {

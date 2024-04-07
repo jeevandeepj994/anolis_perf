@@ -1402,6 +1402,8 @@ void rich_container_get_cpus(struct task_struct *tsk, struct cpumask *pmask)
 
 		rcu_read_lock();
 		tg = task_tg(tsk);
+		if (sysctl_rich_container_source == 2 && tg->parent)
+			tg = tg->parent;
 		quota = tg_get_cfs_quota(tg);
 		period = tg_get_cfs_period(tg);
 		rcu_read_unlock();
@@ -1427,6 +1429,8 @@ void rich_container_get_cpus(struct task_struct *tsk, struct cpumask *pmask)
 
 		rcu_read_lock();
 		tg = task_tg(tsk);
+		if (sysctl_rich_container_source == 2 && tg->parent)
+			tg = tg->parent;
 		shares = scale_load_down(tg->shares);
 		rcu_read_unlock();
 
@@ -1443,7 +1447,7 @@ void rich_container_get_cpus(struct task_struct *tsk, struct cpumask *pmask)
 
 cpuset_source:
 	/* cpuset.cpus source */
-	cpuset_cpus_allowed(tsk, pmask);
+	rich_container_get_cpuset_cpus(pmask);
 }
 #endif /*CONFIG_RICH_CONTAINER_CG_SWITCH */
 
@@ -1524,8 +1528,10 @@ void rich_container_source(enum rich_container_source *from)
 {
 	if (sysctl_rich_container_source == 1)
 		*from = RICH_CONTAINER_REAPER;
-	else
+	else if (sysctl_rich_container_source == 0)
 		*from = RICH_CONTAINER_CURRENT;
+	else
+		*from = RICH_CONTAINER_PARENT_CGROUP;
 }
 #endif
 
@@ -1544,6 +1550,13 @@ void rich_container_get_usage(enum rich_container_source from,
 		goto ok;
 	} else if (from == RICH_CONTAINER_CURRENT) {
 		ca_src = task_ca(current);
+		goto ok;
+	} else if (from == RICH_CONTAINER_PARENT_CGROUP) {
+		css = task_css(current, cpuacct_cgrp_id)->parent;
+		if (!css)
+			ca_src = task_ca(current);
+		else
+			ca_src = css_ca(css);
 		goto ok;
 	}
 
@@ -1580,6 +1593,13 @@ unsigned long rich_container_get_running(enum rich_container_source from,
 	} else if (from == RICH_CONTAINER_CURRENT) {
 		ca_src = task_ca(current);
 		goto ok;
+	} else if (from == RICH_CONTAINER_PARENT_CGROUP) {
+		css = task_css(current, cpuacct_cgrp_id)->parent;
+		if (!css)
+			ca_src = task_ca(current);
+		else
+			ca_src = css_ca(css);
+		goto ok;
 	}
 
 	css = task_css(current, cpuacct_cgrp_id);
@@ -1615,6 +1635,13 @@ void rich_container_get_avenrun(enum rich_container_source from,
 		goto ok;
 	} else if (from == RICH_CONTAINER_CURRENT) {
 		ca_src = task_ca(current);
+		goto ok;
+	} else if (from == RICH_CONTAINER_PARENT_CGROUP) {
+		css = task_css(current, cpuacct_cgrp_id)->parent;
+		if (!css)
+			ca_src = task_ca(current);
+		else
+			ca_src = css_ca(css);
 		goto ok;
 	}
 
