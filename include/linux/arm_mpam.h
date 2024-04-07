@@ -31,11 +31,22 @@ enum mpam_class_types {
 	MPAM_CLASS_UNKNOWN,     /* Everything else, e.g. SMMU */
 };
 
+enum mpam_machine_type {
+	MPAM_DEFAULT_MACHINE,
+	MPAM_YITIAN710,
+
+	MPAM_NUM_MACHINE_TYPES,
+};
+
+/* Machine identifier which can be used for vendor-specific MPAM features */
+extern enum mpam_machine_type mpam_current_machine;
+
 #ifdef CONFIG_ACPI_MPAM
 /* Parse the ACPI description of resources entries for this MSC. */
 int acpi_mpam_parse_resources(struct mpam_msc *msc,
 			      struct acpi_mpam_msc_node *tbl_msc);
 int acpi_mpam_count_msc(void);
+enum mpam_machine_type acpi_mpam_get_machine_type(void);
 #else
 static inline int acpi_mpam_parse_resources(struct mpam_msc *msc,
 					    struct acpi_mpam_msc_node *tbl_msc)
@@ -43,6 +54,10 @@ static inline int acpi_mpam_parse_resources(struct mpam_msc *msc,
 	return -EINVAL;
 }
 static inline int acpi_mpam_count_msc(void) { return -EINVAL; }
+static inline enum mpam_machine_type acpi_mpam_get_machine_type(void)
+{
+	return MPAM_DEFAULT_MACHINE;
+}
 #endif
 
 int mpam_register_requestor(u16 partid_max, u8 pmg_max);
@@ -66,6 +81,7 @@ bool resctrl_arch_mon_capable(void);
 bool resctrl_arch_is_llc_occupancy_enabled(void);
 bool resctrl_arch_is_mbm_local_enabled(void);
 bool resctrl_arch_is_mbm_total_enabled(void);
+bool resctrl_arch_is_mbm_bps_enabled(void);
 
 /* reset cached configurations, then all devices */
 void resctrl_arch_reset_resources(void);

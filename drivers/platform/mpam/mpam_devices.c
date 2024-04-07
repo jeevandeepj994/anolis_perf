@@ -35,6 +35,8 @@
 
 #include "mpam_internal.h"
 
+extern int ddrc_freq;
+
 /*
  * mpam_list_lock protects the SRCU lists when writing. Once the
  * mpam_enabled key is enabled these lists are read-only,
@@ -44,6 +46,8 @@ static DEFINE_MUTEX(mpam_list_lock);
 static LIST_HEAD(mpam_all_msc);
 
 struct srcu_struct mpam_srcu;
+
+enum mpam_machine_type mpam_current_machine;
 
 /* MPAM isn't available until all the MSC have been probed. */
 static u32 mpam_num_msc;
@@ -365,8 +369,12 @@ static int get_cpumask_from_cache_id(u32 cache_id, u32 cache_level,
 	int iter_cache_id;
 	struct device_node *iter;
 
-	if (!acpi_disabled)
+	if (!acpi_disabled) {
+		if (mpam_current_machine == MPAM_YITIAN710)
+			return acpi_pptt_get_cpumask_from_cache_id_and_level(
+					cache_id, cache_level, affinity);
 		return acpi_pptt_get_cpumask_from_cache_id(cache_id, affinity);
+	}
 
 	for_each_possible_cpu(cpu) {
 		iter = of_get_cpu_node(cpu, NULL);
@@ -685,6 +693,10 @@ static void mpam_ris_hw_probe(struct mpam_msc_ris *ris)
 			}
 		}
 	}
+
+	if (FIELD_GET(MPAMF_IDR_HAS_IMPL_IDR, ris->idr))
+		if (mpam_current_machine == MPAM_YITIAN710 && class->type == MPAM_CLASS_MEMORY)
+			mpam_set_feature(mpam_feat_impl_msmon_mbwu, props);
 
 	/*
 	 * RIS with PARTID narrowing don't have enough storage for one
@@ -1009,6 +1021,45 @@ static void __ris_msmon_read(void *arg)
 	*(m->val) += now;
 }
 
+static void __ris_impl_msmon_read(void *arg)
+{
+	unsigned long flags;
+	struct mon_read *m = arg;
+	u64 mb_val = 0;
+	struct mon_cfg *ctx = m->ctx;
+	struct mpam_msc *msc = m->ris->msc;
+	u32 custom_reg_base_addr, cycle, val;
+
+	lockdep_assert_held(&msc->lock);
+	if (m->type != mpam_feat_impl_msmon_mbwu)
+		return;
+
+	/* Other machine can extend this function */
+	if (mpam_current_machine != MPAM_YITIAN710)
+		return;
+
+	spin_lock_irqsave(&msc->part_sel_lock, flags);
+
+	__mpam_write_reg(msc, MPAMCFG_PART_SEL, ctx->mon);
+
+	custom_reg_base_addr = __mpam_read_reg(msc, MPAMF_IMPL_IDR);
+
+	cycle = __mpam_read_reg(msc, custom_reg_base_addr + MPAMF_CUST_WINDW_OFFSET);
+	val = __mpam_read_reg(msc, custom_reg_base_addr + MPAMF_CUST_MBWC_OFFSET);
+
+	spin_unlock_irqrestore(&msc->part_sel_lock, flags);
+
+	if (val & MSMON___NRDY) {
+		m->err = -EBUSY;
+		return;
+	}
+
+	mb_val = MBWU_GET(val);
+
+	mb_val = mb_val * 32 * ddrc_freq * 1000000 / cycle; /* B/s */
+	*(m->val) += mb_val;
+}
+
 static int _msmon_read(struct mpam_component *comp, struct mon_read *arg)
 {
 	int err, idx;
@@ -1021,8 +1072,15 @@ static int _msmon_read(struct mpam_component *comp, struct mon_read *arg)
 
 		msc = ris->msc;
 		mutex_lock(&msc->lock);
-		err = smp_call_function_any(&msc->accessibility,
-					    __ris_msmon_read, arg, true);
+		if (arg->type == mpam_feat_msmon_csu ||
+		    arg->type == mpam_feat_msmon_mbwu)
+			err = smp_call_function_any(&msc->accessibility,
+					__ris_msmon_read, arg, true);
+		else if (arg->type == mpam_feat_impl_msmon_mbwu)
+			err = smp_call_function_any(&msc->accessibility,
+					__ris_impl_msmon_read, arg, true);
+		else
+			err = -EOPNOTSUPP;
 		mutex_unlock(&msc->lock);
 		if (!err && arg->err)
 			err = arg->err;
@@ -1162,6 +1220,7 @@ static void mpam_reprogram_ris_partid(struct mpam_msc_ris *ris, u16 partid,
 	struct mpam_props *rprops = &ris->props;
 	u16 dspri = GENMASK(rprops->dspri_wd, 0);
 	u16 intpri = GENMASK(rprops->intpri_wd, 0);
+	u32 custom_reg_base_addr;
 
 	spin_lock(&msc->part_sel_lock);
 	__mpam_part_sel(ris->ris_idx, partid, msc);
@@ -1218,6 +1277,15 @@ static void mpam_reprogram_ris_partid(struct mpam_msc_ris *ris, u16 partid,
 		mpam_write_partsel_reg(msc, PRI, pri_val);
 	}
 
+	if (FIELD_GET(MPAMF_IDR_HAS_IMPL_IDR, ris->idr)) {
+		if (mpam_current_machine == MPAM_YITIAN710) {
+			custom_reg_base_addr = __mpam_read_reg(msc, MPAMF_IMPL_IDR);
+			__mpam_write_reg(msc, custom_reg_base_addr +
+					 MPAMF_CUST_WINDW_OFFSET,
+					 MBWU_WINWD_MAX);
+		}
+	}
+
 	spin_unlock(&msc->part_sel_lock);
 }
 
@@ -1240,7 +1308,7 @@ static int mpam_reprogram_ris(void *_arg)
 	spin_lock(&partid_max_lock);
 	partid_max = mpam_partid_max;
 	spin_unlock(&partid_max_lock);
-	for (partid = 0; partid < partid_max; partid++)
+	for (partid = 0; partid <= partid_max; partid++)
 		mpam_reprogram_ris_partid(ris, partid, cfg);
 
 	return 0;
@@ -1396,7 +1464,7 @@ static void mpam_reprogram_msc(struct mpam_msc *msc)
 		}
 
 		reset = true;
-		for (partid = 0; partid < mpam_partid_max; partid++) {
+		for (partid = 0; partid <= mpam_partid_max; partid++) {
 			cfg = &ris->comp->cfg[partid];
 			if (cfg->features)
 				reset = false;
@@ -1561,6 +1629,12 @@ static int mpam_msc_setup_error_irq(struct mpam_msc *msc)
 	return 0;
 }
 
+static enum mpam_machine_type mpam_dt_get_machine_type(void)
+{
+	/* FIXME: not supported yet */
+	return MPAM_DEFAULT_MACHINE;
+}
+
 static int mpam_dt_count_msc(void)
 {
 	int count = 0;
@@ -1688,6 +1762,24 @@ static void mpam_pcc_rx_callback(struct mbox_client *cl, void *msg)
 	/* TODO: wake up tasks blocked on this MSC's PCC channel */
 }
 
+static int mpam_msc_drv_remove(struct platform_device *pdev)
+{
+	struct mpam_msc *msc = platform_get_drvdata(pdev);
+
+	if (!msc)
+		return 0;
+
+	mutex_lock(&mpam_list_lock);
+	mpam_num_msc--;
+	platform_set_drvdata(pdev, NULL);
+	list_del_rcu(&msc->glbl_list);
+	mpam_msc_destroy(msc);
+	synchronize_srcu(&mpam_srcu);
+	mutex_unlock(&mpam_list_lock);
+
+	return 0;
+}
+
 static int mpam_msc_drv_probe(struct platform_device *pdev)
 {
 	int err;
@@ -1733,7 +1825,6 @@ static int mpam_msc_drv_probe(struct platform_device *pdev)
 
 		err = mpam_msc_setup_error_irq(msc);
 		if (err) {
-			devm_kfree(&pdev->dev, msc);
 			msc = ERR_PTR(err);
 			break;
 		}
@@ -1749,12 +1840,16 @@ static int mpam_msc_drv_probe(struct platform_device *pdev)
 								    &msc_res);
 			if (IS_ERR(io)) {
 				pr_err("Failed to map MSC base address\n");
-				devm_kfree(&pdev->dev, msc);
 				err = PTR_ERR(io);
 				break;
 			}
-			msc->mapped_hwpage_sz = msc_res->end - msc_res->start;
+			msc->mapped_hwpage_sz = msc_res->end - msc_res->start + 1;
 			msc->mapped_hwpage = io;
+			if (msc->mapped_hwpage_sz < MPAM_MIN_MMIO_SIZE) {
+				pr_err("MSC MMIO space size is too small\n");
+				err = -EINVAL;
+				break;
+			}
 		} else if (msc->iface == MPAM_IFACE_PCC) {
 			msc->pcc_cl.dev = &pdev->dev;
 			msc->pcc_cl.rx_callback = mpam_pcc_rx_callback;
@@ -1766,7 +1861,6 @@ static int mpam_msc_drv_probe(struct platform_device *pdev)
 								 msc->pcc_subspace_id);
 			if (IS_ERR(msc->pcc_chan)) {
 				pr_err("Failed to request MSC PCC channel\n");
-				devm_kfree(&pdev->dev, msc);
 				err = PTR_ERR(msc->pcc_chan);
 				break;
 			}
@@ -1777,7 +1871,6 @@ static int mpam_msc_drv_probe(struct platform_device *pdev)
 			if (IS_ERR(io)) {
 				pr_err("Failed to map MSC base address\n");
 				pcc_mbox_free_channel(msc->pcc_chan);
-				devm_kfree(&pdev->dev, msc);
 				err = PTR_ERR(io);
 				break;
 			}
@@ -1800,6 +1893,9 @@ static int mpam_msc_drv_probe(struct platform_device *pdev)
 		else
 			err = mpam_dt_parse_resources(msc, plat_data);
 	}
+
+	if (err)
+		mpam_msc_drv_remove(pdev);
 
 	if (!err && fw_num_msc == mpam_num_msc)
 		mpam_register_cpuhp_callbacks(&mpam_discovery_cpu_online);
@@ -1964,13 +2060,15 @@ static irqreturn_t __mpam_irq_handler(int irq, struct mpam_msc *msc)
 	pr_err("error irq from msc:%u '%s', partid:%u, pmg: %u, ris: %u\n",
 	       msc->id, mpam_errcode_names[errcode], partid, pmg, ris);
 
-	if (irq_is_percpu(irq)) {
-		mpam_disable_msc_ecr(msc);
-		schedule_work(&mpam_broken_work);
-		return IRQ_HANDLED;
-	}
+	/*
+	 * To prevent this interrupt from repeatedly cancelling the scheduled
+	 * work to disable mpam, disable the error interrupt.
+	 */
+	mpam_disable_msc_ecr(msc);
 
-	return IRQ_WAKE_THREAD;
+	schedule_work(&mpam_broken_work);
+
+	return IRQ_HANDLED;
 }
 
 static irqreturn_t mpam_ppi_handler(int irq, void *dev_id)
@@ -1986,8 +2084,6 @@ static irqreturn_t mpam_spi_handler(int irq, void *dev_id)
 
 	return __mpam_irq_handler(irq, msc);
 }
-
-static irqreturn_t mpam_disable_thread(int irq, void *dev_id);
 
 static int mpam_register_irqs(void)
 {
@@ -2018,11 +2114,9 @@ static int mpam_register_irqs(void)
 					       true);
 			mutex_unlock(&msc->lock);
 		} else {
-			err = devm_request_threaded_irq(&msc->pdev->dev, irq,
-							&mpam_spi_handler,
-							&mpam_disable_thread,
-							IRQF_SHARED,
-							"mpam:msc:error", msc);
+			err = devm_request_irq(&msc->pdev->dev, irq,
+					       &mpam_spi_handler, IRQF_SHARED,
+					       "mpam:msc:error", msc);
 			if (err)
 				return err;
 		}
@@ -2099,7 +2193,7 @@ static int __allocate_component_cfg(struct mpam_component *comp)
 	if (comp->cfg)
 		return 0;
 
-	comp->cfg = kcalloc(mpam_partid_max, sizeof(*comp->cfg), GFP_KERNEL);
+	comp->cfg = kcalloc(mpam_partid_max + 1, sizeof(*comp->cfg), GFP_KERNEL);
 	if (!comp->cfg)
 		return -ENOMEM;
 
@@ -2200,7 +2294,7 @@ static void mpam_enable_once(void)
 	mpam_register_cpuhp_callbacks(mpam_cpu_online);
 
 	pr_info("MPAM enabled with %u partid and %u pmg\n",
-		READ_ONCE(mpam_partid_max) + 1, mpam_pmg_max + 1);
+		READ_ONCE(mpam_partid_max) + 1, READ_ONCE(mpam_pmg_max) + 1);
 }
 
 void mpam_reset_class(struct mpam_class *class)
@@ -2211,7 +2305,7 @@ void mpam_reset_class(struct mpam_class *class)
 
 	idx = srcu_read_lock(&mpam_srcu);
 	list_for_each_entry_rcu(comp, &class->components, class_list) {
-		memset(comp->cfg, 0, (mpam_partid_max * sizeof(*comp->cfg)));
+		memset(comp->cfg, 0, ((mpam_partid_max + 1) * sizeof(*comp->cfg)));
 
 		list_for_each_entry_rcu(ris, &comp->ris, comp_list) {
 			mutex_lock(&ris->msc->lock);
@@ -2228,7 +2322,7 @@ void mpam_reset_class(struct mpam_class *class)
  * All of MPAMs errors indicate a software bug, restore any modified
  * controls to their reset values.
  */
-static irqreturn_t mpam_disable_thread(int irq, void *dev_id)
+void mpam_disable(struct work_struct *ignored)
 {
 	int idx;
 	struct mpam_class *class;
@@ -2250,13 +2344,6 @@ static irqreturn_t mpam_disable_thread(int irq, void *dev_id)
 	list_for_each_entry_rcu(class, &mpam_classes, classes_list)
 		mpam_reset_class(class);
 	srcu_read_unlock(&mpam_srcu, idx);
-
-	return IRQ_HANDLED;
-}
-
-void mpam_disable(struct work_struct *ignored)
-{
-	mpam_disable_thread(0, NULL);
 }
 
 /*
@@ -2284,24 +2371,6 @@ void mpam_enable(struct work_struct *work)
 
 	if (all_devices_probed && !atomic_fetch_inc(&once))
 		mpam_enable_once();
-}
-
-static int mpam_msc_drv_remove(struct platform_device *pdev)
-{
-	struct mpam_msc *msc = platform_get_drvdata(pdev);
-
-	if (!msc)
-		return 0;
-
-	mutex_lock(&mpam_list_lock);
-	mpam_num_msc--;
-	platform_set_drvdata(pdev, NULL);
-	list_del_rcu(&msc->glbl_list);
-	mpam_msc_destroy(msc);
-	synchronize_srcu(&mpam_srcu);
-	mutex_unlock(&mpam_list_lock);
-
-	return 0;
 }
 
 struct mpam_write_config_arg {
@@ -2382,14 +2451,49 @@ static void mpam_dt_create_foundling_msc(void)
 	}
 }
 
+static int __init arm64_mpam_register_cpus(void)
+{
+	u64 mpamidr = read_sysreg_s(SYS_MPAMIDR_EL1);
+	u16 partid_max = FIELD_GET(MPAMIDR_PARTID_MAX, mpamidr);
+	u8 pmg_max = FIELD_GET(MPAMIDR_PMG_MAX, mpamidr);
+
+	return mpam_register_requestor(partid_max, pmg_max);
+}
+
 static int __init mpam_msc_driver_init(void)
 {
 	bool mpam_not_available = false;
+	int err;
 
 	if (!mpam_cpus_have_feature())
 		return -EOPNOTSUPP;
 
 	init_srcu_struct(&mpam_srcu);
+
+	if (!acpi_disabled)
+		mpam_current_machine = acpi_mpam_get_machine_type();
+	else
+		mpam_current_machine = mpam_dt_get_machine_type();
+
+	if (!acpi_disabled)
+		fw_num_msc = acpi_mpam_count_msc();
+	else
+		fw_num_msc = mpam_dt_count_msc();
+
+	if (fw_num_msc <= 0) {
+		pr_err("No MSC devices found in firmware\n");
+		return -EINVAL;
+	}
+
+	/*
+	 * Access MPAM system registers after MPAM ACPI table is parsed, since
+	 * some BIOSs disable MPAM system registers accessing but export MPAM in
+	 * ID_AA64PFR0_EL1. So we can only rely on the MPAM ACPI table to
+	 * determine whether MPAM feature is enabled.
+	 */
+	err = arm64_mpam_register_cpus();
+	if (err)
+		return err;
 
 	/*
 	 * If the MPAM CPU interface is not implemented, or reserved by
@@ -2402,16 +2506,6 @@ static int __init mpam_msc_driver_init(void)
 
 	if (mpam_not_available)
 		return 0;
-
-	if (!acpi_disabled)
-		fw_num_msc = acpi_mpam_count_msc();
-	else
-		fw_num_msc = mpam_dt_count_msc();
-
-	if (fw_num_msc <= 0) {
-		pr_err("No MSC devices found in firmware\n");
-		return -EINVAL;
-	}
 
 	if (acpi_disabled)
 		mpam_dt_create_foundling_msc();

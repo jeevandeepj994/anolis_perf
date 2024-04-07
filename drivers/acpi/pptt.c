@@ -296,6 +296,54 @@ static struct acpi_pptt_processor *acpi_find_processor_node(struct acpi_table_he
 	return NULL;
 }
 
+/*
+ * acpi_pptt_find_cache_backwards() - Given a PPTT cache find a processor node
+ * that points to it. This lets us find a cacheinfo node by fw_token, but
+ * is totally broken as many processor node may point at the same PPTT
+ * cache indicating different instances of the cache. (e.g. all the L1
+ * caches are the same shape, but they aren't the same cache).
+ * This only works if you cooked your PPTT table to look like this.
+ */
+struct acpi_pptt_processor *
+acpi_pptt_find_cache_backwards(struct acpi_table_header *table_hdr,
+			       struct acpi_pptt_cache *cache)
+{
+	struct acpi_pptt_processor *cpu_node;
+	struct acpi_subtable_header *entry;
+	struct acpi_subtable_header *res;
+	unsigned long table_end;
+	u32 proc_sz;
+	int i;
+
+	table_end = (unsigned long)table_hdr + table_hdr->length;
+	entry = ACPI_ADD_PTR(struct acpi_subtable_header, table_hdr,
+			     sizeof(struct acpi_table_pptt));
+	proc_sz = sizeof(struct acpi_pptt_processor *);
+
+	/* find the processor structure which points at  with this cpuid */
+	while ((unsigned long)entry + proc_sz < table_end) {
+		if (entry->length == 0) {
+			pr_warn("Invalid zero length subtable\n");
+			break;
+		}
+
+		cpu_node = (struct acpi_pptt_processor *)entry;
+		entry = ACPI_ADD_PTR(struct acpi_subtable_header, entry,
+				     entry->length);
+
+		if (cpu_node->header.type != ACPI_PPTT_TYPE_PROCESSOR)
+			continue;
+
+		for (i = 0; i < cpu_node->number_of_priv_resources; i++) {
+			res = acpi_get_pptt_resource(table_hdr, cpu_node, i);
+			if (&cache->header == res)
+				return cpu_node;
+		}
+	}
+
+	return NULL;
+}
+
 /* parent_node points into the table, but the table isn't provided. */
 static void acpi_pptt_get_child_cpus(struct acpi_pptt_processor *parent_node,
 				     cpumask_t *cpus)
@@ -1081,6 +1129,70 @@ int acpi_pptt_get_cpumask_from_cache_id(u32 cache_id, cpumask_t *cpus)
 				cpumask_set_cpu(cpu, cpus);
 			}
 		}
+	}
+
+	acpi_put_table(table);
+	return 0;
+}
+
+/**
+ * acpi_pptt_get_cpumask_from_cache_id_and_level() - Get the cpus associated with the
+ *						     cache specified by id and level
+ * @cache_id: The id field of the unified cache
+ * @cache_level: The level of the unified cache
+ * @cpus: Where to buidl the cpumask
+ *
+ * Determine which CPUs are below this cache in the PPTT. This allows the property
+ * to be found even if the CPUs are offline.
+ *
+ * The PPTT table must be rev 3 or later,
+ *
+ * Return: -ENOENT if the PPTT doesn't exist, or the cache cannot be found.
+ * Otherwise returns 0 and sets the cpus in the provided cpumask.
+ */
+int acpi_pptt_get_cpumask_from_cache_id_and_level(u32 cache_id, u32 cache_level,
+						  cpumask_t *cpus)
+{
+	u32 acpi_cpu_id;
+	acpi_status status;
+	int cpu;
+	struct acpi_table_header *table;
+	struct acpi_pptt_cache *cache_node;
+	struct acpi_pptt_processor *cpu_node;
+
+	cpumask_clear(cpus);
+
+	status = acpi_get_table(ACPI_SIG_PPTT, 0, &table);
+	if (ACPI_FAILURE(status)) {
+		acpi_pptt_warn_missing();
+		return -ENOENT;
+	}
+
+	/*
+	 * FIXME: Since this function does not actually use the cache id in the
+	 * PPTT table, we downgrade the revision requirement.
+	 */
+	if (table->revision < 2) {
+		acpi_put_table(table);
+		return -ENOENT;
+	}
+
+	for_each_possible_cpu(cpu) {
+		acpi_cpu_id = get_acpi_id_for_cpu(cpu);
+		cpu_node = acpi_find_processor_node(table, acpi_cpu_id);
+		if (!cpu_node)
+			continue;
+
+		cache_node = acpi_find_cache_node(table, acpi_cpu_id,
+						  ACPI_PPTT_CACHE_TYPE_UNIFIED,
+						  cache_level, &cpu_node);
+
+		if (!cache_node)
+			continue;
+
+		cpu_node = acpi_pptt_find_cache_backwards(table, cache_node);
+		if (cpu_node->acpi_processor_id == cache_id)
+			cpumask_set_cpu(cpu, cpus);
 	}
 
 	acpi_put_table(table);

@@ -35,6 +35,7 @@ static bool exposed_alloc_capable;
 static bool exposed_mon_capable;
 static struct mpam_class *mbm_local_class;
 static struct mpam_class *mbm_total_class;
+static struct mpam_class *mbm_bps_class;
 
 /*
  * MPAM emulates CDP by setting different PARTID in the I/D fields of MPAM1_EL1.
@@ -77,6 +78,11 @@ bool resctrl_arch_is_mbm_local_enabled(void)
 bool resctrl_arch_is_mbm_total_enabled(void)
 {
 	return mbm_total_class;
+}
+
+bool resctrl_arch_is_mbm_bps_enabled(void)
+{
+	return mbm_bps_class;
 }
 
 bool resctrl_arch_get_cdp_enabled(enum resctrl_res_level rid)
@@ -272,6 +278,10 @@ static void *resctrl_arch_mon_ctx_alloc_no_wait(struct rdt_resource *r,
 	case QOS_L3_MBM_LOCAL_EVENT_ID:
 	case QOS_L3_MBM_TOTAL_EVENT_ID:
 		return mon_is_rmid_idx;
+	case QOS_MC_MBM_BPS_EVENT_ID:
+		if (mpam_current_machine == MPAM_YITIAN710)
+			return mon_is_rmid_idx;
+		return ERR_PTR(-EOPNOTSUPP);
 	}
 
 	return ERR_PTR(-EOPNOTSUPP);
@@ -316,6 +326,7 @@ void resctrl_arch_mon_ctx_free(struct rdt_resource *r, int evtid,
 		return;
 	case QOS_L3_MBM_TOTAL_EVENT_ID:
 	case QOS_L3_MBM_LOCAL_EVENT_ID:
+	case QOS_MC_MBM_BPS_EVENT_ID:
 		return;
 	}
 }
@@ -355,13 +366,18 @@ int resctrl_arch_rmid_read(struct rdt_resource	*r, struct rdt_domain *d,
 	case QOS_L3_MBM_TOTAL_EVENT_ID:
 		type = mpam_feat_msmon_mbwu;
 		break;
+	case QOS_MC_MBM_BPS_EVENT_ID:
+		if (mpam_current_machine == MPAM_YITIAN710)
+			type = mpam_feat_impl_msmon_mbwu;
+		break;
 	default:
 		return -EINVAL;
 	}
 
-	cfg.mon = mon;
-	if (cfg.mon == USE_RMID_IDX)
+	if (mon == USE_RMID_IDX)
 		cfg.mon = resctrl_arch_rmid_idx_encode(closid, rmid);
+	else
+		cfg.mon = mon;
 
 	cfg.match_pmg = true;
 	cfg.pmg = rmid;
@@ -486,6 +502,16 @@ static bool class_has_usable_mbwu(struct mpam_class *class)
 	return (mpam_partid_max > 1) || (mpam_pmg_max != 0);
 }
 
+static bool class_has_usable_impl_mbwu(struct mpam_class *class)
+{
+	struct mpam_props *cprops = &class->props;
+
+	if (!mpam_has_feature(mpam_feat_impl_msmon_mbwu, cprops))
+		return false;
+
+	return true;
+}
+
 static bool mba_class_use_mbw_part(struct mpam_props *cprops)
 {
 	/* TODO: Scaling is not yet supported */
@@ -515,7 +541,7 @@ static u32 get_mba_granularity(struct mpam_props *cprops)
 		 * bwa_wd is the number of bits implemented in the 0.xxx
 		 * fixed point fraction. 1 bit is 50%, 2 is 25% etc.
 		 */
-		return MAX_MBA_BW / (cprops->bwa_wd + 1);
+		return max_t(u32, 1, (MAX_MBA_BW / BIT(cprops->bwa_wd)));
 	}
 
 	return 0;
@@ -539,9 +565,16 @@ static u32 mbw_max_to_percent(u16 mbw_max, struct mpam_props *cprops)
 
 	for (bit = 15; bit; bit--) {
 		if (mbw_max & BIT(bit))
-			value += MAX_MBA_BW / divisor;
+			/*
+			 * Left shift by 16 bits to preserve the precision of
+			 * the division operation.
+			 */
+			value += (MAX_MBA_BW << 16) / divisor;
 		divisor <<= 1;
 	}
+
+	/* Use the upper bound of the fixed-point fraction. */
+	value = (value + (MAX_MBA_BW << (16 - cprops->bwa_wd))) >> 16;
 
 	return value;
 }
@@ -561,23 +594,35 @@ static u32 percent_to_mbw_pbm(u8 pc, struct mpam_props *cprops)
 static u16 percent_to_mbw_max(u8 pc, struct mpam_props *cprops)
 {
 	u8 bit;
-	u32 divisor = 2, value = 0;
+	u32 granularity, pc_ls, divisor = 2, value = 0;
 
 	if (WARN_ON_ONCE(cprops->bwa_wd > 15))
 		return MAX_MBA_BW;
 
+	/* Set the pc value to be a multiple of granularity. */
+	granularity = get_mba_granularity(cprops);
+	pc = roundup(pc, (u8) granularity);
+	if (pc > 100)
+		pc = 100;
+
+	/*
+	 * Left shift by 16 bits to preserve the precision of the division
+	 * operation.
+	 */
+	pc_ls = (u32) pc << 16;
+
 	for (bit = 15; bit; bit--) {
-		if (pc >= MAX_MBA_BW / divisor) {
-			pc -= MAX_MBA_BW / divisor;
+		if (pc_ls >= (MAX_MBA_BW << 16) / divisor) {
+			pc_ls -= (MAX_MBA_BW << 16) / divisor;
 			value |= BIT(bit);
 		}
 		divisor <<= 1;
 
-		if (!pc || !(MAX_MBA_BW / divisor))
+		if (!pc_ls || !((MAX_MBA_BW << 16) / divisor))
 			break;
 	}
 
-	value &= GENMASK(15, 15 - cprops->bwa_wd);
+	value &= GENMASK(15, 15 - cprops->bwa_wd + 1);
 
 	return value;
 }
@@ -739,6 +784,8 @@ static int mpam_resctrl_resource_init(struct mpam_resctrl_res *res)
 	    res->resctrl_res.rid == RDT_RESOURCE_L3) {
 		bool has_csu = cache_has_usable_csu(class);
 
+		r->cache_level = class->level;
+
 		/* TODO: Scaling is not yet supported */
 		r->cache.cbm_len = class->props.cpbm_wd;
 		r->cache.arch_has_sparse_bitmasks = true;
@@ -788,7 +835,7 @@ static int mpam_resctrl_resource_init(struct mpam_resctrl_res *res)
 		struct mpam_props *cprops = &class->props;
 
 		/* TODO: kill these properties off as they are derivatives */
-		r->format_str = "%d=%0*u";
+		r->format_str = "%d=%*u";
 		r->fflags = RFTYPE_RES_MB;
 		r->default_ctrl = MAX_MBA_BW;
 		r->data_width = 3;
@@ -796,6 +843,7 @@ static int mpam_resctrl_resource_init(struct mpam_resctrl_res *res)
 		r->membw.delay_linear = true;
 		r->membw.throttle_mode = THREAD_THROTTLE_UNDEFINED;
 		r->membw.bw_gran = get_mba_granularity(cprops);
+		r->membw.min_bw = r->membw.bw_gran;
 
 		/* Round up to at least 1% */
 		if (!r->membw.bw_gran)
@@ -809,6 +857,10 @@ static int mpam_resctrl_resource_init(struct mpam_resctrl_res *res)
 		if (has_mbwu && class->type == MPAM_CLASS_MEMORY) {
 			mbm_total_class = class;
 			r->mon_capable = true;
+		} else if (class_has_usable_impl_mbwu(class)) {
+			r->mon_capable = true;
+			if (mpam_current_machine == MPAM_YITIAN710)
+				mbm_bps_class = class;
 		}
 	}
 
@@ -909,7 +961,10 @@ u32 resctrl_arch_get_config(struct rdt_resource *r, struct rdt_domain *d,
 	dom = container_of(d, struct mpam_resctrl_dom, resctrl_dom);
 	cprops = &res->class->props;
 
-	partid = resctrl_get_config_index(closid, type);
+	if (mpam_resctrl_hide_cdp(r->rid))
+		partid = resctrl_get_config_index(closid, CDP_CODE);
+	else
+		partid = resctrl_get_config_index(closid, type);
 	cfg = &dom->comp->cfg[partid];
 
 	switch (r->rid) {
