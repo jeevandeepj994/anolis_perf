@@ -1159,6 +1159,18 @@ unsigned long mem_cgroup_soft_limit_reclaim(pg_data_t *pgdat, int order,
 						gfp_t gfp_mask,
 						unsigned long *total_scanned);
 
+void memcg_meminfo(struct mem_cgroup *memcg,
+		struct sysinfo *info, struct sysinfo_ext *ext);
+
+#ifdef CONFIG_RICH_CONTAINER
+struct mem_cgroup *rich_container_get_memcg(void);
+#else
+static inline struct mem_cgroup *rich_container_get_memcg(void)
+{
+	return NULL;
+}
+#endif
+
 #else /* CONFIG_MEMCG */
 
 #define MEM_CGROUP_ID_SHIFT	0
@@ -1577,6 +1589,12 @@ static inline void count_memcg_folio_events(struct folio *folio,
 
 static inline
 void count_memcg_event_mm(struct mm_struct *mm, enum vm_event_item idx)
+{
+}
+
+static inline void
+memcg_meminfo(struct mem_cgroup *memcg,
+		struct sysinfo *info, struct sysinfo_ext *ext)
 {
 }
 

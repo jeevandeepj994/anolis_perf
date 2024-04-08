@@ -43,6 +43,7 @@
 #include <linux/sched/isolation.h>
 #include <linux/cgroup.h>
 #include <linux/wait.h>
+#include <linux/pid_namespace.h>
 
 DEFINE_STATIC_KEY_FALSE(cpusets_pre_enable_key);
 DEFINE_STATIC_KEY_FALSE(cpusets_enabled_key);
@@ -1600,6 +1601,8 @@ static int update_parent_subparts_cpumask(struct cpuset *cs, int cmd,
 	return 0;
 }
 
+static struct cpumask added, deleted, old_cpus;
+
 /*
  * update_cpumasks_hier() flags
  */
@@ -1655,6 +1658,11 @@ static void update_cpumasks_hier(struct cpuset *cs, struct tmpmasks *tmp,
 			WARN_ON_ONCE(!parent->child_ecpus_count);
 			parent->child_ecpus_count--;
 		}
+
+		if (cpumask_empty(cp->effective_cpus))
+			cpumask_copy(&old_cpus, parent->effective_cpus);
+		else
+			cpumask_copy(&old_cpus, cp->effective_cpus);
 
 		/*
 		 * Skip the whole subtree if
@@ -1747,7 +1755,15 @@ update_parent_subparts:
 		WARN_ON(!is_in_v2_mode() &&
 			!cpumask_equal(cp->cpus_allowed, cp->effective_cpus));
 
+		/* add = new - old = new & (~old) */
+		cpumask_andnot(&added, tmp->new_cpus, &old_cpus);
+		cpuacct_cpuset_changed(cs->css.cgroup, NULL, &added);
+
 		update_tasks_cpumask(cp, tmp->new_cpus);
+
+		/* deleted = old - new = old & (~new) */
+		cpumask_andnot(&deleted, &old_cpus, tmp->new_cpus);
+		cpuacct_cpuset_changed(cs->css.cgroup, &deleted, NULL);
 
 		/*
 		 * On default hierarchy, inherit the CS_SCHED_LOAD_BALANCE
@@ -3328,6 +3344,7 @@ static int cpuset_css_online(struct cgroup_subsys_state *css)
 	cs->effective_mems = parent->mems_allowed;
 	cpumask_copy(cs->cpus_allowed, parent->cpus_allowed);
 	cpumask_copy(cs->effective_cpus, parent->cpus_allowed);
+	cpuacct_cpuset_changed(cs->css.cgroup, NULL, cs->effective_cpus);
 	spin_unlock_irq(&callback_lock);
 out_unlock:
 	mutex_unlock(&cpuset_mutex);
@@ -3985,6 +4002,29 @@ void cpuset_cpus_allowed(struct task_struct *tsk, struct cpumask *pmask)
 	rcu_read_unlock();
 	spin_unlock_irqrestore(&callback_lock, flags);
 }
+
+#ifdef CONFIG_RICH_CONTAINER
+void rich_container_get_cpuset_cpus(struct cpumask *pmask)
+{
+	unsigned long flags;
+	struct task_struct *p;
+
+	rcu_read_lock();
+	if (sysctl_rich_container_source == 1) {
+		read_lock(&tasklist_lock);
+		p = task_active_pid_ns(current)->child_reaper;
+		read_unlock(&tasklist_lock);
+
+	} else {
+		p = current;
+	}
+
+	spin_lock_irqsave(&callback_lock, flags);
+	guarantee_online_cpus(p, pmask);
+	spin_unlock_irqrestore(&callback_lock, flags);
+	rcu_read_unlock();
+}
+#endif
 
 /**
  * cpuset_cpus_allowed_fallback - final fallback before complete catastrophe.

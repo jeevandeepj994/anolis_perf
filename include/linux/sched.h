@@ -133,6 +133,10 @@ struct user_event_mm;
 #define task_is_traced(task)		((READ_ONCE(task->jobctl) & JOBCTL_TRACED) != 0)
 #define task_is_stopped(task)		((READ_ONCE(task->jobctl) & JOBCTL_STOPPED) != 0)
 #define task_is_stopped_or_traced(task)	((READ_ONCE(task->jobctl) & (JOBCTL_STOPPED | JOBCTL_TRACED)) != 0)
+#define task_contributes_to_load(task)					\
+		((READ_ONCE((task)->__state) & TASK_UNINTERRUPTIBLE) != 0 && \
+		(READ_ONCE((task)->__state) & TASK_FROZEN) == 0 && \
+		(READ_ONCE((task)->__state) & TASK_NOLOAD) == 0)
 
 /*
  * Special states are those that do not use the normal wait-loop pattern. See
@@ -509,6 +513,8 @@ struct sched_statistics {
 	u64				wait_max;
 	u64				wait_count;
 	u64				wait_sum;
+	u64				parent_wait_sum_base;
+	u64				parent_wait_contrib;
 	u64				iowait_count;
 	u64				iowait_sum;
 
@@ -567,6 +573,20 @@ struct sched_entity {
 	u64				vruntime;
 	s64				vlag;
 	u64				slice;
+
+	/* irq time is included */
+	u64				exec_start_raw;
+	u64				sum_exec_raw;
+	u64				cg_idle_start;
+	u64				cg_idle_sum;
+	u64				cg_init_time;
+	u64				cg_nr_iowait;
+	u64				cg_iowait_sum;
+	u64				cg_iowait_start;
+	u64				cg_ineffective_sum;
+	u64				cg_ineffective_start;
+	seqlock_t			idle_seqlock;
+	spinlock_t			iowait_lock;
 
 	u64				nr_migrations;
 
@@ -2502,5 +2522,75 @@ static inline int sched_core_idle_cpu(int cpu) { return idle_cpu(cpu); }
 #endif
 
 extern void sched_set_stop_task(int cpu, struct task_struct *stop);
+
+struct cpuacct_usage_result {
+	u64 user, nice, system, irq, softirq;
+	u64 steal, iowait, idle, guest, guest_nice;
+};
+
+enum rich_container_source {
+	RICH_CONTAINER_REAPER,
+	RICH_CONTAINER_CURRENT,
+};
+
+#ifdef CONFIG_RICH_CONTAINER
+void rich_container_source(enum rich_container_source *from);
+bool child_cpuacct(struct task_struct *tsk);
+void rich_container_get_usage(enum rich_container_source from,
+		struct task_struct *reaper, int cpu,
+		struct cpuacct_usage_result *res);
+unsigned long rich_container_get_running(enum rich_container_source from,
+		struct task_struct *reaper, int cpu);
+void rich_container_get_avenrun(enum rich_container_source from,
+		struct task_struct *reaper, unsigned long *loads,
+		unsigned long offset, int shift, bool running);
+bool check_rich_container(unsigned int cpu, unsigned int *index,
+		bool *rich_container, unsigned int *total);
+
+void rich_container_get_cpus(struct task_struct *tsk, struct cpumask *pmask);
+
+#else /* CONFIG_RICH_CONTAINER */
+static inline void
+rich_container_source(enum rich_container_source *from)
+{
+}
+
+static inline void
+rich_container_get_usage(enum rich_container_source from,
+		struct task_struct *reaper, int cpu,
+		struct cpuacct_usage_result *res)
+{
+}
+
+static inline unsigned long
+rich_container_get_running(enum rich_container_source from,
+		struct task_struct *reaper, int cpu)
+{
+	return 0;
+}
+
+static inline void rich_container_get_avenrun(enum rich_container_source from,
+		struct task_struct *reaper, unsigned long *loads,
+		unsigned long offset, int shift, bool running)
+{
+}
+
+static inline bool check_rich_container(unsigned int cpu, unsigned int *index,
+		bool *rich_container, unsigned int *total)
+{
+	return false;
+}
+
+static inline
+void rich_container_get_cpus(struct task_struct *tsk, struct cpumask *pmask)
+{
+}
+#endif
+
+#ifdef CONFIG_SCHED_SLI
+void create_rich_container_reaper(struct task_struct *tsk);
+#else
+static inline void create_rich_container_reaper(struct task_struct *tsk) { }
+#endif
 
 #endif

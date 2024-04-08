@@ -113,11 +113,21 @@ extern __read_mostly int scheduler_running;
 
 extern unsigned long calc_load_update;
 extern atomic_long_t calc_load_tasks;
+extern atomic_long_t calc_load_tasks_r;
 
 extern unsigned int sysctl_sched_child_runs_first;
 
 extern void calc_global_load_tick(struct rq *this_rq);
 extern long calc_load_fold_active(struct rq *this_rq, long adjust);
+
+#ifdef CONFIG_SCHED_SLI
+extern long calc_load_fold_active_r(struct rq *this_rq, long adjust);
+#else
+static inline long calc_load_fold_active_r(struct rq *this_rq, long adjust)
+{
+	return 0;
+}
+#endif
 
 extern void call_trace_sched_update_nr_running(struct rq *rq, int count);
 
@@ -338,6 +348,52 @@ struct rt_rq;
 
 extern struct list_head task_groups;
 
+enum sched_lat_stat_item {
+	SCHED_LAT_WAIT,
+	SCHED_LAT_BLOCK,
+	SCHED_LAT_IOBLOCK,
+	SCHED_LAT_CGROUP_WAIT,
+	SCHED_LAT_NR_STAT
+};
+
+/*
+ * [0, 1ms)
+ * [1, 4ms)
+ * [4, 7ms)
+ * [7, 10ms)
+ * [10, 100ms)
+ * [100, 500ms)
+ * [500, 1000ms)
+ * [1000, 5000ms)
+ * [5000, 10000ms)
+ * [10000ms, INF)
+ * total(ms)
+ */
+/* Scheduler latency histogram distribution, in milliseconds */
+enum sched_lat_count_t {
+	SCHED_LAT_0_1,
+	SCHED_LAT_1_4,
+	SCHED_LAT_4_7,
+	SCHED_LAT_7_10,
+	SCHED_LAT_10_20,
+	SCHED_LAT_20_30,
+	SCHED_LAT_30_40,
+	SCHED_LAT_40_50,
+	SCHED_LAT_50_100,
+	SCHED_LAT_100_500,
+	SCHED_LAT_500_1000,
+	SCHED_LAT_1000_5000,
+	SCHED_LAT_5000_10000,
+	SCHED_LAT_10000_INF,
+	SCHED_LAT_TOTAL,
+	SCHED_LAT_NR,
+	SCHED_LAT_NR_COUNT,
+};
+
+struct sched_cgroup_lat_stat_cpu {
+	unsigned long item[SCHED_LAT_NR_STAT][SCHED_LAT_NR_COUNT];
+};
+
 struct cfs_bandwidth {
 #ifdef CONFIG_CFS_BANDWIDTH
 	raw_spinlock_t		lock;
@@ -424,6 +480,9 @@ struct task_group {
 	unsigned int		ht_ratio;
 #endif
 
+#ifdef CONFIG_SCHED_SLI
+	struct sched_cgroup_lat_stat_cpu __percpu *lat_stat_cpu;
+#endif
 };
 
 #ifdef CONFIG_FAIR_GROUP_SCHED
@@ -660,6 +719,8 @@ struct cfs_rq {
 #endif
 #endif /* CONFIG_CFS_BANDWIDTH */
 #endif /* CONFIG_FAIR_GROUP_SCHED */
+
+	unsigned long		nr_uninterruptible;
 };
 
 static inline int rt_bandwidth_enabled(void)
@@ -706,6 +767,8 @@ struct rt_rq {
 	struct rq		*rq;
 	struct task_group	*tg;
 #endif
+
+	unsigned long		nr_uninterruptible;
 };
 
 static inline bool rt_rq_is_runnable(struct rt_rq *rt_rq)
@@ -1028,7 +1091,14 @@ struct rq {
 	struct task_struct	*idle;
 	struct task_struct	*stop;
 	unsigned long		next_balance;
-	struct mm_struct	*prev_mm;
+
+	/*
+	 * Frequent writing to prev_mm and clock_update_flags on local
+	 * CPU causes cacheline containing idle to be invalidated on
+	 * other CPUs. Put prev_mm and sequential fields on a new
+	 * cacheline to fix it.
+	 */
+	struct mm_struct        *prev_mm ____cacheline_aligned;
 
 	unsigned int		clock_update_flags;
 	u64			clock;
@@ -1114,6 +1184,9 @@ struct rq {
 	/* calc_load related fields */
 	unsigned long		calc_load_update;
 	long			calc_load_active;
+#ifdef CONFIG_SCHED_SLI
+	long			calc_load_active_r;
+#endif
 
 #ifdef CONFIG_SCHED_HRTICK
 #ifdef CONFIG_SMP
@@ -1491,6 +1564,11 @@ static inline struct cfs_rq *group_cfs_rq(struct sched_entity *grp)
 #endif
 
 extern void update_rq_clock(struct rq *rq);
+
+static inline u64 __rq_clock_broken(struct rq *rq)
+{
+	return READ_ONCE(rq->clock);
+}
 
 /*
  * rq::clock_update_flags bits
@@ -2318,6 +2396,8 @@ struct sched_class {
 #ifdef CONFIG_SCHED_CORE
 	int (*task_is_throttled)(struct task_struct *p, int cpu);
 #endif
+	void (*update_nr_uninterruptible)(struct task_struct *p, long inc);
+	void (*update_nr_iowait)(struct task_struct *p, long inc);
 };
 
 static inline void put_prev_task(struct rq *rq, struct task_struct *prev)
@@ -2331,6 +2411,11 @@ static inline void set_next_task(struct rq *rq, struct task_struct *next)
 	next->sched_class->set_next_task(rq, next, false);
 }
 
+static inline void update_nr_iowait(struct task_struct *p, long inc)
+{
+	if (p->sched_class->update_nr_iowait)
+		p->sched_class->update_nr_iowait(p, inc);
+}
 
 /*
  * Helper to define a sched_class instance; each one is placed in a separate
@@ -3555,5 +3640,33 @@ static inline void init_sched_mm_cid(struct task_struct *t) { }
 
 extern u64 avg_vruntime(struct cfs_rq *cfs_rq);
 extern int entity_eligible(struct cfs_rq *cfs_rq, struct sched_entity *se);
+
+#ifdef CONFIG_SCHED_SLI
+extern u64 get_idle_time(struct kernel_cpustat *kcs, int cpu);
+extern u64 get_iowait_time(struct kernel_cpustat *kcs, int cpu);
+extern void task_ca_increase_nr_migrations(struct task_struct *tsk);
+void cpu_update_latency(struct sched_entity *se, u64 delta);
+void task_cpu_update_block(struct task_struct *tsk, u64 runtime);
+void calc_cgroup_load(void);
+bool async_load_calc_enabled(void);
+struct task_group *cgroup_tg(struct cgroup *cgrp);
+int sched_lat_stat_show(struct seq_file *sf, void *v);
+int sched_lat_stat_write(struct cgroup_subsys_state *css,
+				struct cftype *cft, u64 val);
+#else
+static inline void task_ca_increase_nr_migrations(struct task_struct *tsk) { }
+static inline void cpu_update_latency(struct sched_entity *se,
+		u64 delta) { }
+static inline void task_cpu_update_block(struct task_struct *tsk,
+		u64 runtime) { }
+static inline void calc_cgroup_load(void) { }
+static inline bool async_load_calc_enabled(void)
+{
+	return false;
+}
+#endif
+
+long tg_get_cfs_quota(struct task_group *tg);
+long tg_get_cfs_period(struct task_group *tg);
 
 #endif /* _KERNEL_SCHED_SCHED_H */

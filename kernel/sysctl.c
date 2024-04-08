@@ -63,6 +63,7 @@
 #include <linux/mount.h>
 #include <linux/userfaultfd_k.h>
 #include <linux/pid.h>
+#include <linux/pid_namespace.h>
 
 #include "../lib/kstrtox.h"
 
@@ -2079,6 +2080,43 @@ static struct ctl_table kern_table[] = {
 		.extra2		= SYSCTL_ONE,
 	},
 #endif /* CONFIG_SCHED_ACPU*/
+#ifdef CONFIG_RICH_CONTAINER
+	{
+		.procname	= "rich_container_enable",
+		.data		= &sysctl_rich_container_enable,
+		.maxlen		= sizeof(int),
+		.mode		= 0600,
+		.proc_handler	= proc_dointvec_minmax,
+		.extra1		= SYSCTL_ZERO,
+		.extra2		= SYSCTL_ONE,
+	},
+	{
+		.procname	= "rich_container_source",
+		.data		= &sysctl_rich_container_source,
+		.maxlen		= sizeof(int),
+		.mode		= 0600,
+		.proc_handler	= proc_dointvec_minmax,
+		.extra1		= SYSCTL_ZERO,
+		.extra2		= SYSCTL_ONE,
+	},
+	{
+		.procname       = "rich_container_cpuinfo_source",
+		.data           = &sysctl_rich_container_cpuinfo_source,
+		.maxlen         = sizeof(int),
+		.mode           = 0600,
+		.proc_handler   = proc_dointvec_minmax,
+		.extra1         = SYSCTL_ZERO,
+		.extra2         = SYSCTL_TWO,
+	},
+	{
+		.procname       = "rich_container_cpuinfo_sharesbase",
+		.data           = &sysctl_rich_container_cpuinfo_sharesbase,
+		.maxlen         = sizeof(int),
+		.mode           = 0600,
+		.proc_handler   = proc_douintvec_minmax,
+		.extra1         = SYSCTL_TWO,
+	},
+#endif
 	{ }
 };
 
