@@ -14,6 +14,7 @@
 #define NFS_SB_MASK (SB_RDONLY|SB_NOSUID|SB_NODEV|SB_NOEXEC|SB_SYNCHRONOUS)
 
 extern const struct export_operations nfs_export_ops;
+extern bool force_cgwb;
 
 struct nfs_string;
 struct nfs_pageio_descriptor;
@@ -722,6 +723,9 @@ void nfs_mark_page_unstable(struct page *page, struct nfs_commit_info *cinfo)
 		inc_node_page_state(page, NR_WRITEBACK);
 		inc_wb_stat(&inode_to_bdi(inode)->wb, WB_WRITEBACK);
 		__mark_inode_dirty(inode, I_DIRTY_DATASYNC);
+		if (force_cgwb) {
+			force_cgwb_inc_lruvec_page_state(page, NR_WRITEBACK);
+		}
 	}
 }
 
