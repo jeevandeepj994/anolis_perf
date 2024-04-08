@@ -941,6 +941,9 @@ nfs_clear_page_commit(struct page *page)
 	dec_node_page_state(page, NR_WRITEBACK);
 	dec_wb_stat(&inode_to_bdi(page_file_mapping(page)->host)->wb,
 		    WB_WRITEBACK);
+	if (force_cgwb) {
+		force_cgwb_dec_lruvec_page_state(page, NR_WRITEBACK);
+	}
 }
 
 /* Called holding the request lock on @req */

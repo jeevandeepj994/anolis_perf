@@ -407,4 +407,9 @@ void account_page_redirty(struct page *page);
 void sb_mark_inode_writeback(struct inode *inode);
 void sb_clear_inode_writeback(struct inode *inode);
 
+void force_cgwb_dec_lruvec_page_state(struct page *page,
+					 enum node_stat_item idx);
+void force_cgwb_inc_lruvec_page_state(struct page *page,
+					 enum node_stat_item idx);
+
 #endif		/* WRITEBACK_H */
