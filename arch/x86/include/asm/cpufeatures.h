@@ -13,7 +13,7 @@
 /*
  * Defines x86 CPU feature bits
  */
-#define NCAPINTS			22	   /* N 32-bit words worth of info */
+#define NCAPINTS			23	   /* N 32-bit words worth of info */
 #define NBUGINTS			2	   /* N 32-bit bug flags */
 
 /*
@@ -479,6 +479,9 @@
 /* HYGON-defined CPU features, CPUID level 0x8c860000:0 (EDX), word 21 */
 #define X86_FEATURE_SM3			(21*32 + 1) /* SM3 instructions */
 #define X86_FEATURE_SM4			(21*32 + 2) /* SM4 instructions */
+
+/* VIA/Cyrix/Centaur-defined CPU features, CPUID level 0xC0000006, word 22 */
+#define X86_FEATURE_ZXPAUSE		(22*32 + 0) /* ZHAOXIN ZXPAUSE */
 
 /*
  * BUG word(s)
