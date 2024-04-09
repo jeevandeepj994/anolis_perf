@@ -66,6 +66,7 @@ xfs_inode_alloc(
 	ip->i_delayed_blks = 0;
 	memset(&ip->i_d, 0, sizeof(ip->i_d));
 	ip->i_reflink_flags = 0;
+	ip->i_reflink_ino = 0;
 	ip->i_sick = 0;
 	ip->i_checked = 0;
 	INIT_WORK(&ip->i_ioend_work, xfs_end_io);
@@ -434,6 +435,7 @@ xfs_iget_cache_hit(
 		ip->i_flags &= ~XFS_IRECLAIM_RESET_FLAGS;
 		ip->i_flags |= XFS_INEW;
 		ip->i_reflink_flags = 0;
+		ip->i_reflink_ino = 0;
 		xfs_inode_clear_reclaim_tag(pag, ip->i_ino);
 		inode->i_state = I_NEW;
 		ip->i_sick = 0;
