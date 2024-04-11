@@ -489,8 +489,7 @@ int show_interrupts(struct seq_file *p, void *v)
 		goto outsparse;
 
 	if (desc->kstat_irqs)
-		for_each_online_cpu(j)
-			any_count |= per_cpu(desc->kstat_irqs->cnt, j);
+		any_count = kstat_irqs_desc(desc, cpu_online_mask);
 
 	if ((!desc->action || irq_desc_is_chained(desc)) && !any_count)
 		goto outsparse;
