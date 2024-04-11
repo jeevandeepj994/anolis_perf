@@ -19,6 +19,14 @@ struct irq_domain;
 struct pt_regs;
 
 /**
+ * struct irqstat - interrupt statistics
+ * @cnt:	real-time interrupt count
+ */
+struct irqstat {
+	unsigned int	cnt;
+};
+
+/**
  * struct irq_desc - interrupt descriptor
  * @irq_common_data:	per irq and chip data passed down to chip functions
  * @kstat_irqs:		irq stats per cpu
@@ -56,7 +64,7 @@ struct pt_regs;
 struct irq_desc {
 	struct irq_common_data	irq_common_data;
 	struct irq_data		irq_data;
-	unsigned int __percpu	*kstat_irqs;
+	CK_KABI_REPLACE(unsigned int __percpu   *kstat_irqs, struct irqstat __percpu *kstat_irqs);
 	irq_flow_handler_t	handle_irq;
 	struct irqaction	*action;	/* IRQ action list */
 	unsigned int		status_use_accessors;
