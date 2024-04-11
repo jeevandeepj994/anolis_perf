@@ -2117,6 +2117,17 @@ static struct ctl_table kern_table[] = {
 		.extra1         = SYSCTL_TWO,
 	},
 #endif
+#ifdef CONFIG_SCHED_CORE
+	{
+		.procname	= "sched_core",
+		.data		= &sysctl_sched_core,
+		.maxlen		= sizeof(int),
+		.mode		= 0644,
+		.proc_handler	= sysctl_sched_core_handler,
+		.extra1		= SYSCTL_ZERO,
+		.extra2		= SYSCTL_ONE,
+	},
+#endif
 	{ }
 };
 
