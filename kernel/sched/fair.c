@@ -9941,6 +9941,9 @@ struct lb_env {
 	enum fbq_type		fbq_type;
 	enum migration_type	migration_type;
 	struct list_head	tasks;
+#ifdef CONFIG_GROUP_IDENTITY
+	bool			id_need_redo;
+#endif
 };
 
 /*
@@ -10233,10 +10236,12 @@ static int detach_tasks(struct lb_env *env)
 #ifdef CONFIG_GROUP_IDENTITY
 		/* For migrate_identity, we wanna pull highclass or normal tasks. */
 		case migrate_identity:
-			if (id_regard_as_idle(env->src_rq))
-				break;
-			if (is_underclass_task(p))
-				goto next;
+			if (env->id_need_redo) {
+				if (id_regard_as_idle(env->src_rq))
+					break;
+				if (is_underclass_task(p))
+					goto next;
+			}
 			/* If there is highclass or normal tasks, we pull tasks as migrate_load. */
 			fallthrough;
 #endif
@@ -12154,6 +12159,7 @@ static int load_balance(int this_cpu, struct rq *this_rq,
 		.tasks		= LIST_HEAD_INIT(env.tasks),
 #ifdef CONFIG_GROUP_IDENTITY
 		.migration_type	= type,
+		.id_need_redo	= true,
 #endif
 	};
 
@@ -12295,6 +12301,13 @@ more_balance:
 			goto out_all_pinned;
 		}
 	}
+
+#ifdef CONFIG_GROUP_IDENTITY
+	if (id_load_balance() && env.imbalance > 0 && env.id_need_redo) {
+		env.id_need_redo = false;
+		goto redo;
+	}
+#endif
 
 	if (!ld_moved) {
 		schedstat_inc(sd->lb_failed[idle]);
