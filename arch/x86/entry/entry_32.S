@@ -1275,7 +1275,7 @@ SYM_CODE_START(asm_exc_nmi)
 	 * is using the thread stack right now, so it's safe for us to use it.
 	 */
 	movl	%esp, %ebx
-	movl	PER_CPU_VAR(cpu_current_top_of_stack), %esp
+	movl	PER_CPU_VAR(pcpu_hot + X86_top_of_stack), %esp
 	call	exc_nmi
 	movl	%ebx, %esp
 
@@ -1337,7 +1337,7 @@ SYM_CODE_START(rewind_stack_do_exit)
 	/* Prevent any naive code from trying to unwind to our caller. */
 	xorl	%ebp, %ebp
 
-	movl	PER_CPU_VAR(cpu_current_top_of_stack), %esi
+	movl	PER_CPU_VAR(pcpu_hot + X86_top_of_stack), %esi
 	leal	-TOP_OF_KERNEL_STACK_PADDING-PTREGS_SIZE(%esi), %esp
 
 	call	do_exit

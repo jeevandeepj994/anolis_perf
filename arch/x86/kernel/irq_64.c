@@ -48,7 +48,7 @@ static int map_irq_stack(unsigned int cpu)
 	if (!va)
 		return -ENOMEM;
 
-	per_cpu(hardirq_stack_ptr, cpu) = va + IRQ_STACK_SIZE;
+	per_cpu(pcpu_hot.hardirq_stack_ptr, cpu) = va + IRQ_STACK_SIZE;
 	return 0;
 }
 #else
@@ -60,14 +60,14 @@ static int map_irq_stack(unsigned int cpu)
 {
 	void *va = per_cpu_ptr(&irq_stack_backing_store, cpu);
 
-	per_cpu(hardirq_stack_ptr, cpu) = va + IRQ_STACK_SIZE;
+	per_cpu(pcpu_hot.hardirq_stack_ptr, cpu) = va + IRQ_STACK_SIZE;
 	return 0;
 }
 #endif
 
 int irq_init_percpu_irqstack(unsigned int cpu)
 {
-	if (per_cpu(hardirq_stack_ptr, cpu))
+	if (per_cpu(pcpu_hot.hardirq_stack_ptr, cpu))
 		return 0;
 	return map_irq_stack(cpu);
 }
