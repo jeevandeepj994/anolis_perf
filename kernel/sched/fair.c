@@ -9140,6 +9140,9 @@ struct lb_env {
 
 	enum fbq_type		fbq_type;
 	struct list_head	tasks;
+#ifdef CONFIG_GROUP_IDENTITY
+	bool			id_need_redo;
+#endif
 };
 
 /*
@@ -9413,10 +9416,12 @@ static int detach_tasks(struct lb_env *env)
 		if (!can_migrate_task(p, env))
 			goto next;
 #ifdef CONFIG_GROUP_IDENTITY
-		if (id_regard_as_idle(env->src_rq))
-			break;
-		if (is_underclass_task(p))
-			goto next;
+		if (id_load_balance() && env->id_need_redo) {
+			if (id_regard_as_idle(env->src_rq))
+				break;
+			if (is_underclass_task(p))
+				goto next;
+		}
 #endif
 		load = task_h_load(p);
 
@@ -10831,6 +10836,9 @@ static int load_balance(int this_cpu, struct rq *this_rq,
 		.cpus		= cpus,
 		.fbq_type	= all,
 		.tasks		= LIST_HEAD_INIT(env.tasks),
+#ifdef CONFIG_GROUP_IDENTITY
+		.id_need_redo	= id_load_balance(),
+#endif
 	};
 
 	cpumask_and(cpus, sched_domain_span(sd), cpu_active_mask);
@@ -10972,6 +10980,12 @@ more_balance:
 		}
 	}
 
+#ifdef CONFIG_GROUP_IDENTITY
+	if (id_load_balance() && env.imbalance > 0 && env.id_need_redo) {
+		env.id_need_redo = false;
+		goto redo;
+	}
+#endif
 	if (!ld_moved) {
 		schedstat_inc(sd->lb_failed[idle]);
 		/*
