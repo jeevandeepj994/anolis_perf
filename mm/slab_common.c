@@ -587,6 +587,8 @@ struct kmem_cache *__init create_kmalloc_cache(const char *name,
 
 	create_boot_cache(s, name, size, flags, useroffset, usersize);
 	list_add(&s->list, &slab_caches);
+	INIT_LIST_HEAD(&s->oot_page_list);
+	spin_lock_init(&s->oot_lock);
 	s->refcount = 1;
 	return s;
 }
