@@ -4604,6 +4604,27 @@ static int svm_vm_init(struct kvm *kvm)
 	return 0;
 }
 
+static int kvm_hygon_arch_hypercall(struct kvm *kvm, u64 nr, u64 a0, u64 a1, u64 a2, u64 a3)
+{
+	int ret = 0;
+	struct kvm_vpsp vpsp = {
+		.kvm = kvm,
+		.write_guest = kvm_write_guest,
+		.read_guest = kvm_read_guest
+	};
+
+	switch (nr) {
+	case KVM_HC_PSP_OP:
+		ret = kvm_pv_psp_op(&vpsp, a0, a1, a2, a3);
+		break;
+
+	default:
+		ret = -KVM_ENOSYS;
+		break;
+	}
+	return ret;
+}
+
 static struct kvm_x86_ops svm_x86_ops __initdata = {
 	.hardware_unsetup = svm_hardware_teardown,
 	.hardware_enable = svm_hardware_enable,
@@ -4734,6 +4755,8 @@ static struct kvm_x86_ops svm_x86_ops __initdata = {
 
 	.control_pre_system_reset = csv_control_pre_system_reset,
 	.control_post_system_reset = csv_control_post_system_reset,
+
+	.arch_hypercall = kvm_hygon_arch_hypercall,
 };
 
 static struct kvm_x86_init_ops svm_init_ops __initdata = {
