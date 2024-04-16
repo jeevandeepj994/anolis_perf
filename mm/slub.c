@@ -1619,15 +1619,32 @@ static void *setup_object(struct kmem_cache *s, struct page *page,
 static inline struct page *alloc_slab_page(struct kmem_cache *s,
 		gfp_t flags, int node, struct kmem_cache_order_objects oo)
 {
-	struct page *page;
+	struct page *page, *t;
 	unsigned int order = oo_order(oo);
 
 	flags |= __GFP_NOKFENCE;
+
+	if (unlikely(s->flags & SLAB_OOT)) {
+		spin_lock(&s->oot_lock);
+		list_for_each_entry_safe(page, t, &s->oot_page_list, slab_list) {
+			if (page_to_nid(page) == node ||
+				(node == NUMA_NO_NODE &&
+				page_to_nid(page) == numa_node_id())) {
+				list_del(&page->slab_list);
+				s->oot_page_num--;
+				spin_unlock(&s->oot_lock);
+				goto find;
+			}
+		}
+		spin_unlock(&s->oot_lock);
+	}
+
 	if (node == NUMA_NO_NODE)
 		page = alloc_pages(flags, order);
 	else
 		page = __alloc_pages_node(node, flags, order);
 
+find:
 	if (page)
 		account_slab_page(page, order, s);
 
@@ -1839,6 +1856,8 @@ static struct page *new_slab(struct kmem_cache *s, gfp_t flags, int node)
 		flags & (GFP_RECLAIM_MASK | GFP_CONSTRAINT_MASK), node);
 }
 
+extern unsigned int oot_page_limit;
+
 static void __free_slab(struct kmem_cache *s, struct page *page)
 {
 	int order = compound_order(page);
@@ -1860,6 +1879,20 @@ static void __free_slab(struct kmem_cache *s, struct page *page)
 	if (current->reclaim_state)
 		current->reclaim_state->reclaimed_slab += pages;
 	unaccount_slab_page(page, order, s);
+
+#ifdef CONFIG_MODULES
+	if (unlikely(s->flags & SLAB_OOT)) {
+		if (s->oot_page_num < oot_page_limit) {
+			spin_lock(&s->oot_lock);
+			list_add(&page->slab_list, &s->oot_page_list);
+			s->oot_page_num++;
+			spin_unlock(&s->oot_lock);
+			return;
+		}
+		pr_info_once("Page in buddy may tained by module in oot list\n");
+	}
+#endif
+
 	__free_pages(page, order);
 }
 
@@ -1880,7 +1913,6 @@ static void free_slab(struct kmem_cache *s, struct page *page)
 
 static void discard_slab(struct kmem_cache *s, struct page *page)
 {
-	WARN_ON_ONCE(s->flags & SLAB_OOT);
 	dec_slabs_node(s, page_to_nid(page), page->objects);
 	free_slab(s, page);
 }
@@ -2406,8 +2438,7 @@ static void put_cpu_partial(struct kmem_cache *s, struct page *page, int drain)
 		if (oldpage) {
 			pobjects = oldpage->pobjects;
 			pages = oldpage->pages;
-			if (drain && pobjects > slub_cpu_partial(s)
-					&& !(s->flags & SLAB_OOT)) {
+			if (drain && pobjects > slub_cpu_partial(s)) {
 				unsigned long flags;
 				/*
 				 * partial array is full. Move the existing
@@ -3070,8 +3101,7 @@ static void __slab_free(struct kmem_cache *s, struct page *page,
 		return;
 	}
 
-	if (unlikely(!new.inuse && n->nr_partial >= s->min_partial)
-				&& !(s->flags & SLAB_OOT))
+	if (unlikely(!new.inuse && n->nr_partial >= s->min_partial))
 		goto slab_empty;
 
 	/*

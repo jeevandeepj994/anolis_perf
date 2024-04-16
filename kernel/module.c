@@ -299,6 +299,9 @@ EXPORT_SYMBOL(is_module_sig_enforced);
 int modules_disabled = 0;
 core_param(nomodule, modules_disabled, bint, 0);
 
+unsigned int oot_page_limit = -1;
+module_param(oot_page_limit, uint, 0600);
+
 /* Waiting for a module to finish initializing? */
 static DECLARE_WAIT_QUEUE_HEAD(module_wq);
 
