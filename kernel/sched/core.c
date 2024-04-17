@@ -7424,6 +7424,12 @@ void sched_dynamic_update(int mode)
 	 * Avoid {NONE,VOLUNTARY} -> FULL transitions from ever ending up in
 	 * the ZERO state, which is invalid.
 	 */
+	if (mode == preempt_dynamic_full) {
+		pr_warn("Sorry, ANCK 5.10 prohibits using bootcmdline or debugfs to dynamic enable preempt!\n");
+		pr_warn("The dynamic preempt change doesn't take effect.\n");
+		return;
+	}
+
 	preempt_dynamic_enable(cond_resched);
 	preempt_dynamic_enable(might_resched);
 	preempt_dynamic_enable(preempt_schedule);
@@ -7449,14 +7455,6 @@ void sched_dynamic_update(int mode)
 		pr_info("Dynamic Preempt: voluntary\n");
 		break;
 
-	case preempt_dynamic_full:
-		preempt_dynamic_disable(cond_resched);
-		preempt_dynamic_disable(might_resched);
-		preempt_dynamic_enable(preempt_schedule);
-		preempt_dynamic_enable(preempt_schedule_notrace);
-		preempt_dynamic_enable(irqentry_exit_cond_resched);
-		pr_info("Dynamic Preempt: full\n");
-		break;
 	}
 
 	preempt_dynamic_mode = mode;
