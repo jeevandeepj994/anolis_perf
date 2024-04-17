@@ -421,7 +421,10 @@ int __skb_datagram_iter(const struct sk_buff *skb, int offset,
 	if (copy > 0) {
 		if (copy > len)
 			copy = len;
-		n = cb(skb->data + offset, copy, data, to);
+		if (!cb)
+			n = copy_to_iter(skb->data + offset, copy, to);
+		else
+			n = cb(skb->data + offset, copy, data, to);
 		offset += n;
 		if (n != copy)
 			goto short_copy;
@@ -438,14 +441,20 @@ int __skb_datagram_iter(const struct sk_buff *skb, int offset,
 
 		end = start + skb_frag_size(frag);
 		if ((copy = end - offset) > 0) {
-			struct page *page = skb_frag_page(frag);
-			u8 *vaddr = kmap(page);
-
 			if (copy > len)
 				copy = len;
-			n = cb(vaddr + frag->page_offset +
-				offset - start, copy, data, to);
-			kunmap(page);
+			if (!cb) {
+				n = copy_page_to_iter(skb_frag_page(frag),
+						      frag->page_offset +
+						      offset - start, copy, to);
+			} else {
+				struct page *page = skb_frag_page(frag);
+				u8 *vaddr = kmap(page);
+
+				n = cb(vaddr + frag->page_offset +
+					offset - start, copy, data, to);
+				kunmap(page);
+			}
 			offset += n;
 			if (n != copy)
 				goto short_copy;
@@ -510,12 +519,6 @@ int skb_copy_and_hash_datagram_iter(const struct sk_buff *skb, int offset,
 }
 EXPORT_SYMBOL(skb_copy_and_hash_datagram_iter);
 
-static size_t simple_copy_to_iter(const void *addr, size_t bytes,
-		void *data __always_unused, struct iov_iter *i)
-{
-	return copy_to_iter(addr, bytes, i);
-}
-
 /**
  *	skb_copy_datagram_iter - Copy a datagram to an iovec iterator.
  *	@skb: buffer to copy
@@ -528,7 +531,7 @@ int skb_copy_datagram_iter(const struct sk_buff *skb, int offset,
 {
 	trace_skb_copy_datagram_iovec(skb, len);
 	return __skb_datagram_iter(skb, offset, to, len, false,
-			simple_copy_to_iter, NULL);
+			NULL, NULL);
 }
 EXPORT_SYMBOL(skb_copy_datagram_iter);
 
