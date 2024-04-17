@@ -428,7 +428,7 @@ static struct mlx5_core_cq *mlx5_eq_cq_get(struct mlx5_eq *eq, u32 cqn)
 	cq = radix_tree_lookup(&table->tree, cqn);
 	if (likely(cq))
 		mlx5_cq_hold(cq);
-	rcu_read_lock();
+	rcu_read_unlock();
 
 	return cq;
 }
