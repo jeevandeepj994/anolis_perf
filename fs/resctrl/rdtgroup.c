@@ -113,14 +113,13 @@ void rdt_staged_configs_clear(void)
 static bool resctrl_is_mbm_enabled(void)
 {
 	return (resctrl_arch_is_mbm_total_enabled() ||
-		resctrl_arch_is_mbm_local_enabled() ||
-		resctrl_arch_is_mbm_bps_enabled());
+		resctrl_arch_is_mbm_local_enabled());
 }
 
 static bool resctrl_is_mbm_event(int e)
 {
 	return (e >= QOS_L3_MBM_TOTAL_EVENT_ID &&
-		e <= QOS_MC_MBM_BPS_EVENT_ID);
+		e <= QOS_L3_MBM_LOCAL_EVENT_ID);
 }
 
 /*
@@ -2793,6 +2792,9 @@ static void rmdir_all_sub(void)
 
 static void rdt_kill_sb(struct super_block *sb)
 {
+	struct rdt_resource *l3 = resctrl_arch_get_resource(RDT_RESOURCE_L3);
+	struct rdt_domain *d;
+
 	cpus_read_lock();
 	mutex_lock(&rdtgroup_mutex);
 
@@ -2802,6 +2804,20 @@ static void rdt_kill_sb(struct super_block *sb)
 	resctrl_arch_reset_resources();
 
 	rmdir_all_sub();
+
+	/*
+	 * When resctrl is umounted, forcefully cancel delayed works since the
+	 * new mount option may be changed.
+	 */
+	list_for_each_entry(d, &l3->domains, list) {
+		if (resctrl_is_mbm_enabled())
+			cancel_delayed_work(&d->mbm_over);
+		if (resctrl_arch_is_llc_occupancy_enabled() && has_busy_rmid(d)) {
+			__check_limbo(d, true);
+			cancel_delayed_work(&d->cqm_limbo);
+		}
+	}
+
 	rdt_pseudo_lock_release();
 	rdtgroup_default.mode = RDT_MODE_SHAREABLE;
 	schemata_list_destroy();
