@@ -36,6 +36,7 @@
 extern int ddr_cpufreq;
 
 DEFINE_STATIC_KEY_FALSE(mpam_enabled);
+EXPORT_SYMBOL(mpam_enabled);
 
 /*
  * mpam_list_lock protects the RCU lists when writing. Once the
