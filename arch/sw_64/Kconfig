@@ -3,7 +3,9 @@ config SW64
 	bool
 	default y
 	select ACPI
+	select ACPI_MCFG if (ACPI && PCI)
 	select ACPI_REDUCED_HARDWARE_ONLY
+	select ARCH_HAS_ACPI_TABLE_UPGRADE if ACPI
 	select ARCH_HAS_ELF_RANDOMIZE
 	select ARCH_HAS_PHYS_TO_DMA
 	select ARCH_HAS_STRICT_MODULE_RWX
@@ -107,6 +109,8 @@ config SW64
 	select NO_BOOTMEM
 	select OF_EARLY_FLATTREE if OF
 	select OLD_SIGSUSPEND
+	select PCI_DOMAINS_GENERIC if PCI
+	select PCI_ECAM if (ACPI && PCI)
 	select PCI_MSI_ARCH_FALLBACKS if PCI_MSI
 	select PCI_SW64 if PCI
 	select SET_FS
@@ -189,7 +193,6 @@ config NONCACHE_PAGE
 	bool
 	depends on SW64
 	default y
-
 
 config AUDIT_ARCH
 	bool
@@ -295,6 +298,9 @@ config ISA_DMA_API
 	default y
 
 config PCI_DOMAINS
+	def_bool PCI
+
+config PCI_DOMAINS_GENERIC
 	def_bool PCI
 
 config PCI_SYSCALL
@@ -438,6 +444,7 @@ source "kernel/livepatch/Kconfig"
 config NUMA
 	bool "NUMA Support"
 	depends on SMP && !FLATMEM
+	select ACPI_NUMA if ACPI
 	help
 	  Say Y to compile the kernel to support NUMA (Non-Uniform Memory
 	  Access). This option is for configuring high-end multiprocessor

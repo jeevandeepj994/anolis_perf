@@ -70,8 +70,6 @@ static int __init sw64_cpufreq_init(void)
 }
 arch_initcall(sw64_cpufreq_init);
 
-char curruent_policy[CPUFREQ_NAME_LEN];
-
 static struct clk cpu_clk = {
 	.name = "cpu_clk",
 	.flags = CLK_ALWAYS_ENABLED | CLK_RATE_PROPAGATES,
@@ -99,12 +97,6 @@ unsigned int __sw64_cpufreq_get(struct cpufreq_policy *policy)
 	return 0;
 }
 EXPORT_SYMBOL(__sw64_cpufreq_get);
-
-void sw64_store_policy(struct cpufreq_policy *policy)
-{
-	memcpy(curruent_policy, policy->governor->name, CPUFREQ_NAME_LEN);
-}
-EXPORT_SYMBOL_GPL(sw64_store_policy);
 
 void sw64_set_rate(unsigned int index)
 {

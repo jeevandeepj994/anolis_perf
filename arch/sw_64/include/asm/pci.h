@@ -36,7 +36,6 @@ struct piu_saved {
 };
 
 /* A controller.  Used to manage multiple PCI busses.  */
-
 struct pci_controller {
 	struct pci_controller *next;
 	struct pci_bus *bus;
@@ -95,16 +94,17 @@ extern void __init setup_chip_pci_ops(void);
 #define setup_chip_pci_ops()	do { } while (0)
 #endif
 
-#if defined(CONFIG_SUNWAY_IOMMU) || defined(CONFIG_SUNWAY_IOMMU_V2)
-extern struct syscore_ops iommu_cpu_syscore_ops;
-#endif
+extern struct pci_controller *pci_bus_to_pci_controller(const struct pci_bus *bus);
+extern struct pci_controller *bus_num_to_pci_controller(unsigned long bus_num);
+
+extern void sw64_pci_root_bridge_prepare(struct pci_host_bridge *bridge);
+extern void sw64_pci_root_bridge_scan_finish_up(struct pci_host_bridge *bridge);
+extern int sw64_pci_map_irq(const struct pci_dev *dev, u8 slot, u8 pin);
 
 #ifdef CONFIG_PCI_DOMAINS
-static inline int pci_domain_nr(struct pci_bus *bus) { return 0; }
-
 static inline int pci_proc_domain(struct pci_bus *bus)
 {
-	struct pci_controller *hose = bus->sysdata;
+	struct pci_controller *hose = pci_bus_to_pci_controller(bus);
 
 	return hose->need_domain_info;
 }
@@ -115,7 +115,7 @@ static inline int __pcibus_to_node(const struct pci_bus *bus)
 {
 	struct pci_controller *hose;
 
-	hose = bus->sysdata;
+	hose = pci_bus_to_pci_controller(bus);
 	if (!node_online(hose->node))
 		return next_node_in(hose->node, node_online_map);
 	else

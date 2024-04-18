@@ -3,17 +3,38 @@
 #include <linux/init.h>
 #include <linux/acpi.h>
 #include <linux/irqdomain.h>
+#include <linux/memblock.h>
+#include <linux/smp.h>
 
 #include <asm/early_ioremap.h>
 
 int acpi_disabled = 1;
 EXPORT_SYMBOL(acpi_disabled);
-int acpi_noirq;				/* skip ACPI IRQ initialization */
-int acpi_pci_disabled;		/* skip ACPI PCI scan and IRQ initialization */
+
+int acpi_noirq = 1;		/* skip ACPI IRQ initialization */
+int acpi_pci_disabled = 1;	/* skip ACPI PCI scan and IRQ initialization */
 EXPORT_SYMBOL(acpi_pci_disabled);
+
+static bool param_acpi_on  __initdata;
+static bool param_acpi_off __initdata;
+
+static unsigned int possible_cores = 1; /* number of possible cores(at least boot core) */
+static unsigned int present_cores = 1;  /* number of present cores(at least boot core) */
+static unsigned int disabled_cores;     /* number of disabled cores */
+
 int acpi_strict;
 u64 arch_acpi_wakeup_start;
 u64 acpi_saved_sp_s3;
+
+#define SW_CINTC_FLAG_ENABLED        ACPI_MADT_ENABLED         /* 0x1 */
+#define SW_CINTC_FLAG_ONLINE_CAPABLE 0x2                       /* hotplug capable */
+#define SW_CINTC_FLAG_HT_CAPABLE     0x4                       /* hyper thread capable */
+#define SW_CINTC_FLAG_HT_ENABLED     0x8                       /* hyper thread enabled */
+
+#define is_core_enabled(flags)        ((flags) & SW_CINTC_FLAG_ENABLED)
+#define is_core_online_capable(flags) ((flags) & SW_CINTC_FLAG_ONLINE_CAPABLE)
+#define is_core_ht_capable(flags)     ((flags) & SW_CINTC_FLAG_HT_CAPABLE)
+#define is_core_ht_enabled(flags)     ((flags) & SW_CINTC_FLAG_HT_ENABLED)
 
 #define MAX_LOCAL_APIC 256
 
@@ -115,13 +136,14 @@ static int __init parse_acpi(char *arg)
 	if (!arg)
 		return -EINVAL;
 
-	/* "acpi=off" disables both ACPI table parsing and interpreter */
-	if (strcmp(arg, "off") == 0) {
-		disable_acpi();
-	} else {
-		/* Core will printk when we return error. */
-		return -EINVAL;
-	}
+	/* disable both ACPI table parsing and interpreter */
+	if (strcmp(arg, "off") == 0)
+		param_acpi_off = true;
+	else if (strcmp(arg, "on") == 0) /* prefer ACPI over device tree */
+		param_acpi_on = true;
+	else
+		return -EINVAL; /* Core will printk when we return error. */
+
 	return 0;
 }
 early_param("acpi", parse_acpi);
@@ -144,68 +166,25 @@ int __acpi_release_global_lock(unsigned int *lock)
 }
 
 #ifdef CONFIG_ACPI_NUMA
-static __init int setup_node(int pxm)
+static int rcid_to_cpu(int physical_id)
 {
-	return acpi_map_pxm_to_node(pxm);
-}
+	int i;
 
-/*
- * Callback for SLIT parsing.  pxm_to_node() returns NUMA_NO_NODE for
- * I/O localities since SRAT does not list them.  I/O localities are
- * not supported at this point.
- */
-extern unsigned char __node_distances[MAX_NUMNODES][MAX_NUMNODES];
-unsigned int numa_distance_cnt;
-
-static inline unsigned int get_numa_distances_cnt(struct acpi_table_slit *slit)
-{
-	return slit->locality_count;
-}
-
-void __init numa_set_distance(int from, int to, int distance)
-{
-	unsigned char *numa_distance = (unsigned char *)__node_distances;
-
-	if ((u8)distance != distance ||
-			(from == to && distance != LOCAL_DISTANCE)) {
-		pr_warn_once("Warning: invalid distance parameter, from=%d to=%d distance=%d\n",
-				from, to, distance);
-		return;
+	for (i = 0; i < NR_CPUS; ++i) {
+		if (__cpu_to_rcid[i] == physical_id)
+			return i;
 	}
 
-	numa_distance[from * numa_distance_cnt + to] = distance;
+	/* physical id not found */
+	return -1;
 }
 
-void __init acpi_numa_slit_init(struct acpi_table_slit *slit)
-{
-	int i, j;
-
-	numa_distance_cnt = get_numa_distances_cnt(slit);
-
-	for (i = 0; i < slit->locality_count; i++) {
-		const int from_node = pxm_to_node(i);
-
-		if (from_node == NUMA_NO_NODE)
-			continue;
-
-		for (j = 0; j < slit->locality_count; j++) {
-			const int to_node = pxm_to_node(j);
-
-			if (to_node == NUMA_NO_NODE)
-				continue;
-
-			numa_set_distance(from_node, to_node,
-					slit->entry[slit->locality_count * i + j]);
-		}
-	}
-}
-
-extern cpumask_t possible_cpu_per_node;
 /* Callback for Proximity Domain -> CPUID mapping */
 void __init
 acpi_numa_processor_affinity_init(struct acpi_srat_cpu_affinity *pa)
 {
 	int pxm, node;
+	int cpu; // logical core id
 
 	if (srat_disabled())
 		return;
@@ -221,7 +200,8 @@ acpi_numa_processor_affinity_init(struct acpi_srat_cpu_affinity *pa)
 		pxm |= (pa->proximity_domain_hi[1] << 16);
 		pxm |= (pa->proximity_domain_hi[2] << 24);
 	}
-	node = setup_node(pxm);
+
+	node = acpi_map_pxm_to_node(pxm);
 	if (node < 0) {
 		pr_err("SRAT: Too many proximity domains %x\n", pxm);
 		bad_srat();
@@ -233,16 +213,17 @@ acpi_numa_processor_affinity_init(struct acpi_srat_cpu_affinity *pa)
 		return;
 	}
 
-	if (!cpu_guestmode)
-		numa_add_cpu(__cpu_number_map[pa->apic_id], node);
-	else
-		numa_add_cpu(pa->apic_id, node);
+	/* Record the mapping from logical core id to node id */
+	cpu = rcid_to_cpu(pa->apic_id);
+	if (cpu < 0) {
+		pr_err("SRAT: Can not find the logical id for physical Core 0x%02x\n", pa->apic_id);
+		return;
+	}
 
-	set_cpuid_to_node(pa->apic_id, node);
+	early_map_cpu_to_node(cpu, node);
+
 	node_set(node, numa_nodes_parsed);
-	acpi_numa = 1;
-	pr_err("SRAT: PXM %u -> CPU 0x%02x -> Node %u\n",
-		pxm, pa->apic_id, node);
+	pr_info("SRAT: PXM %u -> CPU 0x%02x -> Node %u\n", pxm, pa->apic_id, node);
 }
 
 #ifdef CONFIG_MEMORY_HOTPLUG
@@ -251,62 +232,11 @@ static inline int save_add_info(void) { return 1; }
 static inline int save_add_info(void) { return 0; }
 #endif
 
-/* Callback for parsing of the Proximity Domain <-> Memory Area mappings */
-int __init
-acpi_numa_memory_affinity_init(struct acpi_srat_mem_affinity *ma)
-{
-	u64 start, end;
-	u32 hotpluggable;
-	int node, pxm;
-
-	if (srat_disabled())
-		goto out_err;
-	if (ma->header.length != sizeof(struct acpi_srat_mem_affinity))
-		goto out_err_bad_srat;
-	if ((ma->flags & ACPI_SRAT_MEM_ENABLED) == 0)
-		goto out_err;
-	hotpluggable = ma->flags & ACPI_SRAT_MEM_HOT_PLUGGABLE;
-	if (hotpluggable && !save_add_info())
-		goto out_err;
-
-	start = ma->base_address;
-	end = start + ma->length;
-	pxm = ma->proximity_domain;
-	if (acpi_srat_revision <= 1)
-		pxm &= 0xff;
-
-	node = setup_node(pxm);
-	if (node < 0) {
-		pr_err("SRAT: Too many proximity domains.\n");
-		goto out_err_bad_srat;
-	}
-	if (numa_add_memblk(node, start, end) < 0)
-		goto out_err_bad_srat;
-
-	node_set(node, numa_nodes_parsed);
-
-	pr_info("SRAT: Node %u PXM %u [mem %#010Lx-%#010Lx]%s%s\n",
-		node, pxm,
-		(unsigned long long) start, (unsigned long long) end - 1,
-		hotpluggable ? " hotplug" : "",
-		ma->flags & ACPI_SRAT_MEM_NON_VOLATILE ? " non-volatile" : "");
-
-	/* Mark hotplug range in memblock. */
-	if (hotpluggable && memblock_mark_hotplug(start, ma->length))
-		pr_warn("SRAT: Failed to mark hotplug range [mem %#010Lx-%#010Lx] in memblock\n",
-			(unsigned long long)start, (unsigned long long)end - 1);
-
-	max_possible_pfn = max(max_possible_pfn, PFN_UP(end - 1));
-
-	return 0;
-out_err_bad_srat:
-	bad_srat();
-out_err:
-	return -1;
-}
-
-void __init acpi_numa_arch_fixup(void) {}
 #endif
+
+void __init arch_reserve_mem_area(acpi_physical_address addr, size_t size)
+{
+}
 
 #ifdef CONFIG_ACPI_HOTPLUG_CPU
 #include <acpi/processor.h>
@@ -354,7 +284,7 @@ int acpi_unmap_cpu(int cpu)
 	set_cpuid_to_node(cpu, NUMA_NO_NODE);
 #endif
 	set_cpu_present(cpu, false);
-	num_processors--;
+	present_cores--;
 
 	pr_info("cpu%d hot remove!\n", cpu);
 
@@ -363,17 +293,177 @@ int acpi_unmap_cpu(int cpu)
 EXPORT_SYMBOL(acpi_unmap_cpu);
 #endif /* CONFIG_ACPI_HOTPLUG_CPU */
 
-void __init acpi_boot_table_init(void)
-
+static bool __init is_rcid_duplicate(int rcid)
 {
+	unsigned int i;
+
+	for (i = 0; (i < possible_cores) && (i < NR_CPUS); i++) {
+		if (cpu_to_rcid(i) == rcid)
+			return true;
+	}
+
+	return false;
+}
+
+static int __init
+setup_rcid_and_core_mask(struct acpi_madt_sw_cintc *sw_cintc)
+{
+	unsigned int logical_core_id;
+	int rcid = sw_cintc->hardware_id;
+
+	/**
+	 * The initial value of nr_cpu_ids is NR_CPUS, which
+	 * represents the maximum number of cores in the system.
+	 */
+	if (possible_cores >= nr_cpu_ids) {
+		pr_err(PREFIX "Max core num [%u] reached, core [0x%x] ignored."
+			" Please check the firmware or CONFIG_NR_CPUS!\n",
+			nr_cpu_ids, rcid);
+		return -ENODEV;
+	}
+
+	/* The rcid of each core is unique */
+	if (is_rcid_duplicate(rcid)) {
+		pr_err(PREFIX "Duplicate core [0x%x] in MADT."
+			" Please check the firmware!\n", rcid);
+		return -EINVAL;
+	}
+
+	/* We can never disable the boot core, whose rcid is 0 */
+	if ((rcid == 0) && !is_core_enabled(sw_cintc->flags)) {
+		pr_err(PREFIX "Boot core disabled in MADT."
+			" Please check the firmware!\n");
+		return -EINVAL;
+	}
+
+	/* Online capable makes core possible */
+	if (!is_core_enabled(sw_cintc->flags) && \
+			!is_core_online_capable(sw_cintc->flags)) {
+		disabled_cores++;
+		return 0;
+	}
+
+	rcid_infomation_init(sw_cintc->version);
+
+	/* The logical core ID of the boot core must be 0 */
+	if (rcid == 0)
+		logical_core_id = 0;
+	else
+		logical_core_id = possible_cores++;
+
+	set_rcid_map(logical_core_id, rcid);
+	set_cpu_possible(logical_core_id, true);
+	store_cpu_data(logical_core_id);
+
+	/**
+	 * Whether the core will finally be online
+	 * depends on two conditions:
+	 * 1. core is enabled via firmware
+	 * 2. core is not disabled by cmdline param(offline)
+	 */
+	if (is_core_enabled(sw_cintc->flags) && \
+		!cpumask_test_cpu(logical_core_id, &cpu_offline)) {
+		set_cpu_present(logical_core_id, true);
+		if (logical_core_id != 0)
+			present_cores++;
+	}
+
+	return 0;
+}
+
+static int __init acpi_parse_sw_cintc(union acpi_subtable_headers *header,
+		const unsigned long end)
+{
+	struct acpi_madt_sw_cintc *sw_cintc = NULL;
+	struct smp_rcb_struct *smp_rcb_base_addr = NULL;
+	int ret;
+
+	sw_cintc = (struct acpi_madt_sw_cintc *)header;
+	if (BAD_MADT_ENTRY(sw_cintc, end)) {
+		pr_err(PREFIX "SW CINTC entry error."
+			" Please check the firmware!\n");
+		return -EINVAL;
+	}
+
+	acpi_table_print_madt_entry(&header->common);
+
+	ret = setup_rcid_and_core_mask(sw_cintc);
+	if (ret)
+		return ret;
+
+	/**
+	 * We use smp_rcb to help SMP boot. Its base
+	 * address is hold in the MADT entry of SW CINTC.
+	 */
+	smp_rcb_base_addr = __va(sw_cintc->boot_flag_address);
+	smp_rcb_init(smp_rcb_base_addr);
+
+	return 0;
+}
+
+static int __init acpi_process_madt_sw_cintc(void)
+{
+	int logical_core, ret;
+
+	/* Clean the map from logical core ID to physical core ID */
+	for (logical_core = 0; logical_core < NR_CPUS; ++logical_core)
+		set_rcid_map(logical_core, -1);
+
+	/* Clean core mask */
+	init_cpu_possible(cpu_none_mask);
+	init_cpu_present(cpu_none_mask);
+
+	/* Parse SW CINTC entries one by one */
+	ret = acpi_table_parse_madt(ACPI_MADT_TYPE_SW_CINTC,
+			acpi_parse_sw_cintc, 0);
+	if (ret < 0)
+		return ret;
+
+#if NR_CPUS > 1
+	/* It's time to update nr_cpu_ids */
+	nr_cpu_ids = possible_cores;
+#endif
+
+	pr_info(PREFIX "Detected %u possible CPU(s), %u CPU(s) are present\n",
+			possible_cores, present_cores);
+
+	return 0;
+}
+
+void __init acpi_boot_table_init(void)
+{
+	/**
+	 * ACPI is disabled by default.
+	 * ACPI is only enabled when firmware passes ACPI table
+	 * and sets boot parameter "acpi=on".
+	 */
+	if (param_acpi_on)
+		enable_acpi();
+
 	/*
 	 * If acpi_disabled, bail out
 	 */
-	if (!acpi_disabled) {
-		if (acpi_table_init()) {
-			pr_err("Failed to init ACPI tables\n");
-			disable_acpi();
-		}
-		pr_info("Enable ACPI support\n");
+	if (acpi_disabled)
+		return;
+
+	pr_warn("Currently, ACPI is an experimental feature!\n");
+	if (acpi_table_init()) {
+		pr_err("Failed to init ACPI tables\n");
+		disable_acpi();
+		return;
+	} else
+		pr_info("Successfully parsed ACPI table\n");
+
+	/**
+	 * Process SW64 Core Interrupt Controller(SW CINTC) in MADT table.
+	 * No initialization of the interrupt controller here, mainly used
+	 * to establish the mapping from logical core IDs to physical core
+	 * IDs and set cpu mask.
+	 */
+	if (acpi_process_madt_sw_cintc()) {
+		/* May be fatal error in MADT table */
+		pr_err("Failed to parse SW CINTC\n");
+		disable_acpi();
+		return;
 	}
 }

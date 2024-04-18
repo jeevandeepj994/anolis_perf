@@ -27,15 +27,16 @@
 #include <linux/of_platform.h>
 #include <linux/genalloc.h>
 #include <linux/acpi.h>
+#include <linux/cpu.h>
 
 #include <asm/efi.h>
 #include <asm/kvm_cma.h>
 #include <asm/mmu_context.h>
 #include <asm/sw64_init.h>
 #include <asm/timer.h>
+#include <asm/pci_impl.h>
 
 #include "proto.h"
-#include "pci_impl.h"
 
 #undef DEBUG_DISCONTIG
 #ifdef DEBUG_DISCONTIG
@@ -682,7 +683,7 @@ static void __init setup_cpu_info(void)
 
 static void __init setup_run_mode(void)
 {
-	if (*(unsigned long *)MMSIZE) {
+	if (rvpcr() >> VPCR_SHIFT) {
 		static_branch_disable(&run_mode_host_key);
 		if (*(unsigned long *)MMSIZE & EMUL_FLAG) {
 			pr_info("run mode: emul\n");
@@ -764,6 +765,12 @@ void __init sw64_kvm_reserve(void)
 void __init
 setup_arch(char **cmdline_p)
 {
+	/**
+	 * Work around the unaligned access exception to parse ACPI
+	 * tables in the following function acpi_boot_table_init().
+	 */
+	trap_init();
+
 	jump_label_init();
 	setup_cpu_info();
 	setup_run_mode();
@@ -833,6 +840,20 @@ setup_arch(char **cmdline_p)
 #endif
 #endif
 
+	efi_init();
+
+	/* Try to upgrade ACPI tables via initrd */
+	acpi_table_upgrade();
+
+	/* Parse the ACPI tables for possible boot-time configuration */
+	acpi_boot_table_init();
+
+#ifdef CONFIG_SMP
+	setup_smp();
+#else
+	store_cpu_data(0);
+#endif
+
 	sw64_numa_init();
 
 	memblock_dump_all();
@@ -844,11 +865,6 @@ setup_arch(char **cmdline_p)
 	paging_init();
 
 	kexec_control_page_init();
-
-	efi_init();
-
-	/* Parse the ACPI tables for possible boot-time configuration */
-	acpi_boot_table_init();
 
 	/*
 	 * Initialize the machine. Usually has to do with setting up
@@ -875,17 +891,12 @@ setup_arch(char **cmdline_p)
 	/* Default root filesystem to sda2.  */
 	ROOT_DEV = Root_SDA2;
 
-#ifdef CONFIG_SMP
-	setup_smp();
-#else
-	store_cpu_data(0);
-#endif
-
+	if (acpi_disabled) {
 #ifdef CONFIG_NUMA
-	cpu_set_node();
+		cpu_set_node();
 #endif
-	if (acpi_disabled)
 		device_tree_init();
+	}
 }
 
 

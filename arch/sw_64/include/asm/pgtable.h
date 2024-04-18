@@ -84,7 +84,7 @@ static inline void set_p4d(p4d_t *p4dp, p4d_t p4d)
 #define VMALLOC_END	(-PGDIR_SIZE)
 #else
 #define VMEMMAP_END	(-PGDIR_SIZE)
-#define vmemmap		((struct page *)VMEMMAP_END - (1UL << (3 * (PAGE_SHIFT - 3))))
+#define vmemmap		((struct page *)VMEMMAP_END - (1UL << (MAX_PHYSMEM_BITS - PAGE_SHIFT)))
 #define VMALLOC_END	((unsigned long)vmemmap)
 #endif
 
@@ -256,6 +256,12 @@ static inline void set_pte_at(struct mm_struct *mm, unsigned long addr,
 			      pte_t *ptep, pte_t pteval)
 {
 	set_pte(ptep, pteval);
+}
+
+#define pud_write pud_write
+static inline int pud_write(pud_t pud)
+{
+	return !(pud_val(pud) & _PAGE_FOW);
 }
 
 static inline pte_t pfn_pte(unsigned long pfn, pgprot_t prot)
@@ -744,16 +750,17 @@ extern pgd_t swapper_pg_dir[1024];
  *
  * Format of swap PTE:
  *	bit  0:		_PAGE_VALID (must be zero)
- *	bits 6-10:	swap type
- *	bits 11-58:	swap offset
+ *	bit  6:		_PAGE_LEAF (must be zero)
+ *	bits 7-11:	swap type
+ *	bits 12-58:	swap offset
  *	bit  63:	_PAGE_PROTNONE (must be zero)
  */
-#define __SWP_TYPE_SHIFT	6
+#define __SWP_TYPE_SHIFT	7
 #define __SWP_TYPE_BITS		5
 
 #endif
 
-#define __SWP_OFFSET_BITS	48
+#define __SWP_OFFSET_BITS	47
 #define __SWP_TYPE_MASK		((1UL << __SWP_TYPE_BITS) - 1)
 #define __SWP_OFFSET_SHIFT	(__SWP_TYPE_BITS + __SWP_TYPE_SHIFT)
 #define __SWP_OFFSET_MASK	((1UL << __SWP_OFFSET_BITS) - 1)
