@@ -1075,6 +1075,7 @@ static inline void perf_sample_data_init(struct perf_sample_data *data,
 	data->addr = addr;
 	data->raw  = NULL;
 	data->br_stack = NULL;
+	data->br_stack_cntr = NULL;
 	data->period = period;
 	data->weight.full = 0;
 	data->data_src.val = PERF_MEM_NA;
