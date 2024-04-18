@@ -28,22 +28,14 @@ u64 acpi_saved_sp_s3;
 
 #define SW_CINTC_FLAG_ENABLED        ACPI_MADT_ENABLED         /* 0x1 */
 #define SW_CINTC_FLAG_ONLINE_CAPABLE 0x2                       /* hotplug capable */
-#define SW_CINTC_FLAG_HT_CAPABLE     0x4                       /* hyper thread capable */
-#define SW_CINTC_FLAG_HT_ENABLED     0x8                       /* hyper thread enabled */
 
 #define is_core_enabled(flags)        ((flags) & SW_CINTC_FLAG_ENABLED)
 #define is_core_online_capable(flags) ((flags) & SW_CINTC_FLAG_ONLINE_CAPABLE)
-#define is_core_ht_capable(flags)     ((flags) & SW_CINTC_FLAG_HT_CAPABLE)
-#define is_core_ht_enabled(flags)     ((flags) & SW_CINTC_FLAG_HT_ENABLED)
 
 #define MAX_LOCAL_APIC 256
 
 #define PREFIX			"ACPI: "
-/*
- * The default interrupt routing model is PIC (8259).  This gets
- * overridden if IOAPICs are enumerated (below).
- */
-enum acpi_irq_model_id acpi_irq_model = ACPI_IRQ_MODEL_IOSAPIC;
+
 void __iomem *__init __acpi_map_table(unsigned long phys, unsigned long size)
 {
 	if (!phys || !size)
@@ -58,17 +50,6 @@ void __init __acpi_unmap_table(void __iomem *map, unsigned long size)
 
 	early_iounmap(map, size);
 }
-/*
- * Following __acpi_xx functions should be implemented for sepecific cpu.
- */
-int acpi_gsi_to_irq(u32 gsi, unsigned int *irqp)
-{
-	if (irqp != NULL)
-		*irqp = acpi_register_gsi(NULL, gsi, -1, -1);
-
-	return 0;
-}
-EXPORT_SYMBOL_GPL(acpi_gsi_to_irq);
 
 int acpi_isa_irq_to_gsi(unsigned int isa_irq, u32 *gsi)
 {
@@ -79,57 +60,6 @@ int acpi_isa_irq_to_gsi(unsigned int isa_irq, u32 *gsi)
 }
 
 int (*acpi_suspend_lowlevel)(void);
-
-/*
- * success: return IRQ number (>=0)
- * failure: return < 0
- */
-static struct irq_domain *irq_default_domain;
-int acpi_register_gsi(struct device *dev, u32 gsi, int trigger, int polarity)
-{
-	u32 irq;
-
-	irq = irq_find_mapping(irq_default_domain, gsi);
-
-	return irq;
-}
-EXPORT_SYMBOL_GPL(acpi_register_gsi);
-
-void acpi_unregister_gsi(u32 gsi)
-{
-
-}
-EXPORT_SYMBOL_GPL(acpi_unregister_gsi);
-/*
- *  ACPI based hotplug support for CPU
- */
-#ifdef CONFIG_ACPI_HOTPLUG_CPU
-#include <acpi/processor.h>
-
-/* wrapper to silence section mismatch warning */
-int __ref acpi_map_lsapic(acpi_handle handle, int physid, int *pcpu)
-{
-	return 0;
-}
-EXPORT_SYMBOL(acpi_map_lsapic);
-
-int acpi_unmap_lsapic(int cpu)
-{
-	return 0;
-}
-EXPORT_SYMBOL(acpi_unmap_lsapic);
-#endif /* CONFIG_ACPI_HOTPLUG_CPU */
-
-u8 acpi_checksum(u8 *table, u32 length)
-{
-	u8 ret = 0;
-
-	while (length--) {
-		ret += *table;
-		table++;
-	}
-	return -ret;
-}
 
 static int __init parse_acpi(char *arg)
 {
@@ -170,10 +100,9 @@ static int rcid_to_cpu(int physical_id)
 {
 	int i;
 
-	for (i = 0; i < NR_CPUS; ++i) {
+	for (i = 0; i < ARRAY_SIZE(__cpu_to_rcid); ++i)
 		if (__cpu_to_rcid[i] == physical_id)
 			return i;
-	}
 
 	/* physical id not found */
 	return -1;
@@ -181,26 +110,24 @@ static int rcid_to_cpu(int physical_id)
 
 /* Callback for Proximity Domain -> CPUID mapping */
 void __init
-acpi_numa_processor_affinity_init(struct acpi_srat_cpu_affinity *pa)
+acpi_numa_x2apic_affinity_init(struct acpi_srat_x2apic_cpu_affinity *pa)
 {
 	int pxm, node;
-	int cpu; // logical core id
+	int cpu;  // logical core id
+	int rcid; // physical core id
 
 	if (srat_disabled())
 		return;
-	if (pa->header.length != sizeof(struct acpi_srat_cpu_affinity)) {
+
+	if (pa->header.length != sizeof(struct acpi_srat_x2apic_cpu_affinity)) {
 		bad_srat();
 		return;
 	}
+
 	if ((pa->flags & ACPI_SRAT_CPU_ENABLED) == 0)
 		return;
-	pxm = pa->proximity_domain_lo;
-	if (acpi_srat_revision >= 2) {
-		pxm |= (pa->proximity_domain_hi[0] << 8);
-		pxm |= (pa->proximity_domain_hi[1] << 16);
-		pxm |= (pa->proximity_domain_hi[2] << 24);
-	}
 
+	pxm = pa->proximity_domain;
 	node = acpi_map_pxm_to_node(pxm);
 	if (node < 0) {
 		pr_err("SRAT: Too many proximity domains %x\n", pxm);
@@ -208,22 +135,25 @@ acpi_numa_processor_affinity_init(struct acpi_srat_cpu_affinity *pa)
 		return;
 	}
 
-	if (pa->apic_id >= CONFIG_NR_CPUS) {
-		pr_err("SRAT: PXM %u -> CPU 0x%02x -> Node %u skipped apicid that is too big\n", pxm, pa->apic_id, node);
-		return;
-	}
+	/**
+	 * In fact, SW64 does not support local X2_APIC and just
+	 * uses this structure to pass CPU affinity information.
+	 */
+	rcid = pa->apic_id;
 
 	/* Record the mapping from logical core id to node id */
-	cpu = rcid_to_cpu(pa->apic_id);
+	cpu = rcid_to_cpu(rcid);
 	if (cpu < 0) {
-		pr_err("SRAT: Can not find the logical id for physical Core 0x%02x\n", pa->apic_id);
+		pr_err("SRAT: Can not find the logical id for physical Core 0x%04x\n",
+				rcid);
 		return;
 	}
 
 	early_map_cpu_to_node(cpu, node);
 
 	node_set(node, numa_nodes_parsed);
-	pr_info("SRAT: PXM %u -> CPU 0x%02x -> Node %u\n", pxm, pa->apic_id, node);
+	pr_debug("SRAT: PXM %u -> CPU 0x%04x -> Node %u\n",
+			pxm, rcid, node);
 }
 
 #ifdef CONFIG_MEMORY_HOTPLUG
@@ -295,9 +225,9 @@ EXPORT_SYMBOL(acpi_unmap_cpu);
 
 static bool __init is_rcid_duplicate(int rcid)
 {
-	unsigned int i;
+	int i;
 
-	for (i = 0; (i < possible_cores) && (i < NR_CPUS); i++) {
+	for_each_possible_cpu(i) {
 		if (cpu_to_rcid(i) == rcid)
 			return true;
 	}
@@ -403,11 +333,11 @@ static int __init acpi_parse_sw_cintc(union acpi_subtable_headers *header,
 
 static int __init acpi_process_madt_sw_cintc(void)
 {
-	int logical_core, ret;
+	int i, ret;
 
 	/* Clean the map from logical core ID to physical core ID */
-	for (logical_core = 0; logical_core < NR_CPUS; ++logical_core)
-		set_rcid_map(logical_core, -1);
+	for (i = 0; i < ARRAY_SIZE(__cpu_to_rcid); ++i)
+		set_rcid_map(i, -1);
 
 	/* Clean core mask */
 	init_cpu_possible(cpu_none_mask);

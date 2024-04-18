@@ -143,17 +143,47 @@ EXPORT_SYMBOL_GPL(sw64_fp_emul_imprecise);
 long (*sw64_fp_emul)(unsigned long pc) = (void *)dummy_emul;
 EXPORT_SYMBOL_GPL(sw64_fp_emul);
 #else
-long sw64_fp_emul_imprecise(struct pt_regs *regs, unsigned long writemask);
-long sw64_fp_emul(unsigned long pc);
+extern long sw64_fp_emul_imprecise(struct pt_regs *regs, unsigned long writemask);
+extern long sw64_fp_emul(unsigned long pc);
 #endif
 
 asmlinkage void
-do_entArith(unsigned long summary, unsigned long write_mask,
+do_entArith(unsigned long exc_sum, unsigned long write_mask,
 		struct pt_regs *regs)
 {
 	long si_code = FPE_FLTINV;
 
-	if (summary & 1) {
+#ifndef CONFIG_SUBARCH_C3B
+	/* integer divide by zero */
+	if (exc_sum & EXC_SUM_DZE_INT)
+		si_code = FPE_INTDIV;
+	/* integer overflow */
+	else if (exc_sum & EXC_SUM_OVI)
+		si_code = FPE_INTOVF;
+	/* floating point invalid operation */
+	else if (exc_sum & EXC_SUM_INV)
+		si_code = FPE_FLTINV;
+	/* floating point divide by zero */
+	else if (exc_sum & EXC_SUM_DZE)
+		si_code = FPE_FLTDIV;
+	/* floating point overflow */
+	else if (exc_sum & EXC_SUM_OVF)
+		si_code = FPE_FLTOVF;
+	/* floating point underflow */
+	else if (exc_sum & EXC_SUM_UNF)
+		si_code = FPE_FLTUND;
+	/* floating point inexact result */
+	else if (exc_sum & EXC_SUM_INE)
+		si_code = FPE_FLTRES;
+	/* denormalized operand */
+	else if (exc_sum & EXC_SUM_DNO)
+		si_code = FPE_FLTUND;
+	/* undiagnosed floating-point exception */
+	else
+		si_code = FPE_FLTUNK;
+#endif
+
+	if ((exc_sum & EXC_SUM_FP_STATUS_ALL) && (exc_sum & EXC_SUM_SWC)) {
 		/* Software-completion summary bit is set, so try to
 		 * emulate the instruction.  If the processor supports
 		 * precise exceptions, we don't have to search.
@@ -165,10 +195,6 @@ do_entArith(unsigned long summary, unsigned long write_mask,
 
 	if (!user_mode(regs))
 		die("Arithmetic fault", regs, 0);
-
-	/*summary<39> means integer divide by zero in C4.*/
-	if ((summary >> 39) & 1)
-		si_code = FPE_INTDIV;
 
 	force_sig_fault(SIGFPE, si_code, (void __user *)regs->pc);
 }
@@ -191,6 +217,32 @@ void simd_emulate(unsigned int inst, unsigned long va)
 		sw64_read_simd_fp_m_d(reg, fp);
 		return;
 	}
+}
+
+static int try_fix_rd_f(unsigned int inst, struct pt_regs *regs)
+{
+	int copied;
+	unsigned int prev_inst, new_inst;
+	unsigned int ra, prev_ra;
+
+	/* not rd_f */
+	if ((inst & 0xfc00ffffU) != 0x18001000)
+		return -1;
+
+	get_user(prev_inst, (__u32 *)(regs->pc - 8));
+	if ((prev_inst & 0xfc00e000U) == 0x20008000) { /* lstw/lstl */
+		ra = (inst >> 21) & 0x1f;
+		prev_ra = (prev_inst >> 21) & 0x1f;
+		/* ldi ra, 0(prev_ra) */
+		new_inst = (0x3e << 26) | (ra << 21) | (prev_ra << 16);
+		copied = access_process_vm(current, regs->pc - 4, &new_inst,
+				sizeof(unsigned int), FOLL_FORCE | FOLL_WRITE);
+		if (copied != sizeof(unsigned int))
+			return -1;
+		regs->pc -= 4;
+		return 0;
+	}
+	return -1;
 }
 
 /*
@@ -294,6 +346,8 @@ do_entIF(unsigned long inst_type, unsigned long va, struct pt_regs *regs)
 		return;
 
 	case IF_OPDEC:
+		if (try_fix_rd_f(inst, regs) == 0)
+			return;
 		switch (inst) {
 #ifdef CONFIG_KPROBES
 		case BREAK_KPROBE:

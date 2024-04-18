@@ -130,7 +130,8 @@ void pcibios_fixup_bus(struct pci_bus *bus)
  * Provide information on locations of various I/O regions in physical
  * memory.  Do this on a per-card basis so that we choose the right hose.
  */
-asmlinkage long sys_pciconfig_iobase(long which, unsigned long bus, unsigned long dfn)
+asmlinkage long
+sys_pciconfig_iobase(long which, unsigned long bus, unsigned long dfn)
 {
 	struct pci_controller *hose;
 
@@ -172,7 +173,8 @@ void __init reserve_mem_for_pci(void)
 		return;
 	}
 
-	pr_info("reserved pages for pcie memory space %lx:%lx\n", base >> PAGE_SHIFT,
+	pr_info("reserved pages for pcie memory space %lx:%lx\n",
+			base >> PAGE_SHIFT,
 			(base + PCI_32BIT_MEMIO_SIZE) >> PAGE_SHIFT);
 }
 
@@ -184,7 +186,8 @@ static void quirk_isa_bridge(struct pci_dev *dev)
 {
 	dev->class = PCI_CLASS_BRIDGE_ISA << 8;
 }
-DECLARE_PCI_FIXUP_HEADER(PCI_VENDOR_ID_INTEL, PCI_DEVICE_ID_INTEL_82378, quirk_isa_bridge);
+DECLARE_PCI_FIXUP_HEADER(PCI_VENDOR_ID_INTEL, PCI_DEVICE_ID_INTEL_82378,
+		quirk_isa_bridge);
 
 /*
  * Early fix up the Root Complex settings
@@ -219,18 +222,13 @@ static void fixup_root_complex(struct pci_dev *dev)
 
 DECLARE_PCI_FIXUP_HEADER(PCI_VENDOR_ID_JN, PCI_DEVICE_ID_SW64_ROOT_BRIDGE, fixup_root_complex);
 
-static int setup_bus_dma_cb(struct pci_dev *pdev, void *data)
+static void quirk_zx200_dma_mask(struct pci_dev *pdev)
 {
-	pdev->dev.bus_dma_limit = DMA_BIT_MASK(32);
-	return 0;
+	pr_info("Set ZX200 UHCI & EHCI dma mask to DMA_BIT_MASK(32)\n");
+	pci_set_dma_mask(pdev, DMA_BIT_MASK(32));
 }
-
-static void fix_bus_dma_limit(struct pci_dev *dev)
-{
-	pci_walk_bus(dev->subordinate, setup_bus_dma_cb, NULL);
-	pr_info("Set zx200 bus_dma_limit to 32-bit\n");
-}
-DECLARE_PCI_FIXUP_FINAL(PCI_VENDOR_ID_ZHAOXIN, 0x071f, fix_bus_dma_limit);
+DECLARE_PCI_FIXUP_FINAL(PCI_VENDOR_ID_ZHAOXIN, 0x3038, quirk_zx200_dma_mask);
+DECLARE_PCI_FIXUP_FINAL(PCI_VENDOR_ID_ZHAOXIN, 0x3104, quirk_zx200_dma_mask);
 
 #ifdef CONFIG_DCA
 static void enable_sw_dca(struct pci_dev *dev)
@@ -251,8 +249,10 @@ static void enable_sw_dca(struct pci_dev *dev)
 			continue;
 		else {
 			dca_conf = (1UL << 63) | (dev->bus->number << 8) | dev->devfn;
-			pr_info("dca device index %d, dca_conf = %#lx\n", i, dca_conf);
-			write_piu_ior1(node, rc_index, DEVICEID0 + (i << 7), dca_conf);
+			pr_info("dca device index %d, dca_conf = %#lx\n",
+					i, dca_conf);
+			write_piu_ior1(node, rc_index,
+					DEVICEID0 + (i << 7), dca_conf);
 			break;
 		}
 	}
@@ -288,7 +288,7 @@ DECLARE_PCI_FIXUP_FINAL(PCI_VENDOR_ID_INTEL, PCI_ANY_ID, enable_sw_dca);
  * A question: when there is too much RCs, may 256 bus
  * numbers be insufficient?
  */
-static unsigned char last_bus = 0;
+static unsigned char last_bus;
 
 void sw64_pci_root_bridge_prepare(struct pci_host_bridge *bridge)
 {
@@ -324,7 +324,8 @@ void sw64_pci_root_bridge_prepare(struct pci_host_bridge *bridge)
 	 * So, need to update bus num of pci host bridge here.
 	 */
 	bridge->busnr = last_bus;
-	dev_set_name(&bridge->dev, "pci%04x:%02x", pci_domain_nr(bus), last_bus);
+	dev_set_name(&bridge->dev, "pci%04x:%02x",
+			pci_domain_nr(bus), last_bus);
 
 	/**
 	 * At this point, pci_bus has been created and use old
@@ -343,7 +344,8 @@ void sw64_pci_root_bridge_prepare(struct pci_host_bridge *bridge)
 	pci_add_flags(PCI_REASSIGN_ALL_BUS);
 }
 
-static void sw64_pci_root_bridge_reserve_legacy_io(struct pci_host_bridge *bridge)
+static void
+sw64_pci_root_bridge_reserve_legacy_io(struct pci_host_bridge *bridge)
 {
 	struct pci_bus *bus = bridge->bus;
 	struct resource_entry *entry = NULL;
@@ -354,10 +356,8 @@ static void sw64_pci_root_bridge_reserve_legacy_io(struct pci_host_bridge *bridg
 			continue;
 
 		res = kzalloc(sizeof(struct resource), GFP_KERNEL);
-		if (res == NULL) {
-			pr_err("alloc resource for legacy io out of mem\n");
+		if (WARN_ON(!res))
 			return;
-		}
 
 		res->name  = "legacy io";
 		res->flags = IORESOURCE_IO;
@@ -426,11 +426,11 @@ void sw64_pci_root_bridge_scan_finish_up(struct pci_host_bridge *bridge)
 	 *
 	 * > echo 1 > /sys/bus/pci/rescan
 	 *
-	 * Unexpected errors may occur on the endpoint devices due to the re-assign
-	 * bus numbers of upstream bridges.
+	 * Unexpected errors may occur on the endpoint devices due to the
+	 * re-assign bus numbers of upstream bridges.
 	 *
-	 * To work around this problem, the flag PCI_REASSIGN_ALL_BUS is set before
-	 * scanning Root Complex and cleared after scanning Root Complex.
+	 * To work around this problem, the flag PCI_REASSIGN_ALL_BUS is set
+	 * before scanning Root Complex and cleared after scanning Root Complex.
 	 */
 	pci_clear_flags(PCI_REASSIGN_ALL_BUS);
 }

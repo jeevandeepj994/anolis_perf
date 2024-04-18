@@ -81,6 +81,21 @@ struct dma_domain {
 const struct iommu_ops sunway_iommu_ops;
 static const struct dma_map_ops sunway_dma_ops;
 
+static int __last_alias(struct pci_dev *pdev, u16 alias, void *data)
+{
+	*(u16 *)data = alias;
+	return 0;
+}
+
+static int get_alias(struct pci_dev *pdev)
+{
+	u16 pci_alias;
+
+	/* As far as I know, few devices are using more than 2 aliases. */
+	pci_for_each_dma_alias(pdev, __last_alias, &pci_alias);
+
+	return pci_alias;
+}
 
 /* flush helpers */
 static void piu_flush_all(struct pci_controller *hose)
@@ -125,15 +140,28 @@ void flush_ptlb_by_addr(struct sunway_iommu_domain *sdomain,
 	struct pci_controller *hose;
 	struct pci_dev *pdev;
 	struct sunway_iommu_dev *sdev_data;
+	unsigned long address;
+	u16 alias, bus_number, devfn;
 
 	list_for_each_entry(sdev_data, &sdomain->dev_list, list) {
 		pdev = sdev_data->pdev;
 		hose = pci_bus_to_pci_controller(pdev->bus);
 
-		flush_addr = (pdev->bus->number << 8)
+		address = (pdev->bus->number << 8)
 			    | pdev->devfn | (flush_addr << 16);
 		write_piu_ior0(hose->node, hose->index,
 				PTLB_FLUSHVADDR, flush_addr);
+
+		if (sdev_data->alias != sdev_data->devid) {
+			alias = sdev_data->alias;
+			bus_number = PCI_BUS_NUM(alias);
+			devfn = PCI_SLOT(alias) | PCI_FUNC(alias);
+
+			address = (bus_number << 8)
+				| devfn | (flush_addr << 16);
+			write_piu_ior0(hose->node, hose->index,
+				PTLB_FLUSHVADDR, flush_addr);
+		}
 	}
 }
 
@@ -242,7 +270,6 @@ static u16 sunway_domain_id_alloc(void)
 static int sunway_domain_init(struct sunway_iommu_domain *sdomain)
 {
 	spin_lock_init(&sdomain->lock);
-	mutex_init(&sdomain->api_lock);
 	sdomain->id = sunway_domain_id_alloc();
 	if (!sdomain->id)
 		return -ENOMEM;
@@ -298,44 +325,80 @@ static void device_flush_all(struct sunway_iommu_dev *sdata)
 	write_piu_ior0(hose->node, hose->index, DTLB_FLUSHDEV, sdata->devid);
 	write_piu_ior0(hose->node, hose->index, PTLB_FLUSHDEV, sdata->devid);
 	write_piu_ior0(hose->node, hose->index, PCACHE_FLUSHDEV, sdata->devid);
+
+	if (sdata->devid != sdata->alias) {
+		write_piu_ior0(hose->node, hose->index, DTLB_FLUSHDEV, sdata->alias);
+		write_piu_ior0(hose->node, hose->index, PTLB_FLUSHDEV, sdata->alias);
+		write_piu_ior0(hose->node, hose->index, PCACHE_FLUSHDEV, sdata->alias);
+	}
 }
 
 /* iommu_ops device attach/unattach helpers */
+static bool
+set_entry_by_devid(u16 devid,
+		   struct sunway_iommu_domain *sdomain,
+		   struct sunway_iommu *iommu)
+{
+	struct page *dt_page, *pt_page;
+	unsigned long *dte_l1, *dte_l2;
+	unsigned long dte_l1_val, dte_l2_base, dte_l2_val;
+	u16 bus_number, devfn;
+
+	bus_number = PCI_BUS_NUM(devid);
+	devfn = PCI_SLOT(devid) | PCI_FUNC(devid);
+
+	dte_l1 = iommu->iommu_dtbr + bus_number;
+	dte_l1_val = *dte_l1;
+
+	if (!dte_l1_val) {
+		/* Alloc a new level-2 device table page */
+		dt_page = alloc_pages_node(iommu->node, GFP_KERNEL | __GFP_ZERO,
+				get_order(PAGE_SIZE));
+
+		WARN_ON(!dt_page);
+		dte_l2_base = (unsigned long)page_address(dt_page);
+		dte_l1_val = (__pa(dte_l2_base) & PAGE_MASK) | SW64_IOMMU_ENTRY_VALID;
+		*dte_l1 = dte_l1_val;
+	}
+
+	if (!sdomain->pt_root) {
+		pt_page = alloc_pages_node(iommu->node, GFP_KERNEL | __GFP_ZERO, 0);
+		WARN_ON(!pt_page);
+		sdomain->pt_root = page_address(pt_page);
+	}
+
+	dte_l2 = __va(dte_l1_val & ~(SW64_IOMMU_ENTRY_VALID) & PAGE_MASK) + (devfn << 3);
+	dte_l2_val = (__pa(sdomain->pt_root) & PAGE_MASK) | SW64_IOMMU_ENTRY_VALID;
+	if (sdomain->type == IOMMU_DOMAIN_IDENTITY) {
+		dte_l2_val |= 0x1;
+		*dte_l2 = dte_l2_val;
+		return true;
+	}
+
+	*dte_l2 = dte_l2_val;
+	pr_debug("iommu: device with id %d added to domain: %d\n", devid, sdomain->id);
+
+	return false;
+}
+
 static void
 set_dte_entry(struct sunway_iommu_dev *sdev, struct sunway_iommu_domain *sdomain)
 {
 	struct sunway_iommu *iommu;
 	struct pci_dev *pdev;
-	struct page *page;
-	unsigned long *dte_l1, *dte_l2;
-	unsigned long dte_l1_val, dte_l2_base, dte_l2_val;
+	bool is_identity;
 
 	pdev = sdev->pdev;
 	if (pdev->hdr_type == PCI_HEADER_TYPE_BRIDGE)
 		return;
 
-	sdev->devid = PCI_DEVID(pdev->bus->number, pdev->devfn);
 	iommu = sdev->iommu;
-	dte_l1 = iommu->iommu_dtbr + (pdev->bus->number);
-	dte_l1_val = *dte_l1;
+	is_identity = set_entry_by_devid(sdev->devid, sdomain, iommu);
+	if (sdev->devid != sdev->alias)
+		is_identity = set_entry_by_devid(sdev->alias, sdomain, iommu);
 
-	if (!dte_l1_val) {
-		/* Alloc a new level-2 device table page */
-		page = alloc_pages_node(iommu->node, __GFP_ZERO,
-				get_order(PAGE_SIZE));
-		dte_l2_base = (unsigned long)page_address(page);
-		dte_l1_val = (__pa(dte_l2_base) & PAGE_MASK) | SW64_IOMMU_ENTRY_VALID;
-		*dte_l1 = dte_l1_val;
-	}
-
-	dte_l2 = __va(dte_l1_val & ~(SW64_IOMMU_ENTRY_VALID) & PAGE_MASK) + (pdev->devfn << 3);
-	BUG_ON(!sdomain->pt_root);
-	dte_l2_val = (__pa(sdomain->pt_root) & PAGE_MASK) | SW64_IOMMU_ENTRY_VALID;
-	if (sdomain->type == IOMMU_DOMAIN_IDENTITY) {
-		dte_l2_val |= 0x1;
+	if (is_identity)
 		sdev->passthrough = IDENTMAP_ALL;
-	}
-	*dte_l2 = dte_l2_val;
 
 	device_flush_all(sdev);
 }
@@ -445,32 +508,6 @@ static struct sunway_iommu_dev *search_dev_data(u16 devid)
 	}
 
 	return NULL;
-}
-
-/* dma_ops helpers*/
-static struct sunway_iommu_domain *get_sunway_domain(struct device *dev)
-{
-	struct sunway_iommu_domain *sdomain;
-	struct iommu_domain *domain;
-	struct pci_dev *pdev;
-	struct sunway_iommu_dev *sdev;
-
-	pdev = to_pci_dev(dev);
-	if (!pdev)
-		return ERR_PTR(-ENODEV);
-
-	sdev = dev_iommu_priv_get(dev);
-	sdomain = sdev->domain;
-	if (sdomain == NULL) {
-		domain = iommu_get_domain_for_dev(dev);
-		sdomain = to_sunway_domain(domain);
-		attach_device(dev, sdomain);
-	}
-
-	if (sdomain == NULL)
-		return ERR_PTR(-EBUSY);
-
-	return sdomain;
 }
 
 /**********************************************************************
@@ -902,415 +939,6 @@ direct_map:
 	return 0;
 }
 
-static unsigned long
-sunway_alloc_iova(struct dma_domain *dma_dom, unsigned int pages)
-{
-	unsigned long pfn = 0;
-
-	pages = __roundup_pow_of_two(pages);
-	/* IOVA boundary should be 16M ~ 3.5G */
-	pfn = alloc_iova_fast(&dma_dom->iovad, pages,
-			      IOVA_PFN(SW64_DMA_LIMIT), true);
-	if (!pfn)
-		return 0;
-
-	return (pfn << PAGE_SHIFT);
-}
-
-static void sunway_free_iova(struct dma_domain *dma_dom,
-			 unsigned long address, unsigned int pages)
-{
-	pages = __roundup_pow_of_two(pages);
-	address >>= PAGE_SHIFT;
-
-	free_iova_fast(&dma_dom->iovad, address, pages);
-}
-
-static dma_addr_t
-__sunway_map_single(struct dma_domain *dma_dom,
-		struct pci_dev *pdev, phys_addr_t paddr, size_t size)
-{
-	struct pci_controller *hose = pci_bus_to_pci_controller(pdev->bus);
-	dma_addr_t ret, address, start;
-	long npages;
-	int i;
-
-	if (hose == NULL) {
-		pr_err("%s:hose does not exist!\n", __func__);
-		return 0;
-	}
-
-	npages = iommu_num_pages(paddr, size, PAGE_SIZE);
-
-	address = sunway_alloc_iova(dma_dom, npages);
-	if (!address)
-		return 0;
-
-	start = address;
-	for (i = 0; i < npages; ++i) {
-		ret = sunway_iommu_map_page(&dma_dom->sdomain, start,
-					paddr, PAGE_SIZE);
-		if (ret) {
-			pr_info("error when map page.\n");
-			goto out_unmap;
-		}
-
-		start += PAGE_SIZE;
-		paddr += PAGE_SIZE;
-	}
-
-	address += paddr & ~PAGE_MASK;
-	return address;
-
-out_unmap:
-	for (--i; i >= 0; --i) {
-		start -= PAGE_SIZE;
-		sunway_iommu_unmap_page(&dma_dom->sdomain, start, PAGE_SIZE);
-	}
-
-	sunway_free_iova(dma_dom, address, npages);
-	return 0;
-}
-
-static dma_addr_t
-pci_iommu_map_single(struct pci_dev *pdev,
-		     struct dma_domain *dma_dom, void *cpu_addr, size_t size)
-{
-	struct pci_controller *hose = pci_bus_to_pci_controller(pdev->bus);
-	unsigned long paddr;
-
-	if (hose == NULL) {
-		pr_err("%s: hose does not exist!\n", __func__);
-		return 0;
-	}
-
-	paddr = __sunway_map_single(dma_dom, pdev, __pa(cpu_addr), size);
-
-	pr_debug("pci_alloc_consistent: %zx -> [%px,%lx] from %ps\n",
-			size, cpu_addr, paddr, __builtin_return_address(0));
-
-	return paddr;
-}
-
-static void *sunway_alloc_coherent(struct device *dev,
-			       size_t size,
-			       dma_addr_t *dma_addr, gfp_t gfp,
-			       unsigned long attrs)
-{
-	struct pci_dev *pdev = to_pci_dev(dev);
-	struct pci_controller *hose;
-	struct sunway_iommu_domain *sdomain;
-	struct dma_domain *dma_dom;
-	struct sunway_iommu_dev *sdev;
-	struct page *page;
-	void *cpu_addr;
-
-	if (!pdev)
-		return NULL;
-
-	hose = pci_bus_to_pci_controller(pdev->bus);
-	if (!hose)
-		return NULL;
-
-	gfp &= ~GFP_DMA;
-
-try_again:
-	page = alloc_pages_node(dev_to_node(dev), gfp | __GFP_ZERO, get_order(size));
-	cpu_addr = page_address(page);
-	if (!cpu_addr) {
-		pr_info
-		    ("pci_alloc_consistent: get_free_pages failed from %ps\n",
-		     __builtin_return_address(0));
-
-		return NULL;
-	}
-
-	*dma_addr = __pa(cpu_addr);
-	if (!(hose->iommu_enable))
-		return cpu_addr;
-
-	sdev = dev_iommu_priv_get(dev);
-	if (sdev->passthrough & DMA_MASK64)
-		return cpu_addr;
-	else if (sdev->passthrough) {
-		if (min_not_zero(*dev->dma_mask, dev->coherent_dma_mask)
-				> DMA_BIT_MASK(32)) {
-			sdev->passthrough |= DMA_MASK64;
-			return cpu_addr;
-		}
-
-		__free_pages(page, get_order(size));
-		set_dma_ops(dev, get_arch_dma_ops(dev->bus));
-		return dev->dma_ops->alloc(dev, size, dma_addr, gfp, attrs);
-	}
-
-	sdomain = get_sunway_domain(dev);
-	dma_dom = to_dma_domain(sdomain);
-
-	*dma_addr = pci_iommu_map_single(pdev, dma_dom, cpu_addr, size);
-	if (*dma_addr == 0) {
-		free_pages((unsigned long)cpu_addr, get_order(size));
-		if (gfp & GFP_DMA)
-			return NULL;
-
-		gfp |= GFP_DMA;
-		goto try_again;
-	}
-
-	return cpu_addr;
-}
-
-static void
-__sunway_unmap_single(struct dma_domain *dma_dom, dma_addr_t dma_addr, size_t size)
-{
-	dma_addr_t start;
-	long npages;
-	int i;
-
-	npages = iommu_num_pages(dma_addr, size, PAGE_SIZE);
-	dma_addr &= PAGE_MASK;
-	start = dma_addr;
-
-	for (i = 0; i < npages; ++i) {
-		sunway_iommu_unmap_page(&dma_dom->sdomain, start, PAGE_SIZE);
-		start += PAGE_SIZE;
-	}
-
-	sunway_free_iova(dma_dom, dma_addr, npages);
-	pr_debug("pci_free_consistent: %zx -> [%llx] from %ps\n",
-			size, dma_addr, __builtin_return_address(0));
-
-}
-
-static void
-sunway_free_coherent(struct device *dev, size_t size,
-		 void *vaddr, dma_addr_t dma_addr, unsigned long attrs)
-{
-	struct sunway_iommu_domain *sdomain;
-	struct dma_domain *dma_dom;
-	struct pci_dev *pdev = to_pci_dev(dev);
-	struct pci_controller *hose;
-	struct sunway_iommu_dev *sdev;
-
-	if (!pdev)
-		goto out_unmap;
-
-	hose = pci_bus_to_pci_controller(pdev->bus);
-	if (!hose || !(hose->iommu_enable))
-		goto out_unmap;
-
-	sdev = dev_iommu_priv_get(dev);
-	if (sdev->passthrough)
-		goto out_unmap;
-
-	sdomain = get_sunway_domain(dev);
-	dma_dom = to_dma_domain(sdomain);
-	__sunway_unmap_single(dma_dom, dma_addr, size);
-	goto out_free;
-
-out_unmap:
-	pci_unmap_single(pdev, dma_addr, size, PCI_DMA_BIDIRECTIONAL);
-
-out_free:
-	pr_debug("sunway_free_consistent: [%llx,%zx] from %ps\n",
-		dma_addr, size, __builtin_return_address(0));
-
-	free_pages((unsigned long)vaddr, get_order(size));
-}
-
-static dma_addr_t
-sunway_map_page(struct device *dev, struct page *page,
-	    unsigned long offset, size_t size,
-	    enum dma_data_direction dir, unsigned long attrs)
-{
-	struct pci_dev *pdev = to_pci_dev(dev);
-	struct sunway_iommu_domain *sdomain;
-	struct dma_domain *dma_dom;
-	struct pci_controller *hose;
-	struct sunway_iommu_dev *sdev;
-	phys_addr_t paddr = page_to_phys(page) + offset;
-
-	if (dir == PCI_DMA_NONE)
-		BUG();
-
-	if (!pdev)
-		return 0;
-
-	hose = pci_bus_to_pci_controller(pdev->bus);
-	if (!hose || !(hose->iommu_enable))
-		return paddr;
-
-	sdev = dev_iommu_priv_get(dev);
-	if (sdev->passthrough & DMA_MASK64)
-		return paddr;
-	else if (sdev->passthrough) {
-		if (min_not_zero(*dev->dma_mask, dev->coherent_dma_mask)
-				> DMA_BIT_MASK(32)) {
-			sdev->passthrough |= DMA_MASK64;
-			return paddr;
-		}
-
-		set_dma_ops(dev, get_arch_dma_ops(dev->bus));
-		return dev->dma_ops->map_page(dev, page, offset,
-				size, dir, attrs);
-	}
-
-	sdomain = get_sunway_domain(dev);
-	dma_dom = to_dma_domain(sdomain);
-
-	return pci_iommu_map_single(pdev, dma_dom,
-		(char *)page_address(page) + offset, size);
-}
-
-static void
-sunway_unmap_page(struct device *dev, dma_addr_t dma_addr,
-	      size_t size, enum dma_data_direction dir, unsigned long attrs)
-{
-	struct sunway_iommu_domain *sdomain;
-	struct dma_domain *dma_dom;
-	struct pci_dev *pdev;
-	struct pci_controller *hose;
-	struct sunway_iommu_dev *sdev;
-
-	pdev = to_pci_dev(dev);
-	if (!pdev)
-		return;
-
-	hose = pci_bus_to_pci_controller(pdev->bus);
-	if (hose == NULL)
-		return;
-
-	if (!hose->iommu_enable)
-		return;
-
-	sdev = dev_iommu_priv_get(dev);
-	if (sdev->passthrough)
-		return;
-
-	sdomain = get_sunway_domain(dev);
-	dma_dom = to_dma_domain(sdomain);
-	__sunway_unmap_single(dma_dom, dma_addr, size);
-}
-
-#define SG_ENT_VIRT_ADDRESS(SG) (sg_virt((SG)))
-static int
-sunway_map_sg(struct device *dev, struct scatterlist *sgl,
-	  int nents, enum dma_data_direction dir, unsigned long attrs)
-{
-	struct sunway_iommu_domain *sdomain;
-	struct dma_domain *dma_dom = NULL;
-	struct scatterlist *sg;
-	struct pci_dev *pdev = to_pci_dev(dev);
-	struct pci_controller *hose;
-	struct sunway_iommu_dev *sdev;
-	int i, out_nents = 0;
-
-	if (dir == PCI_DMA_NONE)
-		BUG();
-
-	if (!pdev)
-		return 0;
-
-	hose = pci_bus_to_pci_controller(pdev->bus);
-	if (!hose)
-		return 0;
-
-	sdomain = get_sunway_domain(dev);
-	dma_dom = to_dma_domain(sdomain);
-
-	for_each_sg(sgl, sg, nents, i) {
-		BUG_ON(!sg_page(sg));
-
-		sg_dma_address(sg) = __pa(SG_ENT_VIRT_ADDRESS(sg));
-		if (!(hose->iommu_enable))
-			goto check;
-
-		sdev = dev_iommu_priv_get(dev);
-		if (sdev->passthrough & DMA_MASK64)
-			goto check;
-		else if (sdev->passthrough) {
-			if (min_not_zero(*dev->dma_mask, dev->coherent_dma_mask)
-					> DMA_BIT_MASK(32)) {
-				sdev->passthrough |= DMA_MASK64;
-				goto check;
-			}
-
-			set_dma_ops(dev, get_arch_dma_ops(dev->bus));
-			return dev->dma_ops->map_sg(dev, sgl, nents,
-					dir, attrs);
-		}
-
-		sg_dma_address(sg) =
-		    pci_iommu_map_single(pdev, dma_dom,
-					 SG_ENT_VIRT_ADDRESS(sg), sg->length);
-check:
-		if (sg_dma_address(sg) == 0)
-			goto error;
-
-		sg_dma_len(sg) = sg->length;
-		out_nents++;
-	}
-
-	return nents;
-
-error:
-	pr_warn("pci_map_sg failed:");
-	pr_warn("could not allocate dma page tables\n");
-
-	if (out_nents)
-		pci_unmap_sg(pdev, sgl, out_nents, dir);
-	return 0;
-}
-
-static void
-sunway_unmap_sg(struct device *dev, struct scatterlist *sgl,
-	    int nents, enum dma_data_direction dir, unsigned long attrs)
-{
-	struct sunway_iommu_domain *sdomain;
-	struct dma_domain *dma_dom;
-	struct scatterlist *sg;
-	struct pci_dev *pdev;
-	struct pci_controller *hose;
-	struct sunway_iommu_dev *sdev;
-	dma_addr_t dma_addr;
-	long size;
-	int j;
-
-	pdev = to_pci_dev(dev);
-	if (!pdev)
-		return;
-
-	hose = pci_bus_to_pci_controller(pdev->bus);
-	if (!hose->iommu_enable)
-		return;
-
-	sdev = dev_iommu_priv_get(dev);
-	if (sdev->passthrough)
-		return;
-
-	sdomain = get_sunway_domain(dev);
-	dma_dom = to_dma_domain(sdomain);
-
-	for_each_sg(sgl, sg, nents, j) {
-		dma_addr = sg->dma_address;
-		size = sg->dma_length;
-		if (!size)
-			break;
-
-		__sunway_unmap_single(dma_dom, dma_addr, size);
-	}
-}
-
-static const struct dma_map_ops sunway_dma_ops = {
-	.alloc = sunway_alloc_coherent,
-	.free = sunway_free_coherent,
-	.map_sg = sunway_map_sg,
-	.unmap_sg = sunway_unmap_sg,
-	.map_page = sunway_map_page,
-	.unmap_page = sunway_unmap_page,
-	.dma_supported = dma_direct_supported,
-};
-
 /**********************************************************************
  *
  * IOMMU OPS Functions
@@ -1346,6 +974,8 @@ static struct iommu_domain *sunway_iommu_domain_alloc(unsigned type)
 		}
 
 		sdomain = &dma_dom->sdomain;
+		if (iommu_get_dma_cookie(&sdomain->domain) == -ENOMEM)
+			return NULL;
 		break;
 
 	case IOMMU_DOMAIN_IDENTITY:
@@ -1506,9 +1136,7 @@ sunway_iommu_map(struct iommu_domain *dom, unsigned long iova,
 	if (iova >= SW64_BAR_ADDRESS)
 		return 0;
 
-	mutex_lock(&sdomain->api_lock);
 	ret = sunway_iommu_map_page(sdomain, iova, paddr, page_size);
-	mutex_unlock(&sdomain->api_lock);
 
 	return ret;
 }
@@ -1524,16 +1152,19 @@ sunway_iommu_unmap(struct iommu_domain *dom, unsigned long iova,
 	if (iova >= SW64_BAR_ADDRESS)
 		return page_size;
 
-	mutex_lock(&sdomain->api_lock);
 	unmap_size = sunway_iommu_unmap_page(sdomain, iova, page_size);
-	mutex_unlock(&sdomain->api_lock);
 
 	return unmap_size;
 }
 
 static struct iommu_group *sunway_iommu_device_group(struct device *dev)
 {
-	return pci_device_group(dev);
+	/*
+	 * As sw64 requires all DMA transactions to go through RC right now,
+	 * there is no need to consider group isolation yet. Thus, we decide
+	 * to use the one device/function per group strategy here.
+	 */
+	return generic_device_group(dev);
 }
 
 static int iommu_init_device(struct device *dev)
@@ -1551,6 +1182,9 @@ static int iommu_init_device(struct device *dev)
 		return -ENOMEM;
 
 	pdev = to_pci_dev(dev);
+	sdev->devid = PCI_DEVID(pdev->bus->number, pdev->devfn);
+	sdev->alias = get_alias(pdev);
+
 	hose = pci_bus_to_pci_controller(pdev->bus);
 	iommu = hose->pci_iommu;
 	llist_add(&sdev->dev_data_list, &dev_data_list);
@@ -1599,14 +1233,11 @@ static struct iommu_device *sunway_iommu_probe_device(struct device *dev)
 	struct sunway_iommu *iommu;
 	int ret;
 
+	if (!dev_is_pci(dev))
+		return 0;
+
 	pdev = to_pci_dev(dev);
 	if (!pdev)
-		return ERR_PTR(-ENODEV);
-
-	if (pdev->hdr_type == PCI_HEADER_TYPE_BRIDGE)
-		return ERR_PTR(-ENODEV);
-
-	if (pci_pcie_type(pdev) == PCI_EXP_TYPE_ROOT_PORT)
 		return ERR_PTR(-ENODEV);
 
 	hose = pci_bus_to_pci_controller(pdev->bus);
@@ -1654,8 +1285,10 @@ static void sunway_iommu_probe_finalize(struct device *dev)
 	struct iommu_domain *domain;
 
 	domain = iommu_get_domain_for_dev(dev);
-	if (domain)
-		set_dma_ops(dev, &sunway_dma_ops);
+	if (domain->type == IOMMU_DOMAIN_DMA)
+		iommu_setup_dma_ops(dev, SW64_DMA_START, SW64_DMA_LIMIT);
+	else
+		set_dma_ops(dev, get_arch_dma_ops(dev->bus));
 }
 
 const struct iommu_ops sunway_iommu_ops = {
