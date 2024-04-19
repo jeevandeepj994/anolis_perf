@@ -2058,6 +2058,17 @@ static struct ctl_table kern_table[] = {
 		.extra2		= SYSCTL_ONE,
 	},
 #endif /* CONFIG_SCHED_ACPU*/
+#ifdef CONFIG_GROUP_BALANCER
+	{
+		.procname	= "sched_group_balancer",
+		.data		= &sysctl_sched_group_balancer_enabled,
+		.maxlen		= sizeof(unsigned int),
+		.mode		= 0644,
+		.proc_handler	= sched_group_balancer_enable_handler,
+		.extra1		= SYSCTL_ZERO,
+		.extra2		= SYSCTL_ONE,
+	},
+#endif
 #ifdef CONFIG_PROVE_LOCKING
 	{
 		.procname	= "prove_locking",
