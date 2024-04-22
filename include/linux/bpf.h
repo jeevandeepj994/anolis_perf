@@ -1420,6 +1420,7 @@ struct bpf_map *bpf_map_get_curr_or_next(u32 *id);
 struct bpf_prog *bpf_prog_get_curr_or_next(u32 *id);
 
 extern int sysctl_unprivileged_bpf_disabled;
+extern int sysctl_bpf_customized_fmodret;
 
 static inline bool bpf_allow_ptr_leaks(void)
 {
