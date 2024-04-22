@@ -2899,6 +2899,15 @@ static struct ctl_table kern_table[] = {
 		.mode		= 0644,
 		.proc_handler	= bpf_stats_handler,
 	},
+	{
+		.procname	= "bpf_customized_fmodret",
+		.data		= &sysctl_bpf_customized_fmodret,
+		.maxlen		= sizeof(sysctl_bpf_customized_fmodret),
+		.mode		= 0644,
+		.proc_handler	= proc_dointvec_minmax,
+		.extra1		= SYSCTL_ZERO,
+		.extra2		= SYSCTL_ONE,
+	},
 #endif
 #if defined(CONFIG_TREE_RCU)
 	{
