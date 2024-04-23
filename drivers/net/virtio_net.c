@@ -5569,6 +5569,56 @@ static int virtnet_validate(struct virtio_device *vdev)
 	return 0;
 }
 
+/* This operation should not fail anything, if it fails it will be as
+ * if this operation never happened, i.e. everything else continues
+ * normally and all coalescing parameters remain 0.
+ */
+static int virtnet_get_coal_init_value(struct virtnet_info *vi,
+				       u16 vqn, bool is_tx)
+{
+	struct virtio_net_ctrl_coal_vq *coal_vq = NULL;
+	struct scatterlist sgs_in, sgs_out;
+	u32 usecs, pkts, i;
+	bool ret;
+
+	coal_vq = kzalloc(sizeof(*coal_vq), GFP_KERNEL);
+	if (!coal_vq)
+		return -ENOMEM;
+
+	coal_vq->vqn = vqn;
+	sg_init_one(&sgs_out, &coal_vq->vqn, sizeof(coal_vq->vqn));
+	sg_init_one(&sgs_in, &coal_vq->coal, sizeof(coal_vq->coal));
+	ret = virtnet_send_command_reply(vi, VIRTIO_NET_CTRL_NOTF_COAL,
+					 VIRTIO_NET_CTRL_NOTF_COAL_VQ_GET,
+					 &sgs_out, &sgs_in);
+	if (!ret) {
+		kfree(coal_vq);
+		dev_warn(&vi->dev->dev, "getting initial coalescing failed\n");
+		return !ret;
+	}
+
+	usecs = le32_to_cpu(coal_vq->coal.max_usecs);
+	pkts = le32_to_cpu(coal_vq->coal.max_packets);
+	if (is_tx) {
+		vi->intr_coal_tx.max_usecs = usecs;
+		vi->intr_coal_tx.max_packets = pkts;
+		for (i = 0; i < vi->max_queue_pairs; i++) {
+			vi->sq[i].intr_coal.max_usecs = usecs;
+			vi->sq[i].intr_coal.max_packets = pkts;
+		}
+	} else {
+		vi->intr_coal_rx.max_usecs = usecs;
+		vi->intr_coal_rx.max_packets = pkts;
+		for (i = 0; i < vi->max_queue_pairs; i++) {
+			vi->rq[i].intr_coal.max_usecs = usecs;
+			vi->rq[i].intr_coal.max_packets = pkts;
+		}
+	}
+
+	kfree(coal_vq);
+	return 0;
+}
+
 static int virtnet_probe(struct virtio_device *vdev)
 {
 	struct virtio_net_stats_capabilities *stats_cap = NULL;
@@ -5777,17 +5827,6 @@ static int virtnet_probe(struct virtio_device *vdev)
 			vi->intr_coal_tx.max_packets = 0;
 	}
 
-	if (virtio_has_feature(vi->vdev, VIRTIO_NET_F_VQ_NOTF_COAL)) {
-		/* The reason is the same as VIRTIO_NET_F_NOTF_COAL. */
-		for (i = 0; i < vi->max_queue_pairs; i++)
-			if (vi->sq[i].napi.weight)
-				vi->sq[i].intr_coal.max_packets = 1;
-
-		err = virtnet_init_irq_moder(vi);
-		if (err)
-			goto free;
-	}
-
 #ifdef CONFIG_SYSFS
 	if (vi->mergeable_rx_bufs)
 		dev->sysfs_rx_queue_group = &virtio_net_mrg_rx_group;
@@ -5857,6 +5896,23 @@ static int virtnet_probe(struct virtio_device *vdev)
 	}
 
 	virtnet_set_queues(vi, vi->curr_queue_pairs);
+
+	if (virtio_has_feature(vi->vdev, VIRTIO_NET_F_VQ_NOTF_COAL)) {
+		/* The reason is the same as VIRTIO_NET_F_NOTF_COAL. */
+		for (i = 0; i < vi->max_queue_pairs; i++)
+			if (vi->sq[i].napi.weight)
+				vi->sq[i].intr_coal.max_packets = 1;
+
+		err = virtnet_init_irq_moder(vi);
+		if (err)
+			goto free;
+
+		/* Getting the initial irq values from the first rxq
+		 * and txq. Even if it fails, the probe should continue.
+		 */
+		virtnet_get_coal_init_value(vi, rxq2vq(0), false);
+		virtnet_get_coal_init_value(vi, txq2vq(0), true);
+	}
 
 	/* Assume link up if device can't report link status,
 	   otherwise get link status from config. */
