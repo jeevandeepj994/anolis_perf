@@ -785,11 +785,13 @@ struct cfs_rq {
 #endif
 #if defined(CONFIG_GROUP_IDENTITY) && !defined(CONFIG_SCHED_SMT)
 	CK_KABI_USE(3, unsigned int h_nr_expel_immune)
+	CK_KABI_USE(4, u64 expel_spread)
+	CK_KABI_USE(5, u64 expel_start)
 #else
 	CK_KABI_RESERVE(3)
-#endif
 	CK_KABI_RESERVE(4)
 	CK_KABI_RESERVE(5)
+#endif
 	CK_KABI_RESERVE(6)
 	CK_KABI_RESERVE(7)
 	CK_KABI_RESERVE(8)
