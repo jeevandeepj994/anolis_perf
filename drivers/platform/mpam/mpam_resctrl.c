@@ -675,7 +675,7 @@ static int mpam_resctrl_resource_init(struct mpam_resctrl_res *res)
 
 		/* TODO: Scaling is not yet supported */
 		r->cache.cbm_len = class->props.cpbm_wd;
-		r->cache.arch_has_sparse_bitmaps = true;
+		r->cache.arch_has_sparse_bitmasks = true;
 
 		/* mpam_devices will reject empty bitmaps */
 		r->cache.min_cbm_bits = 1;
