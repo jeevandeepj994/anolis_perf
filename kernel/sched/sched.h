@@ -572,9 +572,9 @@ struct cfs_rq {
 #ifdef CONFIG_GROUP_IDENTITY
 	unsigned int		nr_tasks;
 	u64			min_under_vruntime;
-#ifdef CONFIG_SCHED_SMT
 	u64			expel_spread;
 	u64			expel_start;
+#ifdef CONFIG_SCHED_SMT
 	struct list_head	expel_list;
 #endif
 	unsigned int		h_nr_expel_immune;
