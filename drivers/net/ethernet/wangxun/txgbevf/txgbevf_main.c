@@ -4095,6 +4095,44 @@ void txgbe_service_task(struct work_struct *work)
 	txgbe_service_event_complete(adapter);
 }
 
+#define TXGBE_MAX_TUNNEL_HDR_LEN 80
+static netdev_features_t
+txgbe_features_check(struct sk_buff *skb, struct net_device *dev,
+		     netdev_features_t features)
+{
+	u32 vlan_num = 0;
+	u16 vlan_depth = skb->mac_len;
+	__be16 type = skb->protocol;
+	struct vlan_hdr *vh;
+
+	if (skb_vlan_tag_present(skb))
+		vlan_num++;
+
+	if (vlan_depth)
+		vlan_depth -= VLAN_HLEN;
+	else
+		vlan_depth = ETH_HLEN;
+
+	while (type == htons(ETH_P_8021Q) || type == htons(ETH_P_8021AD)) {
+		vlan_num++;
+		vh = (struct vlan_hdr *)(skb->data + vlan_depth);
+		type = vh->h_vlan_encapsulated_proto;
+		vlan_depth += VLAN_HLEN;
+	}
+
+	if (vlan_num > 2)
+		features &= ~(NETIF_F_HW_VLAN_CTAG_TX |
+			    NETIF_F_HW_VLAN_STAG_TX);
+
+	if (skb->encapsulation)
+		if (unlikely(skb_inner_mac_header(skb) -
+			     skb_transport_header(skb) >
+			     TXGBE_MAX_TUNNEL_HDR_LEN))
+			return features & ~NETIF_F_CSUM_MASK;
+
+	return features;
+}
+
 static const struct net_device_ops txgbe_netdev_ops = {
 	.ndo_open               = txgbe_open,
 	.ndo_stop               = txgbe_close,
@@ -4107,6 +4145,7 @@ static const struct net_device_ops txgbe_netdev_ops = {
 	.ndo_tx_timeout         = txgbe_tx_timeout,
 	.ndo_vlan_rx_add_vid    = txgbe_vlan_rx_add_vid,
 	.ndo_vlan_rx_kill_vid   = txgbe_vlan_rx_kill_vid,
+	.ndo_features_check     = txgbe_features_check,
 };
 
 void txgbe_assign_netdev_ops(struct net_device *dev)
