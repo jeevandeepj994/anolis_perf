@@ -1226,18 +1226,11 @@ hierarchy_update_nr_expel_immune(struct sched_entity *se, long delta)
 			break;
 	}
 }
-#ifdef CONFIG_SCHED_SMT
+
 static inline u64 get_expel_spread(struct cfs_rq *cfs_rq)
 {
 	return cfs_rq->expel_spread;
 }
-#else
-static inline u64 get_expel_spread(struct cfs_rq *cfs_rq)
-{
-	return 0;
-}
-
-#endif
 
 static void __enqueue_entity(struct cfs_rq *cfs_rq, struct sched_entity *se);
 static void __dequeue_entity(struct cfs_rq *cfs_rq, struct sched_entity *se);
@@ -1546,7 +1539,6 @@ id_rb_root(struct cfs_rq *cfs_rq, struct sched_entity *se)
 	return &cfs_rq->tasks_timeline;
 }
 
-#ifdef CONFIG_SCHED_SMT
 static inline void
 update_expel_start(struct cfs_rq *cfs_rq, struct sched_entity *se)
 {
@@ -1589,6 +1581,7 @@ static inline void update_expel_spread(struct cfs_rq *cfs_rq)
 	cfs_rq->expel_start = 0;
 }
 
+#ifdef CONFIG_SCHED_SMT
 static void
 place_entity(struct cfs_rq *cfs_rq, struct sched_entity *se, int initial);
 
@@ -1626,15 +1619,6 @@ static inline struct rb_node *skip_expellee_se(struct cfs_rq *cfs_rq)
 	return left;
 }
 #else
-static inline void
-update_expel_start(struct cfs_rq *cfs_rq, struct sched_entity *se)
-{
-}
-
-static inline void update_expel_spread(struct cfs_rq *cfs_rq)
-{
-}
-
 static inline void check_expellee_se(struct cfs_rq *cfs_rq)
 {
 }
@@ -1740,8 +1724,14 @@ static inline u64 id_vruntime(struct sched_entity *se)
 static inline bool
 id_entity_before(struct sched_entity *a, struct sched_entity *b)
 {
+	bool a_is_underclass = __is_underclass(a);
+	bool b_is_underclass = __is_underclass(b);
+
 	if (group_identity_disabled())
 		return entity_before(a, b);
+
+	if (sched_feat(ID_ABSOLUTE_EXPEL) && a_is_underclass != b_is_underclass)
+		return b_is_underclass;
 
 	return (s64)(__id_vruntime(a) - __id_vruntime(b)) < 0;
 }
