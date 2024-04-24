@@ -107,6 +107,11 @@ static void group_balancer_disable(void)
 	static_branch_disable(&__group_balancer_enabled);
 }
 
+bool group_balancer_enabled(void)
+{
+	return static_branch_unlikely(&__group_balancer_enabled);
+}
+
 int sched_group_balancer_enable_handler(struct ctl_table *table, int write,
 					void __user *buffer, size_t *lenp, loff_t *ppos)
 {
@@ -3771,6 +3776,12 @@ int sched_fork(unsigned long clone_flags, struct task_struct *p)
 #ifdef CONFIG_SMP
 	plist_node_init(&p->pushable_tasks, MAX_PRIO);
 	RB_CLEAR_NODE(&p->pushable_dl_tasks);
+#endif
+#ifdef CONFIG_GROUP_BALANCER
+	p->gb_priv = current->gb_priv;
+	p->cpus_allowed_alt = kzalloc(sizeof(cpumask_t), GFP_KERNEL);
+	if (!p->cpus_allowed_alt)
+		return -ENOMEM;
 #endif
 	return 0;
 }
@@ -8454,6 +8465,9 @@ void __init sched_init(void)
 {
 	unsigned long ptr = 0;
 	int i;
+#ifdef CONFIG_GROUP_BALANCER
+	struct group_balancer_private *gb_priv;
+#endif
 
 	/* Make sure the linker didn't screw up */
 	BUG_ON(&idle_sched_class + 1 != &fair_sched_class ||
@@ -8493,6 +8507,13 @@ void __init sched_init(void)
 
 #endif /* CONFIG_RT_GROUP_SCHED */
 	}
+#ifdef CONFIG_GROUP_BALANCER
+	gb_priv = kzalloc(sizeof(struct group_balancer_private), GFP_KERNEL);
+	if (gb_priv)
+		cpumask_copy(&gb_priv->soft_cpus_allowed, cpu_online_mask);
+	root_task_group.gb_priv = gb_priv;
+
+#endif
 #ifdef CONFIG_CPUMASK_OFFSTACK
 	for_each_possible_cpu(i) {
 		per_cpu(load_balance_mask, i) = (cpumask_var_t)kzalloc_node(
@@ -8861,9 +8882,31 @@ static inline void alloc_uclamp_sched_group(struct task_group *tg,
 	}
 #endif
 }
+#ifdef CONFIG_GROUP_BALANCER
+static struct group_balancer_private *alloc_group_balancer_private(struct task_group *tg)
+{
+	struct group_balancer_private *gb_priv;
+
+	gb_priv = kzalloc(sizeof(struct group_balancer_private), GFP_KERNEL);
+
+	return gb_priv;
+}
+
+static void free_group_balancer_private(struct task_group *tg)
+{
+	if (task_group_is_autogroup(tg))
+		return;
+
+	kfree(tg->gb_priv);
+	tg->gb_priv = NULL;
+}
+#else
+static inline void free_group_balancer_private(struct task_group *tg) { }
+#endif
 
 static void sched_free_group(struct task_group *tg)
 {
+	free_group_balancer_private(tg);
 	free_fair_sched_group(tg);
 	free_rt_sched_group(tg);
 	autogroup_free(tg);
@@ -8885,6 +8928,13 @@ struct task_group *sched_create_group(struct task_group *parent)
 	if (!tg)
 		return ERR_PTR(-ENOMEM);
 
+#ifdef CONFIG_GROUP_BALANCER
+	if (!task_group_is_autogroup(tg)) {
+		tg->gb_priv = alloc_group_balancer_private(tg);
+		if (!tg->gb_priv)
+			goto err;
+	}
+#endif
 	if (!alloc_fair_sched_group(tg, parent))
 		goto err;
 
@@ -8925,6 +8975,12 @@ void sched_online_group(struct task_group *tg, struct task_group *parent)
 	spin_unlock_irqrestore(&task_group_lock, flags);
 
 	online_fair_sched_group(tg);
+#ifdef CONFIG_GROUP_BALANCER
+	if (tg->gb_priv && parent->gb_priv) {
+		cpumask_copy(&tg->gb_priv->soft_cpus_allowed,
+			     &parent->gb_priv->soft_cpus_allowed);
+	}
+#endif
 }
 
 /* rcu callback to free various structures associated with a task group */
@@ -8975,6 +9031,9 @@ static void sched_change_group(struct task_struct *tsk, int type)
 	else
 #endif
 		set_task_rq(tsk, task_cpu(tsk));
+#ifdef CONFIG_GROUP_BALANCER
+	tsk->gb_priv = tg->gb_priv;
+#endif
 }
 
 /*
@@ -9876,6 +9935,56 @@ static u64 cpu_ht_ratio_read(struct cgroup_subsys_state *css,
 }
 #endif
 
+#ifdef CONFIG_GROUP_BALANCER
+static int cpu_soft_cpus_show(struct seq_file *sf, void *v)
+{
+	struct task_group *tg = css_tg(seq_css(sf));
+
+	if (tg->gb_priv)
+		seq_printf(sf, "%*pbl\n", cpumask_pr_args(&tg->gb_priv->soft_cpus_allowed));
+	else
+		seq_puts(sf, "\n");
+
+	return 0;
+}
+
+static ssize_t cpu_soft_cpus_write(struct kernfs_open_file *of,
+				   char *buf, size_t nbytes, loff_t off)
+{
+	struct task_group *tg = css_tg(of_css(of));
+	cpumask_t tmp_soft_cpus_allowed;
+	cpumask_t *tg_soft_cpus_allowed;
+	int retval;
+
+	if (tg == &root_task_group)
+		return -EACCES;
+
+	if (!*buf) {
+		cpumask_clear(&tmp_soft_cpus_allowed);
+	} else {
+		retval = cpulist_parse(buf, &tmp_soft_cpus_allowed);
+		if (retval < 0)
+			return retval;
+	}
+
+	if (!cpumask_subset(&tmp_soft_cpus_allowed, cpu_online_mask))
+		return -EINVAL;
+
+	if (cpumask_empty(&tmp_soft_cpus_allowed))
+		return -ENOSPC;
+
+	if (!tg->gb_priv)
+		return -ENOMEM;
+
+	tg_soft_cpus_allowed = &tg->gb_priv->soft_cpus_allowed;
+	if (cpumask_equal(&tmp_soft_cpus_allowed, tg_soft_cpus_allowed))
+		return 0;
+
+	cpumask_copy(tg_soft_cpus_allowed, &tmp_soft_cpus_allowed);
+	return 0;
+}
+#endif
+
 static struct cftype cpu_legacy_files[] = {
 #ifdef CONFIG_FAIR_GROUP_SCHED
 	{
@@ -9994,6 +10103,15 @@ static struct cftype cpu_legacy_files[] = {
 		.name = "ht_ratio",
 		.read_u64 = cpu_ht_ratio_read,
 		.write_u64 = cpu_ht_ratio_write,
+	},
+#endif
+#ifdef CONFIG_GROUP_BALANCER
+	{
+		.name = "soft_cpus",
+		.flags = CFTYPE_NOT_ON_ROOT,
+		.seq_show = cpu_soft_cpus_show,
+		.write = cpu_soft_cpus_write,
+		.max_write_len = (100U + 6 * 1024),
 	},
 #endif
 	{ }	/* Terminate */
@@ -10576,6 +10694,15 @@ static struct cftype cpu_files[] = {
 		.write_u64 = cpu_ht_ratio_write,
 	},
 #endif
+#ifdef CONFIG_GROUP_BALANCER
+	{
+		.name = "soft_cpus",
+		.flags = CFTYPE_NOT_ON_ROOT,
+		.seq_show = cpu_soft_cpus_show,
+		.write = cpu_soft_cpus_write,
+		.max_write_len = (100U + 6 * 1024),
+	},
+#endif
 	{ }	/* terminate */
 };
 
@@ -10651,4 +10778,8 @@ void call_trace_sched_update_nr_running(struct rq *rq, int count)
 /* A hook point for hotfix to release reserve memory used for scheduler. */
 void sched_task_release(struct task_struct *p)
 {
+#ifdef CONFIG_GROUP_BALANCER
+	kfree(p->cpus_allowed_alt);
+	p->cpus_allowed_alt = NULL;
+#endif
 }
