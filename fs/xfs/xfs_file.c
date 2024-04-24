@@ -1164,6 +1164,19 @@ xfs_file_remap_range(
 
 	if (xfs_file_sync_writes(file_in) || xfs_file_sync_writes(file_out))
 		xfs_log_force_inode(dest);
+
+	if (remapped && (src->i_reflink_flags & XFS_REFLINK_PRIMARY)) {
+		mutex_lock(&mp->m_reflink_opt_lock);
+		src->i_reflink_opt_ip = dest;
+		dest->i_reflink_opt_ip = src;
+		mutex_unlock(&mp->m_reflink_opt_lock);
+
+		if (!xfs_sb_version_hasrmapbt(&mp->m_sb)) {
+			set_bit(AS_FSDAX_NORMAP, &VFS_I(src)->i_mapping->flags);
+			set_bit(AS_FSDAX_NORMAP, &VFS_I(dest)->i_mapping->flags);
+		}
+	}
+
 out_unlock:
 	xfs_iunlock2_io_mmap(src, dest);
 	if (ret)
