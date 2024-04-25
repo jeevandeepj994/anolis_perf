@@ -136,6 +136,43 @@ int sched_group_balancer_enable_handler(struct ctl_table *table, int write,
 
 	return ret;
 }
+
+static int tg_set_specs_percent_down(struct task_group *tg, void *data)
+{
+	int *sp = data;
+
+	if (tg->gb_priv->group_balancer &&
+	    tg->cfs_bandwidth.quota == RUNTIME_INF)
+		tg->gb_priv->specs_percent = *sp;
+
+	return 0;
+}
+
+static void tg_set_specs_percent(struct task_group *tg, u64 period, u64 quota)
+{
+	int sp;
+
+	if (!group_balancer_enabled())
+		return;
+	read_lock(&group_balancer_lock);
+	if (quota < 0) {
+		if (tg->gb_priv->group_balancer)
+			tg->gb_priv->specs_percent = -1;
+	} else if ((u64)quota <= U64_MAX / NSEC_PER_USEC) {
+		sp = quota * 100 / period;
+		/* Considering the limited accuracy. */
+		if (unlikely(!sp))
+			sp = 1;
+		if (tg->gb_priv->group_balancer)
+			tg->gb_priv->specs_percent = sp;
+		else
+			walk_tg_tree_from(tg, tg_set_specs_percent_down,
+					  tg_nop, &sp);
+	}
+	read_unlock(&group_balancer_lock);
+}
+#else
+static inline void tg_set_specs_percent(struct task_group *tg, u64 period, u64 quota) { }
 #endif
 
 #ifdef CONFIG_SCHED_CORE
@@ -8935,6 +8972,7 @@ struct task_group *sched_create_group(struct task_group *parent)
 		if (!tg->gb_priv)
 			goto err;
 		tg->gb_priv->group_balancer = false;
+	tg->gb_priv->specs_percent = -1;
 	}
 #endif
 	if (!alloc_fair_sched_group(tg, parent))
@@ -9538,6 +9576,11 @@ static int tg_set_cfs_bandwidth(struct task_group *tg, u64 period, u64 quota,
 	}
 	if (runtime_was_enabled && !runtime_enabled)
 		cfs_bandwidth_usage_dec();
+	/*
+	 * It's ok if we don't hold cfs_b->lock here, because if quota/period
+	 * changed, tg_set_specs_percent() will be called again.
+	 */
+	tg_set_specs_percent(tg, period, quota);
 out_unlock:
 	mutex_unlock(&cfs_constraints_mutex);
 	put_online_cpus();
@@ -10049,9 +10092,33 @@ static int cpu_group_balancer_write_u64(struct cgroup_subsys_state *css,
 		goto out;
 
 	if (new) {
+		struct task_group *trail_tg = tg;
+		struct cfs_bandwidth *cfs_b;
+		int specs;
+
 		retval = validate_group_balancer(tg);
 		if (retval)
 			goto out;
+		/*
+		 * If one of his ancestor(or himself) has limited quota, take
+		 * the specs of the ancstor(or himself) as his.
+		 */
+		while (trail_tg != &root_task_group) {
+			cfs_b = &trail_tg->cfs_bandwidth;
+			raw_spin_lock_irq(&cfs_b->lock);
+			if (cfs_b->quota != RUNTIME_INF) {
+				specs = cfs_b->quota * 100 / cfs_b->period;
+				if (unlikely(!specs))
+					specs = 1;
+				tg->gb_priv->specs_percent = specs;
+				raw_spin_unlock_irq(&cfs_b->lock);
+				break;
+			}
+			raw_spin_unlock_irq(&cfs_b->lock);
+			trail_tg = trail_tg->parent;
+		}
+	} else {
+		tg->gb_priv->specs_percent = -1;
 	}
 	tg->gb_priv->group_balancer = new;
 out:
