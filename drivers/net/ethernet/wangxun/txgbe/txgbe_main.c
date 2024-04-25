@@ -25,7 +25,7 @@
 #include "txgbe_sriov.h"
 
 char txgbe_driver_name[] = "txgbe";
-#define DRV_VERSION "1.3.4-k"
+#define DRV_VERSION "1.3.5.1-k"
 const char txgbe_driver_version[] = DRV_VERSION;
 
 static const char txgbe_overheat_msg[] =
