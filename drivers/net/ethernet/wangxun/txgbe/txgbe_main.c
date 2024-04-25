@@ -25,6 +25,8 @@
 #include "txgbe_sriov.h"
 
 char txgbe_driver_name[] = "txgbe";
+#define DRV_VERSION     __stringify(1.3.5.1-k)
+const char txgbe_driver_version[32] = DRV_VERSION;
 
 static const char txgbe_overheat_msg[] =
 	"Network adapter has been stopped because it has over heated."
@@ -7084,3 +7086,4 @@ MODULE_DEVICE_TABLE(pci, txgbe_pci_tbl);
 MODULE_AUTHOR("Beijing WangXun Technology Co., Ltd, <software@trustnetic.com>");
 MODULE_DESCRIPTION("WangXun(R) 10 Gigabit PCI Express Network Driver");
 MODULE_LICENSE("GPL");
+MODULE_VERSION(DRV_VERSION);

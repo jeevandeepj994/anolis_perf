@@ -874,6 +874,7 @@ static inline void txgbe_intr_trigger(struct txgbe_hw *hw, u64 qmask)
 #define usec_delay(_x) udelay(_x)
 
 extern char txgbe_driver_name[];
+extern const char txgbe_driver_version[];
 
 struct txgbe_msg {
 	u16 msg_enable;

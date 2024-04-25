@@ -157,7 +157,7 @@ static void txgbe_get_drvinfo(struct net_device *netdev,
 
 	strlcpy(drvinfo->driver, txgbe_driver_name,
 		sizeof(drvinfo->driver));
-	strlcpy(drvinfo->version, txgbe_driver_version,
+	strlcpy(drvinfo->version, txgbevf_driver_version,
 		sizeof(drvinfo->version));
 	strlcpy(drvinfo->fw_version, txgbe_firmware_version,
 		sizeof(drvinfo->fw_version));
