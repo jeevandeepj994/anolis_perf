@@ -22,7 +22,8 @@ char txgbe_driver_name[] = "txgbevf";
 static const char txgbe_driver_string[] =
 	"WangXun(R) 10GbE PCI Express Virtual Function Linux Network Driver";
 
-const char txgbe_driver_version[] = __stringify(1.3.1);
+#define DRV_VERSION     __stringify(1.3.1-k)
+const char txgbevf_driver_version[32] = DRV_VERSION;
 
 char txgbe_firmware_version[TXGBE_FW_VER_SIZE] = "N/A";
 
@@ -4505,3 +4506,4 @@ MODULE_DEVICE_TABLE(pci, txgbe_pci_tbl);
 MODULE_AUTHOR("Beijing WangXun Technology Co., Ltd, <software@trustnetic.com>");
 MODULE_DESCRIPTION("WangXun(R) 10 Gigabit PCI Express Virtual Function Network Driver");
 MODULE_LICENSE("GPL");
+MODULE_VERSION(DRV_VERSION);

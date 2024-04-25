@@ -531,7 +531,7 @@ enum txgbe_error {
 
 extern char txgbe_firmware_version[];
 extern char txgbe_driver_name[];
-extern const char txgbe_driver_version[];
+extern const char txgbevf_driver_version[];
 
 typedef u32 txgbe_link_speed;
 
