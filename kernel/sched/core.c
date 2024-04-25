@@ -96,6 +96,7 @@ __read_mostly int scheduler_running;
 #ifdef CONFIG_GROUP_BALANCER
 DEFINE_STATIC_KEY_FALSE(__group_balancer_enabled);
 unsigned int sysctl_sched_group_balancer_enabled;
+DEFINE_RWLOCK(group_balancer_lock);
 
 static void group_balancer_enable(void)
 {
@@ -8933,6 +8934,7 @@ struct task_group *sched_create_group(struct task_group *parent)
 		tg->gb_priv = alloc_group_balancer_private(tg);
 		if (!tg->gb_priv)
 			goto err;
+		tg->gb_priv->group_balancer = false;
 	}
 #endif
 	if (!alloc_fair_sched_group(tg, parent))
@@ -9983,6 +9985,79 @@ static ssize_t cpu_soft_cpus_write(struct kernfs_open_file *of,
 	cpumask_copy(tg_soft_cpus_allowed, &tmp_soft_cpus_allowed);
 	return 0;
 }
+
+static u64 cpu_group_balancer_read_u64(struct cgroup_subsys_state *css,
+				       struct cftype *cft)
+{
+	struct task_group *tg = css_tg(css);
+
+	return tg->gb_priv->group_balancer;
+}
+
+static int tg_validate_group_balancer_down(struct task_group *tg, void *data)
+{
+	if (tg->gb_priv->group_balancer)
+		return -EINVAL;
+	return 0;
+}
+
+/*
+ * There is only one task group allowed to enable group balancer in the path from
+ * root_task_group to a certion leaf task group.
+ */
+static int validate_group_balancer(struct task_group *tg)
+{
+	int retval = 0;
+
+	rcu_read_lock();
+	retval = walk_tg_tree_from(tg, tg_validate_group_balancer_down,
+				   tg_nop, NULL);
+	if (retval)
+		goto out;
+
+	for (; tg != &root_task_group; tg = tg->parent) {
+		if (tg->gb_priv->group_balancer) {
+			retval = -EINVAL;
+			break;
+		}
+	}
+out:
+	rcu_read_unlock();
+	return retval;
+}
+
+static int cpu_group_balancer_write_u64(struct cgroup_subsys_state *css,
+					struct cftype *cftype, u64 new)
+{
+	struct task_group *tg = css_tg(css);
+	bool old;
+	int retval = 0;
+
+	if (!group_balancer_enabled())
+		return -EPERM;
+
+	if (tg == &root_task_group || task_group_is_autogroup(tg))
+		return -EACCES;
+
+	if (new > 1)
+		return -EINVAL;
+
+	write_lock(&group_balancer_lock);
+	old = tg->gb_priv->group_balancer;
+
+	if (old == new)
+		goto out;
+
+	if (new) {
+		retval = validate_group_balancer(tg);
+		if (retval)
+			goto out;
+	}
+	tg->gb_priv->group_balancer = new;
+out:
+	write_unlock(&group_balancer_lock);
+	return retval;
+}
 #endif
 
 static struct cftype cpu_legacy_files[] = {
@@ -10112,6 +10187,13 @@ static struct cftype cpu_legacy_files[] = {
 		.seq_show = cpu_soft_cpus_show,
 		.write = cpu_soft_cpus_write,
 		.max_write_len = (100U + 6 * 1024),
+	},
+	{
+		.name = "group_balancer",
+		.flags = CFTYPE_NOT_ON_ROOT,
+		.read_u64 = cpu_group_balancer_read_u64,
+		.write_u64 = cpu_group_balancer_write_u64,
+		.max_write_len = 1,
 	},
 #endif
 	{ }	/* Terminate */
@@ -10701,6 +10783,13 @@ static struct cftype cpu_files[] = {
 		.seq_show = cpu_soft_cpus_show,
 		.write = cpu_soft_cpus_write,
 		.max_write_len = (100U + 6 * 1024),
+	},
+	{
+		.name = "group_balancer",
+		.flags = CFTYPE_NOT_ON_ROOT,
+		.read_u64 = cpu_group_balancer_read_u64,
+		.write_u64 = cpu_group_balancer_write_u64,
+		.max_write_len = 1,
 	},
 #endif
 	{ }	/* terminate */

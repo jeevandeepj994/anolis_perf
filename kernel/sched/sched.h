@@ -482,6 +482,7 @@ struct cfs_bandwidth {
 #ifdef CONFIG_GROUP_BALANCER
 struct group_balancer_private {
 	cpumask_t		soft_cpus_allowed;
+	bool			group_balancer;
 };
 #endif
 /* Task group related information */
