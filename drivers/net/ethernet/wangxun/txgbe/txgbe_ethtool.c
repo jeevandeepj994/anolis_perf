@@ -2936,12 +2936,16 @@ static int txgbe_add_ethtool_fdir_entry(struct txgbe_adapter *adapter,
 		queue = TXGBE_RDB_FDIR_DROP_QUEUE;
 	} else {
 		u32 ring = ethtool_get_flow_spec_ring(fsp->ring_cookie);
+		u8 vf = ethtool_get_flow_spec_ring_vf(fsp->ring_cookie);
 
 		if (ring >= adapter->num_rx_queues)
 			return -EINVAL;
 
 		/* Map the ring onto the absolute queue index */
-		queue = adapter->rx_ring[ring]->reg_idx;
+		if (!vf)
+			queue = adapter->rx_ring[ring]->reg_idx;
+		else
+			queue = ((vf - 1) * adapter->num_rx_queues_per_pool) + ring;
 	}
 
 	/* Don't allow indexes to exist outside of available space */
