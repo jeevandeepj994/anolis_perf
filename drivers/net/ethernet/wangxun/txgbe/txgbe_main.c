@@ -6712,7 +6712,8 @@ static int txgbe_probe(struct pci_dev *pdev,
 			       NETIF_F_HW_VLAN_CTAG_FILTER |
 			       NETIF_F_HW_VLAN_CTAG_RX |
 			       NETIF_F_HW_VLAN_CTAG_TX |
-			       NETIF_F_RXALL;
+			       NETIF_F_RXALL |
+				   NETIF_F_NTUPLE;
 
 	netdev->features |= NETIF_F_NTUPLE;
 	adapter->flags |= TXGBE_FLAG_FDIR_HASH_CAPABLE;
