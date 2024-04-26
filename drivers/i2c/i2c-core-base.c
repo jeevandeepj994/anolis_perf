@@ -2091,7 +2091,7 @@ int i2c_transfer(struct i2c_adapter *adap, struct i2c_msg *msgs, int num)
 {
 	int ret;
 
-
+>>>>>>> 91811a31b68d... i2c: smbus: fix NULL function pointer dereference
 	/* REVISIT the fault reporting model here is weak:
 	 *
 	 *  - When we get an error after receiving N bytes from a slave,
