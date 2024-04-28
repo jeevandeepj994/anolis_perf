@@ -239,6 +239,10 @@ typedef struct xfs_mount {
 	struct xfs_kobj		m_errortag_kobj;
 #endif
 	struct mutex		m_reflink_opt_lock;
+	spinlock_t		m_reflink_opt_gclock;
+	struct list_head	m_reflink_opt_gclist;
+	struct work_struct	m_reflink_opt_gcwork;
+	struct wait_queue_head	m_reflink_opt_wait;
 } xfs_mount_t;
 
 #define M_IGEO(mp)		(&(mp)->m_ino_geo)

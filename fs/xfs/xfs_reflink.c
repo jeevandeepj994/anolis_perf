@@ -348,7 +348,8 @@ xfs_find_trim_cow_extent(
 STATIC int
 xfs_reflink_unshare_range(
 	struct xfs_inode	*src,
-	struct xfs_bmbt_irec	*oimap)
+	struct xfs_bmbt_irec	*oimap,
+	bool *secondary_evicting)
 {
 	struct xfs_mount	*mp = src->i_mount;
 	struct xfs_inode	*ip;
@@ -363,19 +364,13 @@ xfs_reflink_unshare_range(
 	struct xfs_bmbt_irec	imap = *oimap;
 	struct xfs_bmbt_irec	cmap;
 
-retry:
 	mutex_lock(&mp->m_reflink_opt_lock);
-	if (WARN_ON(!src->i_reflink_opt_ip)) {
-		mutex_unlock(&mp->m_reflink_opt_lock);
-		return -EINVAL;
-	}
-
-	if (!igrab(VFS_I(src->i_reflink_opt_ip))) {
-		mutex_unlock(&mp->m_reflink_opt_lock);
-		delay(1);
-		goto retry;
-	}
 	ip = src->i_reflink_opt_ip;
+	if (!ip || !igrab(VFS_I(ip))) {
+		mutex_unlock(&mp->m_reflink_opt_lock);
+		*secondary_evicting = true;
+		return 0;
+	}
 	mutex_unlock(&mp->m_reflink_opt_lock);
 
 	xfs_ilock(ip, lockmode);
@@ -496,6 +491,7 @@ xfs_reflink_allocate_cow(
 	struct xfs_trans	*tp;
 	int			nimaps, error = 0;
 	bool			found;
+	bool			secondary_evicting = false;
 	xfs_filblks_t		resaligned;
 	xfs_extlen_t		resblks = 0;
 
@@ -516,11 +512,17 @@ xfs_reflink_allocate_cow(
 	resblks = XFS_DIOSTRAT_SPACE_RES(mp, resaligned);
 
 	xfs_iunlock(ip, *lockmode);
-
-	if (ip->i_reflink_flags & XFS_REFLINK_PRIMARY)
-		xfs_reflink_unshare_range(ip, imap);
-
 	*lockmode = 0;
+
+	if (ip->i_reflink_flags & XFS_REFLINK_PRIMARY) {
+		error = xfs_reflink_unshare_range(ip, imap,
+					&secondary_evicting);
+		if (error) {
+			xfs_warn(mp, "failed to unshare secondary range @ ino %llu",
+				 ip->i_ino);
+		}
+		ASSERT(xfs_isilocked(ip, XFS_MMAPLOCK_SHARED));
+	}
 
 	error = xfs_trans_alloc_inode(ip, &M_RES(mp)->tr_write, resblks, 0,
 			false, &tp);
@@ -538,6 +540,17 @@ xfs_reflink_allocate_cow(
 	if (found) {
 		xfs_trans_cancel(tp);
 		goto convert;
+	}
+
+	if (secondary_evicting) {
+		/*
+		 * It's impossible to have another reflink here (racing with
+		 * FICLONE) since ip takes XFS_MMAPLOCK_SHARED lock and FICLONE
+		 * needs XFS_MMAPLOCK_EXEC.
+		 */
+		ASSERT(xfs_isilocked(ip, XFS_MMAPLOCK_SHARED));
+		*shared = false;
+		goto out_trans_cancel;
 	}
 
 	/* Allocate the entire reservation as unwritten blocks. */
