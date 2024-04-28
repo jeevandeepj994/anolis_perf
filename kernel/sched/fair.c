@@ -1963,7 +1963,6 @@ static inline void sync_min_vruntime(struct cfs_rq *cfs_rq)
 		sync_up = true;
 	}
 
-#ifdef CONFIG_SCHED_SMT
 	/*
 	 * Once min vruntime sync up, the expel penalty will be
 	 * included, just clear it.
@@ -1972,7 +1971,6 @@ static inline void sync_min_vruntime(struct cfs_rq *cfs_rq)
 		cfs_rq->expel_start = 0;
 		cfs_rq->expel_spread = 0;
 	}
-#endif
 }
 
 static inline void update_under_min_vruntime(struct cfs_rq *cfs_rq)
