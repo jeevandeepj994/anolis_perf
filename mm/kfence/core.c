@@ -923,6 +923,7 @@ fail:
 static struct delayed_work kfence_timer;
 static void __start_kfence(void)
 {
+	unsigned long total_nr_objects = 0;
 	struct kfence_pool_area *kpa;
 	struct rb_node *iter;
 
@@ -934,7 +935,14 @@ static void __start_kfence(void)
 				(void *)(kpa->addr + kpa->pool_size));
 		else
 			pr_cont("\n");
+		total_nr_objects += kpa->nr_objects;
 	}
+
+	/* Update kfence_num_objects to export to /sys/module/ */
+	if (total_nr_objects > KFENCE_MAX_OBJECTS_PER_AREA)
+		kfence_num_objects = rounddown(total_nr_objects, KFENCE_MAX_OBJECTS_PER_AREA);
+	else
+		kfence_num_objects = total_nr_objects;
 
 	WRITE_ONCE(kfence_enabled, true);
 	static_branch_enable(&kfence_once_inited);
