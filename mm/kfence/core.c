@@ -955,6 +955,10 @@ static void __start_kfence(void)
 	else
 		kfence_num_objects = total_nr_objects;
 
+	/* Forget upstream mode. */
+	if (kfence_num_objects_snap && total_nr_objects > kfence_num_objects_snap)
+		kfence_num_objects_snap = 0;
+
 	WRITE_ONCE(kfence_enabled, true);
 	static_branch_enable(&kfence_once_inited);
 	if (kfence_sample_interval < 0) {
@@ -2048,10 +2052,8 @@ void kfence_init_late(void)
 	 * Keep upstream mode remaining the same.
 	 * Otherwise we "forget" the upstream version whose pool size < 1GiB.
 	 */
-	if (kfence_num_objects > kfence_num_objects_snap || kfence_pool_node_mode) {
+	if (kfence_num_objects > kfence_num_objects_snap || kfence_pool_node_mode)
 		kfence_num_objects = roundup(kfence_num_objects, KFENCE_MAX_OBJECTS_PER_AREA);
-		kfence_num_objects_snap = 0;
-	}
 
 	if (kfence_num_objects < KFENCE_MAX_OBJECTS_PER_AREA && kfence_sample_interval < 0)
 		goto fail;
