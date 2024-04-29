@@ -1387,15 +1387,16 @@ static void kfence_free_area(struct work_struct *work)
 	unsigned long flags, i;
 	struct page *page;
 	struct kfence_pool_area *kpa = container_of(work, struct kfence_pool_area, work);
-	struct kfence_freelist_node *kfence_freelist = &freelist.node[kpa->node];
+	struct kfence_freelist_node *kfence_freelist;
 
 	mutex_lock(&kfence_mutex);
-	if (READ_ONCE(kfence_enabled))
+	if (!kpa->nr_objects || !percpu_ref_is_zero(&kpa->refcnt))
 		goto out_unlock;
 
 	if (!kfence_flush_all_and_wait())
 		goto out_unlock;
 
+	kfence_freelist = &freelist.node[kpa->node];
 	raw_spin_lock_irqsave(&kfence_freelist->lock, flags);
 	for (i = 0; i < kpa->nr_objects; i++)
 		list_del(&kpa->meta[i].list);
