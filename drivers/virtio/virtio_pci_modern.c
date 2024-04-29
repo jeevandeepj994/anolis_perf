@@ -304,6 +304,15 @@ static u16 vp_config_vector(struct virtio_pci_device *vp_dev, u16 vector)
 	return vp_ioread16(&vp_dev->common->msix_config);
 }
 
+static bool vp_notify_with_data(struct virtqueue *vq)
+{
+	u32 data = vring_notification_data(vq);
+
+	iowrite32(data, (void __iomem *)vq->priv);
+
+	return true;
+}
+
 static struct virtqueue *setup_vq(struct virtio_pci_device *vp_dev,
 				  struct virtio_pci_vq_info *info,
 				  unsigned index,
@@ -313,6 +322,7 @@ static struct virtqueue *setup_vq(struct virtio_pci_device *vp_dev,
 				  u16 msix_vec)
 {
 	struct virtio_pci_common_cfg __iomem *cfg = vp_dev->common;
+	bool (*notify)(struct virtqueue *vq);
 	struct virtqueue *vq;
 	u16 num, off;
 	int err;
@@ -322,6 +332,11 @@ static struct virtqueue *setup_vq(struct virtio_pci_device *vp_dev,
 
 	/* Select the queue we're interested in */
 	vp_iowrite16(index, &cfg->queue_select);
+
+	if (__virtio_test_bit(&vp_dev->vdev, VIRTIO_F_NOTIFICATION_DATA))
+		notify = vp_notify_with_data;
+	else
+		notify = vp_notify;
 
 	/* Check if queue is either not available or already active. */
 	num = vp_ioread16(&cfg->queue_size);
@@ -342,7 +357,7 @@ static struct virtqueue *setup_vq(struct virtio_pci_device *vp_dev,
 	vq = vring_create_virtqueue(index, num,
 				    SMP_CACHE_BYTES, &vp_dev->vdev,
 				    true, true, ctx,
-				    vp_notify, callback, name);
+				    notify, callback, name);
 	if (!vq)
 		return ERR_PTR(-ENOMEM);
 
