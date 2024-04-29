@@ -1285,9 +1285,11 @@ static inline int check_free_page(struct page *page)
 	if (likely(page_expected_state(page, PAGE_FLAGS_CHECK_AT_FREE)))
 		return 0;
 
+#ifdef CONFIG_KFENCE
 	/* It's not performance sensitive when reaching here */
-	if (is_kfence_address(page_to_virt(page)))
+	if (PageKfence(page))
 		return 0;
+#endif
 
 	/* Something has gone sideways, find it */
 	check_free_page_bad(page);
