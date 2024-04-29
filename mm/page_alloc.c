@@ -5367,13 +5367,6 @@ __alloc_pages_nodemask(gfp_t gfp_mask, unsigned int order, int preferred_nid,
 	gfp_mask &= gfp_allowed_mask;
 	alloc_mask = gfp_mask;
 
-	page = kfence_alloc_page(order, preferred_nid, gfp_mask);
-	if (unlikely(page)) {
-		set_page_private(page, 0);
-		prep_new_page(page, 0, gfp_mask, alloc_mask);
-		goto out;
-	}
-
 	if (!prepare_alloc_pages(gfp_mask, order, preferred_nid, nodemask, &ac, &alloc_mask, &alloc_flags))
 		return NULL;
 
@@ -5382,6 +5375,13 @@ __alloc_pages_nodemask(gfp_t gfp_mask, unsigned int order, int preferred_nid,
 	 * memory until all local zones are considered.
 	 */
 	alloc_flags |= alloc_flags_nofragment(ac.preferred_zoneref->zone, gfp_mask);
+
+	page = kfence_alloc_page(order, preferred_nid, alloc_mask);
+	if (unlikely(page)) {
+		set_page_private(page, 0);
+		prep_new_page(page, 0, alloc_mask, alloc_flags);
+		goto out;
+	}
 
 	/* First allocation attempt */
 	page = get_page_from_freelist(alloc_mask, order, alloc_flags, &ac);
