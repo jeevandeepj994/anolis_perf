@@ -1082,6 +1082,7 @@ static inline bool __init_kpa(struct kfence_pool_area *kpa, char *__kfence_pool,
 	kpa->pool_size = pool_size;
 	kpa->nr_objects = nr_objects;
 	kpa->node = node;
+	atomic_set(&kpa->_ref, 1); /* held by rb tree */
 
 	if (!__kfence_init_pool_area(kpa))
 		goto fail;
@@ -1117,7 +1118,6 @@ static bool __init kfence_init_pool_area(int node, int area)
 
 	rb_add(&kpa->rb_node, &kfence_pool_root, kfence_rb_less);
 	__kfence_pool_area[index] = NULL;
-	kpa->on_rb_tree = true;
 	kfence_num_objects_stat[node].allocated += nr_objects;
 
 	return true;
@@ -1207,6 +1207,17 @@ static inline void kfence_free_pool_late_area(struct kfence_pool_area *kpa)
 	free_contig_range(page_to_pfn(virt_to_page(kpa->addr)), kpa->pool_size / PAGE_SIZE);
 }
 
+static void get_kpa(struct kfence_pool_area *kpa)
+{
+	atomic_inc(&kpa->_ref);
+}
+
+static void put_kpa(struct kfence_pool_area *kpa)
+{
+	if (atomic_dec_and_test(&kpa->_ref))
+		kfree(kpa);
+}
+
 static int kfence_update_pool_root(void *info)
 {
 	struct list_head *ready_list = info;
@@ -1218,7 +1229,7 @@ static int kfence_update_pool_root(void *info)
 		next = rb_next(cur);
 		if (!kpa->nr_objects) {
 			rb_erase(&kpa->rb_node, &kfence_pool_root);
-			kfree(kpa);
+			put_kpa(kpa);
 		} else {
 			percpu_ref_resurrect(&kpa->refcnt);
 		}
@@ -1227,7 +1238,6 @@ static int kfence_update_pool_root(void *info)
 	while (!list_empty(ready_list)) {
 		kpa = list_first_entry(ready_list, struct kfence_pool_area, list);
 		rb_add(&kpa->rb_node, &kfence_pool_root, kfence_rb_less);
-		kpa->on_rb_tree = true;
 		list_del(&kpa->list);
 	}
 
@@ -1374,18 +1384,19 @@ static void kfence_free_area(struct work_struct *work)
 	percpu_ref_exit(&kpa->refcnt);
 	kpa->nr_objects = 0;
 	kpa->pool_size = 0;
-	if (!kpa->on_rb_tree)
-		kfree(kpa);
 
 out_unlock:
 	mutex_unlock(&kfence_mutex);
+	put_kpa(kpa);
 }
 
 static void kpa_release(struct percpu_ref *ref)
 {
 	struct kfence_pool_area *kpa = container_of(ref, struct kfence_pool_area, refcnt);
 
-	queue_work(system_long_wq, &kpa->work);
+	get_kpa(kpa);
+	if (!queue_work(system_long_wq, &kpa->work))
+		put_kpa(kpa);
 }
 
 static void calculate_need_alloc(void)
