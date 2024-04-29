@@ -143,11 +143,22 @@ static int param_set_num_objects(const char *val, const struct kernel_param *kp)
 		return 0;
 #endif
 
-	if (READ_ONCE(kfence_enabled) || !num)
-		return -EINVAL; /* can not change num_objects when enabled */
+	if (!num)
+		return -EINVAL;
+
+	mutex_lock(&kfence_mutex);
+
+	if (READ_ONCE(kfence_enabled)) {
+		ret = -EBUSY; /* can not change num_objects when enabled */
+		goto out_unlock;
+	}
 
 	*((unsigned long *)kp->arg) = num;
-	return 0;
+	ret = 0;
+
+out_unlock:
+	mutex_unlock(&kfence_mutex);
+	return ret;
 }
 
 static int param_get_num_objects(char *buffer, const struct kernel_param *kp)
