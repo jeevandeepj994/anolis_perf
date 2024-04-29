@@ -1318,7 +1318,7 @@ static void kfence_flush_call(void *info)
 
 static struct cpumask offline_cpus;
 /* Flush percpu freelists on all cpus and wait for return. */
-static inline bool kfence_flush_all_and_wait(void)
+static inline void kfence_flush_all_and_wait(void)
 {
 	int cpu;
 
@@ -1335,15 +1335,14 @@ static inline bool kfence_flush_all_and_wait(void)
 	preempt_enable();
 	cpus_read_unlock();
 
+wait:
 	if (sysctl_hung_task_timeout_secs) {
 		if (!wait_event_idle_timeout(kfence_flush_wait, !atomic_read(&kfence_flush_res),
 					     sysctl_hung_task_timeout_secs * HZ / 2))
-			return false;
+			goto wait;
 	} else {
 		wait_event_idle(kfence_flush_wait, !atomic_read(&kfence_flush_res));
 	}
-
-	return true;
 }
 
 static bool kfence_can_recover_tlb(struct kfence_pool_area *kpa)
@@ -1393,8 +1392,7 @@ static void kfence_free_area(struct work_struct *work)
 	if (!kpa->nr_objects || !percpu_ref_is_zero(&kpa->refcnt))
 		goto out_unlock;
 
-	if (!kfence_flush_all_and_wait())
-		goto out_unlock;
+	kfence_flush_all_and_wait();
 
 	kfence_freelist = &freelist.node[kpa->node];
 	raw_spin_lock_irqsave(&kfence_freelist->lock, flags);
@@ -1489,18 +1487,14 @@ static inline bool __check_map_change(int *new_node_map)
 	return false;
 }
 
-static bool update_kfence_node_map(void)
+static void update_kfence_node_map(int *new_node_map)
 {
-	int *new_node_map = kmalloc_array(nr_node_ids, sizeof(int), GFP_KERNEL | __GFP_ZERO);
 	int *old_node_map;
 	int node;
 	enum node_states node_stat = N_CPU;
 	struct zonelist *zonelist;
 	struct zone *zone;
 	struct zoneref *z;
-
-	if (!new_node_map)
-		return false;
 
 	memset(new_node_map, -1, sizeof(int) * nr_node_ids);
 
@@ -1526,27 +1520,22 @@ static bool update_kfence_node_map(void)
 	/* It's the first time of init */
 	if (!kfence_node_map) {
 		kfence_node_map = new_node_map;
-		return true;
+		return;
 	}
 
 	if (!__check_map_change(new_node_map)) {
 		kfree(new_node_map);
-		return true;
+		return;
 	}
 
 	old_node_map = kfence_node_map;
 	kfence_node_map = NULL;
 	synchronize_rcu();
 
-	if (!kfence_flush_all_and_wait()) {
-		kfence_node_map = old_node_map;
-		kfree(new_node_map);
-		return false;
-	}
+	kfence_flush_all_and_wait();
 
 	kfence_node_map = new_node_map;
 	kfree(old_node_map);
-	return true;
 }
 
 /*
@@ -1985,31 +1974,32 @@ void __init kfence_init(void)
 	int node, area, index;
 	unsigned long nr_objects = min(kfence_num_objects, KFENCE_MAX_OBJECTS_PER_AREA);
 	unsigned long kfence_pool_size = (nr_objects + 1) * 2 * PAGE_SIZE;
+	int *new_node_map;
 
 	if (!READ_ONCE(kfence_sample_interval))
 		return;
 
 	if (!__init_freelist())
-		goto fail;
+		goto fail_alloc;
+
+	/* pre-alloc here for update_kfence_node_map() to avoid complex error handling later. */
+	new_node_map = kmalloc_array(nr_node_ids, sizeof(int), GFP_KERNEL | __GFP_ZERO);
+	if (!new_node_map)
+		goto fail_alloc;
 
 	if (!kfence_init_pool()) {
 		pr_err("%s failed on all nodes!\n", __func__);
-		goto fail;
+		goto fail_node_map;
 	}
 
-	if (!update_kfence_node_map()) {
-		struct kfence_pool_area *kpa;
-		struct rb_node *iter;
-
-		kfence_for_each_area(kpa, iter)
-			percpu_ref_kill(&kpa->refcnt);
-		goto fail;
-	}
+	update_kfence_node_map(new_node_map);
 
 	__start_kfence();
 	goto out;
 
-fail:
+fail_node_map:
+	kfree(new_node_map);
+fail_alloc:
 	for_each_node(node) {
 		for (area = 0; area < kfence_nr_areas_per_node; area++) {
 			index = kfence_nr_areas_per_node * node + area;
@@ -2036,7 +2026,7 @@ void kfence_init_late(void)
 	LIST_HEAD(ready_list);
 	struct kfence_pool_area *kpa;
 	struct rb_node *iter;
-	bool ret;
+	int *new_node_map;
 
 	if (!READ_ONCE(kfence_sample_interval))
 		return;
@@ -2066,10 +2056,15 @@ void kfence_init_late(void)
 	if (!__init_freelist())
 		goto fail;
 
+	/* pre-alloc here for update_kfence_node_map() to avoid complex error handling later. */
+	new_node_map = kmalloc_array(nr_node_ids, sizeof(int), GFP_KERNEL | __GFP_ZERO);
+	if (!new_node_map)
+		goto fail;
+
 	kfence_num_objects_stat = kmalloc_array(nr_node_ids, sizeof(struct kfence_alloc_node_cond),
 						GFP_KERNEL | __GFP_ZERO);
 	if (!kfence_num_objects_stat)
-		goto fail;
+		goto fail_node_map;
 
 	calculate_need_alloc();
 
@@ -2089,18 +2084,9 @@ void kfence_init_late(void)
 	for_each_node(node)
 		kfence_alloc_pool_late_node(node, &ready_list, true);
 
-	ret = update_kfence_node_map();
+	update_kfence_node_map(new_node_map);
 	kfree(kfence_num_objects_stat);
 	kfence_num_objects_stat = NULL;
-
-	if (!ret) {
-		while (!list_empty(&ready_list)) {
-			kpa = list_first_entry(&ready_list, struct kfence_pool_area, list);
-			list_del(&kpa->list);
-			percpu_ref_kill(&kpa->refcnt);
-		}
-		goto fail;
-	}
 
 	stop_machine(kfence_update_pool_root, &ready_list, NULL);
 
@@ -2110,6 +2096,8 @@ void kfence_init_late(void)
 	__start_kfence();
 	goto out;
 
+fail_node_map:
+	kfree(new_node_map);
 fail:
 	WRITE_ONCE(kfence_sample_interval, 0);
 out:
