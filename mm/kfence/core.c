@@ -95,7 +95,7 @@ static int param_set_sample_interval(const char *val, const struct kernel_param 
 		return ret;
 
 	if (system_state == SYSTEM_BOOTING) {
-		*((unsigned long *)kp->arg) = num;
+		*((long *)kp->arg) = num;
 		return 0;
 	}
 
@@ -108,7 +108,7 @@ static int param_set_sample_interval(const char *val, const struct kernel_param 
 	if (!num) /* Using 0 to indicate KFENCE is disabled. */
 		kfence_disable();
 
-	*((unsigned long *)kp->arg) = num;
+	*((long *)kp->arg) = num;
 
 	if (!READ_ONCE(kfence_enabled))
 		kfence_init_late();
