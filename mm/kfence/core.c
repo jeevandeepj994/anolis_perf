@@ -279,7 +279,6 @@ struct kfence_freelist {
 	struct kfence_freelist_cpu __percpu *cpu;
 };
 static struct kfence_freelist freelist;
-static struct irq_work __percpu *kfence_flush_work;
 static atomic_t kfence_flush_res, kfence_refkill_res;
 
 /* Gates the allocation, ensuring only one succeeds in a given period. */
@@ -884,18 +883,15 @@ static void __free_freelist(void)
 	freelist.cpu = NULL;
 	free_percpu(counters);
 	counters = NULL;
-	free_percpu(kfence_flush_work);
-	kfence_flush_work = NULL;
 }
 
-static void kfence_flush(struct irq_work *work);
 static bool __init_freelist(void)
 {
 	int i;
 
 	/*
-	 * freelist.node, freelist.cpu, counters and kfence_flush_work are
-	 * inited together, we only need to check one of them and know whether
+	 * freelist.node, freelist.cpu, counters are inited together,
+	 * we only need to check one of them and know whether
 	 * we are now in re-enabling.
 	 */
 	if (counters)
@@ -905,9 +901,8 @@ static bool __init_freelist(void)
 				      GFP_KERNEL);
 	freelist.cpu = alloc_percpu(struct kfence_freelist_cpu);
 	counters = alloc_percpu(struct kfence_counter);
-	kfence_flush_work = alloc_percpu(struct irq_work);
 
-	if (!freelist.node || !freelist.cpu || !counters || !kfence_flush_work)
+	if (!freelist.node || !freelist.cpu || !counters)
 		goto fail;
 
 	for_each_node(i) {
@@ -915,10 +910,8 @@ static bool __init_freelist(void)
 		raw_spin_lock_init(&freelist.node[i].lock);
 	}
 
-	for_each_possible_cpu(i) {
+	for_each_possible_cpu(i)
 		INIT_LIST_HEAD(&per_cpu_ptr(freelist.cpu, i)->freelist);
-		init_irq_work(per_cpu_ptr(kfence_flush_work, i), kfence_flush);
-	}
 
 	return true;
 
@@ -1244,8 +1237,26 @@ static int kfence_update_pool_root(void *info)
 	return 0;
 }
 
-/* Flush this cpu's per cpu freelist to per node freelist. */
-static inline void __kfence_flush(void)
+/*
+ * Flush this cpu's per cpu freelist to per node freelist.
+ *
+ * We don't need more sync methods to prevent race, because we can
+ * only reach here in two routes (with both kfence is disabled
+ * so no new allocatings will occur):
+ *
+ * 1) from update_kfence_node_map() when enabling kfence
+ *     Since kfence_node_map is set to NULL, the objects
+ *     will be directly freed to the per node freelist.
+ *
+ * 2) from kfence_free_area() when a kpa being released
+ *     Since the refcnt of this kpa is down to 0, no objects
+ *     from this kpa will be freed to per cpu freelist.
+ *     If some objects from other kpas are freed after this
+ *     check, it is ok because we will only free the space
+ *     of our target kpa. Just let objects from other kpas
+ *     remain in per cpu freelist.
+ */
+static inline void kfence_flush(void)
 {
 	struct kfence_freelist_cpu *c;
 	struct kfence_freelist_node *kfence_freelist;
@@ -1269,22 +1280,12 @@ out:
 }
 
 static DECLARE_WAIT_QUEUE_HEAD(kfence_flush_wait);
-
-/*
- * This function is called by kfence_flush_call() through irq_work_queue().
- * DO NOT call it directly.
- */
-static void kfence_flush(struct irq_work *work)
+static void kfence_flush_call(void *info)
 {
-	__kfence_flush();
+	kfence_flush();
 
 	if (!atomic_dec_return(&kfence_flush_res))
 		wake_up(&kfence_flush_wait);
-}
-
-static void kfence_flush_call(void *info)
-{
-	irq_work_queue(raw_cpu_ptr(kfence_flush_work));
 }
 
 /* Flush percpu freelists on all cpus and wait for return. */
