@@ -1183,8 +1183,12 @@ static void kfence_alloc_pool_late_node(int node, struct list_head *ready, bool 
 		struct page *page;
 		struct kfence_pool_area *kpa;
 		unsigned long nr_pages = (nr_request + 1) * 2;
-
+#ifdef CONFIG_CONTIG_ALLOC
 		page = alloc_contig_pages(nr_pages, gfp_mask, node, NULL);
+#else
+		pr_warn("anolis kfence only supports enabled later with CONFIG_CONTIG_ALLOC\n");
+		page = NULL;
+#endif
 		if (!page) {
 			pr_err("kfence alloc metadata on node %d failed\n", node);
 			return;
@@ -1204,7 +1208,9 @@ static void kfence_alloc_pool_late_node(int node, struct list_head *ready, bool 
 		continue;
 
 fail:
+#ifdef CONFIG_CONTIG_ALLOC
 		free_contig_range(page_to_pfn(page), nr_pages);
+#endif
 		kfree(kpa);
 
 		return;
@@ -1224,7 +1230,9 @@ static inline void kfence_free_pool_area(struct kfence_pool_area *kpa)
 
 static inline void kfence_free_pool_late_area(struct kfence_pool_area *kpa)
 {
+#ifdef CONFIG_CONTIG_ALLOC
 	free_contig_range(page_to_pfn(virt_to_page(kpa->addr)), kpa->pool_size / PAGE_SIZE);
+#endif
 }
 
 static void get_kpa(struct kfence_pool_area *kpa)
