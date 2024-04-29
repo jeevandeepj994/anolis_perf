@@ -1256,44 +1256,56 @@ static int kfence_update_pool_root(void *info)
  *     of our target kpa. Just let objects from other kpas
  *     remain in per cpu freelist.
  */
-static inline void kfence_flush(void)
+static inline void kfence_flush(struct kfence_freelist_cpu *c)
 {
-	struct kfence_freelist_cpu *c;
 	struct kfence_freelist_node *kfence_freelist;
 	struct kfence_metadata *meta;
 	unsigned long flags;
 
-	c = get_cpu_ptr(freelist.cpu);
-	if (list_empty(&c->freelist))
-		goto out;
+	if (list_empty(&c->freelist)) {
+		if (KFENCE_WARN_ON(c->count))
+			c->count = 0;
+		return;
+	}
 
 	meta = list_first_entry(&c->freelist, struct kfence_metadata, list);
 	kfence_freelist = &freelist.node[meta->kpa->node];
 
 	raw_spin_lock_irqsave(&kfence_freelist->lock, flags);
 	list_splice_tail_init(&c->freelist, &kfence_freelist->freelist);
-	raw_spin_unlock_irqrestore(&kfence_freelist->lock, flags);
-
-out:
 	c->count = 0;
-	put_cpu_ptr(c);
+	raw_spin_unlock_irqrestore(&kfence_freelist->lock, flags);
 }
 
 static DECLARE_WAIT_QUEUE_HEAD(kfence_flush_wait);
 static void kfence_flush_call(void *info)
 {
-	kfence_flush();
+	struct kfence_freelist_cpu *c = get_cpu_ptr(freelist.cpu);
+
+	kfence_flush(c);
+	put_cpu_ptr(c);
 
 	if (!atomic_dec_return(&kfence_flush_res))
 		wake_up(&kfence_flush_wait);
 }
 
+static struct cpumask offline_cpus;
 /* Flush percpu freelists on all cpus and wait for return. */
 static inline bool kfence_flush_all_and_wait(void)
 {
+	int cpu;
+
 	cpus_read_lock();
 	atomic_set(&kfence_flush_res, num_online_cpus());
 	on_each_cpu(kfence_flush_call, NULL, 0);
+
+	cpumask_andnot(&offline_cpus, cpu_possible_mask, cpu_online_mask);
+	/* Flush offline cpus. */
+	preempt_disable();
+	for_each_cpu(cpu, &offline_cpus) {
+		kfence_flush(per_cpu_ptr(freelist.cpu, cpu));
+	}
+	preempt_enable();
 	cpus_read_unlock();
 
 	if (sysctl_hung_task_timeout_secs) {
