@@ -477,6 +477,8 @@ get_free_meta_from_node(struct kfence_freelist_node *kfence_freelist)
 		object = list_entry(kfence_freelist->freelist.next, struct kfence_metadata, list);
 		list_del_init(&object->list);
 	}
+	if (object)
+		percpu_ref_get(&object->kpa->refcnt);
 	raw_spin_unlock_irqrestore(&kfence_freelist->lock, flags);
 
 	return object;
@@ -547,6 +549,8 @@ static struct kfence_metadata *get_free_meta(int real_node)
 		list_del_init(&object->list);
 		c->count--;
 	}
+	if (object)
+		percpu_ref_get(&object->kpa->refcnt);
 
 	put_cpu_ptr(c);
 	local_irq_restore(flags);
@@ -584,7 +588,6 @@ static inline void __init_meta(struct kfence_metadata *meta, size_t size, struct
 	/* Pairs with READ_ONCE() in kfence_shutdown_cache(). */
 	WRITE_ONCE(meta->cache, cache);
 	meta->size = size;
-	percpu_ref_get(&meta->kpa->refcnt);
 }
 
 static void put_free_meta(struct kfence_metadata *object);
@@ -721,6 +724,7 @@ static inline void put_free_meta_to_node(struct kfence_metadata *object,
 
 	raw_spin_lock_irqsave(&kfence_freelist->lock, flags);
 	list_add_tail(&object->list, &kfence_freelist->freelist);
+	percpu_ref_put(&object->kpa->refcnt);
 	raw_spin_unlock_irqrestore(&kfence_freelist->lock, flags);
 }
 
@@ -764,6 +768,8 @@ static void put_free_meta(struct kfence_metadata *object)
 
 	if (unlikely(c->count == KFENCE_FREELIST_PERCPU_SIZE * 2))
 		put_free_meta_slowpath(c, kfence_freelist);
+
+	percpu_ref_put(&object->kpa->refcnt);
 
 	put_cpu_ptr(c);
 	local_irq_restore(flags);
@@ -816,8 +822,6 @@ static inline bool __free_meta(void *addr, struct kfence_metadata *meta, bool zo
 
 	/* Mark the object as freed. */
 	metadata_update_state(meta, KFENCE_OBJECT_FREED);
-
-	percpu_ref_put(&meta->kpa->refcnt);
 
 	raw_spin_unlock_irqrestore(&meta->lock, flags);
 
