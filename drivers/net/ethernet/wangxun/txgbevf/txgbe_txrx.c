@@ -22,7 +22,7 @@
 /* Lookup table mapping the HW PTYPE to the bit field for decoding */
 /* for ((pt=0;pt<256;pt++)); do printf "macro(0x%02X),\n" $pt; done */
 #define TXGBE_PTYPE_MAX (256)
-struct txgbe_dec_ptype txgbe_ptype_lookup[TXGBE_PTYPE_MAX] = {
+struct txgbe_dec_ptype txgbevf_ptype_lookup[TXGBE_PTYPE_MAX] = {
 	TXGBE_UKN(0x00),
 	TXGBE_UKN(0x01),
 	TXGBE_UKN(0x02),
@@ -308,7 +308,7 @@ struct txgbe_dec_ptype txgbe_ptype_lookup[TXGBE_PTYPE_MAX] = {
 
 static inline struct txgbe_dec_ptype txgbe_decode_ptype(const u8 ptype)
 {
-	return txgbe_ptype_lookup[ptype];
+	return txgbevf_ptype_lookup[ptype];
 }
 
 static u8 get_ipv6_proto(struct sk_buff *skb, int offset)

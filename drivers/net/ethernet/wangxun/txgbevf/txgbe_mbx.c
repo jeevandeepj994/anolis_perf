@@ -3,7 +3,7 @@
 #include "txgbe_vf.h"
 #include "txgbe_mbx.h"
 
-u32 txgbe_read_v2p_mailbox(struct txgbe_hw *hw)
+u32 txgbevf_read_v2p_mailbox(struct txgbe_hw *hw)
 {
 	u32 v2p_mailbox = rd32(hw, TXGBE_VXMAILBOX);
 
@@ -16,16 +16,16 @@ u32 txgbe_read_v2p_mailbox(struct txgbe_hw *hw)
 	return v2p_mailbox;
 }
 
-s32 txgbe_check_for_bit_vf(struct txgbe_hw *hw, u32 mask)
+s32 txgbevf_check_for_bit_vf(struct txgbe_hw *hw, u32 mask)
 {
-	u32 mailbox = txgbe_read_v2p_mailbox(hw);
+	u32 mailbox = txgbevf_read_v2p_mailbox(hw);
 
 	hw->mbx.v2p_mailbox &= ~mask;
 
 	return (mailbox & mask ? 0 : TXGBE_ERR_MBX);
 }
 
-s32 txgbe_obtain_mbx_lock_vf(struct txgbe_hw *hw)
+s32 txgbevf_obtain_mbx_lock_vf(struct txgbe_hw *hw)
 {
 	s32 err = TXGBE_ERR_MBX;
 	u32 mailbox;
@@ -34,7 +34,7 @@ s32 txgbe_obtain_mbx_lock_vf(struct txgbe_hw *hw)
 	wr32(hw, TXGBE_VXMAILBOX, TXGBE_VXMAILBOX_VFU);
 
 	/* reserve mailbox for vf use */
-	mailbox = txgbe_read_v2p_mailbox(hw);
+	mailbox = txgbevf_read_v2p_mailbox(hw);
 	if (mailbox & TXGBE_VXMAILBOX_VFU)
 		err = 0;
 	else
@@ -45,7 +45,7 @@ s32 txgbe_obtain_mbx_lock_vf(struct txgbe_hw *hw)
 }
 
 /**
- *  txgbe_read_mbx_vf - Reads a message from the inbox intended for vf
+ *  txgbevf_read_mbx_vf - Reads a message from the inbox intended for vf
  *  @hw: pointer to the HW structure
  *  @msg: The message buffer
  *  @size: Length of buffer
@@ -53,14 +53,14 @@ s32 txgbe_obtain_mbx_lock_vf(struct txgbe_hw *hw)
  *
  *  returns SUCCESS if it successfully read message from buffer
  **/
-s32 txgbe_read_mbx_vf(struct txgbe_hw *hw, u32 *msg, u16 size,
-		      u16 __always_unused mbx_id)
+s32 txgbevf_read_mbx_vf(struct txgbe_hw *hw, u32 *msg, u16 size,
+			u16 __always_unused mbx_id)
 {
 	s32 err = 0;
 	u16 i;
 
 	/* lock the mailbox to prevent pf/vf race condition */
-	err = txgbe_obtain_mbx_lock_vf(hw);
+	err = txgbevf_obtain_mbx_lock_vf(hw);
 	if (err)
 		goto out_no_read;
 
@@ -78,7 +78,7 @@ out_no_read:
 	return err;
 }
 
-s32 txgbe_poll_for_msg(struct txgbe_hw *hw, u16 mbx_id)
+s32 txgbevf_poll_for_msg(struct txgbe_hw *hw, u16 mbx_id)
 {
 	struct txgbe_mbx_info *mbx = &hw->mbx;
 	int countdown = mbx->timeout;
@@ -100,7 +100,7 @@ out:
 	return countdown ? 0 : TXGBE_ERR_MBX;
 }
 
-s32 txgbe_poll_for_ack(struct txgbe_hw *hw, u16 mbx_id)
+s32 txgbevf_poll_for_ack(struct txgbe_hw *hw, u16 mbx_id)
 {
 	struct txgbe_mbx_info *mbx = &hw->mbx;
 	int countdown = mbx->timeout;
@@ -123,7 +123,7 @@ out:
 }
 
 /**
- *  txgbe_read_posted_mbx - Wait for message notification and receive message
+ *  txgbevf_read_posted_mbx - Wait for message notification and receive message
  *  @hw: pointer to the HW structure
  *  @msg: The message buffer
  *  @size: Length of buffer
@@ -132,7 +132,7 @@ out:
  *  returns SUCCESS if it successfully received a message notification and
  *  copied it into the receive buffer.
  **/
-s32 txgbe_read_posted_mbx(struct txgbe_hw *hw, u32 *msg, u16 size, u16 mbx_id)
+s32 txgbevf_read_posted_mbx(struct txgbe_hw *hw, u32 *msg, u16 size, u16 mbx_id)
 {
 	struct txgbe_mbx_info *mbx = &hw->mbx;
 	s32 err = TXGBE_ERR_MBX;
@@ -140,7 +140,7 @@ s32 txgbe_read_posted_mbx(struct txgbe_hw *hw, u32 *msg, u16 size, u16 mbx_id)
 	if (!mbx->ops.read)
 		goto out;
 
-	err = txgbe_poll_for_msg(hw, mbx_id);
+	err = txgbevf_poll_for_msg(hw, mbx_id);
 
 	/* if ack received read message, otherwise we timed out */
 	if (!err)
@@ -150,7 +150,7 @@ out:
 }
 
 /**
- *  txgbe_write_posted_mbx - Write a message to the mailbox, wait for ack
+ *  txgbevf_write_posted_mbx - Write a message to the mailbox, wait for ack
  *  @hw: pointer to the HW structure
  *  @msg: The message buffer
  *  @size: Length of buffer
@@ -159,8 +159,8 @@ out:
  *  returns SUCCESS if it successfully copied message into the buffer and
  *  received an ack to that message within delay * timeout period
  **/
-s32 txgbe_write_posted_mbx(struct txgbe_hw *hw, u32 *msg, u16 size,
-			   u16 mbx_id)
+s32 txgbevf_write_posted_mbx(struct txgbe_hw *hw, u32 *msg, u16 size,
+			     u16 mbx_id)
 {
 	struct txgbe_mbx_info *mbx = &hw->mbx;
 	s32 err;
@@ -174,24 +174,24 @@ s32 txgbe_write_posted_mbx(struct txgbe_hw *hw, u32 *msg, u16 size,
 
 	/* if msg sent wait until we receive an ack */
 	if (!err)
-		err = txgbe_poll_for_ack(hw, mbx_id);
+		err = txgbevf_poll_for_ack(hw, mbx_id);
 
 	return err;
 }
 
 /**
- *  txgbe_check_for_msg_vf - checks to see if the PF has sent mail
+ *  txgbevf_check_for_msg_vf - checks to see if the PF has sent mail
  *  @hw: pointer to the HW structure
  *  @mbx_id: id of mailbox to check
  *
  *  returns SUCCESS if the PF has set the Status bit or else ERR_MBX
  **/
-s32 txgbe_check_for_msg_vf(struct txgbe_hw *hw, u16 __always_unused mbx_id)
+s32 txgbevf_check_for_msg_vf(struct txgbe_hw *hw, u16 __always_unused mbx_id)
 {
 	s32 err = TXGBE_ERR_MBX;
 
 	/* read clear the pf sts bit */
-	if (!txgbe_check_for_bit_vf(hw, TXGBE_VXMAILBOX_PFSTS)) {
+	if (!txgbevf_check_for_bit_vf(hw, TXGBE_VXMAILBOX_PFSTS)) {
 		err = 0;
 		hw->mbx.stats.reqs++;
 	}
@@ -200,18 +200,18 @@ s32 txgbe_check_for_msg_vf(struct txgbe_hw *hw, u16 __always_unused mbx_id)
 }
 
 /**
- *  txgbe_check_for_ack_vf - checks to see if the PF has ACK'd
+ *  txgbevf_check_for_ack_vf - checks to see if the PF has ACK'd
  *  @hw: pointer to the HW structure
  *  @mbx_id: id of mailbox to check
  *
  *  returns SUCCESS if the PF has set the ACK bit or else ERR_MBX
  **/
-s32 txgbe_check_for_ack_vf(struct txgbe_hw *hw, u16 __always_unused mbx_id)
+s32 txgbevf_check_for_ack_vf(struct txgbe_hw *hw, u16 __always_unused mbx_id)
 {
 	s32 err = TXGBE_ERR_MBX;
 
 	/* read clear the pf ack bit */
-	if (!txgbe_check_for_bit_vf(hw, TXGBE_VXMAILBOX_PFACK)) {
+	if (!txgbevf_check_for_bit_vf(hw, TXGBE_VXMAILBOX_PFACK)) {
 		err = 0;
 		hw->mbx.stats.acks++;
 	}
@@ -220,17 +220,17 @@ s32 txgbe_check_for_ack_vf(struct txgbe_hw *hw, u16 __always_unused mbx_id)
 }
 
 /**
- *  txgbe_check_for_rst_vf - checks to see if the PF has reset
+ *  txgbevf_check_for_rst_vf - checks to see if the PF has reset
  *  @hw: pointer to the HW structure
  *  @mbx_id: id of mailbox to check
  *
  *  returns true if the PF has set the reset done bit or else false
  **/
-s32 txgbe_check_for_rst_vf(struct txgbe_hw *hw, u16 __always_unused mbx_id)
+s32 txgbevf_check_for_rst_vf(struct txgbe_hw *hw, u16 __always_unused mbx_id)
 {
 	s32 err = TXGBE_ERR_MBX;
 
-	if (!txgbe_check_for_bit_vf(hw, (TXGBE_VXMAILBOX_RSTD |
+	if (!txgbevf_check_for_bit_vf(hw, (TXGBE_VXMAILBOX_RSTD |
 	    TXGBE_VXMAILBOX_RSTI))) {
 		err = 0;
 		hw->mbx.stats.rsts++;
@@ -240,7 +240,7 @@ s32 txgbe_check_for_rst_vf(struct txgbe_hw *hw, u16 __always_unused mbx_id)
 }
 
 /**
- *  txgbe_write_mbx_vf - Write a message to the mailbox
+ *  txgbevf_write_mbx_vf - Write a message to the mailbox
  *  @hw: pointer to the HW structure
  *  @msg: The message buffer
  *  @size: Length of buffer
@@ -248,20 +248,20 @@ s32 txgbe_check_for_rst_vf(struct txgbe_hw *hw, u16 __always_unused mbx_id)
  *
  *  returns SUCCESS if it successfully copied message into the buffer
  **/
-s32 txgbe_write_mbx_vf(struct txgbe_hw *hw, u32 *msg, u16 size,
-		       u16 __always_unused mbx_id)
+s32 txgbevf_write_mbx_vf(struct txgbe_hw *hw, u32 *msg, u16 size,
+			 u16 __always_unused mbx_id)
 {
 	s32 err;
 	u16 i;
 
 	/* lock the mailbox to prevent pf/vf race condition */
-	err = txgbe_obtain_mbx_lock_vf(hw);
+	err = txgbevf_obtain_mbx_lock_vf(hw);
 	if (err)
 		goto out_no_write;
 
 	/* flush msg and acks as we are overwriting the message buffer */
-	txgbe_check_for_msg_vf(hw, 0);
-	txgbe_check_for_ack_vf(hw, 0);
+	txgbevf_check_for_msg_vf(hw, 0);
+	txgbevf_check_for_ack_vf(hw, 0);
 
 	/* copy the caller specified message to the mailbox memory buffer */
 	for (i = 0; i < size; i++)
@@ -277,7 +277,7 @@ out_no_write:
 	return err;
 }
 
-void txgbe_init_mbx_params_vf(struct txgbe_hw *hw)
+void txgbevf_init_mbx_params_vf(struct txgbe_hw *hw)
 {
 	struct txgbe_mbx_info *mbx = &hw->mbx;
 
@@ -289,13 +289,13 @@ void txgbe_init_mbx_params_vf(struct txgbe_hw *hw)
 
 	mbx->size = TXGBE_VXMAILBOX_SIZE;
 
-	mbx->ops.read = txgbe_read_mbx_vf;
-	mbx->ops.write = txgbe_write_mbx_vf;
-	mbx->ops.read_posted = txgbe_read_posted_mbx;
-	mbx->ops.write_posted = txgbe_write_posted_mbx;
-	mbx->ops.check_for_msg = txgbe_check_for_msg_vf;
-	mbx->ops.check_for_ack = txgbe_check_for_ack_vf;
-	mbx->ops.check_for_rst = txgbe_check_for_rst_vf;
+	mbx->ops.read = txgbevf_read_mbx_vf;
+	mbx->ops.write = txgbevf_write_mbx_vf;
+	mbx->ops.read_posted = txgbevf_read_posted_mbx;
+	mbx->ops.write_posted = txgbevf_write_posted_mbx;
+	mbx->ops.check_for_msg = txgbevf_check_for_msg_vf;
+	mbx->ops.check_for_ack = txgbevf_check_for_ack_vf;
+	mbx->ops.check_for_rst = txgbevf_check_for_rst_vf;
 
 	mbx->stats.msgs_tx = 0;
 	mbx->stats.msgs_rx = 0;

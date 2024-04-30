@@ -624,5 +624,5 @@ void txgbe_init_ops_vf(struct txgbe_hw *hw)
 	hw->mac.max_tx_queues = 1;
 	hw->mac.max_rx_queues = 1;
 
-	hw->mbx.ops.init_params = txgbe_init_mbx_params_vf;
+	hw->mbx.ops.init_params = txgbevf_init_mbx_params_vf;
 }
