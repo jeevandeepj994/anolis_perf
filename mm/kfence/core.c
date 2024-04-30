@@ -91,7 +91,7 @@ DEFINE_STATIC_KEY_TRUE(kfence_order0_page);
 static void kfence_enable_late(void);
 static int param_set_sample_interval(const char *val, const struct kernel_param *kp)
 {
-	unsigned long num;
+	long num;
 	int ret = kstrtol(val, 0, &num);
 
 	if (ret < 0)
@@ -988,7 +988,7 @@ static inline bool __free_meta(void *addr, struct kfence_metadata *meta, bool zo
 		 * data is still there, and after a use-after-free is detected, we
 		 * unprotect the page, so the data is still accessible.
 		 */
-		if (!zombie && unlikely(slab_want_init_on_free(meta->cache)))
+		if (!zombie && unlikely(init))
 			memzero_explicit(addr, meta->size);
 	}
 
