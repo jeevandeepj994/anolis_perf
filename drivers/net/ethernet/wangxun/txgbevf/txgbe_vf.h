@@ -530,7 +530,7 @@ enum txgbe_error {
 #define TXGBE_ERR_MBX                         (-TXGBE_ERR_MBX)
 
 extern char txgbe_firmware_version[];
-extern char txgbe_driver_name[];
+extern char txgbevf_driver_name[];
 extern const char txgbevf_driver_version[];
 
 typedef u32 txgbe_link_speed;
@@ -1173,37 +1173,37 @@ static inline unsigned int txgbe_rx_offset(struct txgbe_ring *rx_ring)
 
 #define txgbe_flush(a) rd32(a, TXGBE_VXSTATUS)
 
-int txgbe_open(struct net_device *netdev);
-int txgbe_close(struct net_device *netdev);
+int txgbevf_open(struct net_device *netdev);
+int txgbevf_close(struct net_device *netdev);
 int txgbe_negotiate_api_version(struct txgbe_hw *hw, int api);
 void txgbe_init_ops_vf(struct txgbe_hw *hw);
 s32 txgbe_rlpml_set_vf(struct txgbe_hw *hw, u16 max_size);
 int txgbe_get_queues(struct txgbe_hw *hw, unsigned int *num_tcs,
 		     unsigned int *default_tc);
-void txgbe_set_rx_mode(struct net_device *netdev);
+void txgbevf_set_rx_mode(struct net_device *netdev);
 void txgbe_init_last_counter_stats(struct txgbe_adapter *adapter);
-int txgbe_poll(struct napi_struct *napi, int budget);
-void txgbe_free_rx_resources(struct txgbe_ring *rx_ring);
+int txgbevf_poll(struct napi_struct *napi, int budget);
+void txgbevf_free_rx_resources(struct txgbe_ring *rx_ring);
 int txgbe_vlan_rx_add_vid(struct net_device *netdev,
 			  __always_unused __be16 proto, u16 vid);
-void txgbe_service_event_schedule(struct txgbe_adapter *adapter);
-void txgbe_write_eitr(struct txgbe_q_vector *q_vector);
-void txgbe_disable_rx_queue(struct txgbe_adapter *adapter,
-			    struct txgbe_ring *ring);
-void txgbe_alloc_rx_buffers(struct txgbe_ring *rx_ring,
-			    u16 cleaned_count);
-void txgbe_set_ethtool_ops(struct net_device *netdev);
-void txgbe_reinit_locked(struct txgbe_adapter *adapter);
-int txgbe_setup_tx_resources(struct txgbe_ring *tx_ring);
-void txgbe_free_tx_resources(struct txgbe_ring *tx_ring);
-int txgbe_setup_rx_resources(struct txgbe_adapter *adapter,
-			     struct txgbe_ring *rx_ring);
-void txgbe_down(struct txgbe_adapter *adapter);
+void txgbevf_service_event_schedule(struct txgbe_adapter *adapter);
+void txgbevf_write_eitr(struct txgbe_q_vector *q_vector);
+void txgbevf_disable_rx_queue(struct txgbe_adapter *adapter,
+			      struct txgbe_ring *ring);
+void txgbevf_alloc_rx_buffers(struct txgbe_ring *rx_ring,
+			      u16 cleaned_count);
+void txgbevf_set_ethtool_ops(struct net_device *netdev);
+void txgbevf_reinit_locked(struct txgbe_adapter *adapter);
+int txgbevf_setup_tx_resources(struct txgbe_ring *tx_ring);
+void txgbevf_free_tx_resources(struct txgbe_ring *tx_ring);
+int txgbevf_setup_rx_resources(struct txgbe_adapter *adapter,
+			       struct txgbe_ring *rx_ring);
+void txgbevf_down(struct txgbe_adapter *adapter);
 void txgbe_free_irq(struct txgbe_adapter *adapter);
 void txgbe_configure(struct txgbe_adapter *adapter);
 int txgbe_request_irq(struct txgbe_adapter *adapter);
 void txgbe_up_complete(struct txgbe_adapter *adapter);
-void txgbe_reset(struct txgbe_adapter *adapter);
-void txgbe_update_stats(struct txgbe_adapter *adapter);
+void txgbevf_reset(struct txgbe_adapter *adapter);
+void txgbevf_update_stats(struct txgbe_adapter *adapter);
 
 #endif
