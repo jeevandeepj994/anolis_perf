@@ -155,7 +155,7 @@ static void txgbe_get_drvinfo(struct net_device *netdev,
 {
 	struct txgbe_adapter *adapter = netdev_priv(netdev);
 
-	strlcpy(drvinfo->driver, txgbe_driver_name,
+	strlcpy(drvinfo->driver, txgbevf_driver_name,
 		sizeof(drvinfo->driver));
 	strlcpy(drvinfo->version, txgbevf_driver_version,
 		sizeof(drvinfo->version));
@@ -240,7 +240,7 @@ static int txgbe_nway_reset(struct net_device *netdev)
 	struct txgbe_adapter *adapter = netdev_priv(netdev);
 
 	if (netif_running(netdev))
-		txgbe_reinit_locked(adapter);
+		txgbevf_reinit_locked(adapter);
 
 	return 0;
 }
@@ -488,11 +488,11 @@ static int txgbe_set_ringparam(struct net_device *netdev,
 			/* clone ring and setup updated count */
 			tx_ring[i] = *adapter->tx_ring[i];
 			tx_ring[i].count = new_tx_count;
-			err = txgbe_setup_tx_resources(&tx_ring[i]);
+			err = txgbevf_setup_tx_resources(&tx_ring[i]);
 			if (err) {
 				while (i) {
 					i--;
-					txgbe_free_tx_resources(&tx_ring[i]);
+					txgbevf_free_tx_resources(&tx_ring[i]);
 				}
 
 				vfree(tx_ring);
@@ -514,11 +514,11 @@ static int txgbe_set_ringparam(struct net_device *netdev,
 			/* clone ring and setup updated count */
 			rx_ring[i] = *adapter->rx_ring[i];
 			rx_ring[i].count = new_rx_count;
-			err = txgbe_setup_rx_resources(adapter, &rx_ring[i]);
+			err = txgbevf_setup_rx_resources(adapter, &rx_ring[i]);
 			if (err) {
 				while (i) {
 					i--;
-					txgbe_free_rx_resources(&rx_ring[i]);
+					txgbevf_free_rx_resources(&rx_ring[i]);
 				}
 
 				vfree(rx_ring);
@@ -529,13 +529,13 @@ static int txgbe_set_ringparam(struct net_device *netdev,
 		}
 	}
 
-	txgbe_down(adapter);
+	txgbevf_down(adapter);
 	txgbe_free_irq(adapter);
 
 	/* Tx */
 	if (tx_ring) {
 		for (i = 0; i < adapter->num_tx_queues; i++) {
-			txgbe_free_tx_resources(adapter->tx_ring[i]);
+			txgbevf_free_tx_resources(adapter->tx_ring[i]);
 			*adapter->tx_ring[i] = tx_ring[i];
 		}
 		adapter->tx_ring_count = new_tx_count;
@@ -547,7 +547,7 @@ static int txgbe_set_ringparam(struct net_device *netdev,
 	/* Rx */
 	if (rx_ring) {
 		for (i = 0; i < adapter->num_rx_queues; i++) {
-			txgbe_free_rx_resources(adapter->rx_ring[i]);
+			txgbevf_free_rx_resources(adapter->rx_ring[i]);
 			*adapter->rx_ring[i] = rx_ring[i];
 		}
 		adapter->rx_ring_count = new_rx_count;
@@ -564,7 +564,7 @@ clear_reset:
 	/* free Tx resources if Rx error is encountered */
 	if (tx_ring) {
 		for (i = 0; i < adapter->num_tx_queues; i++)
-			txgbe_free_tx_resources(&tx_ring[i]);
+			txgbevf_free_tx_resources(&tx_ring[i]);
 		vfree(tx_ring);
 	}
 
@@ -793,19 +793,19 @@ static void txgbe_diag_test(struct net_device *netdev,
 
 		if (if_running)
 			/* indicate we're in test mode */
-			txgbe_close(netdev);
+			txgbevf_close(netdev);
 		else
-			txgbe_reset(adapter);
+			txgbevf_reset(adapter);
 
 		e_info(hw, "register testing starting\n");
 		if (txgbe_reg_test(adapter, &data[0]))
 			eth_test->flags |= ETH_TEST_FL_FAILED;
 
-		txgbe_reset(adapter);
+		txgbevf_reset(adapter);
 
 		clear_bit(__TXGBE_TESTING, &adapter->state);
 		if (if_running)
-			txgbe_open(netdev);
+			txgbevf_open(netdev);
 	} else {
 		e_info(hw, "online testing starting\n");
 		/* Online tests */
@@ -891,7 +891,7 @@ static void txgbe_get_ethtool_stats(struct net_device *netdev,
 	char *p;
 	unsigned int start;
 
-	txgbe_update_stats(adapter);
+	txgbevf_update_stats(adapter);
 
 	for (j = 0; j < TXGBE_HW_STATS_LEN; j++) {
 		p = (char *)adapter + txgbe_hw_stats[j].offset;
@@ -1010,7 +1010,7 @@ static int txgbe_set_coalesce(struct net_device *netdev,
 		else
 			/* rx only or mixed */
 			q_vector->itr = rx_itr_param;
-		txgbe_write_eitr(q_vector);
+		txgbevf_write_eitr(q_vector);
 	}
 
 	return 0;
@@ -1056,7 +1056,7 @@ static const struct ethtool_ops txgbe_ethtool_ops = {
 	.set_rxnfc              = txgbe_set_rxnfc,
 };
 
-void txgbe_set_ethtool_ops(struct net_device *netdev)
+void txgbevf_set_ethtool_ops(struct net_device *netdev)
 {
 	netdev->ethtool_ops = &txgbe_ethtool_ops;
 }

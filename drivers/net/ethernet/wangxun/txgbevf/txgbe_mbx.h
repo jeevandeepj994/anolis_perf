@@ -53,6 +53,6 @@ enum txgbe_pfvf_api_rev {
 	txgbe_mbox_api_unknown /* indicates that API version is not known */
 };
 
-void txgbe_init_mbx_params_vf(struct txgbe_hw *hw);
+void txgbevf_init_mbx_params_vf(struct txgbe_hw *hw);
 
 #endif
