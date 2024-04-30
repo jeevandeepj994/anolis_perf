@@ -17,7 +17,7 @@
 #include "txgbe_mbx.h"
 #include "txgbe_txrx.h"
 
-char txgbe_driver_name[] = "txgbevf";
+char txgbevf_driver_name[] = "txgbevf";
 
 static const char txgbe_driver_string[] =
 	"WangXun(R) 10GbE PCI Express Virtual Function Linux Network Driver";
@@ -87,7 +87,7 @@ void txgbe_negotiate_api(struct txgbe_adapter *adapter)
 	spin_unlock_bh(&adapter->mbx_lock);
 }
 
-void txgbe_reset(struct txgbe_adapter *adapter)
+void txgbevf_reset(struct txgbe_adapter *adapter)
 {
 	struct txgbe_hw *hw = &adapter->hw;
 	struct net_device *netdev = adapter->netdev;
@@ -175,12 +175,12 @@ void txgbe_clean_tx_ring(struct txgbe_ring *tx_ring)
 }
 
 /**
- * txgbe_free_tx_resources - Free Tx Resources per Queue
+ * txgbevf_free_tx_resources - Free Tx Resources per Queue
  * @tx_ring: Tx descriptor ring for a specific queue
  *
  * Free all transmit software resources
  **/
-void txgbe_free_tx_resources(struct txgbe_ring *tx_ring)
+void txgbevf_free_tx_resources(struct txgbe_ring *tx_ring)
 {
 	txgbe_clean_tx_ring(tx_ring);
 
@@ -198,12 +198,12 @@ void txgbe_free_tx_resources(struct txgbe_ring *tx_ring)
 }
 
 /**
- * txgbe_setup_tx_resources - allocate Tx resources (Descriptors)
+ * txgbevf_setup_tx_resources - allocate Tx resources (Descriptors)
  * @tx_ring:    tx descriptor ring (for a specific queue) to setup
  *
  * Return 0 on success, negative on failure
  **/
-int txgbe_setup_tx_resources(struct txgbe_ring *tx_ring)
+int txgbevf_setup_tx_resources(struct txgbe_ring *tx_ring)
 {
 	int size;
 
@@ -248,7 +248,7 @@ int txgbe_setup_all_tx_resources(struct txgbe_adapter *adapter)
 	int err = 0;
 
 	for (i = 0; i < adapter->num_tx_queues; i++) {
-		err = txgbe_setup_tx_resources(adapter->tx_ring[i]);
+		err = txgbevf_setup_tx_resources(adapter->tx_ring[i]);
 		if (!err)
 			continue;
 		e_err(drv, "Allocation for Tx Queue %u failed\n", i);
@@ -259,7 +259,7 @@ int txgbe_setup_all_tx_resources(struct txgbe_adapter *adapter)
 err_setup_tx:
 	/* rewind the index freeing the rings as we go */
 	while (i--)
-		txgbe_free_tx_resources(adapter->tx_ring[i]);
+		txgbevf_free_tx_resources(adapter->tx_ring[i]);
 	return err;
 }
 
@@ -275,17 +275,17 @@ void txgbe_free_all_tx_resources(struct txgbe_adapter *adapter)
 
 	for (i = 0; i < adapter->num_tx_queues; i++)
 		if (adapter->tx_ring[i]->desc)
-			txgbe_free_tx_resources(adapter->tx_ring[i]);
+			txgbevf_free_tx_resources(adapter->tx_ring[i]);
 }
 
 /**
- * txgbe_setup_rx_resources - allocate Rx resources (Descriptors)
+ * txgbevf_setup_rx_resources - allocate Rx resources (Descriptors)
  * @rx_ring:    rx descriptor ring (for a specific queue) to setup
  *
  * Returns 0 on success, negative on failure
  **/
-int txgbe_setup_rx_resources(struct txgbe_adapter *adapter,
-			     struct txgbe_ring *rx_ring)
+int txgbevf_setup_rx_resources(struct txgbe_adapter *adapter,
+			       struct txgbe_ring *rx_ring)
 {
 	int size;
 
@@ -329,7 +329,7 @@ int txgbe_setup_all_rx_resources(struct txgbe_adapter *adapter)
 	int i, err = 0;
 
 	for (i = 0; i < adapter->num_rx_queues; i++) {
-		err = txgbe_setup_rx_resources(adapter, adapter->rx_ring[i]);
+		err = txgbevf_setup_rx_resources(adapter, adapter->rx_ring[i]);
 		if (!err)
 			continue;
 		e_err(probe, "Allocation for Rx Queue %u failed\n", i);
@@ -340,7 +340,7 @@ int txgbe_setup_all_rx_resources(struct txgbe_adapter *adapter)
 err_setup_rx:
 	/* rewind the index freeing the rings as we go */
 	while (i--)
-		txgbe_free_rx_resources(adapter->rx_ring[i]);
+		txgbevf_free_rx_resources(adapter->rx_ring[i]);
 	return err;
 }
 
@@ -418,12 +418,12 @@ void txgbe_clean_all_tx_rings(struct txgbe_adapter *adapter)
 }
 
 /**
- * txgbe_free_rx_resources - Free Rx Resources
+ * txgbevf_free_rx_resources - Free Rx Resources
  * @rx_ring: ring to clean the resources from
  *
  * Free all receive software resources
  **/
-void txgbe_free_rx_resources(struct txgbe_ring *rx_ring)
+void txgbevf_free_rx_resources(struct txgbe_ring *rx_ring)
 {
 	txgbe_clean_rx_ring(rx_ring);
 
@@ -448,7 +448,7 @@ void txgbe_free_all_rx_resources(struct txgbe_adapter *adapter)
 
 	for (i = 0; i < adapter->num_rx_queues; i++)
 		if (adapter->rx_ring[i]->desc)
-			txgbe_free_rx_resources(adapter->rx_ring[i]);
+			txgbevf_free_rx_resources(adapter->rx_ring[i]);
 }
 
 int txgbe_configure_dcb(struct txgbe_adapter *adapter)
@@ -503,14 +503,14 @@ void txgbe_restore_vlan(struct txgbe_adapter *adapter)
 }
 
 /**
- * txgbe_configure_tx_ring - Configure Tx ring after Reset
+ * txgbevf_configure_tx_ring - Configure Tx ring after Reset
  * @adapter: board private structure
  * @ring: structure containing ring specific data
  *
  * Configure the Tx descriptor ring after a reset.
  **/
-void txgbe_configure_tx_ring(struct txgbe_adapter *adapter,
-			     struct txgbe_ring *ring)
+void txgbevf_configure_tx_ring(struct txgbe_adapter *adapter,
+			       struct txgbe_ring *ring)
 {
 	struct txgbe_hw *hw = &adapter->hw;
 	u64 tdba = ring->dma_addr;
@@ -566,7 +566,7 @@ void txgbe_configure_tx(struct txgbe_adapter *adapter)
 
 	/* Setup the HW Tx Head and Tail descriptor pointers */
 	for (i = 0; i < adapter->num_tx_queues; i++)
-		txgbe_configure_tx_ring(adapter, adapter->tx_ring[i]);
+		txgbevf_configure_tx_ring(adapter, adapter->tx_ring[i]);
 }
 
 static void txgbe_set_rx_buffer_len(struct txgbe_adapter *adapter,
@@ -680,8 +680,8 @@ void txgbe_rx_desc_queue_enable(struct txgbe_adapter *adapter,
 			reg_idx);
 }
 
-void txgbe_configure_rx_ring(struct txgbe_adapter *adapter,
-			     struct txgbe_ring *ring)
+void txgbevf_configure_rx_ring(struct txgbe_adapter *adapter,
+			       struct txgbe_ring *ring)
 {
 	struct txgbe_hw *hw = &adapter->hw;
 	union txgbe_rx_desc *rx_desc;
@@ -691,7 +691,7 @@ void txgbe_configure_rx_ring(struct txgbe_adapter *adapter,
 
 	/* disable queue to avoid issues while updating state */
 	rxdctl = rd32(hw, TXGBE_VXRXDCTL(reg_idx));
-	txgbe_disable_rx_queue(adapter, ring);
+	txgbevf_disable_rx_queue(adapter, ring);
 
 	wr32(hw, TXGBE_VXRDBAL(reg_idx), rdba & DMA_BIT_MASK(32));
 	wr32(hw, TXGBE_VXRDBAH(reg_idx), rdba >> 32);
@@ -734,7 +734,7 @@ void txgbe_configure_rx_ring(struct txgbe_adapter *adapter,
 	wr32(hw, TXGBE_VXRXDCTL(reg_idx), rxdctl);
 
 	txgbe_rx_desc_queue_enable(adapter, ring);
-	txgbe_alloc_rx_buffers(ring, txgbe_desc_unused(ring));
+	txgbevf_alloc_rx_buffers(ring, txgbe_desc_unused(ring));
 }
 
 /**
@@ -765,14 +765,14 @@ void txgbe_configure_rx(struct txgbe_adapter *adapter)
 		struct txgbe_ring *rx_ring = adapter->rx_ring[i];
 
 		txgbe_set_rx_buffer_len(adapter, rx_ring);
-		txgbe_configure_rx_ring(adapter, rx_ring);
+		txgbevf_configure_rx_ring(adapter, rx_ring);
 	}
 }
 
 void txgbe_configure(struct txgbe_adapter *adapter)
 {
 	txgbe_configure_dcb(adapter);
-	txgbe_set_rx_mode(adapter->netdev);
+	txgbevf_set_rx_mode(adapter->netdev);
 	txgbe_restore_vlan(adapter);
 	txgbe_configure_tx(adapter);
 	txgbe_configure_rx(adapter);
@@ -801,7 +801,7 @@ irqreturn_t txgbe_msix_other(int __always_unused irq, void *data)
 
 	hw->mac.get_link_status = 1;
 
-	txgbe_service_event_schedule(adapter);
+	txgbevf_service_event_schedule(adapter);
 
 	wr32(hw, TXGBE_VXIMC, adapter->eims_other);
 
@@ -925,10 +925,10 @@ void txgbe_napi_disable_all(struct txgbe_adapter *adapter)
 }
 
 /**
- * txgbe_irq_enable - Enable default interrupt generation settings
+ * txgbevf_irq_enable - Enable default interrupt generation settings
  * @adapter: board private structure
  **/
-inline void txgbe_irq_enable(struct txgbe_adapter *adapter)
+inline void txgbevf_irq_enable(struct txgbe_adapter *adapter)
 {
 	struct txgbe_hw *hw = &adapter->hw;
 
@@ -1029,7 +1029,7 @@ void txgbe_configure_msix(struct txgbe_adapter *adapter)
 		/* add q_vector eims value to global eims_enable_mask */
 		adapter->eims_enable_mask |= BIT(v_idx);
 
-		txgbe_write_eitr(q_vector);
+		txgbevf_write_eitr(q_vector);
 	}
 
 	txgbe_set_ivar(adapter, -1, 1, v_idx);
@@ -1069,7 +1069,7 @@ void txgbe_up_complete(struct txgbe_adapter *adapter)
 
 	/* clear any pending interrupts, may auto mask */
 	wr32(hw, TXGBE_VXICR, ~0);
-	txgbe_irq_enable(adapter);
+	txgbevf_irq_enable(adapter);
 
 	msleep(1000);
 	/* enable transmits */
@@ -1081,7 +1081,7 @@ void txgbe_up_complete(struct txgbe_adapter *adapter)
 	mod_timer(&adapter->service_timer, jiffies);
 }
 
-int txgbe_open(struct net_device *netdev)
+int txgbevf_open(struct net_device *netdev)
 {
 	struct txgbe_adapter *adapter = netdev_priv(netdev);
 	struct txgbe_hw *hw = &adapter->hw;
@@ -1097,7 +1097,7 @@ int txgbe_open(struct net_device *netdev)
 		return -ENOMEM;
 
 	if (hw->adapter_stopped) {
-		txgbe_reset(adapter);
+		txgbevf_reset(adapter);
 		/* if adapter is still stopped then PF isn't up and
 		 * the vf can't start.
 		 */
@@ -1147,14 +1147,14 @@ err_req_irq:
 err_setup_rx:
 	txgbe_free_all_tx_resources(adapter);
 err_setup_tx:
-	txgbe_reset(adapter);
+	txgbevf_reset(adapter);
 err_setup_reset:
 
 	return err;
 }
 
-void txgbe_disable_rx_queue(struct txgbe_adapter *adapter,
-			    struct txgbe_ring *ring)
+void txgbevf_disable_rx_queue(struct txgbe_adapter *adapter,
+			      struct txgbe_ring *ring)
 {
 	struct txgbe_hw *hw = &adapter->hw;
 	u32 rxdctl;
@@ -1175,10 +1175,10 @@ void txgbe_disable_rx_queue(struct txgbe_adapter *adapter,
 }
 
 /**
- * txgbe_irq_disable - Mask off interrupt generation on the NIC
+ * txgbevf_irq_disable - Mask off interrupt generation on the NIC
  * @adapter: board private structure
  **/
-inline void txgbe_irq_disable(struct txgbe_adapter *adapter)
+inline void txgbevf_irq_disable(struct txgbe_adapter *adapter)
 {
 	struct txgbe_hw *hw = &adapter->hw;
 	int vector;
@@ -1193,7 +1193,7 @@ inline void txgbe_irq_disable(struct txgbe_adapter *adapter)
 	synchronize_irq(adapter->msix_entries[vector++].vector);
 }
 
-void txgbe_down(struct txgbe_adapter *adapter)
+void txgbevf_down(struct txgbe_adapter *adapter)
 {
 	struct net_device *netdev = adapter->netdev;
 	struct txgbe_hw *hw = &adapter->hw;
@@ -1205,7 +1205,7 @@ void txgbe_down(struct txgbe_adapter *adapter)
 
 	/* disable all enabled rx queues */
 	for (i = 0; i < adapter->num_rx_queues; i++)
-		txgbe_disable_rx_queue(adapter, adapter->rx_ring[i]);
+		txgbevf_disable_rx_queue(adapter, adapter->rx_ring[i]);
 
 	usleep_range(10000, 20000);
 
@@ -1215,7 +1215,7 @@ void txgbe_down(struct txgbe_adapter *adapter)
 	netif_carrier_off(netdev);
 	netif_tx_disable(netdev);
 
-	txgbe_irq_disable(adapter);
+	txgbevf_irq_disable(adapter);
 
 	txgbe_napi_disable_all(adapter);
 
@@ -1230,17 +1230,17 @@ void txgbe_down(struct txgbe_adapter *adapter)
 	}
 
 	if (!pci_channel_offline(adapter->pdev))
-		txgbe_reset(adapter);
+		txgbevf_reset(adapter);
 
 	txgbe_clean_all_tx_rings(adapter);
 	txgbe_clean_all_rx_rings(adapter);
 }
 
-int txgbe_close(struct net_device *netdev)
+int txgbevf_close(struct net_device *netdev)
 {
 	struct txgbe_adapter *adapter = netdev_priv(netdev);
 
-	txgbe_down(adapter);
+	txgbevf_down(adapter);
 	txgbe_free_irq(adapter);
 
 	txgbe_free_all_tx_resources(adapter);
@@ -1441,13 +1441,13 @@ int txgbe_acquire_msix_vectors(struct txgbe_adapter *adapter,
 }
 
 /**
- * txgbe_set_interrupt_capability - set MSI-X or FAIL if not supported
+ * txgbevf_set_interrupt_capability - set MSI-X or FAIL if not supported
  * @adapter: board private structure to initialize
  *
  * Attempt to configure the interrupts using the best available
  * capabilities of the hardware and the kernel.
  */
-int txgbe_set_interrupt_capability(struct txgbe_adapter *adapter)
+int txgbevf_set_interrupt_capability(struct txgbe_adapter *adapter)
 {
 	int vector, v_budget;
 
@@ -1510,7 +1510,7 @@ int txgbe_alloc_q_vector(struct txgbe_adapter *adapter, int v_idx,
 		return -ENOMEM;
 
 	/* initialize NAPI */
-	netif_napi_add(adapter->netdev, &q_vector->napi, txgbe_poll, 64);
+	netif_napi_add(adapter->netdev, &q_vector->napi, txgbevf_poll, 64);
 
 	/* tie q_vector and adapter together */
 	adapter->q_vector[v_idx] = q_vector;
@@ -1677,11 +1677,11 @@ err_out:
 }
 
 /**
- * txgbe_reset_interrupt_capability - Reset MSIX setup
+ * txgbevf_reset_interrupt_capability - Reset MSIX setup
  * @adapter: board private structure
  *
  **/
-void txgbe_reset_interrupt_capability(struct txgbe_adapter *adapter)
+void txgbevf_reset_interrupt_capability(struct txgbe_adapter *adapter)
 {
 	if (!adapter->msix_entries)
 		return;
@@ -1691,11 +1691,11 @@ void txgbe_reset_interrupt_capability(struct txgbe_adapter *adapter)
 }
 
 /**
- * txgbe_init_interrupt_scheme - Determine if MSIX is supported and init
+ * txgbevf_init_interrupt_scheme - Determine if MSIX is supported and init
  * @adapter: board private structure to initialize
  *
  **/
-int txgbe_init_interrupt_scheme(struct txgbe_adapter *adapter)
+int txgbevf_init_interrupt_scheme(struct txgbe_adapter *adapter)
 {
 	struct pci_dev *pdev = adapter->pdev;
 	int err;
@@ -1703,7 +1703,7 @@ int txgbe_init_interrupt_scheme(struct txgbe_adapter *adapter)
 	/* Number of supported queues */
 	txgbe_set_num_queues(adapter);
 
-	err = txgbe_set_interrupt_capability(adapter);
+	err = txgbevf_set_interrupt_capability(adapter);
 	if (err) {
 		dev_err(&pdev->dev, "Unable to setup interrupt capabilities\n");
 		goto err_set_interrupt;
@@ -1723,7 +1723,7 @@ int txgbe_init_interrupt_scheme(struct txgbe_adapter *adapter)
 
 	return 0;
 err_alloc_q_vectors:
-	txgbe_reset_interrupt_capability(adapter);
+	txgbevf_reset_interrupt_capability(adapter);
 err_set_interrupt:
 	return err;
 }
@@ -1812,10 +1812,10 @@ void txgbe_update_itr(struct txgbe_q_vector *q_vector,
 }
 
 /**
- * txgbe_write_eitr - write VTEITR register in hardware specific way
+ * txgbevf_write_eitr - write VTEITR register in hardware specific way
  * @q_vector: structure containing interrupt and ring information
  */
-void txgbe_write_eitr(struct txgbe_q_vector *q_vector)
+void txgbevf_write_eitr(struct txgbe_q_vector *q_vector)
 {
 	struct txgbe_adapter *adapter = q_vector->adapter;
 	struct txgbe_hw *hw = &adapter->hw;
@@ -1863,7 +1863,7 @@ void txgbe_set_itr(struct txgbe_q_vector *q_vector)
 		/* save the algorithm value here */
 		q_vector->itr = new_itr;
 
-		txgbe_write_eitr(q_vector);
+		txgbevf_write_eitr(q_vector);
 	}
 }
 
@@ -1910,12 +1910,12 @@ bool txgbe_alloc_mapped_page(struct txgbe_ring *rx_ring,
 }
 
 /**
- * txgbe_alloc_rx_buffers - Replace used receive buffers; packet split
+ * txgbevf_alloc_rx_buffers - Replace used receive buffers; packet split
  * @rx_ring: rx descriptor ring (for a specific queue) to setup buffers on
  * @cleaned_count: number of buffers to replace
  **/
-void txgbe_alloc_rx_buffers(struct txgbe_ring *rx_ring,
-			    u16 cleaned_count)
+void txgbevf_alloc_rx_buffers(struct txgbe_ring *rx_ring,
+			      u16 cleaned_count)
 {
 	union txgbe_rx_desc *rx_desc;
 	struct txgbe_rx_buffer *bi;
@@ -2407,7 +2407,7 @@ int txgbe_clean_rx_irq(struct txgbe_q_vector *q_vector,
 
 		/* return some buffers to hardware, one at a time is too slow */
 		if (cleaned_count >= TXGBE_RX_BUFFER_WRITE) {
-			txgbe_alloc_rx_buffers(rx_ring, cleaned_count);
+			txgbevf_alloc_rx_buffers(rx_ring, cleaned_count);
 			cleaned_count = 0;
 		}
 
@@ -2579,8 +2579,8 @@ static inline int txgbe_maybe_stop_tx(struct txgbe_ring *tx_ring, int size)
 	return __txgbe_maybe_stop_tx(tx_ring, size);
 }
 
-void txgbe_tx_ctxtdesc(struct txgbe_ring *tx_ring,
-		       u32 vlan_macip_lens,
+void txgbevf_tx_ctxtdesc(struct txgbe_ring *tx_ring,
+			 u32 vlan_macip_lens,
 				u32 fcoe_sof_eof,
 				u32 type_tucmd,
 				u32 mss_l4len_idx)
@@ -2726,8 +2726,8 @@ int txgbe_tso(struct txgbe_ring *tx_ring,
 					TXGBE_TX_FLAGS_VLAN,
 					0x1 << TXGBE_TXD_TAG_TPID_SEL_SHIFT);
 
-	txgbe_tx_ctxtdesc(tx_ring, vlan_macip_lens, tunhdr_eiplen_tunlen,
-			  type_tucmd, mss_l4len_idx);
+	txgbevf_tx_ctxtdesc(tx_ring, vlan_macip_lens, tunhdr_eiplen_tunlen,
+			    type_tucmd, mss_l4len_idx);
 
 	return 1;
 }
@@ -2860,8 +2860,8 @@ void txgbe_tx_csum(struct txgbe_ring *tx_ring,
 					TXGBE_TX_FLAGS_VLAN,
 					0x1 << TXGBE_TXD_TAG_TPID_SEL_SHIFT);
 
-	txgbe_tx_ctxtdesc(tx_ring, vlan_macip_lens, tunhdr_eiplen_tunlen,
-			  type_tucmd, mss_l4len_idx);
+	txgbevf_tx_ctxtdesc(tx_ring, vlan_macip_lens, tunhdr_eiplen_tunlen,
+			    type_tucmd, mss_l4len_idx);
 }
 
 __le32 txgbe_tx_olinfo_status(struct txgbe_tx_desc *tx_desc,
@@ -2910,8 +2910,8 @@ __le32 txgbe_tx_cmd_type(u32 tx_flags)
 	return cmd_type;
 }
 
-void txgbe_unmap_and_free_tx_resource(struct txgbe_ring *tx_ring,
-				      struct txgbe_tx_buffer *tx_buffer)
+void txgbevf_unmap_and_free_tx_resource(struct txgbe_ring *tx_ring,
+					struct txgbe_tx_buffer *tx_buffer)
 {
 	if (tx_buffer->skb) {
 		dev_kfree_skb_any(tx_buffer->skb);
@@ -3053,7 +3053,7 @@ dma_error:
 	/* clear dma mappings for failed tx_buffer_info map */
 	for (;;) {
 		tx_buffer = &tx_ring->tx_buffer_info[i];
-		txgbe_unmap_and_free_tx_resource(tx_ring, tx_buffer);
+		txgbevf_unmap_and_free_tx_resource(tx_ring, tx_buffer);
 		if (tx_buffer == first)
 			break;
 		if (i == 0)
@@ -3210,7 +3210,7 @@ u8 *txgbe_addr_list_itr(struct txgbe_hw __maybe_unused *hw, u8 **mc_addr_ptr,
 	return addr;
 }
 
-int txgbe_write_uc_addr_list(struct net_device *netdev)
+int txgbevf_write_uc_addr_list(struct net_device *netdev)
 {
 	struct txgbe_adapter *adapter = netdev_priv(netdev);
 	struct txgbe_hw *hw = &adapter->hw;
@@ -3234,7 +3234,7 @@ int txgbe_write_uc_addr_list(struct net_device *netdev)
 }
 
 /**
- * txgbe_set_rx_mode - Multicast and unicast set
+ * txgbevf_set_rx_mode - Multicast and unicast set
  * @netdev: network interface device structure
  *
  * The set_rx_method entry point is called whenever the multicast address
@@ -3242,7 +3242,7 @@ int txgbe_write_uc_addr_list(struct net_device *netdev)
  * This routine is responsible for configuring the hardware for proper
  * multicast mode and configuring requested unicast filters.
  **/
-void txgbe_set_rx_mode(struct net_device *netdev)
+void txgbevf_set_rx_mode(struct net_device *netdev)
 {
 	struct txgbe_adapter *adapter = netdev_priv(netdev);
 	struct txgbe_hw *hw = &adapter->hw;
@@ -3281,7 +3281,7 @@ void txgbe_set_rx_mode(struct net_device *netdev)
 	hw->mac.ops.update_mc_addr_list(hw, addr_list, addr_count,
 					txgbe_addr_list_itr, false);
 
-	txgbe_write_uc_addr_list(netdev);
+	txgbevf_write_uc_addr_list(netdev);
 
 	spin_unlock_bh(&adapter->mbx_lock);
 }
@@ -3366,15 +3366,15 @@ int txgbe_set_mac(struct net_device *netdev, void *p)
 	return 0;
 }
 
-void txgbe_reinit_locked(struct txgbe_adapter *adapter)
+void txgbevf_reinit_locked(struct txgbe_adapter *adapter)
 {
 	WARN_ON(in_interrupt());
 
 	while (test_and_set_bit(__TXGBE_RESETTING, &adapter->state))
 		usleep_range(1000, 2000);
 
-	/*txgbe_down +  free_irq*/
-	txgbe_down(adapter);
+	/*txgbevf_down +  free_irq*/
+	txgbevf_down(adapter);
 	txgbe_free_irq(adapter);
 
 	/*txgbe_up +  request_irq*/
@@ -3413,7 +3413,7 @@ int txgbe_change_mtu(struct net_device *netdev, int new_mtu)
 	/* set new MTU */
 	netdev->mtu = new_mtu;
 	if (netif_running(netdev))
-		txgbe_reinit_locked(adapter);
+		txgbevf_reinit_locked(adapter);
 
 	return 0;
 }
@@ -3423,7 +3423,7 @@ void txgbe_tx_timeout_reset(struct txgbe_adapter *adapter)
 	/* Do the reset outside of interrupt context */
 	if (!test_bit(__TXGBE_DOWN, &adapter->state)) {
 		adapter->flagsd |= TXGBE_F_REQ_RESET;
-		txgbe_service_event_schedule(adapter);
+		txgbevf_service_event_schedule(adapter);
 	}
 }
 
@@ -3685,14 +3685,14 @@ bool txgbe_clean_tx_irq(struct txgbe_q_vector *q_vector,
 }
 
 /**
- * txgbe_poll - NAPI polling calback
+ * txgbevf_poll - NAPI polling calback
  * @napi: napi struct with our devices info in it
  * @budget: amount of work driver is allowed to do this pass, in packets
  *
  * This function will clean more than one or more rings associated with a
  * q_vector.
  **/
-int txgbe_poll(struct napi_struct *napi, int budget)
+int txgbevf_poll(struct napi_struct *napi, int budget)
 {
 	struct txgbe_q_vector *q_vector =
 		container_of(napi, struct txgbe_q_vector, napi);
@@ -3743,7 +3743,7 @@ int txgbe_poll(struct napi_struct *napi, int budget)
 	return 0;
 }
 
-void txgbe_service_event_schedule(struct txgbe_adapter *adapter)
+void txgbevf_service_event_schedule(struct txgbe_adapter *adapter)
 {
 	if (!test_bit(__TXGBE_DOWN, &adapter->state) &&
 	    !test_bit(__TXGBE_REMOVING, &adapter->state) &&
@@ -3783,19 +3783,19 @@ void txgbe_free_q_vectors(struct txgbe_adapter *adapter)
 }
 
 /**
- * txgbe_clear_interrupt_scheme - Clear the current interrupt scheme settings
+ * txgbevf_clear_interrupt_scheme - Clear the current interrupt scheme settings
  * @adapter: board private structure to clear interrupt scheme on
  *
  * We go through and clear interrupt specific resources and reset the structure
  * to pre-load conditions
  **/
-void txgbe_clear_interrupt_scheme(struct txgbe_adapter *adapter)
+void txgbevf_clear_interrupt_scheme(struct txgbe_adapter *adapter)
 {
 	adapter->num_tx_queues = 0;
 	adapter->num_rx_queues = 0;
 
 	txgbe_free_q_vectors(adapter);
-	txgbe_reset_interrupt_capability(adapter);
+	txgbevf_reset_interrupt_capability(adapter);
 }
 
 static void txgbe_queue_reset_subtask(struct txgbe_adapter *adapter)
@@ -3820,15 +3820,15 @@ static void txgbe_queue_reset_subtask(struct txgbe_adapter *adapter)
 
 	/* disable running interface */
 	if (netif_running(dev))
-		txgbe_close(dev);
+		txgbevf_close(dev);
 
 	/* free and reallocate queues */
-	txgbe_clear_interrupt_scheme(adapter);
-	txgbe_init_interrupt_scheme(adapter);
+	txgbevf_clear_interrupt_scheme(adapter);
+	txgbevf_init_interrupt_scheme(adapter);
 
 	/* reenable running interface */
 	if (netif_running(dev))
-		txgbe_open(dev);
+		txgbevf_open(dev);
 
 	rtnl_unlock();
 }
@@ -3847,7 +3847,7 @@ static void txgbe_reset_subtask(struct txgbe_adapter *adapter)
 
 	adapter->sw_stats.tx_timeout_count++;
 
-	txgbe_reinit_locked(adapter);
+	txgbevf_reinit_locked(adapter);
 }
 
 /**
@@ -3949,10 +3949,10 @@ void txgbe_update36(struct txgbe_hw *hw, u32 loreg, u32 hireg,
 }
 
 /**
- * txgbe_update_stats - Update the board statistics counters.
+ * txgbevf_update_stats - Update the board statistics counters.
  * @adapter: board private structure
  **/
-void txgbe_update_stats(struct txgbe_adapter *adapter)
+void txgbevf_update_stats(struct txgbe_adapter *adapter)
 {
 	struct txgbe_hw *hw = &adapter->hw;
 	struct txgbe_ring *ring;
@@ -4047,7 +4047,7 @@ static void txgbe_watchdog_subtask(struct txgbe_adapter *adapter)
 	else
 		txgbe_watchdog_link_is_down(adapter);
 
-	txgbe_update_stats(adapter);
+	txgbevf_update_stats(adapter);
 }
 
 /* txgbe_check_hang_subtask - check for hung queues and dropped interrupts
@@ -4088,7 +4088,7 @@ void txgbe_service_task(struct work_struct *work)
 	if (unlikely(!hw->hw_addr)) {
 		if (!test_bit(__TXGBE_DOWN, &adapter->state)) {
 			rtnl_lock();
-			txgbe_down(adapter);
+			txgbevf_down(adapter);
 			rtnl_unlock();
 		}
 		txgbe_service_event_complete(adapter);
@@ -4143,10 +4143,10 @@ txgbe_features_check(struct sk_buff *skb, struct net_device *dev,
 }
 
 static const struct net_device_ops txgbe_netdev_ops = {
-	.ndo_open               = txgbe_open,
-	.ndo_stop               = txgbe_close,
+	.ndo_open               = txgbevf_open,
+	.ndo_stop               = txgbevf_close,
 	.ndo_start_xmit         = txgbe_xmit_frame,
-	.ndo_set_rx_mode        = txgbe_set_rx_mode,
+	.ndo_set_rx_mode        = txgbevf_set_rx_mode,
 	.ndo_get_stats64        = txgbe_get_stats64,
 	.ndo_validate_addr      = eth_validate_addr,
 	.ndo_set_mac_address    = txgbe_set_mac,
@@ -4157,10 +4157,10 @@ static const struct net_device_ops txgbe_netdev_ops = {
 	.ndo_features_check     = txgbe_features_check,
 };
 
-void txgbe_assign_netdev_ops(struct net_device *dev)
+void txgbevf_assign_netdev_ops(struct net_device *dev)
 {
 	dev->netdev_ops = &txgbe_netdev_ops;
-	txgbe_set_ethtool_ops(dev);
+	txgbevf_set_ethtool_ops(dev);
 	dev->watchdog_timeo = 5 * HZ;
 }
 
@@ -4175,7 +4175,7 @@ void txgbe_service_timer(struct timer_list *t)
 	/* Reset the timer */
 	mod_timer(&adapter->service_timer, (HZ * 2) + jiffies);
 
-	txgbe_service_event_schedule(adapter);
+	txgbevf_service_event_schedule(adapter);
 }
 
 /**
@@ -4206,7 +4206,7 @@ static int txgbe_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 
 	err = pci_request_selected_regions(pdev,
 					   pci_select_bars(pdev, IORESOURCE_MEM),
-					   txgbe_driver_name);
+					   txgbevf_driver_name);
 	if (err) {
 		dev_err(&pdev->dev,
 			"pci_request_selected_regions failed 0x%x\n", err);
@@ -4267,7 +4267,7 @@ static int txgbe_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 	hw->hw_addr = adapter->io_addr;
 	hw->b4_addr = adapter->b4_addr;
 
-	txgbe_assign_netdev_ops(netdev);
+	txgbevf_assign_netdev_ops(netdev);
 	adapter->bd_number = cards_found;
 
 		/* setup the private structure */
@@ -4319,7 +4319,7 @@ static int txgbe_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 	set_bit(__TXGBE_SERVICE_INITED, &adapter->state);
 	clear_bit(__TXGBE_SERVICE_SCHED, &adapter->state);
 
-	err = txgbe_init_interrupt_scheme(adapter);
+	err = txgbevf_init_interrupt_scheme(adapter);
 	if (err)
 		goto err_register;
 
@@ -4345,9 +4345,9 @@ static int txgbe_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 	return 0;
 
 err_register:
-	txgbe_clear_interrupt_scheme(adapter);
+	txgbevf_clear_interrupt_scheme(adapter);
 err_sw_init:
-	txgbe_reset_interrupt_capability(adapter);
+	txgbevf_reset_interrupt_capability(adapter);
 	iounmap(adapter->io_addr);
 err_pci_release_regions:
 	pci_release_selected_regions(pdev,
@@ -4384,7 +4384,7 @@ static void txgbe_remove(struct pci_dev *pdev)
 	if (netdev->reg_state == NETREG_REGISTERED)
 		unregister_netdev(netdev);
 
-	txgbe_clear_interrupt_scheme(adapter);
+	txgbevf_clear_interrupt_scheme(adapter);
 
 	pci_release_selected_regions(pdev,
 				     pci_select_bars(pdev, IORESOURCE_MEM));
@@ -4408,14 +4408,14 @@ int txgbe_suspend(struct pci_dev *pdev, pm_message_t __maybe_unused state)
 
 	if (netif_running(netdev)) {
 		rtnl_lock();
-		txgbe_down(adapter);
+		txgbevf_down(adapter);
 		txgbe_free_irq(adapter);
 		txgbe_free_all_tx_resources(adapter);
 		txgbe_free_all_rx_resources(adapter);
 		rtnl_unlock();
 	}
 
-	txgbe_clear_interrupt_scheme(adapter);
+	txgbevf_clear_interrupt_scheme(adapter);
 
 	retval = pci_save_state(pdev);
 	if (retval)
@@ -4449,12 +4449,12 @@ int txgbe_resume(struct pci_dev *pdev)
 	clear_bit(__TXGBE_DISABLED, &adapter->state);
 	pci_set_master(pdev);
 
-	txgbe_reset(adapter);
+	txgbevf_reset(adapter);
 
 	rtnl_lock();
-	err = txgbe_init_interrupt_scheme(adapter);
+	err = txgbevf_init_interrupt_scheme(adapter);
 	if (!err && netif_running(netdev))
-		err = txgbe_open(netdev);
+		err = txgbevf_open(netdev);
 	rtnl_unlock();
 	if (err)
 		return err;
@@ -4465,7 +4465,7 @@ int txgbe_resume(struct pci_dev *pdev)
 }
 
 static struct pci_driver txgbe_driver = {
-	.name     = txgbe_driver_name,
+	.name     = txgbevf_driver_name,
 	.id_table = txgbe_pci_tbl,
 	.probe    = txgbe_probe,
 	.remove   = txgbe_remove,
