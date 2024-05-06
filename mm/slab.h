@@ -211,9 +211,11 @@ static inline int cache_vmstat_idx(struct kmem_cache *s)
 #ifdef CONFIG_KIDLED
 static inline bool kidled_available_slab(struct page *page, struct kmem_cache *s)
 {
+#ifdef CONFIG_KFENCE
 	/* Do not monitor kfence memory. */
 	if (unlikely(PageKfence(page)))
 		return false;
+#endif
 
 	if (!strcmp(s->name, "inode_cache") ||
 		!strcmp(s->name, "ext4_inode_cache") ||

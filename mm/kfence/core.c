@@ -95,7 +95,7 @@ static int param_set_sample_interval(const char *val, const struct kernel_param 
 		return ret;
 
 	if (system_state == SYSTEM_BOOTING) {
-		*((unsigned long *)kp->arg) = num;
+		*((long *)kp->arg) = num;
 		return 0;
 	}
 
@@ -108,7 +108,7 @@ static int param_set_sample_interval(const char *val, const struct kernel_param 
 	if (!num) /* Using 0 to indicate KFENCE is disabled. */
 		kfence_disable();
 
-	*((unsigned long *)kp->arg) = num;
+	*((long *)kp->arg) = num;
 
 	if (!READ_ONCE(kfence_enabled))
 		kfence_init_late();
@@ -143,11 +143,22 @@ static int param_set_num_objects(const char *val, const struct kernel_param *kp)
 		return 0;
 #endif
 
-	if (READ_ONCE(kfence_enabled) || !num)
-		return -EINVAL; /* can not change num_objects when enabled */
+	if (!num)
+		return -EINVAL;
+
+	mutex_lock(&kfence_mutex);
+
+	if (READ_ONCE(kfence_enabled)) {
+		ret = -EBUSY; /* can not change num_objects when enabled */
+		goto out_unlock;
+	}
 
 	*((unsigned long *)kp->arg) = num;
-	return 0;
+	ret = 0;
+
+out_unlock:
+	mutex_unlock(&kfence_mutex);
+	return ret;
 }
 
 static int param_get_num_objects(char *buffer, const struct kernel_param *kp)
@@ -279,7 +290,6 @@ struct kfence_freelist {
 	struct kfence_freelist_cpu __percpu *cpu;
 };
 static struct kfence_freelist freelist;
-static struct irq_work __percpu *kfence_flush_work;
 static atomic_t kfence_flush_res, kfence_refkill_res;
 
 /* Gates the allocation, ensuring only one succeeds in a given period. */
@@ -467,6 +477,8 @@ get_free_meta_from_node(struct kfence_freelist_node *kfence_freelist)
 		object = list_entry(kfence_freelist->freelist.next, struct kfence_metadata, list);
 		list_del_init(&object->list);
 	}
+	if (object)
+		percpu_ref_get(&object->kpa->refcnt);
 	raw_spin_unlock_irqrestore(&kfence_freelist->lock, flags);
 
 	return object;
@@ -537,6 +549,8 @@ static struct kfence_metadata *get_free_meta(int real_node)
 		list_del_init(&object->list);
 		c->count--;
 	}
+	if (object)
+		percpu_ref_get(&object->kpa->refcnt);
 
 	put_cpu_ptr(c);
 	local_irq_restore(flags);
@@ -574,7 +588,6 @@ static inline void __init_meta(struct kfence_metadata *meta, size_t size, struct
 	/* Pairs with READ_ONCE() in kfence_shutdown_cache(). */
 	WRITE_ONCE(meta->cache, cache);
 	meta->size = size;
-	percpu_ref_get(&meta->kpa->refcnt);
 }
 
 static void put_free_meta(struct kfence_metadata *object);
@@ -711,6 +724,7 @@ static inline void put_free_meta_to_node(struct kfence_metadata *object,
 
 	raw_spin_lock_irqsave(&kfence_freelist->lock, flags);
 	list_add_tail(&object->list, &kfence_freelist->freelist);
+	percpu_ref_put(&object->kpa->refcnt);
 	raw_spin_unlock_irqrestore(&kfence_freelist->lock, flags);
 }
 
@@ -754,6 +768,8 @@ static void put_free_meta(struct kfence_metadata *object)
 
 	if (unlikely(c->count == KFENCE_FREELIST_PERCPU_SIZE * 2))
 		put_free_meta_slowpath(c, kfence_freelist);
+
+	percpu_ref_put(&object->kpa->refcnt);
 
 	put_cpu_ptr(c);
 	local_irq_restore(flags);
@@ -806,8 +822,6 @@ static inline bool __free_meta(void *addr, struct kfence_metadata *meta, bool zo
 
 	/* Mark the object as freed. */
 	metadata_update_state(meta, KFENCE_OBJECT_FREED);
-
-	percpu_ref_put(&meta->kpa->refcnt);
 
 	raw_spin_unlock_irqrestore(&meta->lock, flags);
 
@@ -884,18 +898,15 @@ static void __free_freelist(void)
 	freelist.cpu = NULL;
 	free_percpu(counters);
 	counters = NULL;
-	free_percpu(kfence_flush_work);
-	kfence_flush_work = NULL;
 }
 
-static void kfence_flush(struct irq_work *work);
 static bool __init_freelist(void)
 {
 	int i;
 
 	/*
-	 * freelist.node, freelist.cpu, counters and kfence_flush_work are
-	 * inited together, we only need to check one of them and know whether
+	 * freelist.node, freelist.cpu, counters are inited together,
+	 * we only need to check one of them and know whether
 	 * we are now in re-enabling.
 	 */
 	if (counters)
@@ -905,9 +916,8 @@ static bool __init_freelist(void)
 				      GFP_KERNEL);
 	freelist.cpu = alloc_percpu(struct kfence_freelist_cpu);
 	counters = alloc_percpu(struct kfence_counter);
-	kfence_flush_work = alloc_percpu(struct irq_work);
 
-	if (!freelist.node || !freelist.cpu || !counters || !kfence_flush_work)
+	if (!freelist.node || !freelist.cpu || !counters)
 		goto fail;
 
 	for_each_node(i) {
@@ -915,10 +925,8 @@ static bool __init_freelist(void)
 		raw_spin_lock_init(&freelist.node[i].lock);
 	}
 
-	for_each_possible_cpu(i) {
+	for_each_possible_cpu(i)
 		INIT_LIST_HEAD(&per_cpu_ptr(freelist.cpu, i)->freelist);
-		init_irq_work(per_cpu_ptr(kfence_flush_work, i), kfence_flush);
-	}
 
 	return true;
 
@@ -930,6 +938,7 @@ fail:
 static struct delayed_work kfence_timer;
 static void __start_kfence(void)
 {
+	unsigned long total_nr_objects = 0;
 	struct kfence_pool_area *kpa;
 	struct rb_node *iter;
 
@@ -941,7 +950,18 @@ static void __start_kfence(void)
 				(void *)(kpa->addr + kpa->pool_size));
 		else
 			pr_cont("\n");
+		total_nr_objects += kpa->nr_objects;
 	}
+
+	/* Update kfence_num_objects to export to /sys/module/ */
+	if (total_nr_objects > KFENCE_MAX_OBJECTS_PER_AREA)
+		kfence_num_objects = rounddown(total_nr_objects, KFENCE_MAX_OBJECTS_PER_AREA);
+	else
+		kfence_num_objects = total_nr_objects;
+
+	/* Forget upstream mode. */
+	if (kfence_num_objects_snap && total_nr_objects > kfence_num_objects_snap)
+		kfence_num_objects_snap = 0;
 
 	WRITE_ONCE(kfence_enabled, true);
 	static_branch_enable(&kfence_once_inited);
@@ -1082,6 +1102,7 @@ static inline bool __init_kpa(struct kfence_pool_area *kpa, char *__kfence_pool,
 	kpa->pool_size = pool_size;
 	kpa->nr_objects = nr_objects;
 	kpa->node = node;
+	atomic_set(&kpa->_ref, 1); /* held by rb tree */
 
 	if (!__kfence_init_pool_area(kpa))
 		goto fail;
@@ -1117,7 +1138,6 @@ static bool __init kfence_init_pool_area(int node, int area)
 
 	rb_add(&kpa->rb_node, &kfence_pool_root, kfence_rb_less);
 	__kfence_pool_area[index] = NULL;
-	kpa->on_rb_tree = true;
 	kfence_num_objects_stat[node].allocated += nr_objects;
 
 	return true;
@@ -1163,8 +1183,12 @@ static void kfence_alloc_pool_late_node(int node, struct list_head *ready, bool 
 		struct page *page;
 		struct kfence_pool_area *kpa;
 		unsigned long nr_pages = (nr_request + 1) * 2;
-
+#ifdef CONFIG_CONTIG_ALLOC
 		page = alloc_contig_pages(nr_pages, gfp_mask, node, NULL);
+#else
+		pr_warn("anolis kfence only supports enabled later with CONFIG_CONTIG_ALLOC\n");
+		page = NULL;
+#endif
 		if (!page) {
 			pr_err("kfence alloc metadata on node %d failed\n", node);
 			return;
@@ -1184,7 +1208,9 @@ static void kfence_alloc_pool_late_node(int node, struct list_head *ready, bool 
 		continue;
 
 fail:
+#ifdef CONFIG_CONTIG_ALLOC
 		free_contig_range(page_to_pfn(page), nr_pages);
+#endif
 		kfree(kpa);
 
 		return;
@@ -1204,7 +1230,20 @@ static inline void kfence_free_pool_area(struct kfence_pool_area *kpa)
 
 static inline void kfence_free_pool_late_area(struct kfence_pool_area *kpa)
 {
+#ifdef CONFIG_CONTIG_ALLOC
 	free_contig_range(page_to_pfn(virt_to_page(kpa->addr)), kpa->pool_size / PAGE_SIZE);
+#endif
+}
+
+static void get_kpa(struct kfence_pool_area *kpa)
+{
+	atomic_inc(&kpa->_ref);
+}
+
+static void put_kpa(struct kfence_pool_area *kpa)
+{
+	if (atomic_dec_and_test(&kpa->_ref))
+		kfree(kpa);
 }
 
 static int kfence_update_pool_root(void *info)
@@ -1218,7 +1257,7 @@ static int kfence_update_pool_root(void *info)
 		next = rb_next(cur);
 		if (!kpa->nr_objects) {
 			rb_erase(&kpa->rb_node, &kfence_pool_root);
-			kfree(kpa);
+			put_kpa(kpa);
 		} else {
 			percpu_ref_resurrect(&kpa->refcnt);
 		}
@@ -1227,73 +1266,91 @@ static int kfence_update_pool_root(void *info)
 	while (!list_empty(ready_list)) {
 		kpa = list_first_entry(ready_list, struct kfence_pool_area, list);
 		rb_add(&kpa->rb_node, &kfence_pool_root, kfence_rb_less);
-		kpa->on_rb_tree = true;
 		list_del(&kpa->list);
 	}
 
 	return 0;
 }
 
-/* Flush this cpu's per cpu freelist to per node freelist. */
-static inline void __kfence_flush(void)
+/*
+ * Flush this cpu's per cpu freelist to per node freelist.
+ *
+ * We don't need more sync methods to prevent race, because we can
+ * only reach here in two routes (with both kfence is disabled
+ * so no new allocatings will occur):
+ *
+ * 1) from update_kfence_node_map() when enabling kfence
+ *     Since kfence_node_map is set to NULL, the objects
+ *     will be directly freed to the per node freelist.
+ *
+ * 2) from kfence_free_area() when a kpa being released
+ *     Since the refcnt of this kpa is down to 0, no objects
+ *     from this kpa will be freed to per cpu freelist.
+ *     If some objects from other kpas are freed after this
+ *     check, it is ok because we will only free the space
+ *     of our target kpa. Just let objects from other kpas
+ *     remain in per cpu freelist.
+ */
+static inline void kfence_flush(struct kfence_freelist_cpu *c)
 {
-	struct kfence_freelist_cpu *c;
 	struct kfence_freelist_node *kfence_freelist;
 	struct kfence_metadata *meta;
 	unsigned long flags;
 
-	c = get_cpu_ptr(freelist.cpu);
-	if (list_empty(&c->freelist))
-		goto out;
+	if (list_empty(&c->freelist)) {
+		if (KFENCE_WARN_ON(c->count))
+			c->count = 0;
+		return;
+	}
 
 	meta = list_first_entry(&c->freelist, struct kfence_metadata, list);
 	kfence_freelist = &freelist.node[meta->kpa->node];
 
 	raw_spin_lock_irqsave(&kfence_freelist->lock, flags);
 	list_splice_tail_init(&c->freelist, &kfence_freelist->freelist);
-	raw_spin_unlock_irqrestore(&kfence_freelist->lock, flags);
-
-out:
 	c->count = 0;
-	put_cpu_ptr(c);
+	raw_spin_unlock_irqrestore(&kfence_freelist->lock, flags);
 }
 
 static DECLARE_WAIT_QUEUE_HEAD(kfence_flush_wait);
-
-/*
- * This function is called by kfence_flush_call() through irq_work_queue().
- * DO NOT call it directly.
- */
-static void kfence_flush(struct irq_work *work)
+static void kfence_flush_call(void *info)
 {
-	__kfence_flush();
+	struct kfence_freelist_cpu *c = get_cpu_ptr(freelist.cpu);
+
+	kfence_flush(c);
+	put_cpu_ptr(c);
 
 	if (!atomic_dec_return(&kfence_flush_res))
 		wake_up(&kfence_flush_wait);
 }
 
-static void kfence_flush_call(void *info)
-{
-	irq_work_queue(raw_cpu_ptr(kfence_flush_work));
-}
-
+static struct cpumask offline_cpus;
 /* Flush percpu freelists on all cpus and wait for return. */
-static inline bool kfence_flush_all_and_wait(void)
+static inline void kfence_flush_all_and_wait(void)
 {
+	int cpu;
+
 	cpus_read_lock();
 	atomic_set(&kfence_flush_res, num_online_cpus());
 	on_each_cpu(kfence_flush_call, NULL, 0);
+
+	cpumask_andnot(&offline_cpus, cpu_possible_mask, cpu_online_mask);
+	/* Flush offline cpus. */
+	preempt_disable();
+	for_each_cpu(cpu, &offline_cpus) {
+		kfence_flush(per_cpu_ptr(freelist.cpu, cpu));
+	}
+	preempt_enable();
 	cpus_read_unlock();
 
+wait:
 	if (sysctl_hung_task_timeout_secs) {
 		if (!wait_event_idle_timeout(kfence_flush_wait, !atomic_read(&kfence_flush_res),
 					     sysctl_hung_task_timeout_secs * HZ / 2))
-			return false;
+			goto wait;
 	} else {
 		wait_event_idle(kfence_flush_wait, !atomic_read(&kfence_flush_res));
 	}
-
-	return true;
 }
 
 static bool kfence_can_recover_tlb(struct kfence_pool_area *kpa)
@@ -1337,15 +1394,15 @@ static void kfence_free_area(struct work_struct *work)
 	unsigned long flags, i;
 	struct page *page;
 	struct kfence_pool_area *kpa = container_of(work, struct kfence_pool_area, work);
-	struct kfence_freelist_node *kfence_freelist = &freelist.node[kpa->node];
+	struct kfence_freelist_node *kfence_freelist;
 
 	mutex_lock(&kfence_mutex);
-	if (READ_ONCE(kfence_enabled))
+	if (!kpa->nr_objects || !percpu_ref_is_zero(&kpa->refcnt))
 		goto out_unlock;
 
-	if (!kfence_flush_all_and_wait())
-		goto out_unlock;
+	kfence_flush_all_and_wait();
 
+	kfence_freelist = &freelist.node[kpa->node];
 	raw_spin_lock_irqsave(&kfence_freelist->lock, flags);
 	for (i = 0; i < kpa->nr_objects; i++)
 		list_del(&kpa->meta[i].list);
@@ -1374,18 +1431,19 @@ static void kfence_free_area(struct work_struct *work)
 	percpu_ref_exit(&kpa->refcnt);
 	kpa->nr_objects = 0;
 	kpa->pool_size = 0;
-	if (!kpa->on_rb_tree)
-		kfree(kpa);
 
 out_unlock:
 	mutex_unlock(&kfence_mutex);
+	put_kpa(kpa);
 }
 
 static void kpa_release(struct percpu_ref *ref)
 {
 	struct kfence_pool_area *kpa = container_of(ref, struct kfence_pool_area, refcnt);
 
-	queue_work(system_long_wq, &kpa->work);
+	get_kpa(kpa);
+	if (!queue_work(system_long_wq, &kpa->work))
+		put_kpa(kpa);
 }
 
 static void calculate_need_alloc(void)
@@ -1437,18 +1495,14 @@ static inline bool __check_map_change(int *new_node_map)
 	return false;
 }
 
-static bool update_kfence_node_map(void)
+static void update_kfence_node_map(int *new_node_map)
 {
-	int *new_node_map = kmalloc_array(nr_node_ids, sizeof(int), GFP_KERNEL | __GFP_ZERO);
 	int *old_node_map;
 	int node;
 	enum node_states node_stat = N_CPU;
 	struct zonelist *zonelist;
 	struct zone *zone;
 	struct zoneref *z;
-
-	if (!new_node_map)
-		return false;
 
 	memset(new_node_map, -1, sizeof(int) * nr_node_ids);
 
@@ -1474,27 +1528,22 @@ static bool update_kfence_node_map(void)
 	/* It's the first time of init */
 	if (!kfence_node_map) {
 		kfence_node_map = new_node_map;
-		return true;
+		return;
 	}
 
 	if (!__check_map_change(new_node_map)) {
 		kfree(new_node_map);
-		return true;
+		return;
 	}
 
 	old_node_map = kfence_node_map;
 	kfence_node_map = NULL;
 	synchronize_rcu();
 
-	if (!kfence_flush_all_and_wait()) {
-		kfence_node_map = old_node_map;
-		kfree(new_node_map);
-		return false;
-	}
+	kfence_flush_all_and_wait();
 
 	kfence_node_map = new_node_map;
 	kfree(old_node_map);
-	return true;
 }
 
 /*
@@ -1933,31 +1982,32 @@ void __init kfence_init(void)
 	int node, area, index;
 	unsigned long nr_objects = min(kfence_num_objects, KFENCE_MAX_OBJECTS_PER_AREA);
 	unsigned long kfence_pool_size = (nr_objects + 1) * 2 * PAGE_SIZE;
+	int *new_node_map;
 
 	if (!READ_ONCE(kfence_sample_interval))
 		return;
 
 	if (!__init_freelist())
-		goto fail;
+		goto fail_alloc;
+
+	/* pre-alloc here for update_kfence_node_map() to avoid complex error handling later. */
+	new_node_map = kmalloc_array(nr_node_ids, sizeof(int), GFP_KERNEL | __GFP_ZERO);
+	if (!new_node_map)
+		goto fail_alloc;
 
 	if (!kfence_init_pool()) {
 		pr_err("%s failed on all nodes!\n", __func__);
-		goto fail;
+		goto fail_node_map;
 	}
 
-	if (!update_kfence_node_map()) {
-		struct kfence_pool_area *kpa;
-		struct rb_node *iter;
-
-		kfence_for_each_area(kpa, iter)
-			percpu_ref_kill(&kpa->refcnt);
-		goto fail;
-	}
+	update_kfence_node_map(new_node_map);
 
 	__start_kfence();
 	goto out;
 
-fail:
+fail_node_map:
+	kfree(new_node_map);
+fail_alloc:
 	for_each_node(node) {
 		for (area = 0; area < kfence_nr_areas_per_node; area++) {
 			index = kfence_nr_areas_per_node * node + area;
@@ -1984,7 +2034,7 @@ void kfence_init_late(void)
 	LIST_HEAD(ready_list);
 	struct kfence_pool_area *kpa;
 	struct rb_node *iter;
-	bool ret;
+	int *new_node_map;
 
 	if (!READ_ONCE(kfence_sample_interval))
 		return;
@@ -2005,10 +2055,8 @@ void kfence_init_late(void)
 	 * Keep upstream mode remaining the same.
 	 * Otherwise we "forget" the upstream version whose pool size < 1GiB.
 	 */
-	if (kfence_num_objects > kfence_num_objects_snap || kfence_pool_node_mode) {
+	if (kfence_num_objects > kfence_num_objects_snap || kfence_pool_node_mode)
 		kfence_num_objects = roundup(kfence_num_objects, KFENCE_MAX_OBJECTS_PER_AREA);
-		kfence_num_objects_snap = 0;
-	}
 
 	if (kfence_num_objects < KFENCE_MAX_OBJECTS_PER_AREA && kfence_sample_interval < 0)
 		goto fail;
@@ -2016,10 +2064,15 @@ void kfence_init_late(void)
 	if (!__init_freelist())
 		goto fail;
 
+	/* pre-alloc here for update_kfence_node_map() to avoid complex error handling later. */
+	new_node_map = kmalloc_array(nr_node_ids, sizeof(int), GFP_KERNEL | __GFP_ZERO);
+	if (!new_node_map)
+		goto fail;
+
 	kfence_num_objects_stat = kmalloc_array(nr_node_ids, sizeof(struct kfence_alloc_node_cond),
 						GFP_KERNEL | __GFP_ZERO);
 	if (!kfence_num_objects_stat)
-		goto fail;
+		goto fail_node_map;
 
 	calculate_need_alloc();
 
@@ -2039,18 +2092,9 @@ void kfence_init_late(void)
 	for_each_node(node)
 		kfence_alloc_pool_late_node(node, &ready_list, true);
 
-	ret = update_kfence_node_map();
+	update_kfence_node_map(new_node_map);
 	kfree(kfence_num_objects_stat);
 	kfence_num_objects_stat = NULL;
-
-	if (!ret) {
-		while (!list_empty(&ready_list)) {
-			kpa = list_first_entry(&ready_list, struct kfence_pool_area, list);
-			list_del(&kpa->list);
-			percpu_ref_kill(&kpa->refcnt);
-		}
-		goto fail;
-	}
 
 	stop_machine(kfence_update_pool_root, &ready_list, NULL);
 
@@ -2060,6 +2104,8 @@ void kfence_init_late(void)
 	__start_kfence();
 	goto out;
 
+fail_node_map:
+	kfree(new_node_map);
 fail:
 	WRITE_ONCE(kfence_sample_interval, 0);
 out:
