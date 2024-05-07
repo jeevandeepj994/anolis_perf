@@ -6394,14 +6394,8 @@ txgbe_features_check(struct sk_buff *skb, struct net_device *dev,
 
 static netdev_features_t txgbe_fix_features(struct net_device *netdev, netdev_features_t features)
 {
-	struct txgbe_adapter *adapter = netdev_priv(netdev);
-
 	/* If Rx checksum is disabled, then RSC/LRO should also be disabled */
 	if (!(features & NETIF_F_RXCSUM))
-		features &= ~NETIF_F_LRO;
-
-	/* Turn off LRO if not RSC capable */
-	if (!(adapter->flags2 & TXGBE_FLAG2_RSC_CAPABLE))
 		features &= ~NETIF_F_LRO;
 
 	if (!(features & NETIF_F_HW_VLAN_CTAG_RX))
