@@ -624,10 +624,7 @@ static int txgbe_set_link_ksettings(struct net_device *netdev,
 			curr_autoneg = txgbe_rd32_epcs(hw, TXGBE_SR_MII_MMD_CTL);
 			curr_autoneg = !!(curr_autoneg & (0x1 << 12));
 			if (old == advertised && curr_autoneg == adapter->an37)
-				return err;
-		} else {
-			if (old == advertised)
-				return err;
+				return -EINVAL;
 		}
 		/* this sets the link speed and restarts auto-neg */
 		while (test_and_set_bit(__TXGBE_IN_SFP_INIT, &adapter->state))
@@ -661,7 +658,7 @@ static int txgbe_set_link_ksettings(struct net_device *netdev,
 							  10000baseKR_Full)) {
 			err = txgbe_set_link_to_kr(hw, 1);
 			advertised |= TXGBE_LINK_SPEED_10GB_FULL;
-			return err;
+
 		} else if (ethtool_link_ksettings_test_link_mode(cmd, advertising,
 							  10000baseKX4_Full)) {
 			err = txgbe_set_link_to_kx4(hw, 1);
