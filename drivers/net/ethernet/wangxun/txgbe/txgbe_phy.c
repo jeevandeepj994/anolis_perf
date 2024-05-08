@@ -288,8 +288,8 @@ s32 txgbe_init_i2c(struct txgbe_hw *hw)
 	      TXGBE_I2C_CON_SLAVE_DISABLE));
 	/* Default addr is 0xA0 ,bit 0 is configure for read/write! */
 	wr32(hw, TXGBE_I2C_TAR, TXGBE_I2C_SLAVE_ADDR);
-	wr32(hw, TXGBE_I2C_SS_SCL_HCNT, 600);
-	wr32(hw, TXGBE_I2C_SS_SCL_LCNT, 600);
+	wr32(hw, TXGBE_I2C_SS_SCL_HCNT, 780);
+	wr32(hw, TXGBE_I2C_SS_SCL_LCNT, 780);
 	wr32(hw, TXGBE_I2C_RX_TL, 0); /* 1byte for rx full signal */
 	wr32(hw, TXGBE_I2C_TX_TL, 4);
 	wr32(hw, TXGBE_I2C_SCL_STUCK_TIMEOUT, 0xFFFFFF);
