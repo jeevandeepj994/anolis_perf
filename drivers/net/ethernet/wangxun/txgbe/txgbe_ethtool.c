@@ -2545,6 +2545,13 @@ static int txgbe_set_coalesce(struct net_device *netdev,
 	u16  tx_itr_prev;
 	bool need_reset = false;
 
+	if (ec->tx_max_coalesced_frames_irq == adapter->tx_work_limit &&
+	    adapter->rx_itr_setting <= 1 ? ec->rx_coalesce_usecs == adapter->rx_itr_setting :
+	    ec->rx_coalesce_usecs == adapter->rx_itr_setting >> 2) {
+		e_info(probe, "no coalesce parameters changed, aborting\n");
+		return -EINVAL;
+	}
+
 	if (adapter->q_vector[0]->tx.count && adapter->q_vector[0]->rx.count) {
 		/* reject Tx specific changes in case of mixed RxTx vectors */
 		if (ec->tx_coalesce_usecs)
