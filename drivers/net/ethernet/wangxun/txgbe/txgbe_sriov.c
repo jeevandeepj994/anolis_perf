@@ -1434,7 +1434,7 @@ int txgbe_ndo_set_vf_vlan(struct net_device *netdev, int vf, u16 vlan,
 	if (vf >= adapter->num_vfs || vlan > VLAN_VID_MASK - 1 || qos > 7)
 		return -EINVAL;
 
-	if (vlan_proto != htons(ETH_P_8021Q))
+	if (vlan_proto != htons(ETH_P_8021Q)  && vlan_proto != htons(ETH_P_8021AD))
 		return -EPROTONOSUPPORT;
 
 	if (vlan || qos) {
