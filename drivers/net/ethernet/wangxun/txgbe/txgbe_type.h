@@ -1892,8 +1892,8 @@ enum txgbe_l2_ptypes {
 #define TXGBE_TXD_TUNNEL_GRE            (0x1ULL << TXGBE_TXD_TUNNEL_TYPE_SHIFT)
 
 /* Number of Transmit and Receive Descriptors must be a multiple of 8 */
-#define TXGBE_REQ_TX_DESCRIPTOR_MULTIPLE        8
-#define TXGBE_REQ_RX_DESCRIPTOR_MULTIPLE        8
+#define TXGBE_REQ_TX_DESCRIPTOR_MULTIPLE        128
+#define TXGBE_REQ_RX_DESCRIPTOR_MULTIPLE        128
 
 /* Transmit Descriptor */
 union txgbe_tx_desc {
