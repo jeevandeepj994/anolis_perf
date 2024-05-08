@@ -3577,7 +3577,7 @@ static void txgbe_up_complete(struct txgbe_adapter *adapter)
 	 */
 	adapter->flags |= TXGBE_FLAG_NEED_LINK_UPDATE;
 	adapter->link_check_timeout = jiffies;
-
+	hw->f2c_mod_status = false;
 	mod_timer(&adapter->service_timer, jiffies);
 
 	if (hw->bus.lan_id == 0) {
@@ -3843,6 +3843,9 @@ void txgbe_disable_device(struct txgbe_adapter *adapter)
 	adapter->flags &= ~TXGBE_FLAG_NEED_LINK_UPDATE;
 
 	del_timer_sync(&adapter->service_timer);
+
+	hw->f2c_mod_status = false;
+	cancel_work_sync(&adapter->sfp_sta_task);
 
 	if (hw->bus.lan_id == 0)
 		wr32m(hw, TXGBE_MIS_PRB_CTL, TXGBE_MIS_PRB_CTL_LAN0_UP, 0);
@@ -5235,6 +5238,53 @@ static void txgbe_sfp_link_config_subtask(struct txgbe_adapter *adapter)
 	clear_bit(__TXGBE_IN_SFP_INIT, &adapter->state);
 }
 
+static void txgbe_sfp_phy_status_work(struct work_struct *work)
+{
+	struct txgbe_adapter *adapter = container_of(work,
+						     struct txgbe_adapter,
+						     sfp_sta_task);
+	struct txgbe_hw *hw = &adapter->hw;
+	u16 data = 0;
+	bool status = false;
+	s32 i2c_status;
+	u32 swfw_mask = hw->phy.phy_semaphore_mask;
+
+	if (TCALL(hw, mac.ops.acquire_swfw_sync, swfw_mask) != 0)
+		return;
+
+	if (hw->phy.sfp_type == txgbe_sfp_type_1g_cu_core0 ||
+	    hw->phy.sfp_type == txgbe_sfp_type_1g_cu_core1) {
+		i2c_status = TCALL(hw, phy.ops.read_i2c_sfp_phy,
+				   0x0a,
+					 &data);
+
+		if (i2c_status != 0)
+			goto RELEASE_SEM;
+
+		/* Avoid read module info and read f2c module internal phy
+		 * may cause i2c controller read reg data err
+		 */
+		if ((data & 0x83ff) != 0 || data == 0)
+			goto RELEASE_SEM;
+
+		if ((data & TXGBE_I2C_PHY_LOCAL_RX_STATUS) &&
+		    (data & TXGBE_I2C_PHY_REMOTE_RX_STATUS))
+			status = true;
+		else
+			status = false;
+	}
+
+RELEASE_SEM:
+	TCALL(hw, mac.ops.release_swfw_sync, swfw_mask);
+	/* sync sfp status to firmware */
+	wr32(hw, TXGBE_TSC_LSEC_PKTNUM0, data | 0x80000000);
+
+	if (hw->f2c_mod_status != status) {
+		hw->f2c_mod_status = status;
+		adapter->flags |= TXGBE_FLAG_NEED_LINK_UPDATE;
+	}
+}
+
 static void txgbe_service_timer(struct timer_list *t)
 {
 	struct txgbe_adapter *adapter = from_timer(adapter, t, service_timer);
@@ -5255,6 +5305,12 @@ static void txgbe_service_timer(struct timer_list *t)
 	mod_timer(&adapter->service_timer, next_event_offset + jiffies);
 
 	txgbe_service_event_schedule(adapter);
+
+	if (hw->phy.sfp_type == txgbe_sfp_type_1g_cu_core0 ||
+	    hw->phy.sfp_type == txgbe_sfp_type_1g_cu_core1) {
+		next_event_offset = HZ / 10;
+		queue_work(txgbe_wq, &adapter->sfp_sta_task);
+	}
 }
 
 static void txgbe_reset_subtask(struct txgbe_adapter *adapter)
@@ -6900,6 +6956,7 @@ static int txgbe_probe(struct pci_dev *pdev,
 		goto err_free_mac_table;
 	}
 	INIT_WORK(&adapter->service_task, txgbe_service_task);
+	INIT_WORK(&adapter->sfp_sta_task, txgbe_sfp_phy_status_work);
 	set_bit(__TXGBE_SERVICE_INITED, &adapter->state);
 	clear_bit(__TXGBE_SERVICE_SCHED, &adapter->state);
 
