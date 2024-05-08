@@ -2184,6 +2184,10 @@ static int txgbe_run_loopback_test(struct txgbe_adapter *adapter)
 
 static int txgbe_loopback_test(struct txgbe_adapter *adapter, u64 *data)
 {
+	/* Let firmware know the driver has taken over */
+	wr32m(&adapter->hw, TXGBE_CFG_PORT_CTL,
+	      TXGBE_CFG_PORT_CTL_DRV_LOAD, TXGBE_CFG_PORT_CTL_DRV_LOAD);
+
 	*data = txgbe_setup_desc_rings(adapter);
 	if (*data)
 		goto out;
@@ -2204,6 +2208,10 @@ static int txgbe_loopback_test(struct txgbe_adapter *adapter, u64 *data)
 err_loopback:
 	txgbe_free_desc_rings(adapter);
 out:
+	/* Let firmware take over control of h/w */
+	wr32m(&adapter->hw, TXGBE_CFG_PORT_CTL,
+	      TXGBE_CFG_PORT_CTL_DRV_LOAD, 0);
+
 	return *data;
 }
 
