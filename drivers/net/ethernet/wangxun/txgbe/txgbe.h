@@ -594,6 +594,7 @@ struct txgbe_adapter {
 
 	struct timer_list service_timer;
 	struct work_struct service_task;
+	struct work_struct sfp_sta_task;
 	struct hlist_head fdir_filter_list;
 	unsigned long fdir_overflow; /* number of times ATR was backed off */
 	union txgbe_atr_input fdir_mask;

@@ -3431,20 +3431,27 @@ static int txgbe_get_module_info(struct net_device *dev,
 	u32 status;
 	u8 sff8472_rev, addr_mode;
 	bool page_swap = false;
+	u32 swfw_mask = hw->phy.phy_semaphore_mask;
+
+	if (TCALL(hw, mac.ops.acquire_swfw_sync, swfw_mask) != 0)
+		return -EBUSY;
+
+	if (!test_bit(__TXGBE_DOWN, &adapter->state))
+		cancel_work_sync(&adapter->sfp_sta_task);
 
 	/* Check whether we support SFF-8472 or not */
 	status = TCALL(hw, phy.ops.read_i2c_eeprom,
 		       TXGBE_SFF_SFF_8472_COMP,
 		       &sff8472_rev);
 	if (status != 0)
-		return -EIO;
+		goto ERROR_IO;
 
 	/* addressing mode is not supported */
 	status = TCALL(hw, phy.ops.read_i2c_eeprom,
 		       TXGBE_SFF_SFF_8472_SWAP,
 		       &addr_mode);
 	if (status != 0)
-		return -EIO;
+		goto ERROR_IO;
 
 	if (addr_mode & TXGBE_SFF_ADDRESSING_MODE) {
 		netif_err(adapter, drv, dev,
@@ -3452,7 +3459,8 @@ static int txgbe_get_module_info(struct net_device *dev,
 		page_swap = true;
 	}
 
-	if (sff8472_rev == TXGBE_SFF_SFF_8472_UNSUP || page_swap) {
+	if (sff8472_rev == TXGBE_SFF_SFF_8472_UNSUP || page_swap ||
+	    !(addr_mode & TXGBE_SFF_DDM_IMPLEMENTED)) {
 		/* We have a SFP, but it does not support SFF-8472 */
 		modinfo->type = ETH_MODULE_SFF_8079;
 		modinfo->eeprom_len = ETH_MODULE_SFF_8079_LEN;
@@ -3462,7 +3470,12 @@ static int txgbe_get_module_info(struct net_device *dev,
 		modinfo->eeprom_len = ETH_MODULE_SFF_8472_LEN;
 	}
 
+	TCALL(hw, mac.ops.release_swfw_sync, swfw_mask);
+
 	return 0;
+ERROR_IO:
+	TCALL(hw, mac.ops.release_swfw_sync, swfw_mask);
+	return -EIO;
 }
 
 static int txgbe_get_module_eeprom(struct net_device *dev,
@@ -3474,14 +3487,21 @@ static int txgbe_get_module_eeprom(struct net_device *dev,
 	u32 status = TXGBE_ERR_PHY_ADDR_INVALID;
 	u8 databyte = 0xFF;
 	int i = 0;
+	u32 swfw_mask = hw->phy.phy_semaphore_mask;
+
+	if (TCALL(hw, mac.ops.acquire_swfw_sync, swfw_mask) != 0)
+		return -EBUSY;
+
+	if (!test_bit(__TXGBE_DOWN, &adapter->state))
+		cancel_work_sync(&adapter->sfp_sta_task);
 
 	if (ee->len == 0)
-		return -EINVAL;
+		goto ERROR_INVAL;
 
 	for (i = ee->offset; i < ee->offset + ee->len; i++) {
 		/* I2C reads can take long time */
 		if (test_bit(__TXGBE_IN_SFP_INIT, &adapter->state))
-			return -EBUSY;
+			goto ERROR_BUSY;
 
 		if (i < ETH_MODULE_SFF_8079_LEN)
 			status = TCALL(hw, phy.ops.read_i2c_eeprom, i,
@@ -3491,12 +3511,24 @@ static int txgbe_get_module_eeprom(struct net_device *dev,
 				       &databyte);
 
 		if (status != 0)
-			return -EIO;
+			goto ERROR_IO;
 
 		data[i - ee->offset] = databyte;
 	}
 
+	TCALL(hw, mac.ops.release_swfw_sync, swfw_mask);
+
 	return 0;
+
+ERROR_INVAL:
+	TCALL(hw, mac.ops.release_swfw_sync, swfw_mask);
+	return -EINVAL;
+ERROR_BUSY:
+	TCALL(hw, mac.ops.release_swfw_sync, swfw_mask);
+	return -EBUSY;
+ERROR_IO:
+	TCALL(hw, mac.ops.release_swfw_sync, swfw_mask);
+	return -EIO;
 }
 
 static int txgbe_set_flash(struct net_device *netdev, struct ethtool_flash *ef)

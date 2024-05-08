@@ -2557,6 +2557,7 @@ struct txgbe_phy_operations {
 				u8 *sff8472_data);
 	s32 (*read_i2c_eeprom)(struct txgbe_hw *hw, u8 byte_offset,
 			       u8 *eeprom_data);
+	s32 (*read_i2c_sfp_phy)(struct txgbe_hw *hw, u16 byte_offset, u16 *data);
 	s32 (*check_overtemp)(struct txgbe_hw *hw);
 };
 
@@ -2678,6 +2679,7 @@ struct txgbe_hw {
 	u16 tpid[8];
 	u16 oem_ssid;
 	u16 oem_svid;
+	bool f2c_mod_status;
 };
 
 struct txgbe_hic_write_lldp {
