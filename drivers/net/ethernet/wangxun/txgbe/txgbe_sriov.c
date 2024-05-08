@@ -1026,6 +1026,31 @@ static int txgbe_get_vf_link_state(struct txgbe_adapter *adapter,
 	return 0;
 }
 
+static int txgbe_get_fw_version(struct txgbe_adapter *adapter,
+				u32 *msgbuf, u32 vf)
+{
+	unsigned long *fw_version = (unsigned long *)&msgbuf[1];
+	int ret;
+
+	/* verify the PF is supporting the correct API */
+	switch (adapter->vfinfo[vf].vf_api) {
+	case txgbe_mbox_api_12:
+	case txgbe_mbox_api_13:
+		break;
+	default:
+		return -EOPNOTSUPP;
+	}
+
+	ret = kstrtoul(adapter->eeprom_id, 16, fw_version);
+	if (ret < 0)
+		return ret;
+
+	if (*fw_version == 0)
+		return -EOPNOTSUPP;
+
+	return 0;
+}
+
 static int txgbe_rcv_msg_from_vf(struct txgbe_adapter *adapter, u16 vf)
 {
 	u16 mbx_size = TXGBE_VXMAILBOX_SIZE;
@@ -1091,6 +1116,9 @@ static int txgbe_rcv_msg_from_vf(struct txgbe_adapter *adapter, u16 vf)
 		break;
 	case TXGBE_VF_GET_LINK_STATE:
 		retval = txgbe_get_vf_link_state(adapter, msgbuf, vf);
+		break;
+	case TXGBE_VF_GET_FW_VERSION:
+		retval = txgbe_get_fw_version(adapter, msgbuf, vf);
 		break;
 	case TXGBE_VF_BACKUP:
 #ifdef CONFIG_PCI_IOV
