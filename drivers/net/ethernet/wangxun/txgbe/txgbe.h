@@ -444,6 +444,7 @@ struct txgbe_mac_addr {
 #define TXGBE_FLAG2_EEE_CAPABLE                 BIT(14)
 #define TXGBE_FLAG2_EEE_ENABLED                 BIT(15)
 #define TXGBE_FLAG2_VXLAN_REREG_NEEDED          BIT(16)
+#define TXGBE_FLAG2_VLAN_PROMISC                BIT(17)
 #define TXGBE_FLAG2_DEV_RESET_REQUESTED         BIT(18)
 #define TXGBE_FLAG2_RESET_INTR_RECEIVED         BIT(19)
 #define TXGBE_FLAG2_GLOBAL_RESET_REQUESTED      BIT(20)
