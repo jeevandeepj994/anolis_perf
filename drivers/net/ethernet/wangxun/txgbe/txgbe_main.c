@@ -2509,7 +2509,7 @@ static int txgbe_vlan_rx_add_vid(struct net_device *netdev,
 	int pool_ndx = VMDQ_P(0);
 
 	/* add VID to filter table */
-	if (hw->mac.ops.set_vfta)
+	if (!vid || !(adapter->flags2 & TXGBE_FLAG2_VLAN_PROMISC))
 		TCALL(hw, mac.ops.set_vfta, vid, pool_ndx, true);
 
 	if (adapter->flags & TXGBE_FLAG_VMDQ_ENABLED) {
@@ -2535,7 +2535,8 @@ static int txgbe_vlan_rx_kill_vid(struct net_device *netdev,
 
 	/* remove VID from filter table */
 	if (hw->mac.ops.set_vfta) {
-		TCALL(hw, mac.ops.set_vfta, vid, pool_ndx, false);
+		if (vid && !(adapter->flags2 & TXGBE_FLAG2_VLAN_PROMISC))
+			TCALL(hw, mac.ops.set_vfta, vid, pool_ndx, false);
 		if (adapter->flags & TXGBE_FLAG_VMDQ_ENABLED) {
 			int i;
 			/* remove vlan id from all pools */
@@ -2549,6 +2550,128 @@ static int txgbe_vlan_rx_kill_vid(struct net_device *netdev,
 	clear_bit(vid, adapter->active_vlans);
 
 	return 0;
+}
+
+static void txgbe_vlan_promisc_enable(struct txgbe_adapter *adapter)
+{
+	struct txgbe_hw *hw = &adapter->hw;
+	u32 vlnctrl, i;
+	u32 vlvfb;
+	u32 vind;
+	u32 bits;
+
+	vlnctrl = rd32(hw, TXGBE_PSR_VLAN_CTL);
+
+	if (adapter->flags & TXGBE_FLAG_VMDQ_ENABLED) {
+	/* we need to keep the VLAN filter on in SRIOV */
+		vlnctrl |= TXGBE_PSR_VLAN_CTL_VFE;
+		wr32(hw, TXGBE_PSR_VLAN_CTL, vlnctrl);
+	} else {
+		vlnctrl &= ~TXGBE_PSR_VLAN_CTL_VFE;
+		wr32(hw, TXGBE_PSR_VLAN_CTL, vlnctrl);
+		return;
+	}
+
+	/* We are already in VLAN promisc, nothing to do */
+	if (adapter->flags2 & TXGBE_FLAG2_VLAN_PROMISC)
+		return;
+
+	/* Set flag so we don't redo unnecessary work */
+	adapter->flags2 |= TXGBE_FLAG2_VLAN_PROMISC;
+
+	/* Add PF to all active pools */
+	vind = VMDQ_P(0);
+	for (i = TXGBE_PSR_VLAN_SWC_ENTRIES; --i;) {
+		wr32(hw, TXGBE_PSR_VLAN_SWC_IDX, i);
+		vlvfb = rd32(hw, TXGBE_PSR_VLAN_SWC_IDX);
+
+		if (vind < 32) {
+			bits = rd32(hw,
+				    TXGBE_PSR_VLAN_SWC_VM_L);
+			bits |= (1 << vind);
+			wr32(hw,
+			     TXGBE_PSR_VLAN_SWC_VM_L,
+					bits);
+		} else {
+			bits = rd32(hw,
+				    TXGBE_PSR_VLAN_SWC_VM_H);
+			bits |= (1 << (vind - 32));
+			wr32(hw,
+			     TXGBE_PSR_VLAN_SWC_VM_H,
+				bits);
+		}
+	}
+
+	/* Set all bits in the VLAN filter table array */
+	for (i = 0; i < hw->mac.vft_size; i++)
+		wr32(hw, TXGBE_PSR_VLAN_TBL(i), ~0U);
+}
+
+static void txgbe_scrub_vfta(struct txgbe_adapter *adapter)
+{
+	struct txgbe_hw *hw = &adapter->hw;
+	u32 i, vid, bits;
+	u32 vfta;
+	u32 vind;
+	u32 vlvf;
+
+	for (i = TXGBE_PSR_VLAN_SWC_ENTRIES; --i;) {
+		wr32(hw, TXGBE_PSR_VLAN_SWC_IDX, i);
+		vlvf = rd32(hw, TXGBE_PSR_VLAN_SWC_IDX);
+
+		/* pull VLAN ID from VLVF */
+		vid = vlvf & ~TXGBE_PSR_VLAN_SWC_VIEN;
+
+		if (vlvf & TXGBE_PSR_VLAN_SWC_VIEN) {
+			/* if PF is part of this then continue */
+			if (test_bit(vid, adapter->active_vlans))
+				continue;
+		}
+
+		/* remove PF from the pool */
+		vind = VMDQ_P(0);
+		if (vind < 32) {
+			bits = rd32(hw,
+				    TXGBE_PSR_VLAN_SWC_VM_L);
+			bits &= ~(1 << vind);
+			wr32(hw,
+			     TXGBE_PSR_VLAN_SWC_VM_L,
+					bits);
+		} else {
+			bits = rd32(hw,
+				    TXGBE_PSR_VLAN_SWC_VM_H);
+			bits &= ~(1 << (vind - 32));
+			wr32(hw,
+			     TXGBE_PSR_VLAN_SWC_VM_H,
+				bits);
+		}
+	}
+
+	/* extract values from vft_shadow and write back to VFTA */
+	for (i = 0; i < hw->mac.vft_size; i++) {
+		vfta = hw->mac.vft_shadow[i];
+		wr32(hw, TXGBE_PSR_VLAN_TBL(i), vfta);
+	}
+}
+
+static void txgbe_vlan_promisc_disable(struct txgbe_adapter *adapter)
+{
+	struct txgbe_hw *hw = &adapter->hw;
+	u32 vlnctrl;
+
+	/* configure vlan filtering */
+	vlnctrl = rd32(hw, TXGBE_PSR_VLAN_CTL);
+	vlnctrl |= TXGBE_PSR_VLAN_CTL_VFE;
+	wr32(hw, TXGBE_PSR_VLAN_CTL, vlnctrl);
+
+	/* We are not in VLAN promisc, nothing to do */
+	if (!(adapter->flags2 & TXGBE_FLAG2_VLAN_PROMISC))
+		return;
+
+	/* Set flag so we don't redo unnecessary work */
+	adapter->flags2 &= ~TXGBE_FLAG2_VLAN_PROMISC;
+
+	txgbe_scrub_vfta(adapter);
 }
 
 /**
@@ -2858,6 +2981,7 @@ void txgbe_set_rx_mode(struct net_device *netdev)
 	struct txgbe_hw *hw = &adapter->hw;
 	u32 fctrl, vmolr, vlnctrl;
 	int count;
+	netdev_features_t features = netdev->features;
 
 	/* Check for Promiscuous and All Multicast modes */
 	fctrl = rd32m(hw, TXGBE_PSR_CTL,
@@ -2876,7 +3000,6 @@ void txgbe_set_rx_mode(struct net_device *netdev)
 	vmolr |= TXGBE_PSR_VM_L2CTL_BAM |
 		 TXGBE_PSR_VM_L2CTL_AUPE |
 		 TXGBE_PSR_VM_L2CTL_VACC;
-	vlnctrl |= TXGBE_PSR_VLAN_CTL_VFE;
 
 	hw->addr_ctrl.user_set_promisc = false;
 	if (netdev->flags & IFF_PROMISC) {
@@ -2885,6 +3008,12 @@ void txgbe_set_rx_mode(struct net_device *netdev)
 		/* pf don't want packets routing to vf, so clear UPE */
 		vmolr |= TXGBE_PSR_VM_L2CTL_MPE;
 		vlnctrl &= ~TXGBE_PSR_VLAN_CTL_VFE;
+
+		if ((adapter->flags & (TXGBE_FLAG_VMDQ_ENABLED |
+				TXGBE_FLAG_SRIOV_ENABLED)))
+			vlnctrl |= TXGBE_PSR_VLAN_CTL_VFE;
+		features &= ~NETIF_F_HW_VLAN_CTAG_FILTER;
+		features &= ~NETIF_F_HW_VLAN_STAG_FILTER;
 	}
 
 	if (netdev->flags & IFF_ALLMULTI) {
@@ -2924,14 +3053,17 @@ void txgbe_set_rx_mode(struct net_device *netdev)
 		vmolr |= TXGBE_PSR_VM_L2CTL_MPE;
 	}
 
-	wr32(hw, TXGBE_PSR_VLAN_CTL, vlnctrl);
 	wr32(hw, TXGBE_PSR_CTL, fctrl);
 	wr32(hw, TXGBE_PSR_VM_L2CTL(VMDQ_P(0)), vmolr);
 
-	if (netdev->features & NETIF_F_HW_VLAN_CTAG_RX)
-		txgbe_vlan_strip_enable(adapter);
+	if (features & NETIF_F_HW_VLAN_CTAG_FILTER)
+		txgbe_vlan_promisc_disable(adapter);
 	else
-		txgbe_vlan_strip_disable(adapter);
+		txgbe_vlan_promisc_enable(adapter);
+	if (features & NETIF_F_HW_VLAN_STAG_FILTER)
+		txgbe_vlan_promisc_disable(adapter);
+	else
+		txgbe_vlan_promisc_enable(adapter);
 }
 
 static void txgbe_napi_enable_all(struct txgbe_adapter *adapter)
@@ -3194,6 +3326,8 @@ static void txgbe_configure_virtualization(struct txgbe_adapter *adapter)
 	wr32(hw, TXGBE_RDM_VF_RE(reg_offset ^ 1), reg_offset - 1);
 	wr32(hw, TXGBE_TDM_VF_TE(reg_offset), (~0) << vf_shift);
 	wr32(hw, TXGBE_TDM_VF_TE(reg_offset ^ 1), reg_offset - 1);
+
+	adapter->flags2 &= ~TXGBE_FLAG2_VLAN_PROMISC;
 
 	if (!(adapter->flags & TXGBE_FLAG_SRIOV_ENABLED))
 		return;
@@ -6412,6 +6546,7 @@ static int txgbe_set_features(struct net_device *netdev, netdev_features_t featu
 {
 	struct txgbe_adapter *adapter = netdev_priv(netdev);
 	bool need_reset = false;
+	netdev_features_t changed = netdev->features ^ features;
 
 	/* Make sure RSC matches LRO, reset if change */
 	if (!(features & NETIF_F_LRO)) {
@@ -6468,11 +6603,6 @@ static int txgbe_set_features(struct net_device *netdev, netdev_features_t featu
 		break;
 	}
 
-	if (features & NETIF_F_HW_VLAN_CTAG_RX && features & NETIF_F_HW_VLAN_STAG_RX)
-		txgbe_vlan_strip_enable(adapter);
-	else
-		txgbe_vlan_strip_disable(adapter);
-
 	if (features & NETIF_F_RXHASH) {
 		if (!(adapter->flags2 & TXGBE_FLAG2_RSS_ENABLED)) {
 			wr32m(&adapter->hw, TXGBE_RDB_RA_CTL,
@@ -6487,8 +6617,15 @@ static int txgbe_set_features(struct net_device *netdev, netdev_features_t featu
 		}
 	}
 
+	netdev->features = features;
+
+	if (changed & NETIF_F_HW_VLAN_CTAG_RX)
+		need_reset = true;
+
 	if (need_reset)
 		txgbe_do_reset(netdev);
+	else if (changed & NETIF_F_HW_VLAN_CTAG_FILTER)
+		txgbe_set_rx_mode(netdev);
 
 	return 0;
 }
@@ -6720,6 +6857,7 @@ static int txgbe_probe(struct pci_dev *pdev,
 
 	/* set this bit last since it cannot be part of vlan_features */
 	netdev->features |= NETIF_F_HW_VLAN_CTAG_FILTER |
+				NETIF_F_HW_VLAN_STAG_FILTER |
 			    NETIF_F_HW_VLAN_CTAG_RX |
 			    NETIF_F_HW_VLAN_CTAG_TX;
 
