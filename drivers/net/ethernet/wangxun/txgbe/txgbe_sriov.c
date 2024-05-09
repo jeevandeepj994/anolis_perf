@@ -213,15 +213,14 @@ void txgbe_enable_sriov(struct txgbe_adapter *adapter)
 			 "Virtual Functions already enabled for this device\n");
 	} else {
 		int err;
-		int match;
 		/* The sapphire supports up to 64 VFs per physical function
 		 * but this implementation limits allocation to 63 so that
 		 * basic networking resources are still available to the
 		 * physical function.  If the user requests greater thn
 		 * 63 VFs then it is an error - reset to default of zero.
 		 */
-		match = min_t(unsigned int, adapter->vf_mode, TXGBE_MAX_VFS_DRV_LIMIT);
-		adapter->num_vfs = min_t(unsigned int, adapter->num_vfs, match);
+		adapter->num_vfs = min_t(unsigned int, adapter->num_vfs,
+					 TXGBE_MAX_VFS_DRV_LIMIT);
 
 		err = pci_enable_sriov(adapter->pdev, adapter->num_vfs);
 		if (err) {
@@ -602,12 +601,7 @@ static int txgbe_get_vf_queues(struct txgbe_adapter *adapter,
 		msgbuf[TXGBE_VF_TRANS_VLAN] = 0;
 
 	/* notify VF of default queue */
-	if (adapter->vf_mode == 63)
-		msgbuf[TXGBE_VF_DEF_QUEUE] = default_tc;
-	else if (adapter->vf_mode == 31)
-		msgbuf[TXGBE_VF_DEF_QUEUE] = 4;
-	else
-		msgbuf[TXGBE_VF_DEF_QUEUE] = default_tc;
+	msgbuf[TXGBE_VF_DEF_QUEUE] = default_tc;
 
 	return 0;
 }
