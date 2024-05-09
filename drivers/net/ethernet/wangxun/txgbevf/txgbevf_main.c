@@ -1383,6 +1383,7 @@ void txgbe_set_num_queues(struct txgbe_adapter *adapter)
 	unsigned int num_tcs = 0;
 	int err;
 	u16 rss;
+	u16 queue;
 
 	/* Start with base case */
 	adapter->num_rx_queues = 1;
@@ -1402,10 +1403,9 @@ void txgbe_set_num_queues(struct txgbe_adapter *adapter)
 	if (num_tcs > 1) {
 		adapter->num_rx_queues = num_tcs;
 	} else {
-		if (def_q == 4)
-			rss = min_t(u16, num_online_cpus(), 4);
-		else
-			rss = min_t(u16, num_online_cpus(), 2);
+		rss = min_t(u16, num_online_cpus(), TXGBE_MAX_RSS_QUEUES);
+		queue = min_t(u16, hw->mac.max_rx_queues, hw->mac.max_tx_queues);
+		rss = min_t(u16, queue, rss);
 
 		switch (hw->api_version) {
 		case txgbe_mbox_api_11:
