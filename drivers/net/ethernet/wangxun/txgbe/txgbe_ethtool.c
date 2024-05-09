@@ -2637,6 +2637,38 @@ static int txgbe_set_coalesce(struct net_device *netdev,
 	return 0;
 }
 
+static int txgbe_match_etype_entry(struct txgbe_adapter *adapter, u16 sw_idx)
+{
+	struct txgbe_etype_filter_info *ef_info = &adapter->etype_filter_info;
+	int i;
+
+	for (i = 0; i < TXGBE_MAX_PSR_ETYPE_SWC_FILTERS; i++) {
+		if (ef_info->etype_filters[i].rule_idx == sw_idx)
+			break;
+	}
+
+	return i;
+}
+
+static int txgbe_get_etype_rule(struct txgbe_adapter *adapter,
+				struct ethtool_rx_flow_spec *fsp, int ef_idx)
+{
+	struct txgbe_etype_filter_info *ef_info = &adapter->etype_filter_info;
+	u8 mask[6] = {0, 0, 0, 0, 0, 0};
+	u8 mac[6] = {0, 0, 0, 0, 0, 0};
+
+	fsp->flow_type = ETHER_FLOW;
+	ether_addr_copy(fsp->h_u.ether_spec.h_dest, mac);
+	ether_addr_copy(fsp->m_u.ether_spec.h_dest, mask);
+	ether_addr_copy(fsp->h_u.ether_spec.h_source, mac);
+	ether_addr_copy(fsp->m_u.ether_spec.h_source, mask);
+	fsp->h_u.ether_spec.h_proto = htons(ef_info->etype_filters[ef_idx].ethertype);
+	fsp->m_u.ether_spec.h_proto = 0xFFFF;
+	fsp->ring_cookie = ef_info->etype_filters[ef_idx].action;
+
+	return 0;
+}
+
 static int txgbe_get_ethtool_fdir_entry(struct txgbe_adapter *adapter,
 					struct ethtool_rxnfc *cmd)
 {
@@ -2645,6 +2677,11 @@ static int txgbe_get_ethtool_fdir_entry(struct txgbe_adapter *adapter,
 		(struct ethtool_rx_flow_spec *)&cmd->fs;
 	struct hlist_node *node;
 	struct txgbe_fdir_filter *rule = NULL;
+	int ef_idx;
+
+	ef_idx = txgbe_match_etype_entry(adapter, fsp->location);
+	if (ef_idx < TXGBE_MAX_PSR_ETYPE_SWC_FILTERS)
+		return txgbe_get_etype_rule(adapter, fsp, ef_idx);
 
 	/* report total rule count */
 	cmd->data = (1024 << adapter->fdir_pballoc) - 2;
@@ -2708,9 +2745,10 @@ static int txgbe_get_ethtool_fdir_all(struct txgbe_adapter *adapter,
 				      struct ethtool_rxnfc *cmd,
 				      u32 *rule_locs)
 {
+	struct txgbe_etype_filter_info *ef_info = &adapter->etype_filter_info;
 	struct hlist_node *node;
 	struct txgbe_fdir_filter *rule;
-	int cnt = 0;
+	int cnt = 0, i;
 
 	/* report total rule count */
 	cmd->data = (1024 << adapter->fdir_pballoc) - 2;
@@ -2721,6 +2759,13 @@ static int txgbe_get_ethtool_fdir_all(struct txgbe_adapter *adapter,
 			return -EMSGSIZE;
 		rule_locs[cnt] = rule->sw_idx;
 		cnt++;
+	}
+
+	for (i = 0; i < TXGBE_MAX_PSR_ETYPE_SWC_FILTERS; i++) {
+		if (ef_info->ethertype_mask & (1 << i)) {
+			rule_locs[cnt] = ef_info->etype_filters[i].rule_idx;
+			cnt++;
+		}
 	}
 
 	cmd->rule_cnt = cnt;
@@ -2782,7 +2827,8 @@ static int txgbe_get_rxnfc(struct net_device *dev, struct ethtool_rxnfc *cmd,
 		ret = 0;
 		break;
 	case ETHTOOL_GRXCLSRLCNT:
-		cmd->rule_cnt = adapter->fdir_filter_count;
+		cmd->rule_cnt = adapter->fdir_filter_count +
+				adapter->etype_filter_info.count;
 		ret = 0;
 		break;
 	case ETHTOOL_GRXCLSRULE:
@@ -2800,6 +2846,160 @@ static int txgbe_get_rxnfc(struct net_device *dev, struct ethtool_rxnfc *cmd,
 	}
 
 	return ret;
+}
+
+static int
+txgbe_ethertype_filter_lookup(struct txgbe_etype_filter_info *ef_info,
+			      u16 ethertype)
+{
+	int i;
+
+	for (i = 0; i < TXGBE_MAX_PSR_ETYPE_SWC_FILTERS; i++) {
+		if (ef_info->etype_filters[i].ethertype == ethertype &&
+		    (ef_info->ethertype_mask & (1 << i)))
+			return i;
+	}
+	return -1;
+}
+
+static int
+txgbe_ethertype_filter_insert(struct txgbe_etype_filter_info *ef_info,
+			      struct txgbe_ethertype_filter *etype_filter)
+{
+	int i;
+
+	for (i = 0; i < TXGBE_MAX_PSR_ETYPE_SWC_FILTERS; i++) {
+		if (ef_info->ethertype_mask & (1 << i))
+			continue;
+
+		ef_info->ethertype_mask |= 1 << i;
+		ef_info->etype_filters[i].ethertype = etype_filter->ethertype;
+		ef_info->etype_filters[i].etqf = etype_filter->etqf;
+		ef_info->etype_filters[i].etqs = etype_filter->etqs;
+		ef_info->etype_filters[i].rule_idx = etype_filter->rule_idx;
+		ef_info->etype_filters[i].action = etype_filter->action;
+		break;
+	}
+
+	return (i < TXGBE_MAX_PSR_ETYPE_SWC_FILTERS ? i : -1);
+}
+
+static int txgbe_add_ethertype_filter(struct txgbe_adapter *adapter,
+				      struct ethtool_rx_flow_spec *fsp)
+{
+	struct txgbe_etype_filter_info *ef_info = &adapter->etype_filter_info;
+	struct txgbe_ethertype_filter etype_filter;
+	struct txgbe_hw *hw = &adapter->hw;
+	u16 ethertype;
+	u32 etqf = 0;
+	u32 etqs = 0;
+	u8 queue, vf;
+	u32 ring;
+	int ret;
+
+	ethertype = ntohs(fsp->h_u.ether_spec.h_proto);
+	if (!ethertype) {
+		e_err(drv, "protocol number is missing for ethertype filter\n");
+		return -EINVAL;
+	}
+	if (ethertype == ETH_P_IP || ethertype == ETH_P_IPV6) {
+		e_err(drv, "unsupported ether_type(0x%04x) in ethertype filter\n",
+		      ethertype);
+		return -EINVAL;
+	}
+
+	ret = txgbe_ethertype_filter_lookup(ef_info, ethertype);
+	if (ret >= 0) {
+		e_err(drv, "ethertype (0x%04x) filter exists.", ethertype);
+		return -EEXIST;
+	}
+
+	/* ring_cookie is a masked into a set of queues and txgbe pools */
+	if (fsp->ring_cookie == RX_CLS_FLOW_DISC) {
+		e_err(drv, "drop option is unsupported.");
+		return -EINVAL;
+	}
+
+	ring = ethtool_get_flow_spec_ring(fsp->ring_cookie);
+	vf = ethtool_get_flow_spec_ring_vf(fsp->ring_cookie);
+	if (!vf && ring >= adapter->num_rx_queues)
+		return -EINVAL;
+	else if (vf && ((vf > adapter->num_vfs) ||
+			ring >= adapter->num_rx_queues_per_pool))
+		return -EINVAL;
+
+	/* Map the ring onto the absolute queue index */
+	if (!vf)
+		queue = adapter->rx_ring[ring]->reg_idx;
+	else
+		queue = ((vf - 1) * adapter->num_rx_queues_per_pool) + ring;
+
+	etqs |= queue << TXGBE_RDB_ETYPE_CLS_RX_QUEUE_SHIFT;
+	etqs |= TXGBE_RDB_ETYPE_CLS_QUEUE_EN;
+	etqf = TXGBE_PSR_ETYPE_SWC_FILTER_EN | ethertype;
+	if (adapter->num_vfs) {
+		u8 pool;
+
+		if (!vf)
+			pool = adapter->num_vfs;
+		else
+			pool = vf - 1;
+
+		etqf |= TXGBE_PSR_ETYPE_SWC_POOL_ENABLE;
+		etqf |= pool << TXGBE_PSR_ETYPE_SWC_POOL_SHIFT;
+	}
+
+	etype_filter.ethertype = ethertype;
+	etype_filter.etqf = etqf;
+	etype_filter.etqs = etqs;
+	etype_filter.rule_idx = fsp->location;
+	etype_filter.action = fsp->ring_cookie;
+	ret = txgbe_ethertype_filter_insert(ef_info, &etype_filter);
+	if (ret < 0) {
+		e_err(drv, "ethertype filters are full.");
+		return -ENOSPC;
+	}
+
+	wr32(hw, TXGBE_PSR_ETYPE_SWC(ret), etqf);
+	wr32(hw, TXGBE_RDB_ETYPE_CLS(ret), etqs);
+	TXGBE_WRITE_FLUSH(hw);
+
+	ef_info->count++;
+
+	return 0;
+}
+
+static int txgbe_del_ethertype_filter(struct txgbe_adapter *adapter, u16 sw_idx)
+{
+	struct txgbe_etype_filter_info *ef_info = &adapter->etype_filter_info;
+	struct txgbe_hw *hw = &adapter->hw;
+	u16 ethertype;
+	int idx;
+
+	idx = txgbe_match_etype_entry(adapter, sw_idx);
+	if (idx == TXGBE_MAX_PSR_ETYPE_SWC_FILTERS)
+		return -EINVAL;
+
+	ethertype = ef_info->etype_filters[idx].ethertype;
+	if (!ethertype) {
+		e_err(drv, "ethertype filter doesn't exist.");
+		return -ENOENT;
+	}
+
+	ef_info->ethertype_mask &= ~(1 << idx);
+	ef_info->etype_filters[idx].ethertype = 0;
+	ef_info->etype_filters[idx].etqf = 0;
+	ef_info->etype_filters[idx].etqs = 0;
+	ef_info->etype_filters[idx].etqs = false;
+	ef_info->etype_filters[idx].rule_idx = 0;
+
+	wr32(hw, TXGBE_PSR_ETYPE_SWC(idx), 0);
+	wr32(hw, TXGBE_RDB_ETYPE_CLS(idx), 0);
+	TXGBE_WRITE_FLUSH(hw);
+
+	ef_info->count--;
+
+	return 0;
 }
 
 static int txgbe_update_ethtool_fdir_entry(struct txgbe_adapter *adapter,
@@ -2939,6 +3139,9 @@ static int txgbe_add_ethtool_fdir_entry(struct txgbe_adapter *adapter,
 	u8 queue;
 	int err;
 	u16 ptype = 0;
+
+	if ((fsp->flow_type & ~FLOW_EXT) == ETHER_FLOW)
+		return txgbe_add_ethertype_filter(adapter, fsp);
 
 	if (!(adapter->flags & TXGBE_FLAG_FDIR_PERFECT_CAPABLE))
 		return -EOPNOTSUPP;
@@ -3108,6 +3311,10 @@ static int txgbe_del_ethtool_fdir_entry(struct txgbe_adapter *adapter,
 	struct ethtool_rx_flow_spec *fsp =
 		(struct ethtool_rx_flow_spec *)&cmd->fs;
 	int err;
+
+	err = txgbe_del_ethertype_filter(adapter, fsp->location);
+	if (!err)
+		return 0;
 
 	spin_lock(&adapter->fdir_perfect_lock);
 	err = txgbe_update_ethtool_fdir_entry(adapter, NULL, fsp->location);
