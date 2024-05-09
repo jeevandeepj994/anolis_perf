@@ -2186,6 +2186,24 @@ void txgbe_store_reta(struct txgbe_adapter *adapter)
 	}
 }
 
+static void txgbe_store_vfreta(struct txgbe_adapter *adapter)
+{
+	unsigned int pf_pool = adapter->num_vfs;
+	u8 *indir_tbl = adapter->rss_indir_tbl;
+	struct txgbe_hw *hw = &adapter->hw;
+	u32 reta = 0;
+	u32 i;
+
+	/* Write redirection table to HW */
+	for (i = 0; i < 64; i++) {
+		reta |= indir_tbl[i] << (i & 0x3) * 8;
+		if ((i & 3) == 3) {
+			wr32(hw, TXGBE_RDB_VMRSSTBL(i >> 2, pf_pool), reta);
+			reta = 0;
+		}
+	}
+}
+
 static void txgbe_setup_reta(struct txgbe_adapter *adapter)
 {
 	struct txgbe_hw *hw = &adapter->hw;
@@ -2213,6 +2231,27 @@ static void txgbe_setup_reta(struct txgbe_adapter *adapter)
 	txgbe_store_reta(adapter);
 }
 
+static void txgbe_setup_vfreta(struct txgbe_adapter *adapter)
+{
+	u16 rss_i = adapter->ring_feature[RING_F_RSS].indices;
+	unsigned int pf_pool = adapter->num_vfs;
+	struct txgbe_hw *hw = &adapter->hw;
+	u32 i, j;
+
+	/* Fill out hash function seeds */
+	for (i = 0; i < 10; i++)
+		wr32(hw, TXGBE_RDB_VMRSSRK(i, pf_pool), *(adapter->rss_key + i));
+
+	for (i = 0, j = 0; i < 64; i++, j++) {
+		if (j == rss_i)
+			j = 0;
+
+		adapter->rss_indir_tbl[i] = j;
+	}
+
+	txgbe_store_vfreta(adapter);
+}
+
 static void txgbe_setup_mrqc(struct txgbe_adapter *adapter)
 {
 	struct txgbe_hw *hw = &adapter->hw;
@@ -2235,7 +2274,23 @@ static void txgbe_setup_mrqc(struct txgbe_adapter *adapter)
 
 	netdev_rss_key_fill(adapter->rss_key, sizeof(adapter->rss_key));
 
-	txgbe_setup_reta(adapter);
+	if (adapter->flags & TXGBE_FLAG_SRIOV_ENABLED) {
+		unsigned int pool = adapter->num_vfs;
+		u32 vfmrqc;
+
+		/* Setup RSS through the VF registers */
+		txgbe_setup_vfreta(adapter);
+
+		vfmrqc = rd32(hw, TXGBE_RDB_PL_CFG(pool));
+		vfmrqc &= ~TXGBE_RDB_PL_CFG_RSS_MASK;
+		vfmrqc |= rss_field | TXGBE_RDB_PL_CFG_RSS_EN;
+		wr32(hw, TXGBE_RDB_PL_CFG(pool), vfmrqc);
+
+		/* Enable VF RSS mode */
+		rss_field |= TXGBE_RDB_RA_CTL_MULTI_RSS;
+	} else {
+		txgbe_setup_reta(adapter);
+	}
 
 	if (adapter->flags2 & TXGBE_FLAG2_RSS_ENABLED)
 		rss_field |= TXGBE_RDB_RA_CTL_RSS_EN;
@@ -3212,6 +3267,23 @@ static void txgbe_configure_pb(struct txgbe_adapter *adapter)
 	txgbe_pbthresh_setup(adapter);
 }
 
+static void txgbe_ethertype_filter_restore(struct txgbe_adapter *adapter)
+{
+	struct txgbe_etype_filter_info *filter_info = &adapter->etype_filter_info;
+	struct txgbe_hw *hw = &adapter->hw;
+	int i;
+
+	for (i = 0; i < TXGBE_MAX_PSR_ETYPE_SWC_FILTERS; i++) {
+		if (filter_info->ethertype_mask & (1 << i)) {
+			wr32(hw, TXGBE_PSR_ETYPE_SWC(i),
+			     filter_info->etype_filters[i].etqf);
+			wr32(hw, TXGBE_RDB_ETYPE_CLS(i),
+			     filter_info->etype_filters[i].etqs);
+			TXGBE_WRITE_FLUSH(hw);
+		}
+	}
+}
+
 static void txgbe_fdir_filter_restore(struct txgbe_adapter *adapter)
 {
 	struct txgbe_hw *hw = &adapter->hw;
@@ -3379,7 +3451,7 @@ void txgbe_configure_port(struct txgbe_adapter *adapter)
 	u32 i;
 
 	if (adapter->flags & TXGBE_FLAG_VMDQ_ENABLED) {
-		if (adapter->ring_feature[RING_F_RSS].indices == 4)
+		if (adapter->ring_feature[RING_F_RSS].mask == TXGBE_RSS_4Q_MASK)
 			value = TXGBE_CFG_PORT_CTL_NUM_VT_32;
 		else /* adapter->ring_feature[RING_F_RSS].indices <= 2 */
 			value = TXGBE_CFG_PORT_CTL_NUM_VT_64;
@@ -3420,6 +3492,8 @@ static void txgbe_configure(struct txgbe_adapter *adapter)
 	txgbe_restore_vlan(adapter);
 
 	TCALL(hw, mac.ops.disable_sec_rx_path);
+
+	txgbe_ethertype_filter_restore(adapter);
 
 	if (adapter->flags & TXGBE_FLAG_FDIR_HASH_CAPABLE) {
 		txgbe_init_fdir_signature(&adapter->hw,
@@ -3980,7 +4054,6 @@ static int txgbe_sw_init(struct txgbe_adapter *adapter)
 	adapter->tx_itr_setting = 1;
 
 	adapter->atr_sample_rate = 20;
-	adapter->vf_mode = 63;
 
 	adapter->flags |= TXGBE_FLAG_VXLAN_OFFLOAD_CAPABLE;
 	adapter->flags |= TXGBE_FLAG_VXLAN_OFFLOAD_ENABLE;
@@ -6767,7 +6840,6 @@ static int txgbe_probe(struct pci_dev *pdev,
 	char *info_string, *i_s_var;
 	u8 part_str[TXGBE_PBANUM_LENGTH];
 	bool disable_dev = false;
-	u32 match;
 
 	err = pci_enable_device_mem(pdev);
 	if (err)
@@ -6876,8 +6948,7 @@ static int txgbe_probe(struct pci_dev *pdev,
 			   );
 	}
 
-	match = min_t(u32, adapter->vf_mode, TXGBE_MAX_VFS_DRV_LIMIT);
-	pci_sriov_set_totalvfs(pdev, match);
+	pci_sriov_set_totalvfs(pdev, TXGBE_MAX_VFS_DRV_LIMIT);
 	txgbe_enable_sriov(adapter);
 #endif /* CONFIG_PCI_IOV */
 
@@ -6946,6 +7017,8 @@ static int txgbe_probe(struct pci_dev *pdev,
 	}
 
 	txgbe_mac_set_default_filter(adapter, hw->mac.perm_addr);
+	memset(&adapter->etype_filter_info, 0,
+	       sizeof(struct txgbe_etype_filter_info));
 
 	timer_setup(&adapter->service_timer, txgbe_service_timer, 0);
 
