@@ -243,6 +243,13 @@ enum txgbe_ring_f_enum {
 #define TXGBE_VMDQ_4Q_MASK 0x7C
 #define TXGBE_VMDQ_2Q_MASK 0x7E
 
+#define TXGBE_RSS_64Q_MASK      0x3F
+#define TXGBE_RSS_16Q_MASK      0xF
+#define TXGBE_RSS_8Q_MASK       0x7
+#define TXGBE_RSS_4Q_MASK       0x3
+#define TXGBE_RSS_2Q_MASK       0x1
+#define TXGBE_RSS_DISABLED_MASK 0x0
+
 #define TXGBE_MAX_RX_QUEUES   (TXGBE_MAX_FDIR_INDICES + 1)
 #define TXGBE_MAX_TX_QUEUES   (TXGBE_MAX_FDIR_INDICES + 1)
 
@@ -604,6 +611,8 @@ struct txgbe_adapter {
 	u32 atr_sample_rate;
 	spinlock_t fdir_perfect_lock; /*spinlock for FDIR */
 
+	struct txgbe_etype_filter_info etype_filter_info;
+
 	u32 wol;
 
 	char eeprom_id[32];
@@ -654,7 +663,6 @@ struct txgbe_adapter {
 	struct vf_data_storage *vfinfo;
 	struct vf_macvlans vf_mvs;
 	struct vf_macvlans *mv_list;
-	u8  vf_mode;
 #ifdef CONFIG_PCI_IOV
 	u32 timer_event_accumulator;
 	u32 vferr_refcount;
@@ -689,7 +697,7 @@ struct txgbe_fdir_filter {
 	struct  hlist_node fdir_node;
 	union txgbe_atr_input filter;
 	u16 sw_idx;
-	u16 action;
+	u64 action;
 };
 
 enum txgbe_state_t {
