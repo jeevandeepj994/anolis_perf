@@ -3494,6 +3494,7 @@ static int txgbe_set_rxfh(struct net_device *netdev, const u32 *indir,
 	struct txgbe_adapter *adapter = netdev_priv(netdev);
 	int i;
 	u32 reta_entries = 128;
+	struct txgbe_hw *hw = &adapter->hw;
 
 	if (hfunc)
 		return -EINVAL;
@@ -3503,6 +3504,11 @@ static int txgbe_set_rxfh(struct net_device *netdev, const u32 *indir,
 		int max_queues = min_t(int, adapter->num_rx_queues,
 				       TXGBE_RSS_INDIR_TBL_MAX);
 
+		/*Allow at least 2 queues w/ SR-IOV.*/
+		if (adapter->flags & TXGBE_FLAG_SRIOV_ENABLED &&
+		    max_queues < 2)
+			max_queues = 2;
+
 		/* Verify user input. */
 		for (i = 0; i < reta_entries; i++)
 			if (indir[i] >= max_queues)
@@ -3510,12 +3516,18 @@ static int txgbe_set_rxfh(struct net_device *netdev, const u32 *indir,
 
 		for (i = 0; i < reta_entries; i++)
 			adapter->rss_indir_tbl[i] = indir[i];
+
+		txgbe_store_reta(adapter);
 	}
 
 	/* Fill out the rss hash key */
-	if (key)
+	if (key) {
 		memcpy(adapter->rss_key, key, txgbe_get_rxfh_key_size(netdev));
 
+		/* Fill out hash function seeds */
+		for (i = 0; i < 10; i++)
+			wr32(hw, TXGBE_RDB_RSSRK(i), adapter->rss_key[i]);
+	}
 	txgbe_store_reta(adapter);
 
 	return 0;
