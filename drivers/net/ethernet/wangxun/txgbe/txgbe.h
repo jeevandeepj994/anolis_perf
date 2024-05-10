@@ -652,7 +652,7 @@ struct txgbe_adapter {
 #define TXGBE_MAX_RETA_ENTRIES 128
 	u8 rss_indir_tbl[TXGBE_MAX_RETA_ENTRIES];
 #define TXGBE_RSS_KEY_SIZE     40
-	u32 *rss_key;
+	u32 rss_key[TXGBE_RSS_KEY_SIZE / sizeof(u32)];
 
 	/* misc interrupt status block */
 	dma_addr_t isb_dma;
@@ -791,6 +791,8 @@ static inline void txgbe_dbg_adapter_exit(struct txgbe_adapter *adapter) {}
 static inline void txgbe_dbg_init(void) {}
 static inline void txgbe_dbg_exit(void) {}
 #endif
+
+void txgbe_setup_reta(struct txgbe_adapter *adapter);
 
 static inline struct netdev_queue *txring_txq(const struct txgbe_ring *ring)
 {
