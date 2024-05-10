@@ -3569,6 +3569,9 @@ static unsigned int txgbe_max_channels(struct txgbe_adapter *adapter)
 	if (!(adapter->flags & TXGBE_FLAG_MSIX_ENABLED)) {
 		/* We only support one q_vector without MSI-X */
 		max_combined = 1;
+	} else if (adapter->flags & TXGBE_FLAG_SRIOV_ENABLED) {
+		/* SR-IOV currently only allows one queue on the PF */
+		max_combined = adapter->ring_feature[RING_F_RSS].mask + 1;
 	} else if (adapter->atr_sample_rate) {
 		/* support up to 64 queues with ATR */
 		max_combined = TXGBE_MAX_FDIR_INDICES;
