@@ -1016,15 +1016,193 @@ static int txgbe_set_coalesce(struct net_device *netdev,
 	return 0;
 }
 
+static int txgbe_get_rss_hash_opts(struct txgbe_adapter *adapter,
+				   struct ethtool_rxnfc *cmd)
+{
+	cmd->data = 0;
+
+	/* Report default options for RSS on txgbevf */
+	switch (cmd->flow_type) {
+	case TCP_V4_FLOW:
+		goto TCP_V4_FLOW_CASE;
+	case UDP_V4_FLOW:
+		goto UDP_V4_FLOW_CASE;
+	case SCTP_V4_FLOW:
+	case AH_ESP_V4_FLOW:
+	case AH_V4_FLOW:
+	case ESP_V4_FLOW:
+	case IPV4_FLOW:
+		goto IPV4_FLOW_CASE;
+	case TCP_V6_FLOW:
+		goto TCP_V6_FLOW_CASE;
+	case UDP_V6_FLOW:
+		goto UDP_V6_FLOW_CASE;
+	case SCTP_V6_FLOW:
+	case AH_ESP_V6_FLOW:
+	case AH_V6_FLOW:
+	case ESP_V6_FLOW:
+	case IPV6_FLOW:
+		goto IPV6_FLOW_CASE;
+	default:
+		return -EINVAL;
+	}
+
+TCP_V4_FLOW_CASE:
+	cmd->data |= RXH_L4_B_0_1 | RXH_L4_B_2_3;
+UDP_V4_FLOW_CASE:
+	if (adapter->flagsd & TXGBE_F_ENA_RSS_IPV4UDP)
+		cmd->data |= RXH_L4_B_0_1 | RXH_L4_B_2_3;
+IPV4_FLOW_CASE:
+	cmd->data |= RXH_IP_SRC | RXH_IP_DST;
+	return 0;
+
+TCP_V6_FLOW_CASE:
+	cmd->data |= RXH_L4_B_0_1 | RXH_L4_B_2_3;
+UDP_V6_FLOW_CASE:
+	if (adapter->flagsd & TXGBE_F_ENA_RSS_IPV6UDP)
+		cmd->data |= RXH_L4_B_0_1 | RXH_L4_B_2_3;
+IPV6_FLOW_CASE:
+	cmd->data |= RXH_IP_SRC | RXH_IP_DST;
+	return 0;
+}
+
+#define UDP_RSS_FLAGS (TXGBE_F_ENA_RSS_IPV4UDP | \
+		       TXGBE_F_ENA_RSS_IPV6UDP)
+
+static int txgbe_set_rss_hash_opt(struct txgbe_adapter *adapter,
+				  struct ethtool_rxnfc *nfc)
+{
+	struct txgbe_hw *hw = &adapter->hw;
+	u32 flags = adapter->flagsd;
+
+	/* RSS does not support anything other than hashing
+	 * to queues on src and dst IPs and ports
+	 */
+	if (nfc->data & ~(RXH_IP_SRC | RXH_IP_DST |
+			  RXH_L4_B_0_1 | RXH_L4_B_2_3))
+		return -EINVAL;
+
+	switch (nfc->flow_type) {
+	case TCP_V4_FLOW:
+	case TCP_V6_FLOW:
+		if (!(nfc->data & RXH_IP_SRC) ||
+		    !(nfc->data & RXH_IP_DST) ||
+		    !(nfc->data & RXH_L4_B_0_1) ||
+		    !(nfc->data & RXH_L4_B_2_3))
+			return -EINVAL;
+		break;
+	case UDP_V4_FLOW:
+		if (!(nfc->data & RXH_IP_SRC) ||
+		    !(nfc->data & RXH_IP_DST))
+			return -EINVAL;
+		switch (nfc->data & (RXH_L4_B_0_1 | RXH_L4_B_2_3)) {
+		case 0:
+			flags &= ~TXGBE_F_ENA_RSS_IPV4UDP;
+			break;
+		case (RXH_L4_B_0_1 | RXH_L4_B_2_3):
+			flags |= TXGBE_F_ENA_RSS_IPV4UDP;
+			break;
+		default:
+			return -EINVAL;
+		}
+		break;
+	case UDP_V6_FLOW:
+		if (!(nfc->data & RXH_IP_SRC) ||
+		    !(nfc->data & RXH_IP_DST))
+			return -EINVAL;
+		switch (nfc->data & (RXH_L4_B_0_1 | RXH_L4_B_2_3)) {
+		case 0:
+			flags &= ~TXGBE_F_ENA_RSS_IPV6UDP;
+			break;
+		case (RXH_L4_B_0_1 | RXH_L4_B_2_3):
+			flags |= TXGBE_F_ENA_RSS_IPV6UDP;
+			break;
+		default:
+			return -EINVAL;
+		}
+		break;
+	case AH_ESP_V4_FLOW:
+	case AH_V4_FLOW:
+	case ESP_V4_FLOW:
+	case SCTP_V4_FLOW:
+	case AH_ESP_V6_FLOW:
+	case AH_V6_FLOW:
+	case ESP_V6_FLOW:
+	case SCTP_V6_FLOW:
+		if (!(nfc->data & RXH_IP_SRC) ||
+		    !(nfc->data & RXH_IP_DST) ||
+		    (nfc->data & RXH_L4_B_0_1) ||
+		    (nfc->data & RXH_L4_B_2_3))
+			return -EINVAL;
+		break;
+	default:
+		return -EINVAL;
+	}
+
+	/* if we changed something we need to update flags */
+	if (flags != adapter->flagsd) {
+		u32 vfmrqc = 0;
+
+		if ((flags & UDP_RSS_FLAGS) &&
+		    !(adapter->flagsd & UDP_RSS_FLAGS))
+			e_info(drv, "enabling UDP RSS: fragmented packets may arrive out of order to the stack above\n");
+
+		adapter->flagsd = flags;
+
+		vfmrqc = rd32(hw, TXGBE_VXMRQC) >> 16;
+		/* Perform hash on these packet types */
+		vfmrqc |= TXGBE_VXMRQC_RSS_ALG_IPV4 |
+			  TXGBE_VXMRQC_RSS_ALG_IPV4_TCP |
+			  TXGBE_VXMRQC_RSS_ALG_IPV6 |
+			  TXGBE_VXMRQC_RSS_ALG_IPV6_TCP;
+
+		vfmrqc &= ~(TXGBE_VXMRQC_RSS_ALG_IPV4_UDP |
+			    TXGBE_VXMRQC_RSS_ALG_IPV6_UDP);
+
+		if (flags & TXGBE_F_ENA_RSS_IPV4UDP)
+			vfmrqc |= TXGBE_VXMRQC_RSS_ALG_IPV4_UDP;
+
+		if (flags & TXGBE_F_ENA_RSS_IPV6UDP)
+			vfmrqc |= TXGBE_VXMRQC_RSS_ALG_IPV6_UDP;
+
+		wr32m(hw, TXGBE_VXMRQC, TXGBE_VXMRQC_RSS(~0),
+		      TXGBE_VXMRQC_RSS(vfmrqc));
+	}
+
+	return 0;
+}
+
 static int txgbe_get_rxnfc(struct net_device *dev, struct ethtool_rxnfc *info,
 			   __always_unused u32 *rule_locs)
 {
-	return -EOPNOTSUPP;
+	struct txgbe_adapter *adapter = netdev_priv(dev);
+	int ret;
+
+	switch (info->cmd) {
+	case ETHTOOL_GRXRINGS:
+		info->data = adapter->num_rx_queues;
+		break;
+	case ETHTOOL_GRXFH:
+		ret = txgbe_get_rss_hash_opts(adapter, info);
+		if (ret)
+			return ret;
+		break;
+	default:
+		return -EOPNOTSUPP;
+	}
+
+	return 0;
 }
 
 static int txgbe_set_rxnfc(struct net_device *dev, struct ethtool_rxnfc *cmd)
 {
-	return -EOPNOTSUPP;
+	struct txgbe_adapter *adapter = netdev_priv(dev);
+	int ret = -EOPNOTSUPP;
+
+	if (cmd->cmd == ETHTOOL_SRXFH)
+		ret = txgbe_set_rss_hash_opt(adapter, cmd);
+
+	return ret;
 }
 
 static const struct ethtool_ops txgbe_ethtool_ops = {
