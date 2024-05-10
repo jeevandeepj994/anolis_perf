@@ -2137,28 +2137,6 @@ static void txgbe_configure_srrctl(struct txgbe_adapter *adapter,
 }
 
 /**
- * txgbe_init_rss_key - Initialize adapter RSS key
- * @adapter: device handle
- *
- * Allocates and initializes the RSS key if it is not allocated.
- **/
-static inline int txgbe_init_rss_key(struct txgbe_adapter *adapter)
-{
-	u32 *rss_key;
-
-	if (!adapter->rss_key) {
-		rss_key = kzalloc(TXGBE_RSS_KEY_SIZE, GFP_KERNEL);
-		if (unlikely(!rss_key))
-			return -ENOMEM;
-
-		netdev_rss_key_fill(rss_key, TXGBE_RSS_KEY_SIZE);
-		adapter->rss_key = rss_key;
-	}
-
-	return 0;
-}
-
-/**
  * Write the RETA table to HW
  *
  * @adapter: device handle
@@ -2204,7 +2182,7 @@ static void txgbe_store_vfreta(struct txgbe_adapter *adapter)
 	}
 }
 
-static void txgbe_setup_reta(struct txgbe_adapter *adapter)
+void txgbe_setup_reta(struct txgbe_adapter *adapter)
 {
 	struct txgbe_hw *hw = &adapter->hw;
 	u32 i, j;
@@ -3992,6 +3970,12 @@ s32 txgbe_init_shared_code(struct txgbe_hw *hw)
 	return status;
 }
 
+static const u32 def_rss_key[10] = {
+	0xE291D73D, 0x1805EC6C, 0x2A94B30D,
+	0xA54F2BEC, 0xEA49AF7C, 0xE214AD3D, 0xB855AABE,
+	0x6A3E67EA, 0x14364D17, 0x3BED200D
+};
+
 /**
  * txgbe_sw_init - Initialize general software structures (struct txgbe_adapter)
  * @adapter: board private structure to initialize
@@ -4040,8 +4024,7 @@ static int txgbe_sw_init(struct txgbe_adapter *adapter)
 		return err;
 	}
 
-	if (txgbe_init_rss_key(adapter))
-		return -ENOMEM;
+	memcpy(adapter->rss_key, def_rss_key, sizeof(def_rss_key));
 
 	/* Set common capability flags and settings */
 	rss = min_t(int, TXGBE_MAX_RSS_INDICES,
