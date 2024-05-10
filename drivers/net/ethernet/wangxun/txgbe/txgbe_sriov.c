@@ -1280,13 +1280,14 @@ static int txgbe_pci_sriov_enable(struct pci_dev __maybe_unused *dev,
 	for (i = 0; i < adapter->num_vfs; i++)
 		txgbe_vf_configuration(dev, (i | 0x10000000));
 
+	txgbe_sriov_reinit(adapter);
+
 	err = pci_enable_sriov(dev, num_vfs);
 	if (err) {
 		e_dev_warn("Failed to enable PCI sriov: %d\n", err);
 		goto err_out;
 	}
 	txgbe_get_vfs(adapter);
-	txgbe_sriov_reinit(adapter);
 
 out:
 	return num_vfs;
