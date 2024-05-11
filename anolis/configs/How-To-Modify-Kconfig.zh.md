@@ -8,16 +8,16 @@ cd anolis/
 find . -name CONFIG_CAN
 ```
 如果没有找到该 config，说明该 kconfig 的依赖可能没有打开，需要打开对应的 Kconfig 文件，确认其依赖关系，将依赖的 kconfig 一并打开。
-在本文的示例中，我们能找到该 kconfig 位于 `./L2-OPTIONAL/generic/CONFIG_CAN` 路径。
+在本文的示例中，我们能找到该 kconfig 位于 `./configs/L2-OPTIONAL/default/CONFIG_CAN` 路径。
 
 接下来，修改该 kconfig 的配置:
 ```
-echo 'CONFIG_CAN=y' > ./configs/L2-OPTIONAL/generic/CONFIG_CAN
+echo 'CONFIG_CAN=y' > ./configs/L2-OPTIONAL/default/CONFIG_CAN
 ```
 一般来说，调整某个 kconfig 配置，必定有实际的使用场景驱动，这表明该 kconfig 实际上是很重要的，因此我们还需要将该 kconfig 的定级转移到 L1 或者 L0.
 你可以直接使用 `mv` 命令来完成这件事情：
 ```
-mv ./configs/L2-OPTIONAL/generic/CONFIG_CAN ./configs/L1-RECOMMEND
+mv ./configs/L2-OPTIONAL/default/CONFIG_CAN ./configs/L1-RECOMMEND/default/
 ```
 不过我们更推荐使用包装过的 `make dist-configs-move` 命令来完成这个动作，特别是当 kconfig 配置因为不统一而散落在各个目录中时
 ```
