@@ -3612,6 +3612,10 @@ static void txgbe_get_channels(struct net_device *dev,
 	/* record RSS queues */
 	ch->combined_count = adapter->ring_feature[RING_F_RSS].indices;
 
+	/* we do not support ATR queueing if SR-IOV is enabled */
+	if (adapter->flags & TXGBE_FLAG_SRIOV_ENABLED)
+		return;
+
 	/* nothing else to report if RSS is disabled */
 	if (ch->combined_count == 1)
 		return;
