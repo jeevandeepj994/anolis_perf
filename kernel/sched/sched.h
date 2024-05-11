@@ -87,6 +87,9 @@
 
 struct rq;
 struct cpuidle_state;
+#ifdef CONFIG_GROUP_BALANCER
+struct group_balancer_sched_domain;
+#endif
 
 /* task_struct::on_rq states: */
 #define TASK_ON_RQ_QUEUED	1
@@ -1349,6 +1352,10 @@ struct rq {
 
 #if defined(CONFIG_IRQ_TIME_ACCOUNTING) && defined(CONFIG_ARM64)
 	u64			prev_irq_time;
+#endif
+
+#ifdef CONFIG_GROUP_BALANCER
+	struct group_balancer_sched_domain *gb_sd;
 #endif
 
 	CK_KABI_RESERVE(1)
@@ -3394,9 +3401,8 @@ static inline const struct cpumask *task_allowed_cpu(struct task_struct *p)
 	return p->cpus_ptr;
 }
 
-extern int sched_init_group_balancer_sched_domains(const struct cpumask *cpu_map);
+extern void sched_init_group_balancer_sched_domains(void);
 extern void sched_clear_group_balancer_sched_domains(void);
-extern void sched_init_group_balancer(void);
 extern void tg_set_specs_ratio(struct task_group *tg);
 #else
 static inline const struct cpumask *task_allowed_cpu(struct task_struct *p)
