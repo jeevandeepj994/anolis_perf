@@ -98,14 +98,22 @@ DEFINE_STATIC_KEY_FALSE(__group_balancer_enabled);
 unsigned int sysctl_sched_group_balancer_enabled;
 DEFINE_RWLOCK(group_balancer_lock);
 
-static void group_balancer_enable(void)
+static int group_balancer_enable(void)
 {
+	int err = 0;
+
+	err = sched_init_group_balancer_sched_domains(cpu_possible_mask);
+	if (err)
+		return err;
 	static_branch_enable(&__group_balancer_enabled);
+
+	return 0;
 }
 
 static void group_balancer_disable(void)
 {
 	static_branch_disable(&__group_balancer_enabled);
+	sched_clear_group_balancer_sched_domains();
 }
 
 bool group_balancer_enabled(void)
@@ -129,7 +137,7 @@ int sched_group_balancer_enable_handler(struct ctl_table *table, int write,
 	new = sysctl_sched_group_balancer_enabled;
 	if (!ret && (old != new)) {
 		if (new)
-			group_balancer_enable();
+			ret = group_balancer_enable();
 		else
 			group_balancer_disable();
 	}
@@ -8443,6 +8451,7 @@ void __init sched_init_smp(void)
 	mutex_lock(&sched_domains_mutex);
 	sched_init_domains(cpu_active_mask);
 	mutex_unlock(&sched_domains_mutex);
+	sched_init_group_balancer();
 
 	/* Move init over to a non-isolated CPU */
 	if (set_cpus_allowed_ptr(current, housekeeping_cpumask(HK_FLAG_DOMAIN)) < 0)
@@ -8677,6 +8686,9 @@ void __init sched_init(void)
 		rq->cfs.core = &rq->cfs;
 
 		rq->core_cookie = 0UL;
+#endif
+#ifdef CONFIG_GROUP_BALANCER
+		rq->gb_sd = NULL;
 #endif
 	}
 
