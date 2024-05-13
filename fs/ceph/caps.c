@@ -1402,7 +1402,7 @@ static void __prep_cap(struct cap_msg_args *arg, struct ceph_cap *cap,
 	if (flushing & CEPH_CAP_XATTR_EXCL) {
 		arg->old_xattr_buf = __ceph_build_xattrs_blob(ci);
 		arg->xattr_version = ci->i_xattrs.version;
-		arg->xattr_buf=ci->i_xattrs.blob;
+		arg->xattr_buf = ci->i_xattrs.blob;
 	} else {
 		arg->xattr_buf = NULL;
 		arg->old_xattr_buf = NULL;
