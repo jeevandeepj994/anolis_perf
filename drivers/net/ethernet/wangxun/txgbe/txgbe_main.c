@@ -2399,6 +2399,8 @@ void txgbe_configure_rx_ring(struct txgbe_adapter *adapter,
 	u64 rdba = ring->dma;
 	u32 rxdctl;
 	u16 reg_idx = ring->reg_idx;
+	struct net_device *netdev = adapter->netdev;
+	netdev_features_t features = netdev->features;
 
 	/* disable queue to avoid issues while updating state */
 	rxdctl = rd32(hw, TXGBE_PX_RR_CFG(reg_idx));
@@ -2411,6 +2413,12 @@ void txgbe_configure_rx_ring(struct txgbe_adapter *adapter,
 		rxdctl |= 0 << TXGBE_PX_RR_CFG_RR_SIZE_SHIFT;
 	else
 		rxdctl |= (ring->count / 128) << TXGBE_PX_RR_CFG_RR_SIZE_SHIFT;
+
+
+	if (features & NETIF_F_HW_VLAN_CTAG_RX)
+		rxdctl |= TXGBE_PX_RR_CFG_VLAN;
+	else
+		rxdctl &= ~TXGBE_PX_RR_CFG_VLAN;
 
 	rxdctl |= 0x1 << TXGBE_PX_RR_CFG_RR_THER_SHIFT;
 	wr32(hw, TXGBE_PX_RR_CFG(reg_idx), rxdctl);
@@ -3064,6 +3072,8 @@ void txgbe_set_rx_mode(struct net_device *netdev)
 		wr32m(hw, TXGBE_RSC_CTL,
 		      TXGBE_RSC_CTL_SAVE_MAC_ERR,
 		      TXGBE_RSC_CTL_SAVE_MAC_ERR);
+		features &= ~NETIF_F_HW_VLAN_CTAG_FILTER;
+		features &= ~NETIF_F_HW_VLAN_STAG_FILTER;
 	} else {
 		vmolr |= TXGBE_PSR_VM_L2CTL_ROPE | TXGBE_PSR_VM_L2CTL_ROMPE;
 	}
@@ -6652,6 +6662,11 @@ static netdev_features_t txgbe_fix_features(struct net_device *netdev, netdev_fe
 		features &= ~NETIF_F_HW_VLAN_STAG_TX;
 	else
 		features |= NETIF_F_HW_VLAN_STAG_TX;
+	
+	if (features & NETIF_F_HW_VLAN_CTAG_FILTER)
+		features |= NETIF_F_HW_VLAN_STAG_FILTER;
+	else
+		features &= ~NETIF_F_HW_VLAN_STAG_FILTER;
 
 	return features;
 }
