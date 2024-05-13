@@ -32,9 +32,6 @@ struct smc_hashinfo {
 	struct hlist_head ht;
 };
 
-int smc_hash_sk(struct sock *sk);
-void smc_unhash_sk(struct sock *sk);
-
 /* SMCD/ISM device driver interface */
 struct smcd_dmb {
 	u64 dmb_tok;
@@ -209,7 +206,7 @@ struct smc_connection {
 
 	struct smc_buf_desc	*sndbuf_desc;	/* send buffer descriptor */
 	struct smc_buf_desc	*rmb_desc;	/* RMBE descriptor */
-	int			rmbe_size_short;/* compressed notation */
+	int                     rmbe_size_comp; /* compressed notation */
 	int			rmbe_update_limit;
 						/* lower limit for consumer
 						 * cursor update
