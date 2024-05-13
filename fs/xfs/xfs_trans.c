@@ -23,6 +23,7 @@
 #include "xfs_inode.h"
 #include "xfs_dquot_item.h"
 #include "xfs_dquot.h"
+#include "xfs_icache.h"
 
 struct kmem_cache	*xfs_trans_cache;
 
@@ -253,6 +254,7 @@ xfs_trans_alloc(
 	struct xfs_trans	**tpp)
 {
 	struct xfs_trans	*tp;
+	bool			want_retry = true;
 	int			error;
 
 	/*
@@ -260,6 +262,7 @@ xfs_trans_alloc(
 	 * GFP_NOFS allocation context so that we avoid lockdep false positives
 	 * by doing GFP_KERNEL allocations inside sb_start_intwrite().
 	 */
+retry:
 	tp = kmem_cache_zalloc(xfs_trans_cache, GFP_KERNEL | __GFP_NOFAIL);
 	if (!(flags & XFS_TRANS_NO_WRITECOUNT))
 		sb_start_intwrite(mp->m_super);
@@ -283,6 +286,22 @@ xfs_trans_alloc(
 	tp->t_firstblock = NULLFSBLOCK;
 
 	error = xfs_trans_reserve(tp, resp, blocks, rtextents);
+	if (error == -ENOSPC && want_retry) {
+		xfs_trans_cancel(tp);
+
+		/*
+		 * We weren't able to reserve enough space for the transaction.
+		 * Flush the other speculative space allocations to free space.
+		 * Do not perform a synchronous scan because callers can hold
+		 * other locks.
+		 */
+		error = xfs_blockgc_free_space(mp, NULL);
+		if (error)
+			return error;
+
+		want_retry = false;
+		goto retry;
+	}
 	if (error) {
 		xfs_trans_cancel(tp);
 		return error;
@@ -1039,8 +1058,10 @@ xfs_trans_alloc_inode(
 {
 	struct xfs_trans	*tp;
 	struct xfs_mount	*mp = ip->i_mount;
+	bool			retried = false;
 	int			error;
 
+retry:
 	error = xfs_trans_alloc(mp, resv, dblocks,
 			rblocks / mp->m_sb.sb_rextsize,
 			force ? XFS_TRANS_RESERVE : 0, &tp);
@@ -1058,6 +1079,13 @@ xfs_trans_alloc_inode(
 	}
 
 	error = xfs_trans_reserve_quota_nblks(tp, ip, dblocks, rblocks, force);
+	if ((error == -EDQUOT || error == -ENOSPC) && !retried) {
+		xfs_trans_cancel(tp);
+		xfs_iunlock(ip, XFS_ILOCK_EXCL);
+		xfs_blockgc_free_quota(ip, 0);
+		retried = true;
+		goto retry;
+	}
 	if (error)
 		goto out_cancel;
 
@@ -1085,13 +1113,21 @@ xfs_trans_alloc_icreate(
 	struct xfs_trans	**tpp)
 {
 	struct xfs_trans	*tp;
+	bool			retried = false;
 	int			error;
 
+retry:
 	error = xfs_trans_alloc(mp, resv, dblocks, 0, 0, &tp);
 	if (error)
 		return error;
 
 	error = xfs_trans_reserve_quota_icreate(tp, udqp, gdqp, pdqp, dblocks);
+	if ((error == -EDQUOT || error == -ENOSPC) && !retried) {
+		xfs_trans_cancel(tp);
+		xfs_blockgc_free_dquots(mp, udqp, gdqp, pdqp, 0);
+		retried = true;
+		goto retry;
+	}
 	if (error) {
 		xfs_trans_cancel(tp);
 		return error;
@@ -1113,16 +1149,21 @@ xfs_trans_alloc_icreate(
 int
 xfs_trans_alloc_ichange(
 	struct xfs_inode	*ip,
-	struct xfs_dquot	*udqp,
-	struct xfs_dquot	*gdqp,
-	struct xfs_dquot	*pdqp,
+	struct xfs_dquot	*new_udqp,
+	struct xfs_dquot	*new_gdqp,
+	struct xfs_dquot	*new_pdqp,
 	bool			force,
 	struct xfs_trans	**tpp)
 {
 	struct xfs_trans	*tp;
 	struct xfs_mount	*mp = ip->i_mount;
+	struct xfs_dquot	*udqp;
+	struct xfs_dquot	*gdqp;
+	struct xfs_dquot	*pdqp;
+	bool			retried = false;
 	int			error;
 
+retry:
 	error = xfs_trans_alloc(mp, &M_RES(mp)->tr_ichange, 0, 0, 0, &tp);
 	if (error)
 		return error;
@@ -1140,14 +1181,12 @@ xfs_trans_alloc_ichange(
 	/*
 	 * For each quota type, skip quota reservations if the inode's dquots
 	 * now match the ones that came from the caller, or the caller didn't
-	 * pass one in.
+	 * pass one in.  The inode's dquots can change if we drop the ILOCK to
+	 * perform a blockgc scan, so we must preserve the caller's arguments.
 	 */
-	if (udqp == ip->i_udquot)
-		udqp = NULL;
-	if (gdqp == ip->i_gdquot)
-		gdqp = NULL;
-	if (pdqp == ip->i_pdquot)
-		pdqp = NULL;
+	udqp = (new_udqp != ip->i_udquot) ? new_udqp : NULL;
+	gdqp = (new_gdqp != ip->i_gdquot) ? new_gdqp : NULL;
+	pdqp = (new_pdqp != ip->i_pdquot) ? new_pdqp : NULL;
 	if (udqp || gdqp || pdqp) {
 		unsigned int	qflags = XFS_QMOPT_RES_REGBLKS;
 
@@ -1163,6 +1202,12 @@ xfs_trans_alloc_ichange(
 		error = xfs_trans_reserve_quota_bydquots(tp, mp, udqp, gdqp,
 				pdqp, ip->i_d.di_nblocks + ip->i_delayed_blks,
 				1, qflags);
+		if ((error == -EDQUOT || error == -ENOSPC) && !retried) {
+			xfs_trans_cancel(tp);
+			xfs_blockgc_free_dquots(mp, udqp, gdqp, pdqp, 0);
+			retried = true;
+			goto retry;
+		}
 		if (error)
 			goto out_cancel;
 	}
