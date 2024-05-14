@@ -853,6 +853,9 @@ struct fuse_conn {
 	/* separate background queue for WRITE requests and the others */
 	unsigned int separate_background:1;
 
+	/** Support for fuse server recovery */
+	unsigned int recovery:1;
+
 	/** The number of requests waiting for completion */
 	atomic_t num_waiting;
 
