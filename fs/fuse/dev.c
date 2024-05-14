@@ -2354,10 +2354,13 @@ int fuse_dev_release(struct inode *inode, struct file *file)
 			list_splice_init(&fpq->processing[i], &to_end);
 		spin_unlock(&fpq->lock);
 
-		end_requests(&to_end);
+		if (!fc->recovery)
+			end_requests(&to_end);
+		else
+			fuse_requeue_requests(fc, &to_end);
 
 		/* Are we the last open device? */
-		if (atomic_dec_and_test(&fc->dev_count)) {
+		if (atomic_dec_and_test(&fc->dev_count) && !fc->recovery) {
 			WARN_ON(fc->iq.fasync != NULL);
 			fuse_abort_conn(fc);
 		}
@@ -2615,6 +2618,44 @@ static long fuse_dev_ioctl_attach(struct file *file, void __user *argp)
 	return res;
 }
 
+static int fuse_device_recover(struct file *file, void __user *argp,
+		struct fuse_ioctl_attach *attach)
+{
+	struct fuse_conn *fc;
+
+	list_for_each_entry(fc, &fuse_conn_list, entry) {
+		if (strncmp(fc->tag, attach->tag, FUSE_TAG_NAME_MAX))
+			continue;
+		if (!fc->recovery)
+			return -EOPNOTSUPP;
+
+		/* return dev_t of matched connection */
+		attach->dev = fc->dev;
+		if (copy_to_user(argp, attach, sizeof(*attach)))
+			return -EFAULT;
+
+		return fuse_device_clone(fc, file);
+	}
+	return -ENODEV;
+}
+
+static long fuse_dev_ioctl_recover(struct file *file, void __user *argp)
+{
+	struct fuse_ioctl_attach attach;
+	int res;
+
+	if (copy_from_user(&attach, argp, sizeof(attach)))
+		return -EFAULT;
+
+	if (attach.tag[0] == '\0')
+		return -EINVAL;
+
+	mutex_lock(&fuse_mutex);
+	res = fuse_device_recover(file, argp, &attach);
+	mutex_unlock(&fuse_mutex);
+	return res;
+}
+
 static long fuse_dev_ioctl(struct file *file, unsigned int cmd,
 			   unsigned long arg)
 {
@@ -2632,6 +2673,9 @@ static long fuse_dev_ioctl(struct file *file, unsigned int cmd,
 
 	case FUSE_DEV_IOC_ATTACH:
 		return fuse_dev_ioctl_attach(file, argp);
+
+	case FUSE_DEV_IOC_RECOVER:
+		return fuse_dev_ioctl_recover(file, argp);
 
 	default:
 		return -ENOTTY;

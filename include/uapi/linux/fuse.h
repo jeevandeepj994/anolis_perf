@@ -349,6 +349,7 @@ struct fuse_file_lock {
  * FUSE_NO_EXPORT_SUPPORT: explicitly disable export support
  * FUSE_HAS_RESEND: kernel supports resending pending requests, and the high bit
  *		    of the request ID indicates resend requests
+ * FUSE_HAS_RECOVERY:	recovery mechanism for fuse server
  */
 #define FUSE_ASYNC_READ		(1 << 0)
 #define FUSE_POSIX_LOCKS	(1 << 1)
@@ -386,6 +387,7 @@ struct fuse_file_lock {
 #define FUSE_DIRECT_IO_ALLOW_MMAP (1ULL << 36)
 #define FUSE_NO_EXPORT_SUPPORT	(1ULL << 38)
 #define FUSE_HAS_RESEND		(1ULL << 39)
+#define FUSE_HAS_RECOVERY	(1ULL << 57)
 #define FUSE_DELETE_STALE	(1ULL << 58)
 /* The 59th bit is left to FUSE_DIO_SHARED_MMAP */
 #define FUSE_INVAL_CACHE_INFAIL	(1ULL << 60)
@@ -966,6 +968,7 @@ struct fuse_notify_retrieve_in {
 #define FUSE_DEV_IOC_PASSTHROUGH_OPEN_V0	_IOW(FUSE_DEV_IOC_MAGIC, 100, uint32_t)
 #define FUSE_DEV_IOC_PASSTHROUGH_WRITE_OPEN_V0	_IOW(FUSE_DEV_IOC_MAGIC, 101, uint32_t)
 #define FUSE_DEV_IOC_ATTACH		_IOWR(FUSE_DEV_IOC_MAGIC, 200, struct fuse_ioctl_attach)
+#define FUSE_DEV_IOC_RECOVER		_IOWR(FUSE_DEV_IOC_MAGIC, 201, struct fuse_ioctl_attach)
 
 struct fuse_lseek_in {
 	uint64_t	fh;

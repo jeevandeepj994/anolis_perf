@@ -840,6 +840,10 @@ struct fuse_conn {
 	/* Relax restrictions to allow shared mmap in FOPEN_DIRECT_IO mode */
 	unsigned int direct_io_allow_mmap:1;
 
+
+	/** Support for fuse server recovery */
+	unsigned int recovery:1;
+
 	/** The number of requests waiting for completion */
 	atomic_t num_waiting;
 
