@@ -48,6 +48,8 @@ DEFINE_PER_CPU(struct resctrl_pqr_state, pqr_state);
  */
 bool rdt_alloc_capable;
 
+bool rdt_bmec_capable;
+
 static void
 mba_wrmsr_intel(struct rdt_domain *d, struct msr_param *m,
 		struct rdt_resource *r);
@@ -66,9 +68,6 @@ struct rdt_hw_resource rdt_resources_all[] = {
 			.rid			= RDT_RESOURCE_L3,
 			.name			= "L3",
 			.cache_level		= 3,
-			.cache = {
-				.min_cbm_bits	= 1,
-			},
 			.domains		= domain_init(RDT_RESOURCE_L3),
 			.format_str		= "%d=%0*x",
 			.fflags			= RFTYPE_RES_CACHE,
@@ -82,9 +81,6 @@ struct rdt_hw_resource rdt_resources_all[] = {
 			.rid			= RDT_RESOURCE_L2,
 			.name			= "L2",
 			.cache_level		= 2,
-			.cache = {
-				.min_cbm_bits	= 1,
-			},
 			.domains		= domain_init(RDT_RESOURCE_L2),
 			.format_str		= "%d=%0*x",
 			.fflags			= RFTYPE_RES_CACHE,
@@ -99,6 +95,17 @@ struct rdt_hw_resource rdt_resources_all[] = {
 			.name			= "MB",
 			.cache_level		= 3,
 			.domains		= domain_init(RDT_RESOURCE_MBA),
+			.format_str		= "%d=%*u",
+			.fflags			= RFTYPE_RES_MB,
+		},
+	},
+	[RDT_RESOURCE_SMBA] =
+	{
+		.r_resctrl = {
+			.rid			= RDT_RESOURCE_SMBA,
+			.name			= "SMBA",
+			.cache_level		= 3,
+			.domains		= domain_init(RDT_RESOURCE_SMBA),
 			.format_str		= "%d=%*u",
 			.fflags			= RFTYPE_RES_MB,
 		},
@@ -216,9 +223,15 @@ static bool __rdt_get_mem_config_amd(struct rdt_resource *r)
 	struct rdt_hw_resource *hw_res = resctrl_to_arch_res(r);
 	union cpuid_0x10_3_eax eax;
 	union cpuid_0x10_x_edx edx;
-	u32 ebx, ecx;
+	u32 ebx, ecx, subleaf;
 
-	cpuid_count(0x80000020, 1, &eax.full, &ebx, &ecx, &edx.full);
+	/*
+	 * Query CPUID_Fn80000020_EDX_x01 for MBA and
+	 * CPUID_Fn80000020_EDX_x02 for SMBA
+	 */
+	subleaf = (r->rid == RDT_RESOURCE_SMBA) ? 2 :  1;
+
+	cpuid_count(0x80000020, subleaf, &eax.full, &ebx, &ecx, &edx.full);
 	hw_res->num_closid = edx.split.cos_max + 1;
 	r->default_ctrl = MAX_MBA_BW_AMD;
 
@@ -570,7 +583,7 @@ static void clear_closid_rmid(int cpu)
 	state->default_rmid = 0;
 	state->cur_closid = 0;
 	state->cur_rmid = 0;
-	wrmsr(IA32_PQR_ASSOC, 0, 0);
+	wrmsr(MSR_IA32_PQR_ASSOC, 0, 0);
 }
 
 static int resctrl_arch_online_cpu(unsigned int cpu)
@@ -610,6 +623,8 @@ enum {
 	RDT_FLAG_L2_CAT,
 	RDT_FLAG_L2_CDP,
 	RDT_FLAG_MBA,
+	RDT_FLAG_SMBA,
+	RDT_FLAG_BMEC,
 };
 
 #define RDT_OPT(idx, n, f)	\
@@ -633,6 +648,8 @@ static struct rdt_options rdt_options[]  __initdata = {
 	RDT_OPT(RDT_FLAG_L2_CAT,    "l2cat",	X86_FEATURE_CAT_L2),
 	RDT_OPT(RDT_FLAG_L2_CDP,    "l2cdp",	X86_FEATURE_CDP_L2),
 	RDT_OPT(RDT_FLAG_MBA,	    "mba",	X86_FEATURE_MBA),
+	RDT_OPT(RDT_FLAG_SMBA,	    "smba",	X86_FEATURE_SMBA),
+	RDT_OPT(RDT_FLAG_BMEC,	    "bmec",	X86_FEATURE_BMEC),
 };
 #define NUM_RDT_OPTIONS ARRAY_SIZE(rdt_options)
 
@@ -662,7 +679,7 @@ static int __init set_rdt_options(char *str)
 }
 __setup("rdt", set_rdt_options);
 
-static bool __init rdt_cpu_has(int flag)
+bool __init rdt_cpu_has(int flag)
 {
 	bool ret = boot_cpu_has(flag);
 	struct rdt_options *o;
@@ -698,6 +715,19 @@ static __init bool get_mem_config(void)
 	return false;
 }
 
+static __init bool get_slow_mem_config(void)
+{
+	struct rdt_hw_resource *hw_res = &rdt_resources_all[RDT_RESOURCE_SMBA];
+
+	if (!rdt_cpu_has(X86_FEATURE_SMBA))
+		return false;
+
+	if (boot_cpu_data.x86_vendor == X86_VENDOR_AMD)
+		return __rdt_get_mem_config_amd(&hw_res->r_resctrl);
+
+	return false;
+}
+
 static __init bool get_rdt_alloc_resources(void)
 {
 	struct rdt_resource *r;
@@ -728,6 +758,9 @@ static __init bool get_rdt_alloc_resources(void)
 	if (get_mem_config())
 		ret = true;
 
+	if (get_slow_mem_config())
+		ret = true;
+
 	return ret;
 }
 
@@ -741,6 +774,9 @@ static __init bool get_rdt_mon_resources(void)
 		rdt_mon_features |= (1 << QOS_L3_MBM_TOTAL_EVENT_ID);
 	if (rdt_cpu_has(X86_FEATURE_CQM_MBM_LOCAL))
 		rdt_mon_features |= (1 << QOS_L3_MBM_LOCAL_EVENT_ID);
+
+	if (rdt_cpu_has(X86_FEATURE_BMEC))
+		rdt_bmec_capable = true;
 
 	if (!rdt_mon_features)
 		return false;
@@ -793,6 +829,7 @@ static __init void rdt_init_res_defs_intel(void)
 		    r->rid == RDT_RESOURCE_L2) {
 			r->cache.arch_has_empty_bitmaps = false;
 			r->cache.arch_has_per_cpu_cfg = false;
+			r->cache.min_cbm_bits = 1;
 		} else if (r->rid == RDT_RESOURCE_MBA) {
 			hw_res->msr_base = MSR_IA32_MBA_THRTL_BASE;
 			hw_res->msr_update = mba_wrmsr_intel;
@@ -813,8 +850,12 @@ static __init void rdt_init_res_defs_amd(void)
 			r->cache.arch_has_sparse_bitmasks = true;
 			r->cache.arch_has_empty_bitmaps = true;
 			r->cache.arch_has_per_cpu_cfg = true;
+			r->cache.min_cbm_bits = 0;
 		} else if (r->rid == RDT_RESOURCE_MBA) {
 			hw_res->msr_base = MSR_IA32_MBA_BW_BASE;
+			hw_res->msr_update = mba_wrmsr_amd;
+		} else if (r->rid == RDT_RESOURCE_SMBA) {
+			hw_res->msr_base = MSR_IA32_SMBA_BW_BASE;
 			hw_res->msr_update = mba_wrmsr_amd;
 		}
 	}

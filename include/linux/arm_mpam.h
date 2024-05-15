@@ -96,6 +96,24 @@ static inline int resctrl_arch_set_hwdrc_enabled(enum resctrl_res_level ignored,
 	return hwdrc_mb ? -EINVAL : 0;
 }
 
+static inline bool resctrl_arch_is_mbm_total_configurable(void)
+{
+	return false;
+}
+
+static inline bool resctrl_arch_is_mbm_local_configurable(void)
+{
+	return false;
+}
+
+static inline void resctrl_arch_mondata_config_read(void *dom, void *info) { }
+
+static inline int resctrl_arch_mbm_config_write_domain(void *rdt_resource, void *dom,
+						       u32 evtid, u32 val)
+{
+	return 0;
+}
+
 /* reset cached configurations, then all devices */
 void resctrl_arch_reset_resources(void);
 

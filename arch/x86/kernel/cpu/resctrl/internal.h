@@ -22,16 +22,6 @@
 #define HWDRC_MEMCLOS_AVAILABLE		BIT_ULL(0)
 #define HWDRC_OS_MAILBOX_RETRY_COUNT	30
 
-#define MSR_IA32_L3_QOS_CFG		0xc81
-#define MSR_IA32_L2_QOS_CFG		0xc82
-#define MSR_IA32_L3_CBM_BASE		0xc90
-#define MSR_IA32_L2_CBM_BASE		0xd10
-#define MSR_IA32_MBA_THRTL_BASE		0xd50
-#define MSR_IA32_MBA_BW_BASE		0xc0000200
-
-#define MSR_IA32_QM_CTR			0x0c8e
-#define MSR_IA32_QM_EVTSEL		0x0c8d
-
 #define L3_QOS_CDP_ENABLE		0x01ULL
 
 #define L2_QOS_CDP_ENABLE		0x01ULL
@@ -48,6 +38,30 @@
  * as an offset from MBM_CNTR_WIDTH_BASE.
  */
 #define MBM_CNTR_WIDTH_OFFSET_MAX (62 - MBM_CNTR_WIDTH_BASE)
+
+/* Reads to Local DRAM Memory */
+#define READS_TO_LOCAL_MEM		BIT(0)
+
+/* Reads to Remote DRAM Memory */
+#define READS_TO_REMOTE_MEM		BIT(1)
+
+/* Non-Temporal Writes to Local Memory */
+#define NON_TEMP_WRITE_TO_LOCAL_MEM	BIT(2)
+
+/* Non-Temporal Writes to Remote Memory */
+#define NON_TEMP_WRITE_TO_REMOTE_MEM	BIT(3)
+
+/* Reads to Local Memory the system identifies as "Slow Memory" */
+#define READS_TO_LOCAL_S_MEM		BIT(4)
+
+/* Reads to Remote Memory the system identifies as "Slow Memory" */
+#define READS_TO_REMOTE_S_MEM		BIT(5)
+
+/* Dirty Victims to All Types of Memory */
+#define DIRTY_VICTIMS_TO_ALL_MEM	BIT(6)
+
+/* Max event bits supported */
+#define MAX_EVT_CONFIG_BITS		GENMASK(6, 0)
 
 /**
  * struct arch_mbm_state - values used to compute resctrl_arch_rmid_read()s
@@ -284,6 +298,7 @@ union cpuid_0x10_x_edx {
 
 void rdt_ctrl_update(void *arg);
 int rdt_get_mon_l3_config(struct rdt_resource *r);
+bool __init rdt_cpu_has(int flag);
 void __init intel_rdt_mbm_apply_quirk(void);
 void rdt_domain_reconfigure_cdp(struct rdt_resource *r);
 
