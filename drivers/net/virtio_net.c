@@ -28,6 +28,9 @@
 /* skip virtio_check_driver_offered_feature check for force_xdp  */
 #define virtio_has_feature __virtio_test_bit
 
+#define u64_stats_fetch_begin u64_stats_fetch_begin_irq
+#define u64_stats_fetch_retry u64_stats_fetch_retry_irq
+
 static int napi_weight = NAPI_POLL_WEIGHT;
 module_param(napi_weight, int, 0444);
 
@@ -2250,18 +2253,18 @@ static void virtnet_stats(struct net_device *dev,
 		struct send_queue *sq = &vi->sq[i];
 
 		do {
-			start = u64_stats_fetch_begin_irq(&sq->stats.syncp);
+			start = u64_stats_fetch_begin(&sq->stats.syncp);
 			tpackets = u64_stats_read(&sq->stats.packets);
 			tbytes   = u64_stats_read(&sq->stats.bytes);
 			terrors  = u64_stats_read(&sq->stats.tx_timeouts);
-		} while (u64_stats_fetch_retry_irq(&sq->stats.syncp, start));
+		} while (u64_stats_fetch_retry(&sq->stats.syncp, start));
 
 		do {
-			start = u64_stats_fetch_begin_irq(&rq->stats.syncp);
+			start = u64_stats_fetch_begin(&rq->stats.syncp);
 			rpackets = u64_stats_read(&rq->stats.packets);
 			rbytes   = u64_stats_read(&rq->stats.bytes);
 			rdrops   = u64_stats_read(&rq->stats.drops);
-		} while (u64_stats_fetch_retry_irq(&rq->stats.syncp, start));
+		} while (u64_stats_fetch_retry(&rq->stats.syncp, start));
 
 		tot->rx_packets += rpackets;
 		tot->tx_packets += tpackets;
@@ -2920,13 +2923,13 @@ static void virtnet_get_ethtool_stats(struct net_device *dev,
 
 		stats_base = (const u8 *)&rq->stats;
 		do {
-			start = u64_stats_fetch_begin_irq(&rq->stats.syncp);
+			start = u64_stats_fetch_begin(&rq->stats.syncp);
 			for (j = 0; j < VIRTNET_RQ_STATS_LEN; j++) {
 				offset = virtnet_rq_stats_desc[j].offset;
 				p = (const u64_stats_t *)(stats_base + offset);
 				data[idx + j] = u64_stats_read(p);
 			}
-		} while (u64_stats_fetch_retry_irq(&rq->stats.syncp, start));
+		} while (u64_stats_fetch_retry(&rq->stats.syncp, start));
 		idx += VIRTNET_RQ_STATS_LEN;
 	}
 
@@ -2935,13 +2938,13 @@ static void virtnet_get_ethtool_stats(struct net_device *dev,
 
 		stats_base = (const u8 *)&sq->stats;
 		do {
-			start = u64_stats_fetch_begin_irq(&sq->stats.syncp);
+			start = u64_stats_fetch_begin(&sq->stats.syncp);
 			for (j = 0; j < VIRTNET_SQ_STATS_LEN; j++) {
 				offset = virtnet_sq_stats_desc[j].offset;
 				p = (const u64_stats_t *)(stats_base + offset);
 				data[idx + j] = u64_stats_read(p);
 			}
-		} while (u64_stats_fetch_retry_irq(&sq->stats.syncp, start));
+		} while (u64_stats_fetch_retry(&sq->stats.syncp, start));
 		idx += VIRTNET_SQ_STATS_LEN;
 	}
 }
