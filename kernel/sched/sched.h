@@ -1524,6 +1524,9 @@ static inline u64 get_forceidled_sum(struct rq *rq)
 	const struct cpumask *smt_mask = cpu_smt_mask(cpu);
 	int i;
 
+	if (unlikely(!smt_mask))
+		return 0;
+
 	/* We assume smt == 2 here. */
 	for_each_cpu(i, smt_mask) {
 		if (i != cpu)
