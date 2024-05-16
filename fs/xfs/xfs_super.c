@@ -1460,6 +1460,10 @@ xfs_fc_fill_super(
 #endif
 	sb->s_op = &xfs_super_operations;
 
+	spin_lock_init(&mp->m_reflink_opt_gclock);
+	INIT_LIST_HEAD(&mp->m_reflink_opt_gclist);
+	INIT_WORK(&mp->m_reflink_opt_gcwork, xfs_inodegc_reflink_opt_worker);
+	init_waitqueue_head(&mp->m_reflink_opt_wait);
 	error = xfs_inodegc_init_percpu(mp);
 	if (error)
 		goto out_destroy_counters;
