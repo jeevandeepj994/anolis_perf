@@ -43,9 +43,7 @@
 #include <asm/reboot.h>
 #include <asm/svm.h>
 #include <asm/e820/api.h>
-#ifdef CONFIG_HYGON_CSV
 #include <asm/csv_command.h>
-#endif
 
 DEFINE_STATIC_KEY_FALSE(kvm_async_pf_enabled);
 
