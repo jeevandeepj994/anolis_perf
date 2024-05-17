@@ -1,0 +1,7 @@
+* Fri May 17 2024 Jing Zhang <renyu.zj@linux.alibaba.com> [6.6.25-2_rc3%%DIST%%]
+- anolis: spec: add grubby config after install kernel (Jing Zhang)
+- kselftest/arm64: Don't probe the current VL for unsupported vector types (Mark Brown)
+- anolis: crypto: ccp: Return -ENODEV if Hygon PSP is not configured with CSV capability (hanliyang)
+- selftests: net: veth: test the ability to independently manipulate GRO and XDP (Ignat Korchagin)
+- selftests: net: veth: test syncing GRO and XDP state while device is down (Jakub Kicinski)
+
