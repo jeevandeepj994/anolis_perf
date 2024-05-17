@@ -3767,7 +3767,7 @@ static int virtnet_send_rx_notf_coal_cmds(struct virtnet_info *vi,
 
 	/* Acquire all queues dim_locks */
 	for (i = 0; i < vi->max_queue_pairs; i++)
-		mutex_lock(&vi->rq[i].dim_lock);
+		mutex_lock_nested(&vi->rq[i].dim_lock, i);
 
 	if (rx_ctrl_dim_on && !vi->rx_dim_enabled) {
 		vi->rx_dim_enabled = true;
