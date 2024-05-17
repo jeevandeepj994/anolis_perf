@@ -53,3 +53,4 @@ obj-$(CONFIG_CRYPTO_DEV_ZYNQMP_AES) += xilinx/
 obj-y += hisilicon/
 obj-$(CONFIG_CRYPTO_DEV_AMLOGIC_GXL) += amlogic/
 obj-$(CONFIG_CRYPTO_DEV_ALICC) += alibaba/alicc/
+obj-y += montage/
