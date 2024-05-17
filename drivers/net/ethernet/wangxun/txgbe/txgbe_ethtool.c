@@ -2677,11 +2677,15 @@ static int txgbe_get_ethtool_fdir_entry(struct txgbe_adapter *adapter,
 		(struct ethtool_rx_flow_spec *)&cmd->fs;
 	struct hlist_node *node;
 	struct txgbe_fdir_filter *rule = NULL;
-	int ef_idx;
 
-	ef_idx = txgbe_match_etype_entry(adapter, fsp->location);
-	if (ef_idx < TXGBE_MAX_PSR_ETYPE_SWC_FILTERS)
-		return txgbe_get_etype_rule(adapter, fsp, ef_idx);
+	if (adapter->etype_filter_info.count > 0) {
+		int ef_idx;
+
+		ef_idx = txgbe_match_etype_entry(adapter, fsp->location);
+		if (ef_idx < TXGBE_MAX_PSR_ETYPE_SWC_FILTERS)
+			return txgbe_get_etype_rule(adapter, fsp, ef_idx);
+	}
+
 
 	/* report total rule count */
 	cmd->data = (1024 << adapter->fdir_pballoc) - 2;
@@ -3312,9 +3316,11 @@ static int txgbe_del_ethtool_fdir_entry(struct txgbe_adapter *adapter,
 		(struct ethtool_rx_flow_spec *)&cmd->fs;
 	int err;
 
-	err = txgbe_del_ethertype_filter(adapter, fsp->location);
-	if (!err)
-		return 0;
+	if (adapter->etype_filter_info.count > 0) {
+		err = txgbe_del_ethertype_filter(adapter, fsp->location);
+		if (!err)
+			return 0;
+	}
 
 	spin_lock(&adapter->fdir_perfect_lock);
 	err = txgbe_update_ethtool_fdir_entry(adapter, NULL, fsp->location);
