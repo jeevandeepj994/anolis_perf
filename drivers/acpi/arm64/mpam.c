@@ -21,7 +21,7 @@
  */
 #define ACPI_SIG_YMPM "YMPM"
 
-int ddr_cpufreq;
+extern int ddr_cpufreq;
 
 /* Use OEM info in MPAM ACPI table to distinguish different machine types */
 struct acpi_mpam_machine_oem_info {
@@ -141,7 +141,7 @@ static int acpi_mpam_parse_resource(struct mpam_msc *msc,
 		return mpam_ris_create(msc, res->ris_index, MPAM_CLASS_CACHE,
 				       level, cache_id);
 	case ACPI_MPAM_LOCATION_TYPE_MEMORY:
-		ddr_cpufreq = res->locator2;
+		WRITE_ONCE(ddr_cpufreq, res->locator2);
 		return mpam_ris_create(msc, res->ris_index, MPAM_CLASS_MEMORY,
 				       255, res->locator1);
 	default:

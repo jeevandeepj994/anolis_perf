@@ -33,7 +33,8 @@
 
 #include "mpam_internal.h"
 
-extern int ddr_cpufreq;
+int ddr_cpufreq;
+EXPORT_SYMBOL_GPL(ddr_cpufreq);
 
 DEFINE_STATIC_KEY_FALSE(mpam_enabled);
 EXPORT_SYMBOL(mpam_enabled);
@@ -43,10 +44,13 @@ EXPORT_SYMBOL(mpam_enabled);
  * mpam_enabled key is enabled these lists are read-only,
  * unless the error interrupt disables the driver.
  */
-static DEFINE_MUTEX(mpam_list_lock);
-static LIST_HEAD(mpam_all_msc);
+DEFINE_MUTEX(mpam_list_lock);
+EXPORT_SYMBOL_GPL(mpam_list_lock);
+LIST_HEAD(mpam_all_msc);
+EXPORT_SYMBOL_GPL(mpam_all_msc);
 
 enum mpam_machine_type mpam_current_machine;
+EXPORT_SYMBOL_GPL(mpam_current_machine);
 
 /* MPAM isn't available until all the MSC have been probed. */
 static u32 mpam_num_msc;
@@ -59,11 +63,13 @@ static DEFINE_MUTEX(mpam_cpuhp_state_lock);
  * Generating traffic outside this range will result in screaming interrupts.
  */
 u16 mpam_partid_max;
+EXPORT_SYMBOL_GPL(mpam_partid_max);
 u8 mpam_pmg_max;
 static bool partid_max_init, partid_max_published;
 static u16 mpam_cmdline_partid_max;
 static bool mpam_cmdline_partid_max_overridden;
-static DEFINE_SPINLOCK(partid_max_lock);
+DEFINE_SPINLOCK(partid_max_lock);
+EXPORT_SYMBOL_GPL(partid_max_lock);
 
 /*
  * mpam is enabled once all devices have been probed from CPU online callbacks,
@@ -95,22 +101,6 @@ static DECLARE_WORK(mpam_broken_work, &mpam_disable);
  * index will be unique.
  */
 LIST_HEAD(mpam_classes);
-
-static u32 __mpam_read_reg(struct mpam_msc *msc, u16 reg)
-{
-	WARN_ON_ONCE(reg >= msc->mapped_hwpage_sz);
-	WARN_ON_ONCE(!cpumask_test_cpu(smp_processor_id(), &msc->accessibility));
-
-	return readl_relaxed(msc->mapped_hwpage + reg);
-}
-
-static void __mpam_write_reg(struct mpam_msc *msc, u16 reg, u32 val)
-{
-	WARN_ON_ONCE(reg >= msc->mapped_hwpage_sz);
-	WARN_ON_ONCE(!cpumask_test_cpu(smp_processor_id(), &msc->accessibility));
-
-	writel_relaxed(val, msc->mapped_hwpage + reg);
-}
 
 #define mpam_read_partsel_reg(msc, reg)			\
 ({							\
@@ -962,7 +952,7 @@ static void __ris_impl_msmon_read(void *arg)
 
 	mb_val = MBWU_GET(val);
 
-	mb_val = mb_val * 32 * ddr_cpufreq * 1000000 / cycle; /* B/s */
+	mb_val = mb_val * 32 * READ_ONCE(ddr_cpufreq) * 1000000 / cycle; /* B/s */
 	*(m->val) += mb_val;
 }
 
@@ -1515,42 +1505,77 @@ static int mpam_dt_parse_resource(struct mpam_msc *msc, struct device_node *np,
 {
 	int err = 0;
 	u32 level = 0;
-	u32 cache_id;
-	struct device_node *cache;
+	u32 dev_id;
+	enum mpam_class_types type;
+	struct device_node *dev_node;
 
 	do {
+		type = MPAM_CLASS_UNKNOWN;
+
 		if (of_device_is_compatible(np, "arm,mpam-cache")) {
-			cache = of_parse_phandle(np, "arm,mpam-device", 0);
-			if (!cache) {
+			dev_node = of_parse_phandle(np, "arm,mpam-device", 0);
+			if (!dev_node) {
 				pr_err("Failed to read phandle\n");
 				break;
 			}
+			type = MPAM_CLASS_CACHE;
 		} else if (of_device_is_compatible(np->parent, "cache")) {
-			cache = np->parent;
-		} else {
-			pr_err("Not a cache\n");
-			break;
-		}
-
-		err = of_property_read_u32(cache, "cache-level", &level);
-		if (err) {
-			pr_err("Failed to read cache-level\n");
-			break;
-		}
-
-		err = of_property_read_u32(cache, "cache-id", &cache_id);
-		if (err) {
-			cache_id = cache_of_get_id(cache);
-			if (cache_id == ~0U) {
-				pr_err("Failed to read cache-id\n");
+			dev_node = np->parent;
+			type = MPAM_CLASS_CACHE;
+		} else if (of_device_is_compatible(np, "arm,mpam-memory")) {
+			dev_node = of_parse_phandle(np, "arm,mpam-device", 0);
+			if (!dev_node) {
+				pr_err("Failed to read phandle\n");
 				break;
 			}
+			type = MPAM_CLASS_MEMORY;
+		} else if (of_device_is_compatible(np->parent, "memory")) {
+			dev_node = np->parent;
+			type = MPAM_CLASS_MEMORY;
+		} else {
+			pr_err("Not a valid device\n");
+			break;
 		}
 
-		err = mpam_ris_create(msc, ris_idx, MPAM_CLASS_CACHE, level,
-				      cache_id);
+		if (type == MPAM_CLASS_CACHE) {
+			err = of_property_read_u32(dev_node, "cache-level", &level);
+			if (err) {
+				pr_err("Failed to read cache-level\n");
+				break;
+			}
+
+			err = of_property_read_u32(dev_node, "cache-id", &dev_id);
+			if (err) {
+				dev_id = cache_of_get_id(dev_node);
+				if (dev_id == ~0U) {
+					pr_err("Failed to read cache-id\n");
+					break;
+				}
+			}
+		} else if (type == MPAM_CLASS_MEMORY) {
+			/*
+			 * Use 255 as a pesudo level to fill the level field
+			 * in struct mpam_class of the memory type.
+			 */
+			level = 255;
+			err = of_property_read_u32(dev_node, "numa-node-id", &dev_id);
+			if (err) {
+				pr_err("Failed to read memory numa node id\n");
+				break;
+			}
+			err = of_property_read_u32(dev_node, "ddr-cpufreq", &ddr_cpufreq);
+			if (err) {
+				pr_err("Failed to read memory ddr cpufreq\n");
+				break;
+			}
+		} else {
+			pr_err("Not a valid device\n");
+			break;
+		}
+
+		err = mpam_ris_create(msc, ris_idx, type, level, dev_id);
 	} while (0);
-	of_node_put(cache);
+	of_node_put(dev_node);
 
 	return err;
 }
@@ -1610,6 +1635,9 @@ static int get_msc_affinity(struct mpam_msc *msc)
 		if (of_device_is_compatible(parent, "cache")) {
 			err = get_cpumask_from_cache(parent,
 						     &msc->accessibility);
+		} else if (of_node_is_type(parent, "memory")) {
+			cpumask_copy(&msc->accessibility, cpu_possible_mask);
+			err = 0;
 		} else {
 			err = -EINVAL;
 			pr_err("Cannot determine accessibility of MSC: %s\n",
@@ -2237,13 +2265,19 @@ static struct platform_driver mpam_msc_driver = {
 static void mpam_dt_create_foundling_msc(void)
 {
 	int err;
-	struct device_node *cache;
+	struct device_node *cache, *memory;
 
 	for_each_compatible_node(cache, NULL, "cache") {
 		err = of_platform_populate(cache, mpam_of_match, NULL, NULL);
 		if (err) {
 			pr_err("Failed to create MSC devices under caches\n");
 		}
+	}
+
+	for_each_node_by_type(memory, "memory") {
+		err = of_platform_populate(memory, mpam_of_match, NULL, NULL);
+		if (err)
+			pr_err("Failed to create MSC devices under memorys\n");
 	}
 }
 
