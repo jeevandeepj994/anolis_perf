@@ -3391,8 +3391,11 @@ void rich_container_get_cpuset_cpus(struct cpumask *pmask)
 #else
 	if (sysctl_rich_container_source == 1)
 		css = NULL;
-	else
+	else if (sysctl_rich_container_source == 0)
 		css = task_css(current, cpuset_cgrp_id);
+	else
+		css = task_css(current, cpuset_cgrp_id)->parent
+				?: task_css(current, cpuset_cgrp_id);
 #endif
 
 	if (css) {
