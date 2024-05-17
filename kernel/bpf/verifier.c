@@ -12861,10 +12861,29 @@ static int check_struct_ops_btf_id(struct bpf_verifier_env *env)
 }
 #define SECURITY_PREFIX "security_"
 
-static int check_attach_modify_return(unsigned long addr, const char *func_name)
+/*
+ * List of functions that allowed to be modified by anolis cloud-kernel.
+ * WARNING: Applying fmod_ret on these functions is risky and may cause
+ * kernel crash. Users should have full knowledge about bpf and the
+ * corresponding subsystem (e.g., scheduler).
+ */
+BTF_SET_START(btf_customized_allow_fmodret)
+/* The functions below can be used for user-space scheduling. */
+BTF_ID(func, pick_next_entity)
+BTF_ID(func, check_preempt_tick)
+BTF_ID(func, check_preempt_wakeup)
+BTF_ID(func, select_idle_cpu)
+BTF_SET_END(btf_customized_allow_fmodret)
+
+int sysctl_bpf_customized_fmodret __read_mostly;
+static int check_attach_modify_return(unsigned long addr, const char *func_name, u32 btf_id)
 {
 	if (within_error_injection_list(addr) ||
 	    !strncmp(SECURITY_PREFIX, func_name, sizeof(SECURITY_PREFIX) - 1))
+		return 0;
+
+	if (sysctl_bpf_customized_fmodret &&
+	    btf_id_set_contains(&btf_customized_allow_fmodret, btf_id))
 		return 0;
 
 	return -EINVAL;
@@ -13106,7 +13125,7 @@ int bpf_check_attach_target(struct bpf_verifier_log *log,
 				bpf_log(log, "can't modify return codes of BPF programs\n");
 				return -EINVAL;
 			}
-			ret = check_attach_modify_return(addr, tname);
+			ret = check_attach_modify_return(addr, tname, btf_id);
 			if (ret) {
 				bpf_log(log, "%s() is not modifiable\n", tname);
 				return ret;

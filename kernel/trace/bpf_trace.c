@@ -943,9 +943,28 @@ const struct bpf_func_proto bpf_snprintf_btf_proto = {
 	.arg5_type	= ARG_ANYTHING,
 };
 
+BPF_CALL_1(bpf_anolis_rb_next, const struct rb_node *, node)
+{
+	return (unsigned long)rb_next(node);
+}
+
+BTF_ID_LIST_SINGLE(btf_rb_node_ids, struct, rb_node)
+
+static const struct bpf_func_proto bpf_anolis_rb_next_proto = {
+	.func		= bpf_anolis_rb_next,
+	.gpl_only	= false,
+	.ret_type	= RET_PTR_TO_BTF_ID_OR_NULL,
+	.ret_btf_id	= &btf_rb_node_ids[0],
+	.arg1_type	= ARG_PTR_TO_BTF_ID,
+	.arg1_btf_id	= &btf_rb_node_ids[0],
+};
+
 const struct bpf_func_proto *
 bpf_tracing_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 {
+	if ((enum anolis_bpf_func_id)func_id == BPF_FUNC_anolis_rb_next)
+		return &bpf_anolis_rb_next_proto;
+
 	switch (func_id) {
 	case BPF_FUNC_map_lookup_elem:
 		return &bpf_map_lookup_elem_proto;
