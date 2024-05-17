@@ -6355,3 +6355,7 @@
 				memory, and other data can't be written using
 				xmon commands.
 			off	xmon is disabled.
+
+	zhaoxin_patch_bitmask=
+			[X86] Bitmask for Zhaoxin Platform's patch.
+			bit 0: enable KH-40000 dma patch's node check function
