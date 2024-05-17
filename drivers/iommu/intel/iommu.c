@@ -1818,11 +1818,22 @@ static inline void __mapping_notify_one(struct intel_iommu *iommu,
 static void intel_flush_iotlb_all(struct iommu_domain *domain)
 {
 	struct dmar_domain *dmar_domain = to_dmar_domain(domain);
+	unsigned long flags;
 	int idx;
 
 	for_each_domain_iommu(idx, dmar_domain) {
 		struct intel_iommu *iommu = g_iommus[idx];
-		u16 did = dmar_domain->iommu_did[iommu->seq_id];
+		struct dmar_domain *d_domain;
+		u16 did;
+
+		spin_lock_irqsave(&iommu->lock, flags);
+		if (dmar_domain->iommu_refcnt[idx] == 0) {
+			spin_unlock_irqrestore(&iommu->lock, flags);
+			continue;
+		}
+		did = dmar_domain->iommu_did[iommu->seq_id];
+		d_domain = get_iommu_domain(iommu, did);
+		spin_unlock_irqrestore(&iommu->lock, flags);
 
 		if (domain_use_first_level(dmar_domain))
 			domain_flush_piotlb(iommu, dmar_domain, 0, -1, 0);
@@ -1831,7 +1842,7 @@ static void intel_flush_iotlb_all(struct iommu_domain *domain)
 						 DMA_TLB_DSI_FLUSH);
 
 		if (!cap_caching_mode(iommu->cap))
-			iommu_flush_dev_iotlb(get_iommu_domain(iommu, did),
+			iommu_flush_dev_iotlb(d_domain,
 					      0, MAX_AGAW_PFN_WIDTH);
 	}
 }
@@ -4724,6 +4735,7 @@ static void dmar_remove_one_dev_info(struct device *dev)
 	info = get_domain_info(dev);
 	if (info)
 		__dmar_remove_one_dev_info(info);
+
 	spin_unlock_irqrestore(&device_domain_lock, flags);
 }
 
