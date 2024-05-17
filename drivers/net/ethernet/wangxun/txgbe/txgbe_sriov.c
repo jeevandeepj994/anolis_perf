@@ -803,7 +803,7 @@ static int txgbe_set_vf_mac_addr(struct txgbe_adapter *adapter,
 		return -1;
 	}
 
-	if (adapter->vfinfo[vf].pf_set_mac &&
+	if (adapter->vfinfo[vf].pf_set_mac && !adapter->vfinfo[vf].trusted &&
 	    memcmp(adapter->vfinfo[vf].vf_mac_addresses, new_mac,
 		   ETH_ALEN)) {
 		e_warn(drv,
@@ -924,7 +924,7 @@ static int txgbe_set_vf_macvlan_msg(struct txgbe_adapter *adapter,
 		    TXGBE_VT_MSGINFO_SHIFT;
 	int err;
 
-	if (adapter->vfinfo[vf].pf_set_mac && index > 0) {
+	if (adapter->vfinfo[vf].pf_set_mac && !adapter->vfinfo[vf].trusted && index > 0) {
 		e_warn(drv,
 		       "VF %d requested MACVLAN filter but is administratively denied\n",
 			vf);
@@ -974,6 +974,12 @@ static int txgbe_update_vf_xcast_mode(struct txgbe_adapter *adapter,
 	default:
 		return -EOPNOTSUPP;
 	}
+
+	if (xcast_mode > TXGBEVF_XCAST_MODE_MULTI &&
+	    !adapter->vfinfo[vf].trusted) {
+		xcast_mode = TXGBEVF_XCAST_MODE_MULTI;
+	}
+
 	if (adapter->vfinfo[vf].xcast_mode == xcast_mode)
 		goto out;
 
