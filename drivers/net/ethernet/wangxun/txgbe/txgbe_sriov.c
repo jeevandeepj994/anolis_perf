@@ -1336,25 +1336,47 @@ int txgbe_ndo_set_vf_mac(struct net_device *netdev, int vf, u8 *mac)
 	s32 retval = 0;
 	struct txgbe_adapter *adapter = netdev_priv(netdev);
 
-	if (!is_valid_ether_addr(mac) || vf >= adapter->num_vfs)
+	if (vf < 0 || vf >= adapter->num_vfs)
 		return -EINVAL;
 
-	dev_info(pci_dev_to_dev(adapter->pdev),
-		 "setting MAC %pM on VF %d\n", mac, vf);
-	dev_info(pci_dev_to_dev(adapter->pdev),
-		 "Reload the VF driver to make this change effective.\n");
-	retval = txgbe_set_vf_mac(adapter, vf, mac);
-	if (retval >= 0) {
-		adapter->vfinfo[vf].pf_set_mac = true;
-		if (test_bit(__TXGBE_DOWN, &adapter->state)) {
+	if (is_valid_ether_addr(mac)) {
+		dev_info(pci_dev_to_dev(adapter->pdev),
+			 "setting MAC %pM on VF %d\n", mac, vf);
+		dev_info(pci_dev_to_dev(adapter->pdev),
+			 "Reload the VF driver to make this change effective.\n");
+		retval = txgbe_set_vf_mac(adapter, vf, mac);
+		if (retval >= 0) {
+			adapter->vfinfo[vf].pf_set_mac = true;
+			if (test_bit(__TXGBE_DOWN, &adapter->state)) {
+				dev_warn(pci_dev_to_dev(adapter->pdev),
+					 "The VF MAC address has been set, but the PF device is not up.\n");
+				dev_warn(pci_dev_to_dev(adapter->pdev),
+					 "Bring the PF device up before attempting to use the VF device.\n");
+			}
+		} else {
 			dev_warn(pci_dev_to_dev(adapter->pdev),
-				 "The VF MAC address has been set, but the PF device is not up.\n");
-			dev_warn(pci_dev_to_dev(adapter->pdev),
-				 "Bring the PF device up before attempting to use the VF device.\n");
+				"The VF MAC address was NOT set due to invalid or duplicate MAC address.\n");
+		}
+	} else if (is_zero_ether_addr(mac)) {
+		unsigned char *vf_mac_addr =
+						adapter->vfinfo[vf].vf_mac_addresses;
+
+		/* nothing to do */
+		if (is_zero_ether_addr(vf_mac_addr))
+			return 0;
+
+		dev_info(pci_dev_to_dev(adapter->pdev), "removing MAC on VF %d\n",
+			 vf);
+
+		retval = txgbe_del_mac_filter(adapter, vf_mac_addr, vf);
+		if (retval >= 0) {
+			adapter->vfinfo[vf].pf_set_mac = false;
+			memcpy(vf_mac_addr, mac, ETH_ALEN);
+		} else {
+			dev_warn(pci_dev_to_dev(adapter->pdev), "Could NOT remove the VF MAC address.\n");
 		}
 	} else {
-		dev_warn(pci_dev_to_dev(adapter->pdev),
-			 "The VF MAC address was NOT set due to invalid or duplicate MAC address.\n");
+		retval = -EINVAL;
 	}
 
 	return retval;
