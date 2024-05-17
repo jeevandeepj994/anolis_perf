@@ -906,3 +906,4 @@ config CRYPTO_DEV_SA2UL
 	  acceleration for cryptographic algorithms on these devices.
 
 endif # CRYPTO_HW
+source "drivers/crypto/montage/Kconfig"
