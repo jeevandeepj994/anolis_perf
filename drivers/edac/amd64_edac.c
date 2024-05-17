@@ -98,17 +98,6 @@ int __amd64_write_pci_cfg_dword(struct pci_dev *pdev, int offset,
 	return err;
 }
 
-static u32 get_umc_base_f18h_m4h(u16 node, u8 channel)
-{
-	struct pci_dev *f3 = node_to_amd_nb(node)->misc;
-	u8 df_id;
-
-	get_df_id(f3, &df_id);
-	df_id -= 4;
-
-	return get_umc_base(channel) + (0x80000000 + (0x10000000 * df_id));
-}
-
 /*
  * Select DCT to which PCI cfg accesses are routed
  */
@@ -876,10 +865,7 @@ static void __dump_misc_regs_df(struct amd64_pvt *pvt)
 	u32 i, tmp, umc_base;
 
 	for_each_umc(i) {
-		if (hygon_f18h_m4h())
-			umc_base = get_umc_base_f18h_m4h(pvt->mc_node_id, i);
-		else
-			umc_base = get_umc_base(i);
+		umc_base = get_umc_base(i);
 		umc = &pvt->umc[i];
 
 		edac_dbg(1, "UMC%d DIMM cfg: 0x%x\n", i, umc->dimm_cfg);
@@ -999,17 +985,11 @@ static void read_umc_base_mask(struct amd64_pvt *pvt)
 	u32 mask_reg, mask_reg_sec;
 	u32 *base, *base_sec;
 	u32 *mask, *mask_sec;
-	u32 umc_base;
 	int cs, umc;
 
 	for_each_umc(umc) {
-		if (hygon_f18h_m4h())
-			umc_base = get_umc_base_f18h_m4h(pvt->mc_node_id, umc);
-		else
-			umc_base = get_umc_base(umc);
-
-		umc_base_reg = umc_base + UMCCH_BASE_ADDR;
-		umc_base_reg_sec = umc_base + UMCCH_BASE_ADDR_SEC;
+		umc_base_reg = get_umc_base(umc) + UMCCH_BASE_ADDR;
+		umc_base_reg_sec = get_umc_base(umc) + UMCCH_BASE_ADDR_SEC;
 
 		for_each_chip_select(cs, umc, pvt) {
 			base = &pvt->csels[umc].csbases[cs];
@@ -1027,8 +1007,8 @@ static void read_umc_base_mask(struct amd64_pvt *pvt)
 					 umc, cs, *base_sec, base_reg_sec);
 		}
 
-		umc_mask_reg = umc_base + UMCCH_ADDR_MASK;
-		umc_mask_reg_sec = umc_base + get_umc_reg(UMCCH_ADDR_MASK_SEC);
+		umc_mask_reg = get_umc_base(umc) + UMCCH_ADDR_MASK;
+		umc_mask_reg_sec = get_umc_base(umc) + get_umc_reg(UMCCH_ADDR_MASK_SEC);
 
 		for_each_chip_select_mask(cs, umc, pvt) {
 			mask = &pvt->csels[umc].csmasks[cs];
@@ -1116,8 +1096,7 @@ static void determine_memory_type_df(struct amd64_pvt *pvt)
 		 * Check if the system supports the "DDR Type" field in UMC Config
 		 * and has DDR5 DIMMs in use.
 		 */
-		if ((fam_type->flags.zn_regs_v2 || hygon_f18h_m4h()) &&
-		    ((umc->umc_cfg & GENMASK(2, 0)) == 0x1)) {
+		if (fam_type->flags.zn_regs_v2 && ((umc->umc_cfg & GENMASK(2, 0)) == 0x1)) {
 			if (umc->dimm_cfg & BIT(5))
 				umc->dram_type = MEM_LRDDR5;
 			else if (umc->dimm_cfg & BIT(4))
@@ -2446,16 +2425,6 @@ static struct amd64_family_type family_types[] = {
 			.dbam_to_cs		= f17_addr_mask_to_cs_size,
 		}
 	},
-	[F18_M06H_CPUS] = {
-		.ctl_name = "F18h_M06h",
-		.f0_id = PCI_DEVICE_ID_HYGON_18H_M06H_DF_F0,
-		.f6_id = PCI_DEVICE_ID_HYGON_18H_M06H_DF_F6,
-		.max_mcs = 2,
-		.ops = {
-			.early_channel_count	= f17_early_channel_count,
-			.dbam_to_cs		= f17_addr_mask_to_cs_size,
-		}
-	},
 	[F19_CPUS] = {
 		.ctl_name = "F19h",
 		.f0_id = PCI_DEVICE_ID_AMD_19H_DF_F0,
@@ -2737,9 +2706,6 @@ static inline void decode_bus_error(int node_id, struct mce *m)
  */
 static int find_umc_channel(struct mce *m)
 {
-	if (boot_cpu_data.x86_vendor == X86_VENDOR_HYGON &&
-	    boot_cpu_data.x86 == 0x18)
-		return (m->ipid & GENMASK(23, 0)) >> 20;
 	return (m->ipid & GENMASK(31, 0)) >> 20;
 }
 
@@ -2750,7 +2716,6 @@ static void decode_umc_error(int node_id, struct mce *m)
 	struct amd64_pvt *pvt;
 	struct err_info err;
 	u64 sys_addr;
-	u8 umc;
 
 	mci = edac_mc_find(node_id);
 	if (!mci)
@@ -2781,12 +2746,7 @@ static void decode_umc_error(int node_id, struct mce *m)
 
 	err.csrow = m->synd & 0x7;
 
-	if (hygon_f18h_m4h() && boot_cpu_data.x86_model == 0x6)
-		umc = err.channel << 1;
-	else
-		umc = err.channel;
-
-	if (umc_normaddr_to_sysaddr(m->addr, pvt->mc_node_id, umc, &sys_addr)) {
+	if (umc_normaddr_to_sysaddr(m->addr, pvt->mc_node_id, err.channel, &sys_addr)) {
 		err.err_code = ERR_NORM_ADDR;
 		goto log_error;
 	}
@@ -2869,14 +2829,6 @@ static void free_mc_sibling_devs(struct amd64_pvt *pvt)
 	}
 }
 
-static void determine_ecc_sym_sz_f18h_m4h(struct amd64_pvt *pvt, int channel)
-{
-	if (pvt->umc[channel].ecc_ctrl & BIT(8))
-		pvt->ecc_sym_sz = 16;
-	else if (pvt->umc[channel].ecc_ctrl & BIT(7))
-		pvt->ecc_sym_sz = 8;
-}
-
 static void determine_ecc_sym_sz(struct amd64_pvt *pvt)
 {
 	pvt->ecc_sym_sz = 4;
@@ -2887,15 +2839,6 @@ static void determine_ecc_sym_sz(struct amd64_pvt *pvt)
 		for_each_umc(i) {
 			/* Check enabled channels only: */
 			if (pvt->umc[i].sdp_ctrl & UMC_SDP_INIT) {
-				if (boot_cpu_data.x86_vendor == X86_VENDOR_HYGON &&
-				    boot_cpu_data.x86 == 0x18 &&
-				    (boot_cpu_data.x86_model == 0x4 ||
-				     boot_cpu_data.x86_model == 0x5) &&
-				    (pvt->umc[i].umc_cfg & GENMASK(2, 0)) == 0x1) {
-					determine_ecc_sym_sz_f18h_m4h(pvt, i);
-					return;
-				}
-
 				if (pvt->umc[i].ecc_ctrl & BIT(9)) {
 					pvt->ecc_sym_sz = 16;
 					return;
@@ -2930,11 +2873,8 @@ static void __read_mc_regs_df(struct amd64_pvt *pvt)
 
 	/* Read registers from each UMC */
 	for_each_umc(i) {
-		if (hygon_f18h_m4h())
-			umc_base = get_umc_base_f18h_m4h(pvt->mc_node_id, i);
-		else
-			umc_base = get_umc_base(i);
 
+		umc_base = get_umc_base(i);
 		umc = &pvt->umc[i];
 
 		amd_smn_read(nid, umc_base + get_umc_reg(UMCCH_DIMM_CFG), &umc->dimm_cfg);
@@ -3544,31 +3484,13 @@ static struct amd64_family_type *per_family_init(struct amd64_pvt *pvt)
 			pvt->ops = &family_types[F17_M70H_CPUS].ops;
 			break;
 		}
-		fam_type	= &family_types[F17_CPUS];
-		pvt->ops	= &family_types[F17_CPUS].ops;
-		break;
-
+		fallthrough;
 	case 0x18:
-		if (pvt->model == 0x4) {
-			fam_type = &family_types[F17_M30H_CPUS];
-			pvt->ops = &family_types[F17_M30H_CPUS].ops;
-			family_types[F17_M30H_CPUS].max_mcs = 3;
-			family_types[F17_M30H_CPUS].ctl_name = "F18h_M04h";
-			break;
-		} else if (pvt->model == 0x5) {
-			fam_type = &family_types[F17_M30H_CPUS];
-			pvt->ops = &family_types[F17_M30H_CPUS].ops;
-			family_types[F17_M30H_CPUS].max_mcs = 1;
-			family_types[F17_M30H_CPUS].ctl_name = "F18h_M05h";
-			break;
-		} else if (pvt->model == 0x6) {
-			fam_type = &family_types[F18_M06H_CPUS];
-			pvt->ops = &family_types[F18_M06H_CPUS].ops;
-			break;
-		}
 		fam_type	= &family_types[F17_CPUS];
 		pvt->ops	= &family_types[F17_CPUS].ops;
-		family_types[F17_CPUS].ctl_name = "F18h";
+
+		if (pvt->fam == 0x18)
+			family_types[F17_CPUS].ctl_name = "F18h";
 		break;
 
 	case 0x19:
@@ -3846,7 +3768,6 @@ static int __init amd64_edac_init(void)
 {
 	const char *owner;
 	int err = -ENODEV;
-	u16 instance_num;
 	int i;
 
 	owner = edac_get_owner();
@@ -3861,13 +3782,8 @@ static int __init amd64_edac_init(void)
 
 	opstate_init();
 
-	if (hygon_f18h_m4h())
-		instance_num = hygon_nb_num();
-	else
-		instance_num = amd_nb_num();
-
 	err = -ENOMEM;
-	ecc_stngs = kcalloc(instance_num, sizeof(ecc_stngs[0]), GFP_KERNEL);
+	ecc_stngs = kcalloc(amd_nb_num(), sizeof(ecc_stngs[0]), GFP_KERNEL);
 	if (!ecc_stngs)
 		goto err_free;
 
@@ -3875,7 +3791,7 @@ static int __init amd64_edac_init(void)
 	if (!msrs)
 		goto err_free;
 
-	for (i = 0; i < instance_num; i++) {
+	for (i = 0; i < amd_nb_num(); i++) {
 		err = probe_one_instance(i);
 		if (err) {
 			/* unwind properly */
@@ -3922,7 +3838,6 @@ err_free:
 
 static void __exit amd64_edac_exit(void)
 {
-	u16 instance_num;
 	int i;
 
 	if (pci_ctl)
@@ -3934,12 +3849,7 @@ static void __exit amd64_edac_exit(void)
 	else
 		amd_unregister_ecc_decoder(decode_bus_error);
 
-	if (hygon_f18h_m4h())
-		instance_num = hygon_nb_num();
-	else
-		instance_num = amd_nb_num();
-
-	for (i = 0; i < instance_num; i++)
+	for (i = 0; i < amd_nb_num(); i++)
 		remove_one_instance(i);
 
 	kfree(ecc_stngs);
