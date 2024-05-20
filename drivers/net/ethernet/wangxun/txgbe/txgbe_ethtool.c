@@ -3466,14 +3466,17 @@ static u32 txgbe_get_rxfh_key_size(struct net_device *netdev)
 
 static u32 txgbe_rss_indir_size(struct net_device *netdev)
 {
-	return 128;
+	struct txgbe_adapter *adapter = netdev_priv(netdev);
+
+	return txgbe_rss_indir_tbl_entries(adapter);
 }
 
 static void txgbe_get_reta(struct txgbe_adapter *adapter, u32 *indir)
 {
-	int i, reta_size = 128;
+	int i;
+	u32 reta_entries = txgbe_rss_indir_tbl_entries(adapter);
 
-	for (i = 0; i < reta_size; i++)
+	for (i = 0; i < reta_entries; i++)
 		indir[i] = adapter->rss_indir_tbl[i];
 }
 
@@ -3499,7 +3502,7 @@ static int txgbe_set_rxfh(struct net_device *netdev, const u32 *indir,
 {
 	struct txgbe_adapter *adapter = netdev_priv(netdev);
 	int i;
-	u32 reta_entries = 128;
+	u32 reta_entries = txgbe_rss_indir_tbl_entries(adapter);
 	struct txgbe_hw *hw = &adapter->hw;
 
 	if (hfunc)
@@ -3520,21 +3523,32 @@ static int txgbe_set_rxfh(struct net_device *netdev, const u32 *indir,
 			if (indir[i] >= max_queues)
 				return -EINVAL;
 
-		for (i = 0; i < reta_entries; i++)
-			adapter->rss_indir_tbl[i] = indir[i];
-
-		txgbe_store_reta(adapter);
+		if (adapter->flags & TXGBE_FLAG_SRIOV_ENABLED) {
+			for (i = 0; i < reta_entries; i++)
+				adapter->rss_indir_tbl[i] = indir[i];
+			txgbe_store_vfreta(adapter);
+		} else {
+			for (i = 0; i < reta_entries; i++)
+				adapter->rss_indir_tbl[i] = indir[i];
+			txgbe_store_reta(adapter);
+		}
 	}
 
 	/* Fill out the rss hash key */
 	if (key) {
 		memcpy(adapter->rss_key, key, txgbe_get_rxfh_key_size(netdev));
 
-		/* Fill out hash function seeds */
-		for (i = 0; i < 10; i++)
-			wr32(hw, TXGBE_RDB_RSSRK(i), adapter->rss_key[i]);
+		if (adapter->flags & TXGBE_FLAG_SRIOV_ENABLED) {
+			unsigned int pf_pool = adapter->num_vfs;
+
+			for (i = 0; i < 10; i++)
+				wr32(hw, TXGBE_RDB_VMRSSRK(i, pf_pool), adapter->rss_key[i]);
+		} else {
+			/* Fill out hash function seeds */
+			for (i = 0; i < 10; i++)
+				wr32(hw, TXGBE_RDB_RSSRK(i), adapter->rss_key[i]);
+		}
 	}
-	txgbe_store_reta(adapter);
 
 	return 0;
 }
