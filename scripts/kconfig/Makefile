@@ -85,11 +85,11 @@ else
 endif
 
 anolis_defconfig: $(obj)/conf
-	$(Q)DIST_DO_GENERATE_DOT_CONFIG=Y $(MAKE) -C $(srctree)/anolis/ dist-defconfig
+	$(Q)DIST_DO_GENERATE_DOT_CONFIG=Y DIST_CONFIG_KERNEL_NAME=ANCK $(MAKE) -C $(srctree)/anolis/ dist-defconfig
 	$(Q)$(MAKE) -C $(srctree) olddefconfig
 
 anolis-debug_defconfig: $(obj)/conf
-	$(Q)DIST_DO_GENERATE_DOT_CONFIG=Y $(MAKE) -C $(srctree)/anolis/ dist-debug-defconfig
+	$(Q)DIST_DO_GENERATE_DOT_CONFIG=Y DIST_CONFIG_KERNEL_NAME=ANCK $(MAKE) -C $(srctree)/anolis/ dist-debug-defconfig
 	$(Q)$(MAKE) -C $(srctree) olddefconfig
 
 %_defconfig: $(obj)/conf
