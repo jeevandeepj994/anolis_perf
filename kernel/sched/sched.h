@@ -487,6 +487,15 @@ struct group_balancer_private {
 	cpumask_t		soft_cpus_allowed;
 	int			specs_percent;
 	bool			group_balancer;
+
+	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
+	CK_KABI_RESERVE(3)
+	CK_KABI_RESERVE(4)
+	CK_KABI_RESERVE(5)
+	CK_KABI_RESERVE(6)
+	CK_KABI_RESERVE(7)
+	CK_KABI_RESERVE(8)
 };
 #endif
 /* Task group related information */

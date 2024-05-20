@@ -23,6 +23,29 @@ struct group_balancer_sched_domain {
 	struct rb_root					task_groups;
 	unsigned int					total_tg_specs;
 	int						free_tg_specs;
+	unsigned long					min_interval;
+	unsigned long					max_interval;
+	unsigned long					last_balance;
+	unsigned long					balance_interval;
+	unsigned long					nr_balance_failed;
+
+	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
+	CK_KABI_RESERVE(3)
+	CK_KABI_RESERVE(4)
+	CK_KABI_RESERVE(5)
+	CK_KABI_RESERVE(6)
+	CK_KABI_RESERVE(7)
+	CK_KABI_RESERVE(8)
+	CK_KABI_RESERVE(9)
+	CK_KABI_RESERVE(10)
+	CK_KABI_RESERVE(11)
+	CK_KABI_RESERVE(12)
+	CK_KABI_RESERVE(13)
+	CK_KABI_RESERVE(14)
+	CK_KABI_RESERVE(15)
+	CK_KABI_RESERVE(16)
+
 	unsigned long					span[];
 };
 
@@ -71,12 +94,30 @@ struct group_balancer_topology_level {
 	unsigned long		gb_flags;
 	char			*name;
 	struct list_head	domains;
+
+	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
+	CK_KABI_RESERVE(3)
+	CK_KABI_RESERVE(4)
+	CK_KABI_RESERVE(5)
+	CK_KABI_RESERVE(6)
+	CK_KABI_RESERVE(7)
+	CK_KABI_RESERVE(8)
 };
 
 struct group_balancer_size_level {
 	int			size;
 	/* Use list temporarily, we will change to use rb_tree later.*/
 	struct list_head	domains;
+
+	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
+	CK_KABI_RESERVE(3)
+	CK_KABI_RESERVE(4)
+	CK_KABI_RESERVE(5)
+	CK_KABI_RESERVE(6)
+	CK_KABI_RESERVE(7)
+	CK_KABI_RESERVE(8)
 };
 
 bool __maybe_unused gb_sd_auto_generated = true;
