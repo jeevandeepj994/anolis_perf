@@ -31,6 +31,9 @@
 #include <linux/switchtec.h>
 #include <asm/dma.h>	/* isa_dma_bridge_buggy */
 #include "pci.h"
+#ifdef CONFIG_ARM64
+#include <linux/arm-smccc.h>
+#endif
 
 static ktime_t fixup_debug_start(struct pci_dev *dev,
 				 void (*fn)(struct pci_dev *dev))
@@ -5795,6 +5798,14 @@ DECLARE_PCI_FIXUP_FINAL(PCI_VENDOR_ID_NVIDIA, 0x0ab8, nvidia_ion_ahci_fixup);
  */
 static void quirk_save_yitian710_regs(struct pci_dev *dev)
 {
+#ifdef CONFIG_ARM64
+	struct arm_smccc_res res;
+
+	arm_smccc_smc(ARM_SMCCC_VENDOR_ENABLE_VPP_FUNC_ID,
+			0, 0, 0, 0, 0, 0, 0, &res);
+
+	dev->enable_vpp = res.a0 != ARM_SMCCC_VENDOR_ENABLE_VPP_FUNC_ID ? 0 : 1;
+#endif
 	dev->broken_bus_reset = 1;
 }
 DECLARE_PCI_FIXUP_CLASS_EARLY(PCI_VENDOR_ID_ALIBABA, 0x8000,

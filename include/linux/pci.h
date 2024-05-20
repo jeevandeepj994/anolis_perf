@@ -466,6 +466,7 @@ struct pci_dev {
 	unsigned int	no_vf_scan:1;		/* Don't scan for VFs after IOV enablement */
 	unsigned int	no_command_memory:1;	/* No PCI_COMMAND_MEMORY */
 	unsigned int	broken_bus_reset:1;	/* Abnormal bus reset */
+	unsigned int	enable_vpp:1;		/* Change the sequence of operation lights */
 	pci_dev_flags_t dev_flags;
 	atomic_t	enable_cnt;	/* pci_enable_device has been called */
 
