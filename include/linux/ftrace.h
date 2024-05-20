@@ -157,11 +157,7 @@ static __always_inline bool ftrace_regs_has_args(struct ftrace_regs *fregs)
 #endif
 
 typedef void (*ftrace_func_t)(unsigned long ip, unsigned long parent_ip,
-#ifndef __GENKSYMS__
 			      struct ftrace_ops *op, struct ftrace_regs *fregs);
-#else
-			      struct ftrace_ops *op, struct pt_regs *regs);
-#endif
 
 ftrace_func_t ftrace_ops_get_func(struct ftrace_ops *ops);
 
@@ -325,9 +321,12 @@ struct ftrace_ops {
 	unsigned long			trampoline_size;
 	struct list_head		list;
 	ftrace_ops_func_t		ops_func;
+#ifdef CONFIG_DYNAMIC_FTRACE_WITH_DIRECT_CALLS
+	unsigned long			direct_call;
+#endif
 #endif
 
-	CK_KABI_USE(1, unsigned long direct_call)
+	CK_KABI_RESERVE(1)
 };
 
 extern struct ftrace_ops __rcu *ftrace_ops_list;
