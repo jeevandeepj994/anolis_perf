@@ -502,6 +502,21 @@ int sata_set_spd(struct ata_link *link)
 }
 EXPORT_SYMBOL_GPL(sata_set_spd);
 
+#ifdef CONFIG_SW64
+unsigned int port_reset_delay __read_mostly = 1;
+static int __init port_reset_setup(char *str)
+{
+	int delay;
+
+	get_option(&str, &delay);
+	if (delay > 0)
+		port_reset_delay = delay;
+
+	return 0;
+}
+__setup("ata_hrst_delay=", port_reset_setup);
+#endif
+
 /**
  *	sata_link_hardreset - reset link via SATA phy reset
  *	@link: link to reset
@@ -568,7 +583,7 @@ int sata_link_hardreset(struct ata_link *link, const unsigned long *timing,
 	 * 10.4.2 says at least 1 ms.
 	 */
 	if (IS_ENABLED(CONFIG_SW64))
-		ata_msleep(link->ap, 100);
+		ata_msleep(link->ap, port_reset_delay);
 	else
 		ata_msleep(link->ap, 1);
 
