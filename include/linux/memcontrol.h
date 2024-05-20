@@ -525,6 +525,10 @@ struct mem_cgroup {
 	bool allow_pgtable_bind;
 #endif
 
+#ifdef CONFIG_PRE_OOM
+	bool oom_offline;
+#endif
+
 #ifdef CONFIG_LRU_GEN
 	CK_KABI_USE(1, unsigned long mglru_batch_size)
 	CK_KABI_USE(2, unsigned long mglru_reclaim_pages)
