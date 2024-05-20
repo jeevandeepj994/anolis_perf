@@ -10129,8 +10129,13 @@ static int cpu_group_balancer_write_u64(struct cgroup_subsys_state *css,
 			raw_spin_unlock_irq(&cfs_b->lock);
 			trail_tg = trail_tg->parent;
 		}
+
+		retval = attach_tg_to_group_balancer_sched_domain(tg);
+		if (retval)
+			goto out;
 	} else {
 		tg->gb_priv->specs_percent = -1;
+		detach_tg_from_group_balancer_sched_domain(tg);
 	}
 	tg->gb_priv->group_balancer = new;
 out:

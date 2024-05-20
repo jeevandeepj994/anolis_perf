@@ -19,6 +19,10 @@ struct group_balancer_sched_domain {
 	char						*name;
 	unsigned int					span_weight;
 	unsigned int					nr_children;
+	raw_spinlock_t					lock;
+	struct rb_root					task_groups;
+	unsigned int					total_tg_specs;
+	int						free_tg_specs;
 	unsigned long					span[];
 };
 
@@ -82,6 +86,8 @@ LIST_HEAD(group_balancer_sched_domains);
 DEFINE_RWLOCK(group_balancer_sched_domain_lock);
 
 struct cpumask root_cpumask;
+
+struct group_balancer_sched_domain *group_balancer_root_domain;
 
 const struct cpumask *cpu_llc_mask(int cpu)
 {
@@ -155,6 +161,9 @@ struct group_balancer_size_level default_size[NR_SIZE_LEVELS];
 #define for_each_gb_size_level(sl, i)			\
 	for (sl = default_size, i = 0; i <= NR_SIZE_LEVELS; sl++, i++)
 
+#define for_each_gb_sd_child(pos, gb_sd)			\
+	list_for_each_entry(pos, &gb_sd->child, sibling)
+
 #define for_each_gb_sd_child_safe(pos, n, gb_sd)			\
 	list_for_each_entry_safe(pos, n, &gb_sd->child, sibling)
 
@@ -180,6 +189,9 @@ static inline struct group_balancer_sched_domain
 	INIT_LIST_HEAD(&new->size_level_sibling);
 	INIT_LIST_HEAD(&new->gb_sibling);
 	list_add_tail(&new->gb_sibling, &group_balancer_sched_domains);
+
+	raw_spin_lock_init(&new->lock);
+	new->task_groups = RB_ROOT;
 
 	/* TODO: init new->span. */
 	return new;
@@ -303,6 +315,8 @@ static int bi_divide_group_balancer_sched_domains(void)
 
 			left_middle->span_weight = cpumask_weight(gb_sd_span(left_middle));
 			right_middle->span_weight = cpumask_weight(gb_sd_span(right_middle));
+			left_middle->free_tg_specs = 100 * left_middle->span_weight;
+			right_middle->free_tg_specs = 100 * right_middle->span_weight;
 			list_add(&left_middle->sibling, &gb_sd->child);
 			list_add(&right_middle->sibling, &gb_sd->child);
 			gb_sd->nr_children = 2;
@@ -333,8 +347,10 @@ static int build_group_balancer_sched_domains(const struct cpumask *cpu_map)
 		return -ENOMEM;
 	cpumask_copy(gb_sd_span(root), cpu_map);
 	root->span_weight = cpumask_weight(gb_sd_span(root));
+	root->free_tg_specs = 100 * root->span_weight;
 	add_to_size_level(root);
 	list_add(&root->topology_level_sibling, &default_topology[0].domains);
+	group_balancer_root_domain = root;
 
 	/* Build the tree by level. */
 	for_each_gb_topology_level(gb_tl) {
@@ -367,6 +383,7 @@ static int build_group_balancer_sched_domains(const struct cpumask *cpu_map)
 				}
 				cpumask_copy(gb_sd_span(child), next_gb_tl->mask(cpu));
 				child->span_weight = cpumask_weight(gb_sd_span(child));
+				child->free_tg_specs = 100 * child->span_weight;
 				child->name = next_gb_tl->name;
 				list_add(&child->topology_level_sibling, &next_gb_tl->domains);
 				child->gb_flags &= next_gb_tl->gb_flags;
@@ -460,4 +477,124 @@ void sched_clear_group_balancer_sched_domains(void)
 	detach_cpus_from_group_balancer_sched_domains();
 	write_unlock(&group_balancer_sched_domain_lock);
 	cpus_read_unlock();
+}
+
+#define __node_2_task_group(n) rb_entry((n), struct task_group, gb_node)
+
+static inline bool tg_specs_more(struct rb_node *a, const struct rb_node *b)
+{
+	struct task_group *tg_a = __node_2_task_group(a);
+	struct task_group *tg_b = __node_2_task_group(b);
+	int specs_a = tg_a->gb_priv->specs_percent;
+	int specs_b = tg_b->gb_priv->specs_percent;
+
+	return specs_a > specs_b;
+}
+
+static int tg_set_soft_cpus_down(struct task_group *tg, void *data)
+{
+	struct cpumask *soft_cpus = data;
+
+	cpumask_copy(&tg->gb_priv->soft_cpus_allowed, soft_cpus);
+
+	return 0;
+}
+
+static struct group_balancer_sched_domain *select_idle_gb_sd(int specs)
+{
+	struct group_balancer_sched_domain *gb_sd = group_balancer_root_domain;
+	struct group_balancer_sched_domain *child, *target;
+
+	if (specs == -1)
+		return gb_sd;
+
+	target = gb_sd;
+	while (target) {
+		gb_sd = target;
+		target = NULL;
+		for_each_gb_sd_child(child, gb_sd) {
+			int max_free_specs = INT_MIN;
+
+			if (child->free_tg_specs >= max(specs, max_free_specs)) {
+				target = child;
+				max_free_specs = child->free_tg_specs;
+			}
+		}
+	}
+
+	return gb_sd;
+}
+
+void add_tg_to_group_balancer_sched_domain(struct task_group *tg,
+					   struct group_balancer_sched_domain *gb_sd)
+{
+	int specs = tg->gb_priv->specs_percent;
+
+	tg->gb_sd = gb_sd;
+	raw_spin_lock(&gb_sd->lock);
+	rb_add(&tg->gb_node, &gb_sd->task_groups, tg_specs_more);
+	raw_spin_unlock(&gb_sd->lock);
+
+	if (specs != -1) {
+		for (; gb_sd; gb_sd = gb_sd->parent) {
+			raw_spin_lock(&gb_sd->lock);
+			gb_sd->total_tg_specs += specs;
+			gb_sd->free_tg_specs -= specs;
+			raw_spin_unlock(&gb_sd->lock);
+		}
+	}
+
+	walk_tg_tree_from(tg, tg_set_soft_cpus_down, tg_nop, gb_sd_span(gb_sd));
+}
+
+void remove_tg_from_group_balancer_sched_domain(struct task_group *tg)
+{
+	struct group_balancer_sched_domain *gb_sd = tg->gb_sd;
+	int specs = tg->gb_priv->specs_percent;
+	struct cpumask online_mask;
+
+	tg->gb_sd = NULL;
+	raw_spin_lock(&gb_sd->lock);
+	rb_erase(&tg->gb_node, &gb_sd->task_groups);
+	raw_spin_unlock(&gb_sd->lock);
+	if (specs != -1) {
+		for (; gb_sd; gb_sd = gb_sd->parent) {
+			raw_spin_lock(&gb_sd->lock);
+			gb_sd->total_tg_specs -= specs;
+			gb_sd->free_tg_specs += specs;
+			raw_spin_unlock(&gb_sd->lock);
+		}
+	}
+
+	cpumask_copy(&online_mask, cpu_online_mask);
+	walk_tg_tree_from(tg, tg_set_soft_cpus_down, tg_nop, &online_mask);
+}
+
+int attach_tg_to_group_balancer_sched_domain(struct task_group *tg)
+{
+	struct group_balancer_sched_domain *gb_sd;
+	int ret = 0;
+
+	read_lock(&group_balancer_sched_domain_lock);
+	gb_sd = select_idle_gb_sd(tg->gb_priv->specs_percent);
+	if (!gb_sd) {
+		ret = -ESRCH;
+		goto out;
+	}
+	add_tg_to_group_balancer_sched_domain(tg, gb_sd);
+out:
+	read_unlock(&group_balancer_sched_domain_lock);
+	return ret;
+}
+
+void detach_tg_from_group_balancer_sched_domain(struct task_group *tg)
+{
+	struct group_balancer_sched_domain *gb_sd = tg->gb_sd;
+
+	if (!gb_sd)
+		return;
+
+	read_lock(&group_balancer_sched_domain_lock);
+	remove_tg_from_group_balancer_sched_domain(tg);
+	read_unlock(&group_balancer_sched_domain_lock);
 }
