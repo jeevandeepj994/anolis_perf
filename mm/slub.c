@@ -5216,6 +5216,13 @@ static ssize_t order_show(struct kmem_cache *s, char *buf)
 }
 SLAB_ATTR_RO(order);
 
+static ssize_t oot_page_show(struct kmem_cache *s, char *buf)
+{
+	return sprintf(buf, "%d\n", s->oot_page_num);
+}
+
+SLAB_ATTR_RO(oot_page);
+
 static ssize_t min_partial_show(struct kmem_cache *s, char *buf)
 {
 	return sprintf(buf, "%lu\n", s->min_partial);
@@ -5603,6 +5610,7 @@ static struct attribute *slab_attrs[] = {
 	&object_size_attr.attr,
 	&objs_per_slab_attr.attr,
 	&order_attr.attr,
+	&oot_page_attr.attr,
 	&min_partial_attr.attr,
 	&cpu_partial_attr.attr,
 	&objects_attr.attr,
