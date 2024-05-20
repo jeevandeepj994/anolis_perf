@@ -805,7 +805,7 @@ int txgbe_add_mac_filter(struct txgbe_adapter *adapter, u8 *addr, u16 pool);
 int txgbe_del_mac_filter(struct txgbe_adapter *adapter, u8 *addr, u16 pool);
 int txgbe_available_rars(struct txgbe_adapter *adapter);
 void txgbe_vlan_mode(struct net_device *netdev, u32 features);
-
+u32 txgbe_rss_indir_tbl_entries(struct txgbe_adapter *adapter);
 void txgbe_ptp_init(struct txgbe_adapter *adapter);
 void txgbe_ptp_stop(struct txgbe_adapter *adapter);
 void txgbe_ptp_suspend(struct txgbe_adapter *adapter);
@@ -820,6 +820,7 @@ void txgbe_ptp_reset(struct txgbe_adapter *adapter);
 void txgbe_set_rx_drop_en(struct txgbe_adapter *adapter);
 
 void txgbe_store_reta(struct txgbe_adapter *adapter);
+void txgbe_store_vfreta(struct txgbe_adapter *adapter);
 
 void txgbe_set_vlan_anti_spoofing(struct txgbe_hw *hw, bool enable, int vf);
 void txgbe_set_ethertype_anti_spoofing(struct txgbe_hw *hw,
