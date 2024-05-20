@@ -87,6 +87,9 @@
 
 struct rq;
 struct cpuidle_state;
+#ifdef CONFIG_GROUP_BALANCER
+struct group_balancer_sched_domain;
+#endif
 
 /* task_struct::on_rq states: */
 #define TASK_ON_RQ_QUEUED	1
@@ -479,6 +482,22 @@ struct cfs_bandwidth {
 #endif
 };
 
+#ifdef CONFIG_GROUP_BALANCER
+struct group_balancer_private {
+	cpumask_t		soft_cpus_allowed;
+	int			specs_percent;
+	bool			group_balancer;
+
+	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
+	CK_KABI_RESERVE(3)
+	CK_KABI_RESERVE(4)
+	CK_KABI_RESERVE(5)
+	CK_KABI_RESERVE(6)
+	CK_KABI_RESERVE(7)
+	CK_KABI_RESERVE(8)
+};
+#endif
 /* Task group related information */
 struct task_group {
 	struct cgroup_subsys_state css;
@@ -549,11 +568,17 @@ struct task_group {
 	unsigned int		ht_ratio;
 #endif
 	CK_KABI_USE(1, long priority)
+#ifdef CONFIG_GROUP_BALANCER
+	CK_KABI_USE(2, struct group_balancer_private *gb_priv)
+	CK_KABI_USE(3, 4, 5, struct rb_node gb_node);
+	CK_KABI_USE(6, struct group_balancer_sched_domain *gb_sd);
+#else
 	CK_KABI_RESERVE(2)
 	CK_KABI_RESERVE(3)
 	CK_KABI_RESERVE(4)
 	CK_KABI_RESERVE(5)
 	CK_KABI_RESERVE(6)
+#endif
 	CK_KABI_RESERVE(7)
 	CK_KABI_RESERVE(8)
 };
@@ -1361,7 +1386,11 @@ struct rq {
 	CK_KABI_RESERVE(5)
 	CK_KABI_RESERVE(6)
 #endif
+#ifdef CONFIG_GROUP_BALANCER
+	CK_KABI_USE(7, struct group_balancer_sched_domain *gb_sd)
+#else
 	CK_KABI_RESERVE(7)
+#endif
 	CK_KABI_RESERVE(8)
 };
 
@@ -3383,4 +3412,34 @@ extern void __prepare_to_swait(struct swait_queue_head *q, struct swait_queue *w
 extern int preempt_dynamic_mode;
 extern int sched_dynamic_mode(const char *str);
 extern void sched_dynamic_update(int mode);
+#endif
+
+#ifdef CONFIG_GROUP_BALANCER
+extern bool group_balancer_enabled(void);
+static inline const struct cpumask *task_allowed_cpu(struct task_struct *p)
+{
+	if (group_balancer_enabled() && p->gb_priv && p->cpus_allowed_alt) {
+		cpumask_and(p->cpus_allowed_alt, p->cpus_ptr,
+			    &p->gb_priv->soft_cpus_allowed);
+		if (!cpumask_empty(p->cpus_allowed_alt))
+			return p->cpus_allowed_alt;
+	}
+	return p->cpus_ptr;
+}
+extern int sched_init_group_balancer_sched_domains(const struct cpumask *cpu_map);
+extern void sched_clear_group_balancer_sched_domains(void);
+extern void sched_init_group_balancer(void);
+extern int attach_tg_to_group_balancer_sched_domain(struct task_group *tg);
+extern void detach_tg_from_group_balancer_sched_domain(struct task_group *tg);
+#else
+static inline const struct cpumask *task_allowed_cpu(struct task_struct *p)
+{
+	return p->cpus_ptr;
+}
+static inline int sched_init_group_balancer_sched_domains(const struct cpumask *cpu_map)
+{
+	return 0;
+}
+static inline void sched_clear_group_balancer_sched_domains(void) { }
+static inline void sched_init_group_balancer(void) { }
 #endif
