@@ -2235,6 +2235,8 @@ struct net_device {
 	struct bpf_xdp_entity	xdp_state[__MAX_XDP_MODE];
 
 	CK_KABI_USE_SPLIT(1, enum netdev_stat_type      pcpu_stat_type:8)
+	/** @irq_moder: dim parameters used if IS_ENABLED(CONFIG_DIMLIB). */
+	CK_KABI_USE(2, struct dim_irq_moder    *irq_moder)
 	CK_KABI_RESERVE(2)
 	CK_KABI_RESERVE(3)
 	CK_KABI_RESERVE(4)
