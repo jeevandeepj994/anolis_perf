@@ -18979,16 +18979,12 @@ F:	drivers/input/tablet/wacom_serial4.c
 
 WANGXUN ETHERNET DRIVER
 M:	Jiawen Wu <jiawenwu@trustnetic.com>
-L:	netdev@vger.kernel.org
-S:	Maintained
-F:	Documentation/networking/device_drivers/ethernet/wangxun/txgbe.rst
-F:	drivers/net/ethernet/wangxun/
-
-WANGXUN ETHERNET DRIVER
 M:	Duanqiang Wen <duanqiangwen@trustnetic.com>
 L:	netdev@vger.kernel.org
 S:	Maintained
+F:	Documentation/networking/device_drivers/ethernet/wangxun/txgbe.rst
 F:	Documentation/networking/device_drivers/ethernet/wangxun/ngbe.rst
+F:	Documentation/networking/device_drivers/ethernet/wangxun/txgbevf.rst
 F:	drivers/net/ethernet/wangxun/
 
 WATCHDOG DEVICE DRIVERS
