@@ -1986,10 +1986,9 @@ static int __ftrace_hash_update_ipmodify(struct ftrace_ops *ops,
 				 * ops. Run SHARE_IPMODIFY_SELF, to check
 				 * whether sharing is supported.
 				 */
-				if (!(ops->flags & FTRACE_OPS_FL_OPS_FUNC_CK_RESERVED))
+				if (!ops->ops_func)
 					return -EBUSY;
-				ret = bpf_tramp_ftrace_ops_func(ops,
-					FTRACE_OPS_CMD_ENABLE_SHARE_IPMODIFY_SELF);
+				ret = ops->ops_func(ops, FTRACE_OPS_CMD_ENABLE_SHARE_IPMODIFY_SELF);
 				if (ret)
 					return ret;
 			} else if (is_ipmodify) {
@@ -5269,7 +5268,7 @@ int register_ftrace_direct(struct ftrace_ops *ops, unsigned long addr)
 	}
 
 	ops->func = call_direct_funcs;
-	ops->flags = MULTI_FLAGS | (ops->flags & FTRACE_OPS_FL_OPS_FUNC_CK_RESERVED);
+	ops->flags = MULTI_FLAGS;
 	ops->trampoline = FTRACE_REGS_ADDR;
 	ops->direct_call = addr;
 
@@ -7669,11 +7668,10 @@ static int prepare_direct_functions_for_ipmodify(struct ftrace_ops *ops)
 			mutex_unlock(&ftrace_lock);
 
 			if (found_op) {
-				if (!(op->flags & FTRACE_OPS_FL_OPS_FUNC_CK_RESERVED))
+				if (!op->ops_func)
 					return -EBUSY;
 
-				ret = bpf_tramp_ftrace_ops_func(op,
-					FTRACE_OPS_CMD_ENABLE_SHARE_IPMODIFY_PEER);
+				ret = op->ops_func(op, FTRACE_OPS_CMD_ENABLE_SHARE_IPMODIFY_PEER);
 				if (ret)
 					return ret;
 			}
@@ -7719,9 +7717,8 @@ static void cleanup_direct_functions_after_ipmodify(struct ftrace_ops *ops)
 			mutex_unlock(&ftrace_lock);
 
 			/* The cleanup is optional, ignore any errors */
-			if (found_op && (op->flags & FTRACE_OPS_FL_OPS_FUNC_CK_RESERVED))
-				bpf_tramp_ftrace_ops_func(op,
-					FTRACE_OPS_CMD_DISABLE_SHARE_IPMODIFY_PEER);
+			if (found_op && op->ops_func)
+				op->ops_func(op, FTRACE_OPS_CMD_DISABLE_SHARE_IPMODIFY_PEER);
 		}
 	}
 	mutex_unlock(&direct_mutex);
