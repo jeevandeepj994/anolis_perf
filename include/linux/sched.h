@@ -1511,6 +1511,7 @@ struct task_struct {
 
 #ifdef CONFIG_GROUP_BALANCER
 	struct cpumask			cpus_allowed_alt;
+	int				soft_cpus_version;
 #endif
 	/* PF_IO_WORKER */
 	CK_KABI_USE(1, void *pf_io_worker)
