@@ -112,7 +112,7 @@ static ssize_t pre_oom_level_store(struct kobject *kobj,
 	adjust_oom_level(level);
 
 	mutex_unlock(&mutex);
-	return count;
+	return ret ?: count;
 
 }
 
