@@ -2358,6 +2358,10 @@ void do_set_cpus_allowed(struct task_struct *p, const struct cpumask *new_mask)
 		enqueue_task(rq, p, ENQUEUE_RESTORE | ENQUEUE_NOCLOCK);
 	if (running)
 		set_next_task(rq, p);
+#ifdef CONFIG_GROUP_BALANCER
+	/* Once p->cpus_ptr changed, keep soft_cpus_version negative before we sync soft cpus. */
+	p->soft_cpus_version = -1;
+#endif
 }
 
 /*
@@ -3814,6 +3818,9 @@ int sched_fork(unsigned long clone_flags, struct task_struct *p)
 #ifdef CONFIG_SMP
 	plist_node_init(&p->pushable_tasks, MAX_PRIO);
 	RB_CLEAR_NODE(&p->pushable_dl_tasks);
+#endif
+#ifdef CONFIG_GROUP_BALANCER
+	p->soft_cpus_version = -1;
 #endif
 	return 0;
 }
@@ -8540,6 +8547,7 @@ void __init sched_init(void)
 	cpumask_copy(&root_task_group.soft_cpus_allowed, cpu_online_mask);
 	root_task_group.specs_percent = -1;
 	root_task_group.group_balancer = 0;
+	root_task_group.soft_cpus_version = 0;
 #endif
 #ifdef CONFIG_CPUMASK_OFFSTACK
 	for_each_possible_cpu(i) {
@@ -8954,6 +8962,7 @@ struct task_group *sched_create_group(struct task_group *parent)
 	cpumask_copy(&tg->soft_cpus_allowed, &parent->soft_cpus_allowed);
 	tg->specs_percent = -1;
 	tg->group_balancer = 0;
+	tg->soft_cpus_version = 0;
 #endif
 	return tg;
 
@@ -9028,6 +9037,10 @@ static void sched_change_group(struct task_struct *tsk, int type)
 	else
 #endif
 		set_task_rq(tsk, task_cpu(tsk));
+#ifdef CONFIG_GROUP_BALANCER
+	/* Once tsk changed task group, keep soft_cpus_version negative before we sync soft cpus. */
+	tsk->soft_cpus_version = -1;
+#endif
 }
 
 /*
@@ -9970,8 +9983,13 @@ static ssize_t cpu_soft_cpus_write(struct kernfs_open_file *of,
 		return -ENOSPC;
 
 	tg_soft_cpus_allowed = &tg->soft_cpus_allowed;
-	if (!cpumask_equal(tg_soft_cpus_allowed, &tmp_soft_cpus_allowed))
+	if (!cpumask_equal(tg_soft_cpus_allowed, &tmp_soft_cpus_allowed)) {
 		cpumask_copy(tg_soft_cpus_allowed, &tmp_soft_cpus_allowed);
+		tg->soft_cpus_version++;
+		if (unlikely(tg->soft_cpus_version < 0))
+			tg->soft_cpus_version = 0;
+	}
+
 	return 0;
 }
 
