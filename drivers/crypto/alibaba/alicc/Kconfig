@@ -1,0 +1,17 @@
+config CRYPTO_DEV_ALICC
+	tristate "Support for Alibaba cryptographic accelerator"
+	depends on ARM64 && CRYPTO && CRYPTO_HW && PCI
+	default n
+	select CRYPTO_SKCIPHER
+	select CRYPTO_LIB_DES
+	select CRYPTO_AEAD
+	select CRYPTO_AES
+	select CRYPTO_CBC
+	select CRYPTO_ECB
+	select CRYPTO_CTR
+	select CRYPTO_XTS
+	select CRYPTO_SM4
+	help
+	  Enables the driver for the on-chip cryptographic accelerator of
+	  Alibaba SoCs which is based on ARMv9 architecture.
+	  If unsure say N.

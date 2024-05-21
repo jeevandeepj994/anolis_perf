@@ -1,0 +1,29 @@
+# SPDX-License-Identifier: GPL-2.0
+%YAML 1.2
+---
+$id: http://devicetree.org/schemas/mtd/phytium-nand.yaml#
+$schema: http://devicetree.org/meta-schemas/core.yaml#
+
+title: Phytium Random Number Generator
+
+maintainers:
+      - Chen Baozi <chenbaozi@phytium.com.cn>
+properties:
+  compatible:
+    const: phytium,nand
+reg:
+    minItems: 1
+    items:
+      - desceiption:Offset and length of the register set of this block
+
+required:
+  - compatible
+  - reg
+
+additionalProperties: false
+examples:
+  - |
+   nand0@0x28002000 {
+       compatible = "phytium,nfc";
+       reg = <0x0 0x28002000 0x0 0x1000>;
+     };
