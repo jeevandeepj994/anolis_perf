@@ -5043,7 +5043,8 @@ __alloc_pages_slowpath(gfp_t gfp_mask, unsigned int order,
 	unsigned int cpuset_mems_cookie;
 	unsigned int zonelist_iter_cookie;
 	int reserve_flags;
-	bool can_direct_reclaim;
+	bool can_direct_reclaim = gfp_mask & __GFP_DIRECT_RECLAIM;
+	bool can_pre_oom;
 
 	/*
 	 * We also sanity check to catch abuse of atomic reserves being used by
@@ -5070,7 +5071,7 @@ __alloc_pages_slowpath(gfp_t gfp_mask, unsigned int order,
 	}
 #endif
 
-	can_direct_reclaim = gfp_mask & __GFP_DIRECT_RECLAIM;
+	can_pre_oom = !(gfp_mask & __GFP_DIRECT_RECLAIM);
 restart:
 	compaction_retries = 0;
 	no_progress_loops = 0;
@@ -5189,6 +5190,10 @@ retry:
 
 	/* Caller is not willing to reclaim, we can't balance anything */
 	if (!can_direct_reclaim)
+		goto nopage;
+
+	/* Caller is goint to oom, skip direct compact and reclaim */
+	if (can_pre_oom)
 		goto oom;
 
 	/* Avoid recursion of direct reclaim */
