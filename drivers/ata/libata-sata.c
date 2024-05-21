@@ -583,7 +583,7 @@ int sata_link_hardreset(struct ata_link *link, const unsigned long *timing,
 	 * 10.4.2 says at least 1 ms.
 	 */
 #ifdef CONFIG_SW64
-		ata_msleep(link->ap, port_reset_setup);
+		ata_msleep(link->ap, port_reset_delay);
 #else
 		ata_msleep(link->ap, 1);
 #endif
