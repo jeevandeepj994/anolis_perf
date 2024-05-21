@@ -309,10 +309,10 @@ int ne6xvf_parse_vf_resource_msg(struct ne6xvf_adapter *adapter)
  * When success the state is changed to __NE6XVF_DOWN
  * when fails the state is changed to __NE6XVF_INIT_FAILED
  **/
-static void ne6xvf_init_get_resources(struct ne6xvf_adapter *adapter)
+static int ne6xvf_init_get_resources(struct ne6xvf_adapter *adapter)
 {
 	struct pci_dev *pdev = adapter->pdev;
-	int ret;
+	int ret = 0;
 
 	WARN_ON(adapter->state != __NE6XVF_INIT_GET_RESOURCES);
 
@@ -342,7 +342,7 @@ static void ne6xvf_init_get_resources(struct ne6xvf_adapter *adapter)
 		 */
 		dev_err(&pdev->dev,
 			"Unable to get VF config due to PF error condition, not retrying\n");
-		return;
+		return ret;
 	}
 
 	if (ret) {
@@ -357,13 +357,15 @@ static void ne6xvf_init_get_resources(struct ne6xvf_adapter *adapter)
 	}
 
 	ne6xvf_change_state(adapter, __NE6XVF_INIT_EXTENDED_CAPS);
-	return;
+	return ret;
 
 err_alloc:
 	kfree(adapter->vf_res);
 	adapter->vf_res = NULL;
 err:
 	ne6xvf_change_state(adapter, __NE6XVF_INIT_FAILED);
+
+	return ret;
 }
 
 /**
@@ -2970,7 +2972,11 @@ static int ne6xvf_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 	init_waitqueue_head(&adapter->vc_waitqueue);
 
 	ne6xvf_startup(adapter);
-	ne6xvf_init_get_resources(adapter);
+	if (ne6xvf_init_get_resources(adapter)) {
+		err = -EIO;
+		goto err_ioremap;
+	}
+
 	adapter->aq_required = 0;
 	ne6xvf_init_process_extended_caps(adapter);
 	ne6xvf_init_config_adapter(adapter);
