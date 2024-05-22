@@ -13,7 +13,7 @@
 #ifndef _LINUX_TCP_H
 #define _LINUX_TCP_H
 
-
+#include <linux/ck_kabi.h>
 #include <linux/skbuff.h>
 #include <linux/win_minmax.h>
 #include <net/sock.h>
@@ -452,6 +452,9 @@ struct tcp_sock {
 	 */
 	struct request_sock __rcu *fastopen_rsk;
 	struct saved_syn *saved_syn;
+
+	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
 };
 
 enum tsq_enum {
@@ -497,6 +500,9 @@ struct tcp_timewait_sock {
 #ifdef CONFIG_TCP_MD5SIG
 	struct tcp_md5sig_key	  *tw_md5_key;
 #endif
+
+	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
 };
 
 static inline struct tcp_timewait_sock *tcp_twsk(const struct sock *sk)
