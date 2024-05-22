@@ -601,6 +601,7 @@ enum {
 	OPT_ALLOW_OTHER,
 	OPT_MAX_READ,
 	OPT_BLKSIZE,
+	OPT_RESCUE_UID,
 	OPT_ERR
 };
 
@@ -616,6 +617,7 @@ static const struct fs_parameter_spec fuse_fs_parameters[] = {
 	fsparam_u32	("max_read",		OPT_MAX_READ),
 	fsparam_u32	("blksize",		OPT_BLKSIZE),
 	fsparam_string	("subtype",		OPT_SUBTYPE),
+	fsparam_u32	("rescue_uid",		OPT_RESCUE_UID),
 	{}
 };
 
@@ -703,6 +705,13 @@ static int fuse_parse_param(struct fs_context *fc, struct fs_parameter *param)
 		if (!ctx->is_bdev)
 			return invalfc(fc, "blksize only supported for fuseblk");
 		ctx->blksize = result.uint_32;
+		break;
+
+	case OPT_RESCUE_UID:
+		ctx->rescue_uid = make_kuid(fc->user_ns, result.uint_32);
+		if (!uid_valid(ctx->rescue_uid))
+			return invalfc(fc, "Invalid rescue_uid");
+		ctx->rescue_uid_present = true;
 		break;
 
 	default:
@@ -1205,6 +1214,9 @@ static void process_init_reply(struct fuse_mount *fm, struct fuse_args *args,
 				if (fc->tag[0] == '\0') {
 					pr_err("tag is required for server recovery\n");
 					ok = false;
+				} else if (!fc->rescue_uid_present) {
+					pr_err("rescue_uid is required for server recovery\n");
+					ok = false;
 				} else {
 					fc->recovery = 1;
 					pr_info("server recovery enabled for tag %s\n", fc->tag);
@@ -1575,6 +1587,8 @@ int fuse_fill_super_common(struct super_block *sb, struct fuse_fs_context *ctx)
 	fc->destroy = ctx->destroy;
 	fc->no_control = ctx->no_control;
 	fc->no_force_umount = ctx->no_force_umount;
+	fc->rescue_uid = ctx->rescue_uid;
+	fc->rescue_uid_present = ctx->rescue_uid_present;
 
 	err = -ENOMEM;
 	root = fuse_get_root_inode(sb, ctx->rootmode);

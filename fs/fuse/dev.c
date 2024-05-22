@@ -2618,6 +2618,15 @@ static long fuse_dev_ioctl_attach(struct file *file, void __user *argp)
 	return res;
 }
 
+static inline bool fuse_device_recover_permissible(struct fuse_conn *fc)
+{
+	const struct cred *cred = current_cred();
+
+	return (uid_eq(cred->euid, fc->rescue_uid) &&
+		uid_eq(cred->suid, fc->rescue_uid) &&
+		uid_eq(cred->uid,  fc->rescue_uid));
+}
+
 static int fuse_device_recover(struct file *file, void __user *argp,
 		struct fuse_ioctl_attach *attach)
 {
@@ -2628,6 +2637,8 @@ static int fuse_device_recover(struct file *file, void __user *argp,
 			continue;
 		if (!fc->recovery)
 			return -EOPNOTSUPP;
+		if (!fuse_device_recover_permissible(fc))
+			return -EPERM;
 
 		/* return dev_t of matched connection */
 		attach->dev = fc->dev;

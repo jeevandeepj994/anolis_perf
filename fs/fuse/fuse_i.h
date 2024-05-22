@@ -544,6 +544,7 @@ struct fuse_fs_context {
 	unsigned int rootmode;
 	kuid_t user_id;
 	kgid_t group_id;
+	kuid_t rescue_uid;
 	bool is_bdev:1;
 	bool fd_present:1;
 	bool tag_present:1;
@@ -556,6 +557,7 @@ struct fuse_fs_context {
 	bool no_control:1;
 	bool no_force_umount:1;
 	bool legacy_opts_show:1;
+	bool rescue_uid_present:1;
 	enum fuse_dax_mode dax_mode;
 	unsigned int max_read;
 	unsigned int blksize;
@@ -600,6 +602,9 @@ struct fuse_conn {
 
 	/** The group id for this mount */
 	kgid_t group_id;
+
+	/* The expected user id of the fuse server */
+	kuid_t rescue_uid;
 
 	/** The pid namespace for this mount */
 	struct pid_namespace *pid_ns;
@@ -843,6 +848,9 @@ struct fuse_conn {
 
 	/** Support for fuse server recovery */
 	unsigned int recovery:1;
+
+	/* Is rescue_uid specified? */
+	unsigned int rescue_uid_present:1;
 
 	/** The number of requests waiting for completion */
 	atomic_t num_waiting;
