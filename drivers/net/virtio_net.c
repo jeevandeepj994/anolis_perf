@@ -1799,9 +1799,9 @@ static void virtnet_process_dim_cmd(struct virtnet_info *vi, void *res)
  * Note that user commands must be processed synchronously
  *  (poll = true, dim_oneshot = false).
  */
-static void virtnet_cvq_response(struct virtnet_info *vi,
-				 bool poll,
-				 bool dim_oneshot)
+static int virtnet_cvq_response(struct virtnet_info *vi,
+				bool poll,
+				bool dim_oneshot)
 {
 	unsigned tmp;
 	void *res;
@@ -1810,12 +1810,12 @@ static void virtnet_cvq_response(struct virtnet_info *vi,
 		res = virtqueue_get_buf(vi->cvq, &tmp);
 		if (virtqueue_is_broken(vi->cvq)) {
 			dev_warn(&vi->dev->dev, "Control vq is broken.\n");
-			return;
+			return -EIO;
 		}
 
 		if (!res) {
 			if (!poll)
-				return;
+				return 0;
 
 			cpu_relax();
 			continue;
@@ -1823,14 +1823,14 @@ static void virtnet_cvq_response(struct virtnet_info *vi,
 
 		/* this does not occur inside the process of waiting dim */
 		if (res == ((void *)vi))
-			return;
+			return 0;
 
 		virtnet_process_dim_cmd(vi, res);
 		/* When it is a user command, we must wait until the
 		 * processing result is processed synchronously.
 		 */
 		if (dim_oneshot)
-			return;
+			return 0;
 	}
 }
 
@@ -1842,7 +1842,8 @@ static void virtnet_get_cvq_work(struct work_struct *work)
 
 	mutex_lock(&vi->cvq_lock);
 
-	virtnet_cvq_response(vi, false, false);
+	if (virtnet_cvq_response(vi, false, false))
+		goto out;
 
 	if (vi->cvq->num_free >= 3) {
 		mutex_lock(&vi->coal_wait_lock);
@@ -1859,6 +1860,7 @@ static void virtnet_get_cvq_work(struct work_struct *work)
 	if (vi->dim_cmd_nums)
 		schedule_delayed_work(&vi->get_cvq, 1);
 
+out:
 	mutex_unlock(&vi->cvq_lock);
 }
 
@@ -2486,24 +2488,31 @@ static bool virtnet_send_command_reply(struct virtnet_info *vi, u8 class, u8 cmd
 	BUG_ON(out_num + in_num > ARRAY_SIZE(sgs));
 	ret = virtqueue_add_sgs(vi->cvq, sgs, out_num, in_num, vi, GFP_ATOMIC);
 	if (ret == -ENOSPC) {
-		virtnet_cvq_response(vi, true, true);
+		ret = virtnet_cvq_response(vi, true, true);
+		if (ret)
+			goto err_out;
+
 		ret = virtqueue_add_sgs(vi->cvq, sgs, out_num, in_num, vi, GFP_ATOMIC);
 	}
-	if (ret < 0) {
-		dev_warn(&vi->vdev->dev,
-			 "Failed to add sgs for command vq: %d\n.", ret);
-		mutex_unlock(&vi->cvq_lock);
-		return false;
-	}
+	if (ret < 0)
+		goto err_out;
 
 	if (unlikely(!virtqueue_kick(vi->cvq)))
 		goto unlock;
 
-	virtnet_cvq_response(vi, true, false);
+	ret = virtnet_cvq_response(vi, true, false);
+	if (ret)
+		goto err_out;
 
 unlock:
 	mutex_unlock(&vi->cvq_lock);
 	return vi->ctrl->status == VIRTIO_NET_OK;
+
+err_out:
+	dev_warn(&vi->vdev->dev,
+		 "Failed to add sgs for command vq: %d\n.", ret);
+	mutex_unlock(&vi->cvq_lock);
+	return false;
 }
 
 static bool virtnet_send_command(struct virtnet_info *vi, u8 class, u8 cmd,
