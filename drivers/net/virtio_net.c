@@ -52,6 +52,10 @@ module_param(napi_tx, bool, 0644);
 module_param(force_xdp, bool, 0644);
 module_param(lro, bool, 0644);
 
+/* 7 days are long enough by default. */
+static unsigned int cvq_timeout = 7 * 24 * 3600 * 1000;
+module_param(cvq_timeout, uint, 0644);
+
 #define VIRTNET_DIM_TUNE_TRAFFIC 1
 #define VIRTNET_DIM_NEVENTS 128
 
@@ -1791,6 +1795,20 @@ static void virtnet_process_dim_cmd(struct virtnet_info *vi, void *res)
 	vi->dim_cmd_nums--;
 }
 
+static int virtnet_cvq_wait_timeout(struct virtnet_info *vi,
+				    unsigned long time_end)
+{
+	if (time_after_eq(jiffies, time_end)) {
+		netdev_warn(vi->dev,
+			    "Timeout occurs when waiting the CVQ "
+			    "request, break the virtio device.\n");
+		virtio_break_device(vi->vdev);
+		return true;
+	}
+
+	return false;
+}
+
 /**
  * virtnet_cvq_response - get the response for filled ctrlq requests
  * @poll: keep polling ctrlq when a NULL buffer is obtained.
@@ -1803,6 +1821,7 @@ static int virtnet_cvq_response(struct virtnet_info *vi,
 				bool poll,
 				bool dim_oneshot)
 {
+	unsigned long time_end = jiffies + msecs_to_jiffies(cvq_timeout);
 	unsigned tmp;
 	void *res;
 
@@ -1818,6 +1837,8 @@ static int virtnet_cvq_response(struct virtnet_info *vi,
 				return 0;
 
 			cpu_relax();
+			if (virtnet_cvq_wait_timeout(vi, time_end))
+				return -EBUSY;
 			continue;
 		}
 
