@@ -152,8 +152,10 @@ struct thread_struct {
 	struct ptrauth_keys_kernel	keys_kernel;
 #endif
 #ifdef CONFIG_ARM64_MTE
+#ifndef __GENKSYMS__
 	u64			sctlr_tcf0;
 	u64			gcr_user_incl;
+#endif
 #endif
 };
 
