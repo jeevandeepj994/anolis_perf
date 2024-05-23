@@ -66,9 +66,6 @@ struct signal_struct;
 struct task_delay_info;
 struct task_group;
 struct io_uring_task;
-#ifdef CONFIG_GROUP_BALANCER
-struct group_balancer_private;
-#endif
 
 /*
  * Task state bitmask. NOTE! These bits are also
@@ -1512,15 +1509,14 @@ struct task_struct {
 	int				mce_count;
 #endif
 
+#ifdef CONFIG_GROUP_BALANCER
+	struct cpumask			cpus_allowed_alt;
+	int				soft_cpus_version;
+#endif
 	/* PF_IO_WORKER */
 	CK_KABI_USE(1, void *pf_io_worker)
-#ifdef CONFIG_GROUP_BALANCER
-	CK_KABI_USE(2, struct group_balancer_private *gb_priv)
-	CK_KABI_USE(3, cpumask_t *cpus_allowed_alt)
-#else
 	CK_KABI_RESERVE(2)
 	CK_KABI_RESERVE(3)
-#endif
 	CK_KABI_RESERVE(4)
 	CK_KABI_RESERVE(5)
 	CK_KABI_RESERVE(6)

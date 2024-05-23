@@ -141,9 +141,9 @@ static int tg_set_specs_percent_down(struct task_group *tg, void *data)
 {
 	int *sp = data;
 
-	if (tg->gb_priv->group_balancer &&
+	if (tg->group_balancer &&
 	    tg->cfs_bandwidth.quota == RUNTIME_INF)
-		tg->gb_priv->specs_percent = *sp;
+		tg->specs_percent = *sp;
 
 	return 0;
 }
@@ -156,15 +156,15 @@ static void tg_set_specs_percent(struct task_group *tg, u64 period, u64 quota)
 		return;
 	read_lock(&group_balancer_lock);
 	if (quota < 0) {
-		if (tg->gb_priv->group_balancer)
-			tg->gb_priv->specs_percent = -1;
+		if (tg->group_balancer)
+			tg->specs_percent = -1;
 	} else if ((u64)quota <= U64_MAX / NSEC_PER_USEC) {
 		sp = quota * 100 / period;
 		/* Considering the limited accuracy. */
 		if (unlikely(!sp))
 			sp = 1;
-		if (tg->gb_priv->group_balancer)
-			tg->gb_priv->specs_percent = sp;
+		if (tg->group_balancer)
+			tg->specs_percent = sp;
 		else
 			walk_tg_tree_from(tg, tg_set_specs_percent_down,
 					  tg_nop, &sp);
@@ -2358,6 +2358,10 @@ void do_set_cpus_allowed(struct task_struct *p, const struct cpumask *new_mask)
 		enqueue_task(rq, p, ENQUEUE_RESTORE | ENQUEUE_NOCLOCK);
 	if (running)
 		set_next_task(rq, p);
+#ifdef CONFIG_GROUP_BALANCER
+	/* Once p->cpus_ptr changed, keep soft_cpus_version negative before we sync soft cpus. */
+	p->soft_cpus_version = -1;
+#endif
 }
 
 /*
@@ -3816,10 +3820,7 @@ int sched_fork(unsigned long clone_flags, struct task_struct *p)
 	RB_CLEAR_NODE(&p->pushable_dl_tasks);
 #endif
 #ifdef CONFIG_GROUP_BALANCER
-	p->gb_priv = current->gb_priv;
-	p->cpus_allowed_alt = kzalloc(sizeof(cpumask_t), GFP_KERNEL);
-	if (!p->cpus_allowed_alt)
-		return -ENOMEM;
+	p->soft_cpus_version = -1;
 #endif
 	return 0;
 }
@@ -8503,9 +8504,6 @@ void __init sched_init(void)
 {
 	unsigned long ptr = 0;
 	int i;
-#ifdef CONFIG_GROUP_BALANCER
-	struct group_balancer_private *gb_priv;
-#endif
 
 	/* Make sure the linker didn't screw up */
 	BUG_ON(&idle_sched_class + 1 != &fair_sched_class ||
@@ -8546,11 +8544,10 @@ void __init sched_init(void)
 #endif /* CONFIG_RT_GROUP_SCHED */
 	}
 #ifdef CONFIG_GROUP_BALANCER
-	gb_priv = kzalloc(sizeof(struct group_balancer_private), GFP_KERNEL);
-	if (gb_priv)
-		cpumask_copy(&gb_priv->soft_cpus_allowed, cpu_online_mask);
-	root_task_group.gb_priv = gb_priv;
-
+	cpumask_copy(&root_task_group.soft_cpus_allowed, cpu_online_mask);
+	root_task_group.specs_percent = -1;
+	root_task_group.group_balancer = 0;
+	root_task_group.soft_cpus_version = 0;
 #endif
 #ifdef CONFIG_CPUMASK_OFFSTACK
 	for_each_possible_cpu(i) {
@@ -8920,31 +8917,9 @@ static inline void alloc_uclamp_sched_group(struct task_group *tg,
 	}
 #endif
 }
-#ifdef CONFIG_GROUP_BALANCER
-static struct group_balancer_private *alloc_group_balancer_private(struct task_group *tg)
-{
-	struct group_balancer_private *gb_priv;
-
-	gb_priv = kzalloc(sizeof(struct group_balancer_private), GFP_KERNEL);
-
-	return gb_priv;
-}
-
-static void free_group_balancer_private(struct task_group *tg)
-{
-	if (task_group_is_autogroup(tg))
-		return;
-
-	kfree(tg->gb_priv);
-	tg->gb_priv = NULL;
-}
-#else
-static inline void free_group_balancer_private(struct task_group *tg) { }
-#endif
 
 static void sched_free_group(struct task_group *tg)
 {
-	free_group_balancer_private(tg);
 	free_fair_sched_group(tg);
 	free_rt_sched_group(tg);
 	autogroup_free(tg);
@@ -8966,15 +8941,6 @@ struct task_group *sched_create_group(struct task_group *parent)
 	if (!tg)
 		return ERR_PTR(-ENOMEM);
 
-#ifdef CONFIG_GROUP_BALANCER
-	if (!task_group_is_autogroup(tg)) {
-		tg->gb_priv = alloc_group_balancer_private(tg);
-		if (!tg->gb_priv)
-			goto err;
-		tg->gb_priv->group_balancer = false;
-	tg->gb_priv->specs_percent = -1;
-	}
-#endif
 	if (!alloc_fair_sched_group(tg, parent))
 		goto err;
 
@@ -8991,6 +8957,12 @@ struct task_group *sched_create_group(struct task_group *parent)
 
 #if defined(CONFIG_SCHED_CORE) && defined(CONFIG_CFS_BANDWIDTH)
 	tg->ht_ratio = 100;
+#endif
+#ifdef CONFIG_GROUP_BALANCER
+	cpumask_copy(&tg->soft_cpus_allowed, &parent->soft_cpus_allowed);
+	tg->specs_percent = -1;
+	tg->group_balancer = 0;
+	tg->soft_cpus_version = 0;
 #endif
 	return tg;
 
@@ -9015,12 +8987,6 @@ void sched_online_group(struct task_group *tg, struct task_group *parent)
 	spin_unlock_irqrestore(&task_group_lock, flags);
 
 	online_fair_sched_group(tg);
-#ifdef CONFIG_GROUP_BALANCER
-	if (tg->gb_priv && parent->gb_priv) {
-		cpumask_copy(&tg->gb_priv->soft_cpus_allowed,
-			     &parent->gb_priv->soft_cpus_allowed);
-	}
-#endif
 }
 
 /* rcu callback to free various structures associated with a task group */
@@ -9072,7 +9038,8 @@ static void sched_change_group(struct task_struct *tsk, int type)
 #endif
 		set_task_rq(tsk, task_cpu(tsk));
 #ifdef CONFIG_GROUP_BALANCER
-	tsk->gb_priv = tg->gb_priv;
+	/* Once tsk changed task group, keep soft_cpus_version negative before we sync soft cpus. */
+	tsk->soft_cpus_version = -1;
 #endif
 }
 
@@ -9985,10 +9952,7 @@ static int cpu_soft_cpus_show(struct seq_file *sf, void *v)
 {
 	struct task_group *tg = css_tg(seq_css(sf));
 
-	if (tg->gb_priv)
-		seq_printf(sf, "%*pbl\n", cpumask_pr_args(&tg->gb_priv->soft_cpus_allowed));
-	else
-		seq_puts(sf, "\n");
+	seq_printf(sf, "%*pbl\n", cpumask_pr_args(&tg->soft_cpus_allowed));
 
 	return 0;
 }
@@ -10018,14 +9982,14 @@ static ssize_t cpu_soft_cpus_write(struct kernfs_open_file *of,
 	if (cpumask_empty(&tmp_soft_cpus_allowed))
 		return -ENOSPC;
 
-	if (!tg->gb_priv)
-		return -ENOMEM;
+	tg_soft_cpus_allowed = &tg->soft_cpus_allowed;
+	if (!cpumask_equal(tg_soft_cpus_allowed, &tmp_soft_cpus_allowed)) {
+		cpumask_copy(tg_soft_cpus_allowed, &tmp_soft_cpus_allowed);
+		tg->soft_cpus_version++;
+		if (unlikely(tg->soft_cpus_version < 0))
+			tg->soft_cpus_version = 0;
+	}
 
-	tg_soft_cpus_allowed = &tg->gb_priv->soft_cpus_allowed;
-	if (cpumask_equal(&tmp_soft_cpus_allowed, tg_soft_cpus_allowed))
-		return 0;
-
-	cpumask_copy(tg_soft_cpus_allowed, &tmp_soft_cpus_allowed);
 	return 0;
 }
 
@@ -10034,12 +9998,12 @@ static u64 cpu_group_balancer_read_u64(struct cgroup_subsys_state *css,
 {
 	struct task_group *tg = css_tg(css);
 
-	return tg->gb_priv->group_balancer;
+	return tg->group_balancer;
 }
 
 static int tg_validate_group_balancer_down(struct task_group *tg, void *data)
 {
-	if (tg->gb_priv->group_balancer)
+	if (tg->group_balancer)
 		return -EINVAL;
 	return 0;
 }
@@ -10059,7 +10023,7 @@ static int validate_group_balancer(struct task_group *tg)
 		goto out;
 
 	for (; tg != &root_task_group; tg = tg->parent) {
-		if (tg->gb_priv->group_balancer) {
+		if (tg->group_balancer) {
 			retval = -EINVAL;
 			break;
 		}
@@ -10086,7 +10050,7 @@ static int cpu_group_balancer_write_u64(struct cgroup_subsys_state *css,
 		return -EINVAL;
 
 	write_lock(&group_balancer_lock);
-	old = tg->gb_priv->group_balancer;
+	old = tg->group_balancer;
 
 	if (old == new)
 		goto out;
@@ -10110,7 +10074,7 @@ static int cpu_group_balancer_write_u64(struct cgroup_subsys_state *css,
 				specs = cfs_b->quota * 100 / cfs_b->period;
 				if (unlikely(!specs))
 					specs = 1;
-				tg->gb_priv->specs_percent = specs;
+				tg->specs_percent = specs;
 				raw_spin_unlock_irq(&cfs_b->lock);
 				break;
 			}
@@ -10118,9 +10082,9 @@ static int cpu_group_balancer_write_u64(struct cgroup_subsys_state *css,
 			trail_tg = trail_tg->parent;
 		}
 	} else {
-		tg->gb_priv->specs_percent = -1;
+		tg->specs_percent = -1;
 	}
-	tg->gb_priv->group_balancer = new;
+	tg->group_balancer = new;
 out:
 	write_unlock(&group_balancer_lock);
 	return retval;
@@ -10934,8 +10898,4 @@ void call_trace_sched_update_nr_running(struct rq *rq, int count)
 /* A hook point for hotfix to release reserve memory used for scheduler. */
 void sched_task_release(struct task_struct *p)
 {
-#ifdef CONFIG_GROUP_BALANCER
-	kfree(p->cpus_allowed_alt);
-	p->cpus_allowed_alt = NULL;
-#endif
 }

@@ -479,13 +479,6 @@ struct cfs_bandwidth {
 #endif
 };
 
-#ifdef CONFIG_GROUP_BALANCER
-struct group_balancer_private {
-	cpumask_t		soft_cpus_allowed;
-	int			specs_percent;
-	bool			group_balancer;
-};
-#endif
 /* Task group related information */
 struct task_group {
 	struct cgroup_subsys_state css;
@@ -555,12 +548,15 @@ struct task_group {
 #if defined(CONFIG_SCHED_CORE) && defined(CONFIG_CFS_BANDWIDTH)
 	unsigned int		ht_ratio;
 #endif
-	CK_KABI_USE(1, long priority)
 #ifdef CONFIG_GROUP_BALANCER
-	CK_KABI_USE(2, struct group_balancer_private *gb_priv)
-#else
-	CK_KABI_RESERVE(2)
+	cpumask_t		soft_cpus_allowed;
+	int			soft_cpus_version;
+	int			specs_percent;
+	bool			group_balancer;
 #endif
+
+	CK_KABI_USE(1, long priority)
+	CK_KABI_RESERVE(2)
 	CK_KABI_RESERVE(3)
 	CK_KABI_RESERVE(4)
 	CK_KABI_RESERVE(5)
@@ -3400,11 +3396,16 @@ extern void sched_dynamic_update(int mode);
 extern bool group_balancer_enabled(void);
 static inline const struct cpumask *task_allowed_cpu(struct task_struct *p)
 {
-	if (group_balancer_enabled() && p->gb_priv && p->cpus_allowed_alt) {
-		cpumask_and(p->cpus_allowed_alt, p->cpus_ptr,
-			    &p->gb_priv->soft_cpus_allowed);
-		if (!cpumask_empty(p->cpus_allowed_alt))
-			return p->cpus_allowed_alt;
+	if (group_balancer_enabled()) {
+		struct task_group *tg = task_group(p);
+
+		if (unlikely(p->soft_cpus_version != tg->soft_cpus_version)) {
+			cpumask_and(&p->cpus_allowed_alt, p->cpus_ptr,
+				    &tg->soft_cpus_allowed);
+			p->soft_cpus_version = tg->soft_cpus_version;
+		}
+		if (!cpumask_empty(&p->cpus_allowed_alt))
+			return &p->cpus_allowed_alt;
 	}
 	return p->cpus_ptr;
 }
