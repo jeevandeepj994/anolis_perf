@@ -195,7 +195,7 @@ static int patch_do_basic_check(struct device *dev,
 {
 	u64 dma_mask = *dev->dma_mask;
 
-	if (dir != DMA_FROM_DEVICE || dir != DMA_BIDIRECTIONAL)
+	if (dir != DMA_FROM_DEVICE && dir != DMA_BIDIRECTIONAL)
 		return false;
 
 	if (dma_mask <= DMA_BIT_MASK(32))
