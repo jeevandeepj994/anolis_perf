@@ -288,8 +288,8 @@ s32 txgbe_init_i2c(struct txgbe_hw *hw)
 	      TXGBE_I2C_CON_SLAVE_DISABLE));
 	/* Default addr is 0xA0 ,bit 0 is configure for read/write! */
 	wr32(hw, TXGBE_I2C_TAR, TXGBE_I2C_SLAVE_ADDR);
-	wr32(hw, TXGBE_I2C_SS_SCL_HCNT, 600);
-	wr32(hw, TXGBE_I2C_SS_SCL_LCNT, 600);
+	wr32(hw, TXGBE_I2C_SS_SCL_HCNT, 780);
+	wr32(hw, TXGBE_I2C_SS_SCL_LCNT, 780);
 	wr32(hw, TXGBE_I2C_RX_TL, 0); /* 1byte for rx full signal */
 	wr32(hw, TXGBE_I2C_TX_TL, 4);
 	wr32(hw, TXGBE_I2C_SCL_STUCK_TIMEOUT, 0xFFFFFF);
@@ -297,6 +297,32 @@ s32 txgbe_init_i2c(struct txgbe_hw *hw)
 
 	wr32(hw, TXGBE_I2C_INTR_MASK, 0);
 	wr32(hw, TXGBE_I2C_ENABLE, 1);
+	return 0;
+}
+
+static s32 txgbe_init_i2c_sfp_phy(struct txgbe_hw *hw)
+{
+	wr32(hw, TXGBE_I2C_ENABLE, 0);
+
+	wr32(hw, TXGBE_I2C_CON,
+	     (TXGBE_I2C_CON_MASTER_MODE |
+		TXGBE_I2C_CON_SPEED(1) |
+		TXGBE_I2C_CON_RESTART_EN |
+		TXGBE_I2C_CON_SLAVE_DISABLE));
+	/* Default addr is 0xA0 ,bit 0 is configure for read/write! */
+	wr32(hw, TXGBE_I2C_TAR, TXGBE_I2C_SLAVE_ADDR);
+	wr32(hw, TXGBE_I2C_SS_SCL_HCNT, 600);
+	wr32(hw, TXGBE_I2C_SS_SCL_LCNT, 600);
+
+	wr32(hw, TXGBE_I2C_RX_TL, 1); /* 2bytes for rx full signal */
+	wr32(hw, TXGBE_I2C_TX_TL, 4);
+
+	wr32(hw, TXGBE_I2C_SCL_STUCK_TIMEOUT, 0xFFFFFF);
+	wr32(hw, TXGBE_I2C_SDA_STUCK_TIMEOUT, 0xFFFFFF);
+
+	wr32(hw, TXGBE_I2C_INTR_MASK, 0);
+	wr32(hw, TXGBE_I2C_ENABLE, 1);
+
 	return 0;
 }
 
@@ -311,6 +337,7 @@ s32 txgbe_init_i2c(struct txgbe_hw *hw)
 s32 txgbe_read_i2c_eeprom(struct txgbe_hw *hw, u8 byte_offset,
 			  u8 *eeprom_data)
 {
+	txgbe_init_i2c(hw);
 	return TCALL(hw, phy.ops.read_i2c_byte, byte_offset,
 		     TXGBE_I2C_EEPROM_DEV_ADDR,
 		     eeprom_data);
@@ -327,6 +354,7 @@ s32 txgbe_read_i2c_eeprom(struct txgbe_hw *hw, u8 byte_offset,
 s32 txgbe_read_i2c_sff8472(struct txgbe_hw *hw, u8 byte_offset,
 			   u8 *sff8472_data)
 {
+	txgbe_init_i2c(hw);
 	return TCALL(hw, phy.ops.read_i2c_byte, byte_offset,
 		     TXGBE_I2C_EEPROM_DEV_ADDR2,
 		     sff8472_data);
@@ -412,6 +440,83 @@ s32 txgbe_read_i2c_byte(struct txgbe_hw *hw, u8 byte_offset,
 
 	return txgbe_read_i2c_byte_int(hw, byte_offset, dev_addr,
 				       data, true);
+}
+
+/**
+ *  txgbe_read_i2c_word_int - Reads 16 bit word over I2C
+ *  @hw: pointer to hardware structure
+ *  @byte_offset: byte offset to read
+ *  @data: value read
+ *  @lock: true if to take and release semaphore
+ *
+ *  Performs byte read operation to SFP module's EEPROM over I2C interface at
+ *  a specified device address.
+ **/
+s32 txgbe_read_i2c_word_int(struct txgbe_hw *hw, u16 byte_offset,
+			    u8 __always_unused dev_addr, u16 *data, bool __always_unused lock)
+{
+	s32 status = 0;
+
+	if (hw->phy.sfp_type == txgbe_sfp_type_1g_cu_core0 ||
+	    hw->phy.sfp_type == txgbe_sfp_type_1g_cu_core1) {
+		/* reg offset format 0x000yyyyy */
+		byte_offset &= 0x1f;
+
+		/* wait tx empty */
+		status = txgbe_po32m(hw, TXGBE_I2C_RAW_INTR_STAT,
+				     TXGBE_I2C_INTR_STAT_TX_EMPTY, TXGBE_I2C_INTR_STAT_TX_EMPTY,
+		   TXGBE_I2C_TIMEOUT, 10);
+		if (status != 0)
+			goto out;
+
+		/* write reg_offset */
+		wr32(hw, TXGBE_I2C_DATA_CMD, (u8)byte_offset | TXGBE_I2C_DATA_CMD_STOP);
+
+		usec_delay(TXGBE_I2C_TIMEOUT);
+		/* wait tx empty */
+		status = txgbe_po32m(hw, TXGBE_I2C_RAW_INTR_STAT,
+				     TXGBE_I2C_INTR_STAT_TX_EMPTY, TXGBE_I2C_INTR_STAT_TX_EMPTY,
+		   TXGBE_I2C_TIMEOUT, 10);
+		if (status != 0)
+			goto out;
+
+		/* read data */
+		wr32(hw, TXGBE_I2C_DATA_CMD, TXGBE_I2C_DATA_CMD_READ);
+		wr32(hw, TXGBE_I2C_DATA_CMD, TXGBE_I2C_DATA_CMD_READ | TXGBE_I2C_DATA_CMD_STOP);
+
+		/* wait for read complete */
+		status = txgbe_po32m(hw, TXGBE_I2C_RAW_INTR_STAT,
+				     TXGBE_I2C_INTR_STAT_RX_FULL, TXGBE_I2C_INTR_STAT_RX_FULL,
+		   TXGBE_I2C_TIMEOUT, 10);
+		if (status != 0)
+			goto out;
+
+		*data = 0xFF & rd32(hw, TXGBE_I2C_DATA_CMD);
+		*data <<= 8;
+		*data += 0xFF & rd32(hw, TXGBE_I2C_DATA_CMD);
+	}
+
+out:
+	return status;
+}
+
+s32 txgbe_read_i2c_word(struct txgbe_hw *hw, u16 byte_offset,
+			u8 dev_addr, u16 *data)
+{
+	txgbe_switch_i2c_slave_addr(hw, dev_addr);
+
+	return txgbe_read_i2c_word_int(hw, byte_offset, dev_addr,
+						   data, true);
+}
+
+s32 txgbe_read_i2c_sfp_phy(struct txgbe_hw *hw, u16 byte_offset,
+			   u16 *data)
+{
+	txgbe_init_i2c_sfp_phy(hw);
+
+	return txgbe_read_i2c_word(hw, byte_offset,
+					 TXGBE_I2C_EEPROM_DEV_ADDR3,
+					 data);
 }
 
 /**
