@@ -5681,26 +5681,6 @@ static const struct bpf_func_proto bpf_get_listener_sock_proto = {
 	.arg1_type	= ARG_PTR_TO_SOCK_COMMON,
 };
 
-BPF_CALL_1(bpf_skb_ecn_set_ce, struct sk_buff *, skb)
-{
-	unsigned int iphdr_len;
-
-	if (skb->protocol == cpu_to_be16(ETH_P_IP))
-		iphdr_len = sizeof(struct iphdr);
-	else if (skb->protocol == cpu_to_be16(ETH_P_IPV6))
-		iphdr_len = sizeof(struct ipv6hdr);
-	else
-		return 0;
-
-	if (skb_headlen(skb) < iphdr_len)
-		return 0;
-
-	if (skb_cloned(skb) && !skb_clone_writable(skb, iphdr_len))
-		return 0;
-
-	return INET_ECN_set_ce(skb);
-}
-
 bool bpf_xdp_sock_is_valid_access(int off, int size, enum bpf_access_type type,
 				  struct bpf_insn_access_aux *info)
 {
@@ -5740,13 +5720,6 @@ u32 bpf_xdp_sock_convert_ctx_access(enum bpf_access_type type,
 
 	return insn - insn_buf;
 }
-
-static const struct bpf_func_proto bpf_skb_ecn_set_ce_proto = {
-	.func           = bpf_skb_ecn_set_ce,
-	.gpl_only       = false,
-	.ret_type       = RET_INTEGER,
-	.arg1_type      = ARG_PTR_TO_CTX,
-};
 
 BPF_CALL_5(bpf_tcp_check_syncookie, struct sock *, sk, void *, iph, u32, iph_len,
 	   struct tcphdr *, th, u32, th_len)
@@ -6064,8 +6037,6 @@ cg_skb_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 #ifdef CONFIG_INET
 	case BPF_FUNC_tcp_sock:
 		return &bpf_tcp_sock_proto;
-	case BPF_FUNC_skb_ecn_set_ce:
-		return &bpf_skb_ecn_set_ce_proto;
 	case BPF_FUNC_get_listener_sock:
 		return &bpf_get_listener_sock_proto;
 #endif
@@ -6171,8 +6142,6 @@ tc_cls_act_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 		return &bpf_skc_lookup_tcp_proto;
 	case BPF_FUNC_tcp_check_syncookie:
 		return &bpf_tcp_check_syncookie_proto;
-	case BPF_FUNC_skb_ecn_set_ce:
-		return &bpf_skb_ecn_set_ce_proto;
 	case BPF_FUNC_tcp_gen_syncookie:
 		return &bpf_tcp_gen_syncookie_proto;
 #endif
