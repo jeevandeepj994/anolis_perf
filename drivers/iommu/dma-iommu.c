@@ -1234,7 +1234,10 @@ static void *iommu_dma_alloc_pages(struct device *dev, size_t size,
 	page = dma_alloc_contiguous(dev, alloc_size, gfp);
 	if (!page) {
 		if (is_zhaoxin_kh40000()) {
-			if (!(gfp & (GFP_DMA | GFP_DMA32))) {
+			if (node == NUMA_NO_NODE) {
+				page = __alloc_pages_nodemask(gfp, get_order(alloc_size),
+							      numa_mem_id(), NULL);
+			} else if (!(gfp & (GFP_DMA | GFP_DMA32))) {
 				nodemask_t nodemask;
 
 				nodes_clear(nodemask);
