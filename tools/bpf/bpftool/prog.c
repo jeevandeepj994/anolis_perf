@@ -511,6 +511,7 @@ static int show_prog(int fd)
 	int err;
 
 	err = bpf_obj_get_info_by_fd(fd, &info, &len);
+	err = err < 0 ? -errno : err; /* libbpf_err_errno() */
 	if (err && err != -ENODEV) {
 		p_err("can't get prog info: %s", strerror(errno));
 		return -1;
