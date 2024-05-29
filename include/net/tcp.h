@@ -1062,6 +1062,7 @@ struct rate_sample {
 	bool is_ack_delayed;	/* is this (likely) a delayed ACK? */
 
 	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
 };
 
 struct tcp_congestion_ops {
