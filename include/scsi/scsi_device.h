@@ -527,7 +527,7 @@ static inline int scsi_device_created(struct scsi_device *sdev)
 		sdev->sdev_state == SDEV_CREATED_BLOCK;
 }
 
-int scsi_internal_device_block_nowait(struct scsi_device *sdev);
+int scsi_internal_device_block_nowait(struct scsi_device *sdev, int flag);
 int scsi_internal_device_unblock_nowait(struct scsi_device *sdev,
 					enum scsi_device_state new_state);
 

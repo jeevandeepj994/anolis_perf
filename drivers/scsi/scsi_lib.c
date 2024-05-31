@@ -2630,7 +2630,7 @@ EXPORT_SYMBOL(scsi_target_resume);
  * is paused until the device leaves the SDEV_BLOCK state. See also
  * scsi_internal_device_unblock_nowait().
  */
-int scsi_internal_device_block_nowait(struct scsi_device *sdev)
+int scsi_internal_device_block_nowait(struct scsi_device *sdev, int flag)
 {
 	struct request_queue *q = sdev->request_queue;
 	int err = 0;
@@ -2674,7 +2674,7 @@ static int scsi_internal_device_block(struct scsi_device *sdev)
 	int err;
 
 	mutex_lock(&sdev->state_mutex);
-	err = scsi_internal_device_block_nowait(sdev);
+	err = scsi_internal_device_block_nowait(sdev, 0);
 	if (err == 0)
 		blk_mq_quiesce_queue(q);
 	mutex_unlock(&sdev->state_mutex);
@@ -2838,7 +2838,7 @@ scsi_host_block(struct Scsi_Host *shost)
 	 */
 	shost_for_each_device(sdev, shost) {
 		mutex_lock(&sdev->state_mutex);
-		ret = scsi_internal_device_block_nowait(sdev);
+		ret = scsi_internal_device_block_nowait(sdev, 0);
 		mutex_unlock(&sdev->state_mutex);
 		if (ret) {
 			scsi_device_put(sdev);
