@@ -2,6 +2,7 @@
 #ifndef _LINUX_SCHED_USER_H
 #define _LINUX_SCHED_USER_H
 
+#include <linux/ck_kabi.h>
 #include <linux/uidgid.h>
 #include <linux/atomic.h>
 #include <linux/percpu_counter.h>
@@ -34,6 +35,9 @@ struct user_struct {
 
 	/* Miscellaneous per-user rate limit */
 	struct ratelimit_state ratelimit;
+
+	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
 };
 
 extern int uids_sysfs_init(void);

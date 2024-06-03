@@ -115,6 +115,9 @@ struct ubifs_debug_info {
 	struct dentry *dfs_chk_fs;
 	struct dentry *dfs_tst_rcvry;
 	struct dentry *dfs_ro_error;
+
+	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
 };
 
 /**
