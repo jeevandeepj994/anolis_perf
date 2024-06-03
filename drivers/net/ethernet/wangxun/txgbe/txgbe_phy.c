@@ -63,6 +63,10 @@ s32 txgbe_identify_sfp_module(struct txgbe_hw *hw)
 	u8 oui_bytes[3] = {0, 0, 0};
 	u8 cable_tech = 0;
 	u8 cable_spec = 0;
+	u32 swfw_mask = hw->phy.phy_semaphore_mask;
+
+	if (TCALL(hw, mac.ops.acquire_swfw_sync, swfw_mask) != 0)
+		return TXGBE_ERR_SWFW_SYNC;
 
 	if (TCALL(hw, mac.ops.get_media_type) != txgbe_media_type_fiber) {
 		hw->phy.sfp_type = txgbe_sfp_type_not_present;
@@ -267,9 +271,11 @@ s32 txgbe_identify_sfp_module(struct txgbe_hw *hw)
 	}
 
 out:
+	TCALL(hw, mac.ops.release_swfw_sync, swfw_mask);
 	return status;
 
 err_read_i2c_eeprom:
+	TCALL(hw, mac.ops.release_swfw_sync, swfw_mask);
 	hw->phy.sfp_type = txgbe_sfp_type_not_present;
 	if (hw->phy.type != txgbe_phy_nl)
 		hw->phy.type = txgbe_phy_unknown;
@@ -375,10 +381,6 @@ static s32 txgbe_read_i2c_byte_int(struct txgbe_hw *hw, u8 byte_offset,
 				   u8 __maybe_unused dev_addr, u8 *data, bool lock)
 {
 	s32 status = 0;
-	u32 swfw_mask = hw->phy.phy_semaphore_mask;
-
-	if (lock && 0 != TCALL(hw, mac.ops.acquire_swfw_sync, swfw_mask))
-		return TXGBE_ERR_SWFW_SYNC;
 
 	/* wait tx empty */
 	status = txgbe_po32m(hw, TXGBE_I2C_RAW_INTR_STAT,
@@ -404,8 +406,6 @@ static s32 txgbe_read_i2c_byte_int(struct txgbe_hw *hw, u8 byte_offset,
 	*data = 0xFF & rd32(hw, TXGBE_I2C_DATA_CMD);
 
 out:
-	if (lock)
-		TCALL(hw, mac.ops.release_swfw_sync, swfw_mask);
 	return status;
 }
 
