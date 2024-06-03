@@ -713,12 +713,16 @@ static inline struct dma_async_tx_descriptor *txd_next(struct dma_async_tx_descr
 /**
  * struct dma_tx_state - filled in to report the status of
  * a transfer.
+ * @last: last completed DMA cookie
+ * @used: last issued DMA cookie (i.e. the one in progress)
  * @residue: the remaining number of bytes left to transmit
  *	on the selected transfer for states DMA_IN_PROGRESS and
  *	DMA_PAUSED if this is implemented in the driver, else 0
  * @in_flight_bytes: amount of data in bytes cached by the DMA.
  */
 struct dma_tx_state {
+	dma_cookie_t last;
+	dma_cookie_t used;
 	u32 residue;
 	u32 in_flight_bytes;
 };
@@ -1427,13 +1431,25 @@ static inline void dma_async_issue_pending(struct dma_chan *chan)
  * dma_async_is_tx_complete - poll for transaction completion
  * @chan: DMA channel
  * @cookie: transaction identifier to check status of
+ * @last: returns last completed cookie, can be NULL
+ * @used: returns last issued cookie, can be NULL
+ *
+ * If @last and @used are passed in, upon return they reflect the most
+ * recently submitted (used) cookie and the most recently completed
+ * cookie.
  */
 static inline enum dma_status dma_async_is_tx_complete(struct dma_chan *chan,
-	dma_cookie_t cookie)
+	dma_cookie_t cookie, dma_cookie_t *last, dma_cookie_t *used)
 {
 	struct dma_tx_state state;
+	enum dma_status status;
 
-	return chan->device->device_tx_status(chan, cookie, &state);
+	status = chan->device->device_tx_status(chan, cookie, &state);
+	if (last)
+		*last = state.last;
+	if (used)
+		*used = state.used;
+	return status;
 }
 
 #ifdef CONFIG_DMA_ENGINE
