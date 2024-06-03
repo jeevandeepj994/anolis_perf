@@ -3538,6 +3538,17 @@ static struct ctl_table vm_table[] = {
 		.proc_handler	= proc_dointvec_minmax,
 	},
 #endif
+#ifdef CONFIG_MEMCG
+    {
+        .procname       = "cgroup_dirty_thresh",
+        .data           = &cgroup_dirty_thresh,
+        .maxlen         = sizeof(cgroup_dirty_thresh),
+        .mode           = 0644,
+        .proc_handler   = proc_dointvec_minmax,
+		.extra1		= SYSCTL_ZERO,
+		.extra2		= &one_hundred,
+    },
+#endif
 	{ }
 };
 

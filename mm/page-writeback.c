@@ -250,6 +250,22 @@ static void wb_min_max_ratio(struct bdi_writeback *wb,
 
 #endif	/* CONFIG_CGROUP_WRITEBACK */
 
+void force_cgwb_dec_lruvec_page_state(struct page *page,
+					 enum node_stat_item idx)
+{
+
+		dec_lruvec_page_state(page, idx);
+}
+EXPORT_SYMBOL_GPL(force_cgwb_dec_lruvec_page_state);
+
+void force_cgwb_inc_lruvec_page_state(struct page *page,
+					 enum node_stat_item idx)
+{
+
+		inc_lruvec_page_state(page, idx);
+}
+EXPORT_SYMBOL_GPL(force_cgwb_inc_lruvec_page_state);
+
 /*
  * In a memory zone, there is a certain amount of pages we consider
  * available for the page cache, which is essentially the number of
@@ -446,6 +462,16 @@ static void domain_dirty_limits(struct dirty_throttle_control *dtc)
 	/* we should eventually report the domain in the TP */
 	if (!gdtc)
 		trace_global_dirty_state(bg_thresh, thresh);
+}
+
+static void domain_adjust_thresh(struct dirty_throttle_control *mdtc,
+                                    unsigned long *m_thresh,
+                                    unsigned long *m_bg_thresh)
+{
+    if (!!cgroup_dirty_thresh) {
+        *m_thresh = cgroup_dirty_thresh * mdtc->avail / 100;
+        *m_bg_thresh = cgroup_dirty_thresh * mdtc->avail / 100;
+    }
 }
 
 /**
@@ -1742,6 +1768,7 @@ static void balance_dirty_pages(struct bdi_writeback *wb,
 				m_thresh = mdtc->thresh;
 				m_bg_thresh = mdtc->bg_thresh;
 			}
+			domain_adjust_thresh(mdtc, &m_thresh, &m_bg_thresh);
 		}
 
 		/*

@@ -113,6 +113,12 @@ static DECLARE_WAIT_QUEUE_HEAD(memcg_cgwb_frn_waitq);
 
 static struct workqueue_struct *memcg_wmark_wq;
 
+#ifdef CONFIG_MEMCG
+unsigned int cgroup_dirty_thresh = 0;
+#else
+#define cgroup_dirty_thresh 0
+#endif
+
 /* Whether legacy memory+swap accounting is active */
 static bool do_memsw_account(void)
 {
