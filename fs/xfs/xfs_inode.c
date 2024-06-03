@@ -1453,8 +1453,6 @@ xfs_itruncate_clear_reflink_flags(
 		xfs_inode_clear_cowblocks_tag(ip);
 }
 
-#define XFS_REFLINK_INACTIVE_WARN_THRESHOLD	6000000ULL
-
 /*
  * Free up the underlying blocks past new_size.  The new size must be smaller
  * than the current size.  This routine can be used both for the attribute and
@@ -1536,12 +1534,7 @@ xfs_itruncate_extents_flags(
 
 	unmap_len = XFS_MAX_FILEOFF - first_unmap_block + 1;
 	while (unmap_len > 0) {
-		u64 expire, now;
-
 		ASSERT(tp->t_firstblock == NULLFSBLOCK);
-
-		if (secondary_inactive)
-			expire = ktime_get_ns() + XFS_REFLINK_INACTIVE_WARN_THRESHOLD;
 
 		error = __xfs_bunmapi(tp, ip, first_unmap_block, &unmap_len,
 				flags, XFS_ITRUNC_MAX_EXTENTS);
@@ -1554,11 +1547,6 @@ xfs_itruncate_extents_flags(
 			goto out;
 
 		if (secondary_inactive) {
-			now = ktime_get_ns();
-			if (now >= expire)
-				WARN(1, "xfs reflink inactive long tail: %lluns\n",
-				     now - expire + XFS_REFLINK_INACTIVE_WARN_THRESHOLD);
-
 			if (xfs_reflink_inactive_force_log_period &&
 			    ++force_count >= xfs_reflink_inactive_force_log_period) {
 				xfs_log_force(mp, 0);
