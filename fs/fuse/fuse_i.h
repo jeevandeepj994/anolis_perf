@@ -39,6 +39,9 @@
 /** Maximum of max_pages received in init_out */
 #define FUSE_MAX_MAX_PAGES 1024
 
+/** Maximum number of outstanding background requests */
+#define FUSE_DEFAULT_MAX_BACKGROUND 12
+
 /** Bias for fi->writectr, meaning new writepages must not be sent */
 #define FUSE_NOWRITE INT_MIN
 
@@ -637,11 +640,18 @@ struct fuse_conn {
 	/** Number of requests currently in the background */
 	unsigned num_background;
 
-	/** Number of background requests currently queued for userspace */
-	unsigned active_background;
+	/*
+	 * Number of background requests currently queued for userspace.
+	 * active_background[WRITE] for WRITE requests, and
+	 * active_background[READ] for others.
+	 */
+	unsigned active_background[2];
 
-	/** The list of background requests set aside for later queuing */
-	struct list_head bg_queue;
+	/*
+	 * The list of background requests set aside for later queuing.
+	 * bg_queue[WRITE] for WRITE requests, bg_queue[READ] for others.
+	 */
+	struct list_head bg_queue[2];
 
 	/** Protects: max_background, congestion_threshold, num_background,
 	 * active_background, bg_queue, blocked */
@@ -839,6 +849,9 @@ struct fuse_conn {
 
 	/* Relax restrictions to allow shared mmap in FOPEN_DIRECT_IO mode */
 	unsigned int direct_io_allow_mmap:1;
+
+	/* separate background queue for WRITE requests and the others */
+	unsigned int separate_background:1;
 
 	/** The number of requests waiting for completion */
 	atomic_t num_waiting;
