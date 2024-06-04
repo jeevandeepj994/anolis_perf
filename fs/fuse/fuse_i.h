@@ -636,11 +636,14 @@ struct fuse_conn {
 	/** Number of requests currently in the background */
 	unsigned num_background;
 
-	/** Number of background requests currently queued for userspace */
-	unsigned active_background;
+	/** Number of background requests currently queued for userspace.
+	 * active_background[WRITE] for WRITE requests, and
+	 * active_background[READ] for others */
+	unsigned active_background[2];
 
-	/** The list of background requests set aside for later queuing */
-	struct list_head bg_queue;
+	/** The list of background requests set aside for later queuing.
+	    bg_queue[WRITE] for WRITE requests, bg_queue[READ] for others */
+	struct list_head bg_queue[2];
 
 	/** Protects: max_background, congestion_threshold, num_background,
 	 * active_background, bg_queue, blocked */
