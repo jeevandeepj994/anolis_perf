@@ -20,6 +20,7 @@
 #include <linux/wait.h>
 #include <linux/mm.h>
 #include <linux/pagevec.h>
+#include <linux/ck_kabi.h>
 
 /*
  *
@@ -44,6 +45,9 @@ struct svc_pool {
 	struct percpu_counter	sp_threads_woken;
 
 	unsigned long		sp_flags;
+
+	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
 } ____cacheline_aligned_in_smp;
 
 /* bits for sp_flags */
@@ -96,6 +100,9 @@ struct svc_serv {
 						 * entries in the svc_cb_list */
 	bool			sv_bc_enabled;	/* service uses backchannel */
 #endif /* CONFIG_SUNRPC_BACKCHANNEL */
+
+	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
 };
 
 /**
