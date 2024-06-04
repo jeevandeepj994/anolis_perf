@@ -793,7 +793,8 @@ void fuse_conn_init(struct fuse_conn *fc, struct fuse_mount *fm,
 	atomic_set(&fc->dev_count, 1);
 	init_waitqueue_head(&fc->blocked_waitq);
 	fuse_iqueue_init(&fc->iq, fiq_ops, fiq_priv);
-	INIT_LIST_HEAD(&fc->bg_queue);
+	INIT_LIST_HEAD(&fc->bg_queue[READ]);
+	INIT_LIST_HEAD(&fc->bg_queue[WRITE]);
 	INIT_LIST_HEAD(&fc->entry);
 	INIT_LIST_HEAD(&fc->devices);
 	idr_init(&fc->passthrough_req);
