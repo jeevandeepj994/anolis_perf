@@ -61,6 +61,9 @@ struct page;
 #ifdef CONFIG_DMA_CMA
 
 extern struct cma *dma_contiguous_default_area;
+#ifdef CONFIG_PCI
+extern bool zhaoxin_p2cw_patch_en;
+#endif
 
 static inline struct cma *dev_get_cma_area(struct device *dev)
 {

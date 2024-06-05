@@ -194,7 +194,10 @@ struct page *dma_alloc_from_contiguous(struct device *dev, size_t count,
 {
 	if (align > CONFIG_CMA_ALIGNMENT)
 		align = CONFIG_CMA_ALIGNMENT;
-
+#if defined(CONFIG_X86) && defined(CONFIG_PCI)
+	if (zhaoxin_p2cw_patch_en == true)
+		return NULL;
+#endif
 	return cma_alloc(dev_get_cma_area(dev), count, align, no_warn);
 }
 
