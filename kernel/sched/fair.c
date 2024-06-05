@@ -13918,6 +13918,7 @@ int alloc_fair_sched_group(struct task_group *tg, struct task_group *parent)
 #endif
 
 	init_cfs_bandwidth(tg_cfs_bandwidth(tg), tg_cfs_bandwidth(parent));
+	tg_set_specs_ratio(tg, tg_cfs_bandwidth(tg)->hierarchical_quota);
 
 	for_each_possible_cpu(i) {
 		cfs_rq = kzalloc_node(sizeof(struct cfs_rq),
