@@ -281,11 +281,12 @@ EXPORT_SYMBOL_GPL(tpm_is_tpm2);
  * tpm_pcr_read - read a PCR value from SHA1 bank
  * @chip:	a &struct tpm_chip instance, %NULL for the default chip
  * @pcr_idx:	the PCR to be retrieved
- * @res_buf:	the value of the PCR
+ * @digest:	the PCR bank and buffer current PCR value is written to
  *
  * Return: same as with tpm_transmit_cmd()
  */
-int tpm_pcr_read(struct tpm_chip *chip, u32 pcr_idx, u8 *res_buf)
+int tpm_pcr_read(struct tpm_chip *chip, u32 pcr_idx,
+		 struct tpm_digest *digest)
 {
 	int rc;
 
@@ -294,9 +295,9 @@ int tpm_pcr_read(struct tpm_chip *chip, u32 pcr_idx, u8 *res_buf)
 		return -ENODEV;
 
 	if (chip->flags & TPM_CHIP_FLAG_TPM2)
-		rc = tpm2_pcr_read(chip, pcr_idx, res_buf);
+		rc = tpm2_pcr_read(chip, pcr_idx, digest, NULL);
 	else
-		rc = tpm1_pcr_read(chip, pcr_idx, res_buf);
+		rc = tpm1_pcr_read(chip, pcr_idx, digest->digest);
 
 	tpm_put_ops(chip);
 	return rc;
@@ -307,43 +308,34 @@ EXPORT_SYMBOL_GPL(tpm_pcr_read);
  * tpm_pcr_extend - extend a PCR value in SHA1 bank.
  * @chip:	a &struct tpm_chip instance, %NULL for the default chip
  * @pcr_idx:	the PCR to be retrieved
- * @hash:	the hash value used to extend the PCR value
+ * @digests:	array of tpm_digest structures used to extend PCRs
  *
- * Note: with TPM 2.0 extends also those banks with a known digest size to the
- * cryto subsystem in order to prevent malicious use of those PCR banks. In the
- * future we should dynamically determine digest sizes.
+ * Note: callers must pass a digest for every allocated PCR bank, in the same
+ * order of the banks in chip->allocated_banks.
  *
  * Return: same as with tpm_transmit_cmd()
  */
-int tpm_pcr_extend(struct tpm_chip *chip, u32 pcr_idx, const u8 *hash)
+int tpm_pcr_extend(struct tpm_chip *chip, u32 pcr_idx,
+		   struct tpm_digest *digests)
 {
 	int rc;
-	struct tpm2_digest *digest_list;
 	int i;
 
 	chip = tpm_find_get_ops(chip);
 	if (!chip)
 		return -ENODEV;
 
+	for (i = 0; i < chip->nr_allocated_banks; i++)
+		if (digests[i].alg_id != chip->allocated_banks[i].alg_id)
+			return -EINVAL;
+
 	if (chip->flags & TPM_CHIP_FLAG_TPM2) {
-		digest_list = kcalloc(chip->nr_allocated_banks,
-				      sizeof(*digest_list), GFP_KERNEL);
-		if (!digest_list)
-			return -ENOMEM;
-
-		for (i = 0; i < chip->nr_allocated_banks; i++) {
-			digest_list[i].alg_id = chip->allocated_banks[i];
-			memcpy(digest_list[i].digest, hash, TPM_DIGEST_SIZE);
-		}
-
-		rc = tpm2_pcr_extend(chip, pcr_idx, chip->nr_allocated_banks,
-				     digest_list);
-		kfree(digest_list);
+		rc = tpm2_pcr_extend(chip, pcr_idx, digests);
 		tpm_put_ops(chip);
 		return rc;
 	}
 
-	rc = tpm1_pcr_extend(chip, pcr_idx, hash,
+	rc = tpm1_pcr_extend(chip, pcr_idx, digests[0].digest,
 			     "attempting extend a PCR value");
 	tpm_put_ops(chip);
 	return rc;
@@ -410,15 +402,13 @@ int tpm_pm_suspend(struct device *dev)
 	if (chip->flags & TPM_CHIP_FLAG_ALWAYS_POWERED)
 		return 0;
 
-	if (chip->flags & TPM_CHIP_FLAG_TPM2) {
-		mutex_lock(&chip->tpm_mutex);
-		if (!tpm_chip_start(chip)) {
+	if (!tpm_chip_start(chip)) {
+		if (chip->flags & TPM_CHIP_FLAG_TPM2)
 			tpm2_shutdown(chip, TPM2_SU_STATE);
-			tpm_chip_stop(chip);
-		}
-		mutex_unlock(&chip->tpm_mutex);
-	} else {
-		rc = tpm1_pm_suspend(chip, tpm_suspend_pcr);
+		else
+			rc = tpm1_pm_suspend(chip, tpm_suspend_pcr);
+
+		tpm_chip_stop(chip);
 	}
 
 	return rc;
