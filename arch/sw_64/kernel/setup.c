@@ -28,6 +28,7 @@
 #include <linux/genalloc.h>
 #include <linux/acpi.h>
 #include <linux/cpu.h>
+#include <linux/cgroup.h>
 
 #include <asm/efi.h>
 #include <asm/kvm_cma.h>
@@ -971,7 +972,18 @@ show_cpuinfo(struct seq_file *f, void *slot)
 	cpu_freq = cpuid(GET_CPU_FREQ, 0);
 
 	for_each_online_cpu(i) {
+#ifdef CONFIG_CGROUP_BPF
+		struct bpf_rich_container_info info = {0};
+#endif
+
 		index = cpu = i;
+
+#ifdef CONFIG_CGROUP_BPF
+		/* Get cpu mask and check it */
+		if (!BPF_CGROUP_RUN_PROG_RICH_CONTAINER_CPU(&info, 1) &&
+					!cpumask_test_cpu(cpu, &info.cpus_mask))
+			continue;
+#endif
 
 		if (check_rich_container(cpu, &index, &rich_container, &total))
 			continue;
