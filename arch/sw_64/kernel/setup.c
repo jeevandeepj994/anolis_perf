@@ -965,10 +965,17 @@ show_cpuinfo(struct seq_file *f, void *slot)
 {
 	int i;
 	unsigned long cpu_freq;
+	unsigned int cpu, index, total;
+	bool rich_container = false;
 
 	cpu_freq = cpuid(GET_CPU_FREQ, 0);
 
 	for_each_online_cpu(i) {
+		index = cpu = i;
+
+		if (check_rich_container(cpu, &index, &rich_container, &total))
+			continue;
+
 		/*
 		 * glibc reads /proc/cpuinfo to determine the number of
 		 * online processors, looking for lines beginning with
@@ -981,7 +988,7 @@ show_cpuinfo(struct seq_file *f, void *slot)
 				"model name\t: %s CPU @ %lu.%lu%luGHz\n"
 				"cpu variation\t: %u\n"
 				"cpu revision\t: %u\n",
-				i, cpu_desc.vendor_id, cpu_desc.family,
+				index, cpu_desc.vendor_id, cpu_desc.family,
 				cpu_desc.model, cpu_desc.model_id,
 				cpu_freq / 1000, (cpu_freq % 1000) / 100,
 				(cpu_freq % 100) / 10,
