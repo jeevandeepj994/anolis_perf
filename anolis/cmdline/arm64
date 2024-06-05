@@ -3,3 +3,4 @@ crashkernel=0M-2G:0M,2G-64G:256M,64G-:384M
 iommu.passthrough=1 iommu.strict=0
 nospectre_bhb ssbd=force-off
 kfence.sample_interval=100 kfence.booting_max=0-2G:0,2G-32G:2M,32G-:32M
+irqtime_account=off
