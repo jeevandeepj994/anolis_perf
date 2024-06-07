@@ -720,17 +720,9 @@ static int __init tagged_addr_init(void)
 core_initcall(tagged_addr_init);
 #endif	/* CONFIG_ARM64_TAGGED_ADDR_ABI */
 
-#ifdef CONFIG_PREEMPT_DYNAMIC
-DEFINE_STATIC_KEY_TRUE(sk_dynamic_irqentry_exit_cond_resched);
-#define need_irq_preemption() \
-       (static_branch_unlikely(&sk_dynamic_irqentry_exit_cond_resched))
-#else
-#define need_irq_preemption()  (IS_ENABLED(CONFIG_PREEMPTION))
-#endif
-
 asmlinkage void __sched arm64_preempt_schedule_irq(void)
 {
-	if (!need_irq_preemption())
+	if (!IS_ENABLED(CONFIG_PREEMPTION))
 		return;
 	/*
 	 * Note: thread_info::preempt_count includes both thread_info::count
