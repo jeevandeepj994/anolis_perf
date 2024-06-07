@@ -505,7 +505,12 @@ alternative_endif
 
 	irq_handler	\handler
 
+#ifdef CONFIG_PREEMPTION
+	ldr	x24, [tsk, #TSK_TI_PREEMPT]	// get preempt count
+	cbnz	x24, 1f				// preempt count != 0
 	bl	arm64_preempt_schedule_irq	// irq en/disable is done inside
+1:
+#endif
 
 	mov	x0, sp
 	bl	exit_el1_irq_or_nmi

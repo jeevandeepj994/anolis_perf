@@ -722,15 +722,7 @@ core_initcall(tagged_addr_init);
 
 asmlinkage void __sched arm64_preempt_schedule_irq(void)
 {
-	if (!IS_ENABLED(CONFIG_PREEMPTION))
-		return;
-	/*
-	 * Note: thread_info::preempt_count includes both thread_info::count
-	 * and thread_info::need_resched, and is not equivalent to
-	 * preempt_count().
-	 */
-	if (READ_ONCE(current_thread_info()->preempt_count) != 0)
-		return;
+	lockdep_assert_irqs_disabled();
 
 	/*
 	 * DAIF.DA are cleared at the start of IRQ/FIQ handling, and when GIC
