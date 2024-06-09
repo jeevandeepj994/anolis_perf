@@ -349,7 +349,7 @@ static void print_cpu_stall_fast_no_hz(char *cp, int cpu)
 {
 	struct rcu_data *rdp = &per_cpu(rcu_data, cpu);
 
-	snprintf(cp, sizeof(cp), "last_accelerate: %04lx/%04lx dyntick_enabled: %d",
+	sprintf(cp, "last_accelerate: %04lx/%04lx dyntick_enabled: %d",
 		rdp->last_accelerate & 0xffff, jiffies & 0xffff,
 		!!rdp->tick_nohz_enabled_snap);
 }
