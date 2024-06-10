@@ -918,7 +918,7 @@ static struct scsi_host_template pata_macio_sht = {
 	.sg_tablesize		= MAX_DCMDS,
 	/* We may not need that strict one */
 	.dma_boundary		= ATA_DMA_BOUNDARY,
-	/*
+    /*
 	 * The SCSI core requires the segment size to cover at least a page, so
 	 * for 64K page size kernels this must be at least 64K. However the
 	 * hardware can't handle 64K, so pata_macio_qc_prep() will split large
