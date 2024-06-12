@@ -338,6 +338,8 @@ struct fuse_file_lock {
  * FUSE_INIT_EXT: extended fuse_init_in request
  * FUSE_INIT_RESERVED: reserved, do not use
  * FUSE_HAS_INODE_DAX:  use per inode DAX
+ * FUSE_SEPARATE_BACKGROUND: separate background queue for WRITE requets and
+ * 			     the others
  */
 #define FUSE_ASYNC_READ		(1 << 0)
 #define FUSE_POSIX_LOCKS	(1 << 1)
@@ -372,6 +374,8 @@ struct fuse_file_lock {
 #define FUSE_INIT_RESERVED	(1 << 31)
 /* bits 32..63 get shifted down 32 bits into the flags2 field */
 #define FUSE_HAS_INODE_DAX	(1ULL << 33)
+#define FUSE_SEPARATE_BACKGROUND (1ULL << 56)
+/* The 57th bit is left to FUSE_HAS_RECOVERY */
 #define FUSE_DELETE_STALE	(1ULL << 58)
 /* The 59th bit is left to FUSE_DIO_SHARED_MMAP */
 #define FUSE_INVAL_CACHE_INFAIL	(1ULL << 60)
