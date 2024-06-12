@@ -831,6 +831,9 @@ struct fuse_conn {
 	/* meta strong consistency */
 	unsigned int invaldir_allentry:1;
 
+	/* separate background queue for WRITE requests and the others */
+	unsigned int separate_background:1;
+
 	/** The number of requests waiting for completion */
 	atomic_t num_waiting;
 
