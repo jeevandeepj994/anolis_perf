@@ -4534,7 +4534,7 @@ void rdma_copy_ah_attr(struct rdma_ah_attr *dest,
 		       const struct rdma_ah_attr *src);
 void rdma_replace_ah_attr(struct rdma_ah_attr *old,
 			  const struct rdma_ah_attr *new);
-void rdma_move_ah_attr(struct rdma_ah_attr *dest, struct rdma_ah_attr *src);
+int rdma_move_ah_attr(struct rdma_ah_attr *dest, struct rdma_ah_attr *src);
 
 /**
  * rdma_ah_find_type - Return address handle type.

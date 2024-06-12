@@ -402,11 +402,12 @@ EXPORT_SYMBOL(rdma_replace_ah_attr);
  * src to dest, making src invalid in the process. No new reference of the src
  * ah_attr is taken.
  */
-void rdma_move_ah_attr(struct rdma_ah_attr *dest, struct rdma_ah_attr *src)
+int rdma_move_ah_attr(struct rdma_ah_attr *dest, struct rdma_ah_attr *src)
 {
 	rdma_destroy_ah_attr(dest);
 	*dest = *src;
 	src->grh.sgid_attr = NULL;
+	return 0;
 }
 EXPORT_SYMBOL(rdma_move_ah_attr);
 
