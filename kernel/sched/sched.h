@@ -554,8 +554,9 @@ struct task_group {
 	int			specs_ratio;
 	bool			group_balancer;
 #endif
+	long			priority;
 
-	CK_KABI_USE(1, long priority)
+	CK_KABI_RESERVE(1)
 	CK_KABI_RESERVE(2)
 	CK_KABI_RESERVE(3)
 	CK_KABI_RESERVE(4)
@@ -695,11 +696,11 @@ struct cfs_rq {
 
 #ifdef CONFIG_GROUP_IDENTITY
 	unsigned int		nr_tasks;
+	unsigned int		h_nr_expel_immune;
 	u64			min_under_vruntime;
-#ifdef CONFIG_SCHED_SMT
 	u64			expel_spread;
 	u64			expel_start;
-	unsigned int		h_nr_expel_immune;
+#ifdef CONFIG_SCHED_SMT
 	struct list_head	expel_list;
 #endif
 	struct rb_root_cached	under_timeline;
@@ -785,20 +786,14 @@ struct cfs_rq {
 	unsigned long		nr_uninterruptible;
 
 #ifdef CONFIG_SMP
-	CK_KABI_USE(1, 2, struct list_head throttled_csd_list)
-#else
+	struct list_head	throttled_csd_list;
+#endif
+
 	CK_KABI_RESERVE(1)
 	CK_KABI_RESERVE(2)
-#endif
-#if defined(CONFIG_GROUP_IDENTITY) && !defined(CONFIG_SCHED_SMT)
-	CK_KABI_USE(3, unsigned int h_nr_expel_immune)
-	CK_KABI_USE(4, u64 expel_spread)
-	CK_KABI_USE(5, u64 expel_start)
-#else
 	CK_KABI_RESERVE(3)
 	CK_KABI_RESERVE(4)
 	CK_KABI_RESERVE(5)
-#endif
 	CK_KABI_RESERVE(6)
 	CK_KABI_RESERVE(7)
 	CK_KABI_RESERVE(8)
@@ -1332,6 +1327,7 @@ struct rq {
 	unsigned int		core_forceidle_seq;
 	unsigned int		core_sibidle_occupation;
 	u64			core_sibidle_start;
+	u64			core_sibidle_start_task;
 	unsigned int		core_id;
 	unsigned int		core_sibidle_count;
 	bool			in_forceidle;
@@ -1339,35 +1335,28 @@ struct rq {
 #endif
 
 #ifdef CONFIG_SCHED_ACPU
-	u64 acpu_idle_sum;
-	u64 sibidle_sum;
-	u64 last_acpu_update_time;
+	u64			acpu_idle_sum;
+	u64			sibidle_sum;
+	u64			last_acpu_update_time;
+	u64			sibidle_task_sum;
+	u64			last_acpu_update_time_task;
 #endif
 
 #if defined(CONFIG_CFS_BANDWIDTH) && defined(CONFIG_SMP)
-	CK_KABI_USE(1, 2, struct list_head cfsb_csd_list)
-#else
-	CK_KABI_RESERVE(1)
-	CK_KABI_RESERVE(2)
+	call_single_data_t      cfsb_csd;
+	struct list_head	cfsb_csd_list;
 #endif
 
 #if defined(CONFIG_IRQ_TIME_ACCOUNTING) && defined(CONFIG_ARM64)
-	CK_KABI_USE(3, u64 prev_irq_time);
-#else
+	u64			prev_irq_time;
+#endif
+
+	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
 	CK_KABI_RESERVE(3)
-#endif
-#ifdef CONFIG_SCHED_CORE
-	CK_KABI_USE(4, u64 core_sibidle_start_task)
-#else
 	CK_KABI_RESERVE(4)
-#endif
-#ifdef CONFIG_SCHED_ACPU
-	CK_KABI_USE(5, u64 sibidle_task_sum)
-	CK_KABI_USE(6, u64 last_acpu_update_time_task)
-#else
 	CK_KABI_RESERVE(5)
 	CK_KABI_RESERVE(6)
-#endif
 	CK_KABI_RESERVE(7)
 	CK_KABI_RESERVE(8)
 };
@@ -1421,11 +1410,6 @@ DECLARE_PER_CPU_SHARED_ALIGNED(struct rq, runqueues);
 #define task_rq(p)		cpu_rq(task_cpu(p))
 #define cpu_curr(cpu)		(cpu_rq(cpu)->curr)
 #define raw_rq()		raw_cpu_ptr(&runqueues)
-
-#if defined(CONFIG_CFS_BANDWIDTH) && defined(CONFIG_SMP)
-DECLARE_PER_CPU_SHARED_ALIGNED(call_single_data_t, cfsb_csd);
-#define cpu_cfsb_csd(cpu)	(&per_cpu(cfsb_csd, (cpu)))
-#endif
 
 struct sched_group;
 #ifdef CONFIG_SCHED_CORE
