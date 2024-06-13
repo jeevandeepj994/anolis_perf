@@ -2177,6 +2177,8 @@ struct net_device {
 	void				*ml_priv;
 	enum netdev_ml_priv_type	ml_priv_type;
 
+	enum netdev_stat_type		pcpu_stat_type:8;
+
 	union {
 		struct pcpu_lstats __percpu		*lstats;
 		struct pcpu_sw_netstats __percpu	*tstats;
@@ -2234,9 +2236,10 @@ struct net_device {
 	/* protected by rtnl_lock */
 	struct bpf_xdp_entity	xdp_state[__MAX_XDP_MODE];
 
-	CK_KABI_USE_SPLIT(1, enum netdev_stat_type      pcpu_stat_type:8)
 	/** @irq_moder: dim parameters used if IS_ENABLED(CONFIG_DIMLIB). */
-	CK_KABI_USE(2, struct dim_irq_moder    *irq_moder)
+	struct dim_irq_moder	*irq_moder;
+
+	CK_KABI_RESERVE(1)
 	CK_KABI_RESERVE(2)
 	CK_KABI_RESERVE(3)
 	CK_KABI_RESERVE(4)

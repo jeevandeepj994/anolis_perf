@@ -563,10 +563,10 @@ struct vm_fault {
 					 * atomic context.
 					 */
 #ifdef CONFIG_PAGETABLE_SHARE
-	CK_KABI_USE(1, struct vm_area_struct *orig_vma) /* Original VMA */
-#else
-	CK_KABI_RESERVE(1)
+	struct vm_area_struct *orig_vma; /* Original VMA */
 #endif
+
+	CK_KABI_RESERVE(1)
 	CK_KABI_RESERVE(2)
 	CK_KABI_RESERVE(3)
 	CK_KABI_RESERVE(4)

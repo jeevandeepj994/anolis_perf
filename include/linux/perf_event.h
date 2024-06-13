@@ -666,6 +666,7 @@ struct perf_event {
 	/* The cumulative AND of all event_caps for events in this group. */
 	int				group_caps;
 
+	unsigned int			group_generation;
 	struct perf_event		*group_leader;
 	struct pmu			*pmu;
 	void				*pmu_private;
@@ -776,7 +777,7 @@ struct perf_event {
 	struct list_head		sb_list;
 #endif /* CONFIG_PERF_EVENTS */
 
-	CK_KABI_USE_SPLIT(1, unsigned int group_generation)
+	CK_KABI_RESERVE(1)
 	CK_KABI_RESERVE(2)
 	CK_KABI_RESERVE(3)
 	CK_KABI_RESERVE(4)
@@ -1025,6 +1026,7 @@ struct perf_sample_data {
 	u64				addr;
 	struct perf_raw_record		*raw;
 	struct perf_branch_stack	*br_stack;
+	u64				*br_stack_cntr;
 	u64				period;
 	union perf_sample_weight	weight;
 	u64				txn;
@@ -1058,7 +1060,6 @@ struct perf_sample_data {
 	u64				cgroup;
 	u64				data_page_size;
 	u64				code_page_size;
-	CK_KABI_EXTEND(u64 *br_stack_cntr);
 } ____cacheline_aligned;
 
 /* default value for data source */

@@ -498,29 +498,25 @@ struct sched_statistics {
 
 #ifdef CONFIG_SCHED_CORE
 	u64				core_forceidle_sum;
+	u64				core_forceidle_task_sum;
+	u64				forceidled_sum;
+	u64				forceidled_sum_base;
 #endif
 
 #if defined(CONFIG_SCHED_ACPU) || defined(CONFIG_SCHED_CORE)
 	u64				core_sibidle_sum;
+	u64				core_sibidle_task_sum;
 #endif
 
-	CK_KABI_USE(1, unsigned long forceidled_sum)
-	CK_KABI_USE(2, unsigned long forceidled_sum_base)
-#ifdef CONFIG_SCHED_CORE
-	CK_KABI_USE(3, unsigned long core_forceidle_task_sum)
-#else
+	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
 	CK_KABI_RESERVE(3)
-#endif
-#if defined(CONFIG_SCHED_ACPU) || defined(CONFIG_SCHED_CORE)
-	CK_KABI_USE(4, unsigned long core_sibidle_task_sum)
-#else
 	CK_KABI_RESERVE(4)
-#endif
 	CK_KABI_RESERVE(5)
 	CK_KABI_RESERVE(6)
 	CK_KABI_RESERVE(7)
 	CK_KABI_RESERVE(8)
-#endif
+#endif /* CONFIG_SCHEDSTATS */
 };
 
 struct sched_entity {
@@ -546,7 +542,7 @@ struct sched_entity {
 	u64				cg_iowait_start;
 	u64				cg_ineffective_sum;
 	u64				cg_ineffective_start;
-	CK_KABI_REPLACE_SPLIT(seqlock_t idle_seqlock, seqcount_t idle_seqcount);
+	seqcount_t			idle_seqcount;
 	spinlock_t			iowait_lock;
 
 	u64				nr_migrations;
@@ -592,7 +588,9 @@ struct sched_entity {
 #endif
 #endif
 
-	CK_KABI_USE(1, long priority)
+	long priority;
+
+	CK_KABI_RESERVE(1)
 	CK_KABI_RESERVE(2)
 	CK_KABI_RESERVE(3)
 	CK_KABI_RESERVE(4)
@@ -1031,6 +1029,9 @@ struct task_struct {
 
 	/* CLONE_CHILD_CLEARTID: */
 	int __user			*clear_child_tid;
+
+	/* PF_IO_WORKER */
+	void				*pf_io_worker;
 
 	u64				utime;
 	u64				stime;
@@ -1513,8 +1514,8 @@ struct task_struct {
 	struct cpumask			cpus_allowed_alt;
 	int				soft_cpus_version;
 #endif
-	/* PF_IO_WORKER */
-	CK_KABI_USE(1, void *pf_io_worker)
+
+	CK_KABI_RESERVE(1)
 	CK_KABI_RESERVE(2)
 	CK_KABI_RESERVE(3)
 	CK_KABI_RESERVE(4)

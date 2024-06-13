@@ -7130,7 +7130,7 @@ static inline void __unthrottle_cfs_rq_async(struct cfs_rq *cfs_rq)
 	first = list_empty(&rq->cfsb_csd_list);
 	list_add_tail(&cfs_rq->throttled_csd_list, &rq->cfsb_csd_list);
 	if (first)
-		smp_call_function_single_async(cpu_of(rq), cpu_cfsb_csd(cpu_of(rq)));
+		smp_call_function_single_async(cpu_of(rq), &rq->cfsb_csd);
 }
 #else
 static inline void __unthrottle_cfs_rq_async(struct cfs_rq *cfs_rq)
@@ -14334,7 +14334,7 @@ __init void init_sched_fair_class(void)
 
 	for_each_possible_cpu(i) {
 #ifdef CONFIG_CFS_BANDWIDTH
-		INIT_CSD(cpu_cfsb_csd(i), __cfsb_csd_unthrottle, cpu_rq(i));
+		INIT_CSD(&cpu_rq(i)->cfsb_csd, __cfsb_csd_unthrottle, cpu_rq(i));
 		INIT_LIST_HEAD(&cpu_rq(i)->cfsb_csd_list);
 #endif
 	}
