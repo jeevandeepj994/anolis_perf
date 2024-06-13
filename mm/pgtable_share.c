@@ -484,7 +484,7 @@ void pgtable_share_adjust_range(struct vm_area_struct *vma, unsigned long *start
 		*end = ALIGN(*end, PMD_SIZE);
 }
 
-DEFINE_STATIC_KEY_TRUE(pgtable_share_enabled_key);
+DEFINE_STATIC_KEY_FALSE(pgtable_share_enabled_key);
 static int __init setup_pgtable_share(char *s)
 {
 	if (!strcmp(s, "1"))
