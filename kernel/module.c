@@ -2319,8 +2319,8 @@ static void get_oot_mempool(struct module *mod)
 		return;
 
 	tmp = strstrip(s);
-	for (token = strsep(&tmp, " "); token != NULL;
-						token = strsep(&tmp, " ")) {
+	for (token = strsep(&tmp, ","); token != NULL;
+						token = strsep(&tmp, ",")) {
 		if (!strcmp(token, mod->name)) {
 			in_list = true;
 			break;
