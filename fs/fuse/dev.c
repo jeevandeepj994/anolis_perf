@@ -1853,6 +1853,25 @@ copy_finish:
 	return err;
 }
 
+static void fuse_requeue_requests(struct fuse_conn *fc,
+				  struct list_head *to_queue)
+{
+	struct fuse_req *req, *next;
+	struct fuse_iqueue *fiq = &fc->iq;
+
+	list_for_each_entry_safe(req, next, to_queue, list) {
+		set_bit(FR_PENDING, &req->flags);
+		clear_bit(FR_SENT, &req->flags);
+		/* mark the request as resend request */
+		req->in.h.unique |= FUSE_UNIQUE_RESEND;
+	}
+
+	spin_lock(&fiq->lock);
+	/* iq and pq requests are both oldest to newest */
+	list_splice(to_queue, &fiq->pending);
+	fiq->ops->wake_pending_and_unlock(fiq);
+}
+
 /*
  * Resending all processing queue requests.
  *
@@ -1869,8 +1888,6 @@ copy_finish:
 static void fuse_resend(struct fuse_conn *fc)
 {
 	struct fuse_dev *fud;
-	struct fuse_req *req, *next;
-	struct fuse_iqueue *fiq = &fc->iq;
 	LIST_HEAD(to_queue);
 	unsigned int i;
 
@@ -1890,17 +1907,7 @@ static void fuse_resend(struct fuse_conn *fc)
 	}
 	spin_unlock(&fc->lock);
 
-	list_for_each_entry_safe(req, next, &to_queue, list) {
-		set_bit(FR_PENDING, &req->flags);
-		clear_bit(FR_SENT, &req->flags);
-		/* mark the request as resend request */
-		req->in.h.unique |= FUSE_UNIQUE_RESEND;
-	}
-
-	spin_lock(&fiq->lock);
-	/* iq and pq requests are both oldest to newest */
-	list_splice(&to_queue, &fiq->pending);
-	fiq->ops->wake_pending_and_unlock(fiq);
+	fuse_requeue_requests(fc, &to_queue);
 }
 
 static int fuse_notify_resend(struct fuse_conn *fc)
