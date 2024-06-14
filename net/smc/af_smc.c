@@ -1398,18 +1398,32 @@ static int smc_connect_rdma_v2_prepare(struct smc_sock *smc,
 	if (!ini->first_contact_peer || aclc->hdr.version == SMC_V1)
 		return 0;
 
-	if (fce->v2_direct) {
-		memcpy(ini->smcrv2.nexthop_mac, &aclc->r0.lcl.mac, ETH_ALEN);
-		ini->smcrv2.uses_gateway = false;
-	} else {
-		if (smc_ib_find_route(net, smc->clcsock->sk->sk_rcv_saddr,
+	if (smc_ib_is_iwarp(ini->smcrv2.ib_dev_v2->ibdev,
+			    ini->smcrv2.ib_port_v2)) {
+		/* eRDMA specific: allow mismatch.
+		 * e.g. peer claims indirect, but we find its direct.
+		 * so no matter what peer claims, always check route.
+		 */
+		if (smc_ib_find_route(net,
+				      smc_ib_gid_to_ipv4(ini->smcrv2.ib_gid_v2),
 				      smc_ib_gid_to_ipv4(aclc->r0.lcl.gid),
 				      ini->smcrv2.nexthop_mac,
 				      &ini->smcrv2.uses_gateway))
 			return SMC_CLC_DECL_NOROUTE;
-		if (!ini->smcrv2.uses_gateway) {
-			/* mismatch: peer claims indirect, but its direct */
-			return SMC_CLC_DECL_NOINDIRECT;
+	} else {
+		if (fce->v2_direct) {
+			memcpy(ini->smcrv2.nexthop_mac, &aclc->r0.lcl.mac, ETH_ALEN);
+			ini->smcrv2.uses_gateway = false;
+		} else {
+			if (smc_ib_find_route(net, smc->clcsock->sk->sk_rcv_saddr,
+					      smc_ib_gid_to_ipv4(aclc->r0.lcl.gid),
+					      ini->smcrv2.nexthop_mac,
+					      &ini->smcrv2.uses_gateway))
+				return SMC_CLC_DECL_NOROUTE;
+			if (!ini->smcrv2.uses_gateway) {
+				/* mismatch: peer claims indirect, but its direct */
+				return SMC_CLC_DECL_NOINDIRECT;
+			}
 		}
 	}
 
