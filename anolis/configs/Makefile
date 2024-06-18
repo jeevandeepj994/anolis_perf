@@ -25,6 +25,9 @@ dist-configs-import:
 dist-configs-export:
 	@sh scripts/export_configs.sh
 
+dist-configs-check:
+	@sh examination/configs-check.sh
+
 dist-configs-help:
 	@echo ''
 	@echo '--------------------------------'
