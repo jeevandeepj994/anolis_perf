@@ -349,6 +349,8 @@ struct fuse_file_lock {
  * FUSE_NO_EXPORT_SUPPORT: explicitly disable export support
  * FUSE_HAS_RESEND: kernel supports resending pending requests, and the high bit
  *		    of the request ID indicates resend requests
+ * FUSE_SEPARATE_BACKGROUND: separate background queue for WRITE requests and
+ *			     the others
  */
 #define FUSE_ASYNC_READ		(1 << 0)
 #define FUSE_POSIX_LOCKS	(1 << 1)
@@ -386,6 +388,8 @@ struct fuse_file_lock {
 #define FUSE_DIRECT_IO_ALLOW_MMAP (1ULL << 36)
 #define FUSE_NO_EXPORT_SUPPORT	(1ULL << 38)
 #define FUSE_HAS_RESEND		(1ULL << 39)
+#define FUSE_SEPARATE_BACKGROUND (1ULL << 56)
+/* The 57th bit is left to FUSE_HAS_RECOVERY */
 #define FUSE_DELETE_STALE	(1ULL << 58)
 /* The 59th bit is left to FUSE_DIO_SHARED_MMAP */
 #define FUSE_INVAL_CACHE_INFAIL	(1ULL << 60)
