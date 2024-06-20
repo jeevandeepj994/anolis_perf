@@ -1729,6 +1729,17 @@ build_sched_domains(const struct cpumask *cpu_map, struct sched_domain_attr *att
 		}
 	}
 
+#ifdef CONFIG_X86
+	if ((boot_cpu_data.x86_vendor == X86_VENDOR_CENTAUR ||
+	     boot_cpu_data.x86_vendor == X86_VENDOR_ZHAOXIN) &&
+	    (boot_cpu_data.x86 == 7 && boot_cpu_data.x86_model == 0x5b)) {
+		for_each_cpu(i, cpu_map) {
+			for (sd = *per_cpu_ptr(d.sd, i); sd; sd = sd->parent)
+				sd->flags |= SD_ASYM_PACKING;
+		}
+	}
+#endif
+
 	/* Calculate CPU capacity for physical packages and nodes */
 	for (i = nr_cpumask_bits-1; i >= 0; i--) {
 		if (!cpumask_test_cpu(i, cpu_map))
@@ -1739,6 +1750,16 @@ build_sched_domains(const struct cpumask *cpu_map, struct sched_domain_attr *att
 			init_sched_groups_capacity(i, sd);
 		}
 	}
+
+#ifdef CONFIG_X86
+	if ((boot_cpu_data.x86_vendor == X86_VENDOR_CENTAUR ||
+	     boot_cpu_data.x86_vendor == X86_VENDOR_ZHAOXIN) &&
+	    (boot_cpu_data.x86 == 7 && boot_cpu_data.x86_model == 0x5b))
+		for_each_cpu(i, cpu_map) {
+			for (sd = *per_cpu_ptr(d.sd, i); sd; sd = sd->parent)
+				zx_adjust_sched_domains_child_flags(sd);
+		}
+#endif
 
 	/* Attach the domains */
 	rcu_read_lock();
