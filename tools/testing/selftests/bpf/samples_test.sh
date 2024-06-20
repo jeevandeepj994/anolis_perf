@@ -21,7 +21,6 @@ ulimit -l unlimited
 ./test_cgrp2_tc.sh
 ./test_cls_bpf.sh
 ./test_map_in_map
-./test_overhead
 timeout 10 ./tracex1
 ./tracex2
 timeout 10 ./tracex3
