@@ -796,9 +796,9 @@ static u64 read_hpet(struct clocksource *cs)
 	BUILD_BUG_ON(sizeof(union hpet_lock) != 8);
 
 	/*
-	 * Read HPET directly if in NMI.
+	 * Read HPET directly if in NMI or panic in progress.
 	 */
-	if (in_nmi())
+	if (in_nmi() || (unlikely(atomic_read(&panic_cpu) != PANIC_CPU_INVALID)))
 		return (u64)hpet_readl(HPET_COUNTER);
 
 	/*
