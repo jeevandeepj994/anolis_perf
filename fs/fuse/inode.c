@@ -54,9 +54,6 @@ MODULE_PARM_DESC(max_user_congthresh,
 
 #define FUSE_DEFAULT_BLKSIZE 512
 
-/** Maximum number of outstanding background requests */
-#define FUSE_DEFAULT_MAX_BACKGROUND 12
-
 /** Congestion starts at 75% of maximum */
 #define FUSE_DEFAULT_CONGESTION_THRESHOLD (FUSE_DEFAULT_MAX_BACKGROUND * 3 / 4)
 
@@ -756,6 +753,17 @@ static void fuse_iqueue_init(struct fuse_iqueue *fiq,
 	fiq->priv = priv;
 }
 
+static void fuse_sbg_queue_init(struct fuse_conn *fc)
+{
+	unsigned int i;
+
+	for (i = 0; i < FUSE_BG_TYPES; i++) {
+		struct fuse_bg_table *table = &fc->bg_table[i];
+
+		INIT_LIST_HEAD(&table->bg_queue);
+	}
+}
+
 static void fuse_pqueue_init(struct fuse_pqueue *fpq)
 {
 	unsigned int i;
@@ -780,8 +788,8 @@ void fuse_conn_init(struct fuse_conn *fc, struct fuse_mount *fm,
 	atomic_set(&fc->dev_count, 1);
 	init_waitqueue_head(&fc->blocked_waitq);
 	fuse_iqueue_init(&fc->iq, fiq_ops, fiq_priv);
-	INIT_LIST_HEAD(&fc->bg_queue[READ]);
-	INIT_LIST_HEAD(&fc->bg_queue[WRITE]);
+	fuse_sbg_queue_init(fc);
+	INIT_LIST_HEAD(&fc->bg_queue);
 	INIT_LIST_HEAD(&fc->entry);
 	INIT_LIST_HEAD(&fc->devices);
 	idr_init(&fc->passthrough_req);

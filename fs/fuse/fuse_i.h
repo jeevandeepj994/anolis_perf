@@ -38,6 +38,9 @@
 /** Maximum of max_pages received in init_out */
 #define FUSE_MAX_MAX_PAGES 1024
 
+/** Maximum number of outstanding background requests */
+#define FUSE_DEFAULT_MAX_BACKGROUND 12
+
 /** Bias for fi->writectr, meaning new writepages must not be sent */
 #define FUSE_NOWRITE INT_MIN
 
@@ -46,6 +49,12 @@
 
 /** Number of dentries for each connection in the control filesystem */
 #define FUSE_CTL_NUM_DENTRIES 11
+
+enum fuse_bgqueue_type {
+	FUSE_BG_DEFAULT,	/* Opcodes other than FUSE_WRITE */
+	FUSE_BG_WRITE,
+	FUSE_BG_TYPES
+};
 
 /** List of active connections */
 extern struct list_head fuse_conn_list;
@@ -575,6 +584,15 @@ struct fuse_stats {
 	atomic64_t req_cnts[FUSE_OP_MAX];
 };
 
+/* Separate background queue for background requests. */
+struct fuse_bg_table {
+	/* The list of background requests */
+	struct list_head bg_queue;
+
+	/* Number of background requests */
+	unsigned int active_background;
+};
+
 /**
  * A Fuse connection.
  *
@@ -636,14 +654,14 @@ struct fuse_conn {
 	/** Number of requests currently in the background */
 	unsigned num_background;
 
-	/** Number of background requests currently queued for userspace.
-	 * active_background[WRITE] for WRITE requests, and
-	 * active_background[READ] for others */
-	unsigned active_background[2];
+	/** Number of background requests currently queued for userspace */
+	unsigned active_background;
 
-	/** The list of background requests set aside for later queuing.
-	    bg_queue[WRITE] for WRITE requests, bg_queue[READ] for others */
-	struct list_head bg_queue[2];
+	/** The list of background requests set aside for later queuing */
+	struct list_head bg_queue;
+
+	/* The separate background queue when FUSE_SEPARATE_BACKGROUND enabled */
+	struct fuse_bg_table bg_table[FUSE_BG_TYPES];
 
 	/** Protects: max_background, congestion_threshold, num_background,
 	 * active_background, bg_queue, blocked */
