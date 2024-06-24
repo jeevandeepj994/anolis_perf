@@ -1,0 +1,16 @@
+* Mon Jun 24 2024 Qinyun Tan <qinyuntan@linux.alibaba.com> [5.10.134-17_rc2.2%%DIST%%]
+- selftests/bpf: Workaround verification failure for fexit_bpf2bpf/func_replace_return_code (Yonghong Song)
+- anolis: selftests/bpf: remove test_overhead (Yuanhe Shu)
+- anolis: selftests/bpf: fix samples/bpf testcases (Yuanhe Shu)
+- anolis: bpf/selftests: fix compile error when CONFIG_SMC was not set (D. Wythe)
+- anolis: net/smc: fix incorrect sndbuf setting (D. Wythe)
+- anolis: net/smc: fix data_ready panic when listen sock shutdown (D. Wythe)
+- anolis: net/smc: fix conflict IPPROTO_SMC from upstream (D. Wythe)
+- anolis: net/smc: optimize smc reachability check when using erdma (Wen Gu)
+- anolis: net/smc: restore the correspondence between sk_{snd|rcv}buf and sndbuf/RMB (Wen Gu)
+- net/smc: avoid overwriting when adjusting sock bufsizes (Wen Gu)
+- net/smc: change SMCR_RMBE_SIZES from 5 to 15 (Guangguan Wang)
+- net/smc: set rmb's SG_MAX_SINGLE_ALLOC limitation only when CONFIG_ARCH_NO_SG_CHAIN is defined (Guangguan Wang)
+- anolis: configs: disable CONFIG_DEBUG_PREEMPT in anolis debug defconfig (zhouzhixin.zzx)
+- anolis: virtio_net: avoid canceling worker if not initialized (Heng Qi)
+
