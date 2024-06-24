@@ -479,6 +479,9 @@ struct virtnet_info {
 	int dim_cmd_nums;
 	struct delayed_work get_cvq;
 
+	/* OK to queue work getting cvq response? */
+	bool get_cvq_work_enabled;
+
 	/* Free nodes for dim filled by rx_dim_work. */
 	struct mutex coal_free_lock;
 	struct list_head coal_free_list;
@@ -1805,6 +1808,20 @@ static int virtnet_cvq_response(struct virtnet_info *vi,
 	}
 }
 
+static void enable_get_cvq_work(struct virtnet_info *vi)
+{
+	rtnl_lock();
+	vi->get_cvq_work_enabled = true;
+	rtnl_unlock();
+}
+
+static void disable_get_cvq_work(struct virtnet_info *vi)
+{
+	rtnl_lock();
+	vi->get_cvq_work_enabled = false;
+	rtnl_unlock();
+}
+
 static void __virtnet_add_dim_command(struct virtnet_info *vi,
 				      struct virtnet_coal_node *ctrl)
 {
@@ -1847,7 +1864,7 @@ err_ret:
 
 	virtqueue_kick(vi->cvq);
 	vi->dim_cmd_nums++;
-	if (vi->dim_cmd_nums)
+	if (vi->dim_cmd_nums && vi->get_cvq_work_enabled)
 		schedule_delayed_work(&vi->get_cvq, 1);
 }
 
@@ -1869,7 +1886,7 @@ static void virtnet_get_cvq_work(struct work_struct *work)
 	if (virtnet_cvq_response(vi, false, false))
 		goto out;
 
-	if (vi->dim_cmd_nums)
+	if (vi->dim_cmd_nums && vi->get_cvq_work_enabled)
 		schedule_delayed_work(&vi->get_cvq, 1);
 
 out:
@@ -4144,6 +4161,8 @@ static int virtnet_init_coal_list(struct virtnet_info *vi)
 	if (!virtio_has_feature(vi->vdev, VIRTIO_NET_F_VQ_NOTF_COAL))
 		return 0;
 
+	enable_get_cvq_work(vi);
+
 	vi->dim_cmd_nums = 0;
 	batch_dim_nums = min((unsigned int)vi->max_queue_pairs,
 			     virtqueue_get_vring_size(vi->cvq) / 3);
@@ -4454,6 +4473,8 @@ static void virtnet_freeze_down(struct virtio_device *vdev)
 	flush_work(&vi->config_work);
 	disable_rx_mode_work(vi);
 	flush_work(&vi->rx_mode_work);
+	disable_get_cvq_work(vi);
+	flush_delayed_work(&vi->get_cvq);
 
 	netif_tx_lock_bh(vi->dev);
 	netif_device_detach(vi->dev);
@@ -4477,6 +4498,7 @@ static int virtnet_restore_up(struct virtio_device *vdev)
 
 	enable_delayed_refill(vi);
 	enable_rx_mode_work(vi);
+	enable_get_cvq_work(vi);
 
 	if (netif_running(vi->dev)) {
 		err = virtnet_open(vi->dev);
@@ -5900,10 +5922,12 @@ static void virtnet_remove(struct virtio_device *vdev)
 	flush_work(&vi->config_work);
 	disable_rx_mode_work(vi);
 	flush_work(&vi->rx_mode_work);
-
-	virtnet_free_irq_moder(vi);
+	disable_get_cvq_work(vi);
+	flush_delayed_work(&vi->get_cvq);
 
 	unregister_netdev(vi->dev);
+
+	virtnet_free_irq_moder(vi);
 
 	net_failover_destroy(vi->failover);
 
