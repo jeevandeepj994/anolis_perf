@@ -6916,6 +6916,7 @@ static inline char *strsep_s(char **s, const char *ct)
 	return NULL;
 }
 
+#ifdef CONFIG_TRANSPARENT_HUGEPAGE
 static int memcg_thp_reclaim_ctrl_show(struct seq_file *m, void *v)
 {
 	struct mem_cgroup *memcg = mem_cgroup_from_css(seq_css(m));
@@ -6927,6 +6928,7 @@ static int memcg_thp_reclaim_ctrl_show(struct seq_file *m, void *v)
 
 	return 0;
 }
+#endif
 
 static inline int get_thp_reclaim_ctrl_value(char *buf, int *value)
 {
@@ -7001,6 +7003,7 @@ static ssize_t memcg_thp_reclaim_ctrl_write(struct kernfs_open_file *of,
 }
 #endif
 
+#ifdef CONFIG_TRANSPARENT_HUGEPAGE
 static int thp_reclaim_proactive_memcg_init;
 static int __init setup_thp_reclaim_proactive_init(char *str)
 {
@@ -7029,7 +7032,6 @@ out:
 }
 __setup("tr.proactive=", setup_thp_reclaim_proactive_init);
 
-#ifdef CONFIG_TRANSPARENT_HUGEPAGE
 static int memcg_thp_control_show(struct seq_file *m, void *v)
 {
 	struct mem_cgroup *memcg = mem_cgroup_from_css(seq_css(m));
