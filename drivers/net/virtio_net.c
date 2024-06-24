@@ -268,7 +268,6 @@ struct virtnet_coal_node {
 	struct virtio_net_ctrl_hdr hdr;
 	virtio_net_ctrl_ack status;
 	struct virtio_net_ctrl_coal_vq coal_vqs;
-	bool is_wait;
 	struct list_head list;
 };
 
@@ -483,10 +482,6 @@ struct virtnet_info {
 	/* Free nodes for dim filled by rx_dim_work. */
 	struct mutex coal_free_lock;
 	struct list_head coal_free_list;
-
-	/* Filled when there are no free nodes for dim. */
-	struct mutex coal_wait_lock;
-	struct list_head coal_wait_list;
 
 	unsigned long guest_offloads;
 	unsigned long guest_offloads_capable;
@@ -1729,47 +1724,6 @@ static bool try_fill_recv(struct virtnet_info *vi, struct receive_queue *rq,
 	return !oom;
 }
 
-static void __virtnet_add_dim_command(struct virtnet_info *vi,
-				      struct virtnet_coal_node *ctrl)
-{
-	struct scatterlist *sgs[4], hdr, stat, out;
-	unsigned int out_num = 0;
-	int ret;
-
-	BUG_ON(!virtio_has_feature(vi->vdev, VIRTIO_NET_F_CTRL_VQ));
-
-	ctrl->hdr.class = VIRTIO_NET_CTRL_NOTF_COAL;
-	ctrl->hdr.cmd = VIRTIO_NET_CTRL_NOTF_COAL_VQ_SET;
-
-	sg_init_one(&hdr, &ctrl->hdr, sizeof(ctrl->hdr));
-	sgs[out_num++] = &hdr;
-
-	sg_init_one(&out, &ctrl->coal_vqs, sizeof(ctrl->coal_vqs));
-	sgs[out_num++] = &out;
-
-	ctrl->status = VIRTIO_NET_OK;
-	sg_init_one(&stat, &ctrl->status, sizeof(ctrl->status));
-	sgs[out_num] = &stat;
-
-	BUG_ON(out_num + 1 > ARRAY_SIZE(sgs));
-	ret = virtqueue_add_sgs(vi->cvq, sgs, out_num, 1, ctrl, GFP_ATOMIC);
-	if (ret < 0) {
-		dev_warn(&vi->vdev->dev, "Failed to add sgs for command vq: %d\n.", ret);
-		return;
-	}
-
-	virtqueue_kick(vi->cvq);
-	vi->dim_cmd_nums++;
-}
-
-static void virtnet_add_dim_command(struct virtnet_info *vi,
-				    struct virtnet_coal_node *ctrl)
-{
-	mutex_lock(&vi->cvq_lock);
-	__virtnet_add_dim_command(vi, ctrl);
-	mutex_unlock(&vi->cvq_lock);
-}
-
 static void virtnet_process_dim_cmd(struct virtnet_info *vi, void *res)
 {
 	struct virtnet_coal_node *node;
@@ -1784,13 +1738,9 @@ static void virtnet_process_dim_cmd(struct virtnet_info *vi, void *res)
 		le32_to_cpu(node->coal_vqs.coal.max_packets);
 	vi->rq[qnum].dim.state = DIM_START_MEASURE;
 
-	if (!node->is_wait) {
-		mutex_lock(&vi->coal_free_lock);
-		list_add(&node->list, &vi->coal_free_list);
-		mutex_unlock(&vi->coal_free_lock);
-	} else {
-		kfree(node);
-	}
+	mutex_lock(&vi->coal_free_lock);
+	list_add(&node->list, &vi->coal_free_list);
+	mutex_unlock(&vi->coal_free_lock);
 
 	vi->dim_cmd_nums--;
 }
@@ -1855,28 +1805,69 @@ static int virtnet_cvq_response(struct virtnet_info *vi,
 	}
 }
 
+static void __virtnet_add_dim_command(struct virtnet_info *vi,
+				      struct virtnet_coal_node *ctrl)
+{
+	struct scatterlist *sgs[4], hdr, stat, out;
+	unsigned int out_num = 0;
+	int ret;
+
+	BUG_ON(!virtio_has_feature(vi->vdev, VIRTIO_NET_F_CTRL_VQ));
+
+	ctrl->hdr.class = VIRTIO_NET_CTRL_NOTF_COAL;
+	ctrl->hdr.cmd = VIRTIO_NET_CTRL_NOTF_COAL_VQ_SET;
+
+	sg_init_one(&hdr, &ctrl->hdr, sizeof(ctrl->hdr));
+	sgs[out_num++] = &hdr;
+
+	sg_init_one(&out, &ctrl->coal_vqs, sizeof(ctrl->coal_vqs));
+	sgs[out_num++] = &out;
+
+	ctrl->status = VIRTIO_NET_OK;
+	sg_init_one(&stat, &ctrl->status, sizeof(ctrl->status));
+	sgs[out_num] = &stat;
+
+	BUG_ON(out_num + 1 > ARRAY_SIZE(sgs));
+	ret = virtqueue_add_sgs(vi->cvq, sgs, out_num, 1, ctrl, GFP_ATOMIC);
+	if (ret == -ENOSPC) {
+		ret = virtnet_cvq_response(vi, true, true);
+		if (ret)
+			goto err_ret;
+
+		ret = virtqueue_add_sgs(vi->cvq, sgs, out_num, 1, ctrl, GFP_ATOMIC);
+	}
+
+err_ret:
+	if (ret < 0) {
+		mutex_lock(&vi->coal_free_lock);
+		list_add(&ctrl->list, &vi->coal_free_list);
+		mutex_unlock(&vi->coal_free_lock);
+		return;
+	}
+
+	virtqueue_kick(vi->cvq);
+	vi->dim_cmd_nums++;
+	if (vi->dim_cmd_nums)
+		schedule_delayed_work(&vi->get_cvq, 1);
+}
+
+static void virtnet_add_dim_command(struct virtnet_info *vi,
+				    struct virtnet_coal_node *ctrl)
+{
+	mutex_lock(&vi->cvq_lock);
+	__virtnet_add_dim_command(vi, ctrl);
+	mutex_unlock(&vi->cvq_lock);
+}
+
 static void virtnet_get_cvq_work(struct work_struct *work)
 {
 	struct virtnet_info *vi =
 		container_of(work, struct virtnet_info, get_cvq.work);
-	struct virtnet_coal_node *wait_coal;
 
 	mutex_lock(&vi->cvq_lock);
 
 	if (virtnet_cvq_response(vi, false, false))
 		goto out;
-
-	if (vi->cvq->num_free >= 3) {
-		mutex_lock(&vi->coal_wait_lock);
-		while (!list_empty(&vi->coal_wait_list)) {
-			wait_coal = list_first_entry(&vi->coal_wait_list,
-						     struct virtnet_coal_node,
-						     list);
-			list_del(&wait_coal->list);
-			__virtnet_add_dim_command(vi, wait_coal);
-		}
-		mutex_unlock(&vi->coal_wait_lock);
-	}
 
 	if (vi->dim_cmd_nums)
 		schedule_delayed_work(&vi->get_cvq, 1);
@@ -4066,25 +4057,26 @@ static int virtnet_send_notf_coal_vq_cmds(struct virtnet_info *vi,
 	return 0;
 }
 
-static void virtnet_put_wait_coal(struct virtnet_info *vi,
-				  struct receive_queue *rq,
-				  struct dim_cq_moder moder)
+static struct virtnet_coal_node *virtnet_wait_space(struct virtnet_info *vi)
 {
-	struct virtnet_coal_node *wait_node;
+	struct virtnet_coal_node *node;
+	bool no_free_node = true;
 
-	wait_node = kzalloc(sizeof(*wait_node), GFP_KERNEL);
-	if (!wait_node) {
-		rq->dim.state = DIM_START_MEASURE;
-		return;
+	while (no_free_node) {
+		mutex_lock(&vi->coal_free_lock);
+		if (!list_empty(&vi->coal_free_list)) {
+			no_free_node = false;
+			node = list_first_entry(&vi->coal_free_list,
+						struct virtnet_coal_node,
+						list);
+			list_del(&node->list);
+		}
+		mutex_unlock(&vi->coal_free_lock);
+		if (no_free_node)
+			usleep_range(1000, 2000);
 	}
 
-	wait_node->is_wait = true;
-	wait_node->coal_vqs.vqn = cpu_to_le16(rxq2vq(rq - vi->rq));
-	wait_node->coal_vqs.coal.max_usecs = cpu_to_le32(moder.usec);
-	wait_node->coal_vqs.coal.max_packets = cpu_to_le32(moder.pkts);
-	mutex_lock(&vi->coal_wait_lock);
-	list_add_tail(&wait_node->list, &vi->coal_wait_list);
-	mutex_unlock(&vi->coal_wait_lock);
+	return node;
 }
 
 static void virtnet_rx_dim_work(struct work_struct *work)
@@ -4096,8 +4088,6 @@ static void virtnet_rx_dim_work(struct work_struct *work)
 	struct virtnet_coal_node *avail_coal;
 	struct dim_cq_moder update_moder;
 
-	update_moder = net_dim_get_rx_irq_moder(vi->dev, dim);
-
 	if (!rq->dim_enabled ||
 	    (update_moder.usec == rq->intr_coal.max_usecs &&
 	     update_moder.pkts == rq->intr_coal.max_packets)) {
@@ -4105,36 +4095,14 @@ static void virtnet_rx_dim_work(struct work_struct *work)
 		return;
 	}
 
-	mutex_lock(&vi->cvq_lock);
-	if (vi->cvq->num_free < 3) {
-		virtnet_put_wait_coal(vi, rq, update_moder);
-		mutex_unlock(&vi->cvq_lock);
-		return;
-	}
-	mutex_unlock(&vi->cvq_lock);
+	update_moder = net_dim_get_rx_irq_moder(vi->dev, dim);
 
-	mutex_lock(&vi->coal_free_lock);
-	if (list_empty(&vi->coal_free_list)) {
-		virtnet_put_wait_coal(vi, rq, update_moder);
-		mutex_unlock(&vi->coal_free_lock);
-		return;
-	}
-
-	avail_coal = list_first_entry(&vi->coal_free_list,
-				      struct virtnet_coal_node, list);
+	avail_coal = virtnet_wait_space(vi);
 	avail_coal->coal_vqs.vqn = cpu_to_le16(rxq2vq(rq - vi->rq));
 	avail_coal->coal_vqs.coal.max_usecs = cpu_to_le32(update_moder.usec);
 	avail_coal->coal_vqs.coal.max_packets = cpu_to_le32(update_moder.pkts);
 
-	list_del(&avail_coal->list);
-	mutex_unlock(&vi->coal_free_lock);
-
 	virtnet_add_dim_command(vi, avail_coal);
-
-	mutex_lock(&vi->cvq_lock);
-	if (vi->dim_cmd_nums)
-		schedule_delayed_work(&vi->get_cvq, 1);
-	mutex_unlock(&vi->cvq_lock);
 }
 
 static int virtnet_coal_params_supported(struct ethtool_coalesce *ec)
@@ -4170,9 +4138,6 @@ static int virtnet_init_coal_list(struct virtnet_info *vi)
 
 	INIT_LIST_HEAD(&vi->coal_free_list);
 	mutex_init(&vi->coal_free_lock);
-
-	INIT_LIST_HEAD(&vi->coal_wait_list);
-	mutex_init(&vi->coal_wait_lock);
 
 	INIT_DELAYED_WORK(&vi->get_cvq, virtnet_get_cvq_work);
 
