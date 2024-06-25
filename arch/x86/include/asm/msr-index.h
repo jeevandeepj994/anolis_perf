@@ -1089,6 +1089,16 @@
 #define MSR_VM_IGNNE                    0xc0010115
 #define MSR_VM_HSAVE_PA                 0xc0010117
 
+#define MSR_ZX_PAUSE_CONTROL                   0x187f
+#define MSR_ZX_PAUSE_CONTROL_C02_DISABLE       BIT(0)
+#define MSR_ZX_PAUSE_CONTROL_RESERVED          BIT(1)
+
+/*
+ * The time field is bit[31:2], but representing a 32bit value with
+ * bit[1:0] zero.
+ */
+#define MSR_ZX_PAUSE_CONTROL_TIME_MASK (~0x03U)
+
 /* Hardware Feedback Interface */
 #define MSR_IA32_HW_FEEDBACK_PTR        0x17d0
 #define MSR_IA32_HW_FEEDBACK_CONFIG     0x17d1
