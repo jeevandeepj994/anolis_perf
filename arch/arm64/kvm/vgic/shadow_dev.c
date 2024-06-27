@@ -304,11 +304,7 @@ void kvm_shadow_dev_delete_all(struct kvm *kvm)
 	flush_workqueue(sdev_cleanup_wq);
 }
 
-static int __init early_virt_msi_bypass(char *buf)
-{
-	return strtobool(buf, &virt_msi_bypass);
-}
-early_param("kvm-arm.virt_msi_bypass", early_virt_msi_bypass);
+module_param(virt_msi_bypass, bool, 0444);
 
 void kvm_shadow_dev_init(void)
 {
