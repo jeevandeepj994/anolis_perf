@@ -2535,14 +2535,28 @@ static long fuse_dev_ioctl_clone(struct file *file, __u32 __user *argp)
 	return res;
 }
 
+static long fuse_dev_ioctl_passthrough_open(struct file *file,
+		__u32 __user *argp, bool write_only)
+{
+	int fd;
+	struct fuse_dev *fud;
+
+	if (get_user(fd, argp))
+		return -EFAULT;
+
+	fud = fuse_get_dev(file);
+	if (!fud)
+		return -EINVAL;
+
+	return fuse_passthrough_open(fud, fd, write_only);
+}
+
 static long fuse_dev_ioctl(struct file *file, unsigned int cmd,
 			   unsigned long arg)
 {
 	void __user *argp = (void __user *)arg;
 	int res;
-	int fd;
 	struct fuse_dev *fud = NULL;
-	bool passthrough_write_only = false;
 	struct fuse_ioctl_attach attach_info;
 	struct fuse_conn *fc;
 	struct fuse_mount *fm, *tmp_fm;
@@ -2552,18 +2566,11 @@ static long fuse_dev_ioctl(struct file *file, unsigned int cmd,
 		return fuse_dev_ioctl_clone(file, argp);
 
 	case FUSE_DEV_IOC_PASSTHROUGH_WRITE_OPEN_V0:
-		passthrough_write_only = true;
-		/* fallthrough */
+		return fuse_dev_ioctl_passthrough_open(file, argp, true);
+
 	case FUSE_DEV_IOC_PASSTHROUGH_OPEN_V0:
-		res = -EFAULT;
-		if (!get_user(fd, (__u32 __user *)arg)) {
-			res = -EINVAL;
-			fud = fuse_get_dev(file);
-			if (fud)
-				res = fuse_passthrough_open(fud, fd,
-						passthrough_write_only);
-		}
-		break;
+		return fuse_dev_ioctl_passthrough_open(file, argp, false);
+
 	case FUSE_DEV_IOC_ATTACH:
 		if (copy_from_user(&attach_info, (__u32 __user *)arg,
 				   sizeof(attach_info))) {
