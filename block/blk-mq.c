@@ -63,6 +63,32 @@ static int blk_mq_poll_stats_bkt(const struct request *rq)
 	return bucket;
 }
 
+#define BLK_QC_T_SHIFT		16
+#define BLK_QC_T_INTERNAL	(1U << 31)
+
+static inline struct blk_mq_hw_ctx *blk_qc_to_hctx(struct request_queue *q,
+		blk_qc_t qc)
+{
+	return q->queue_hw_ctx[(qc & ~BLK_QC_T_INTERNAL) >> BLK_QC_T_SHIFT];
+}
+
+static inline struct request *blk_qc_to_rq(struct blk_mq_hw_ctx *hctx,
+		blk_qc_t qc)
+{
+	unsigned int tag = qc & ((1U << BLK_QC_T_SHIFT) - 1);
+
+	if (qc & BLK_QC_T_INTERNAL)
+		return blk_mq_tag_to_rq(hctx->sched_tags, tag);
+	return blk_mq_tag_to_rq(hctx->tags, tag);
+}
+
+static inline blk_qc_t blk_rq_to_qc(struct request *rq)
+{
+	return (rq->mq_hctx->queue_num << BLK_QC_T_SHIFT) |
+		(rq->tag != -1 ?
+		 rq->tag : (rq->internal_tag | BLK_QC_T_INTERNAL));
+}
+
 /*
  * Check if any of the ctx, dispatch list or elevator
  * have pending work in this hardware queue.
@@ -294,15 +320,6 @@ void blk_mq_wake_waiters(struct request_queue *q)
 			blk_mq_tag_wakeup_all(hctx->tags, true);
 }
 
-/*
- * Only need start/end time stamping if we have iostat or
- * blk stats enabled, or using an IO scheduler.
- */
-static inline bool blk_mq_need_time_stamp(struct request *rq)
-{
-	return (rq->rq_flags & (RQF_IO_STAT | RQF_STATS)) || rq->q->elevator;
-}
-
 static struct request *blk_mq_rq_ctx_init(struct blk_mq_alloc_data *data,
 		unsigned int tag, u64 alloc_time_ns)
 {
@@ -379,6 +396,7 @@ static struct request *__blk_mq_alloc_request(struct blk_mq_alloc_data *data)
 	struct request_queue *q = data->q;
 	struct elevator_queue *e = q->elevator;
 	u64 alloc_time_ns = 0;
+	struct request *rq;
 	unsigned int tag;
 
 	/* alloc_time includes depth and tag waits */
@@ -411,10 +429,20 @@ retry:
 	 * case just retry the hctx assignment and tag allocation as CPU hotplug
 	 * should have migrated us to an online CPU by now.
 	 */
-	tag = blk_mq_get_tag(data);
-	if (tag == BLK_MQ_NO_TAG) {
+	do {
+		tag = blk_mq_get_tag(data);
+		if (tag != BLK_MQ_NO_TAG) {
+			rq = blk_mq_rq_ctx_init(data, tag, alloc_time_ns);
+			if (!--data->nr_tags)
+				return rq;
+			if (e || data->hctx->flags & BLK_MQ_F_TAG_QUEUE_SHARED)
+				return rq;
+			rq_list_add(data->cached_rq, rq);
+			data->flags |= BLK_MQ_REQ_NOWAIT;
+			continue;
+		}
 		if (data->flags & BLK_MQ_REQ_NOWAIT)
-			return NULL;
+			break;
 
 		/*
 		 * Give up the CPU and sleep for a random short time to ensure
@@ -423,8 +451,9 @@ retry:
 		 */
 		msleep(3);
 		goto retry;
-	}
-	return blk_mq_rq_ctx_init(data, tag, alloc_time_ns);
+	} while (1);
+
+	return rq_list_pop(data->cached_rq);
 }
 
 struct request *blk_mq_alloc_request(struct request_queue *q, unsigned int op,
@@ -434,6 +463,7 @@ struct request *blk_mq_alloc_request(struct request_queue *q, unsigned int op,
 		.q		= q,
 		.flags		= flags,
 		.cmd_flags	= op,
+		.nr_tags	= 1,
 	};
 	struct request *rq;
 	int ret;
@@ -462,6 +492,7 @@ struct request *blk_mq_alloc_request_hctx(struct request_queue *q,
 		.q		= q,
 		.flags		= flags,
 		.cmd_flags	= op,
+		.nr_tags	= 1,
 	};
 	u64 alloc_time_ns = 0;
 	unsigned int cpu;
@@ -566,21 +597,31 @@ void blk_mq_free_request(struct request *rq)
 }
 EXPORT_SYMBOL_GPL(blk_mq_free_request);
 
-inline void __blk_mq_end_request(struct request *rq, blk_status_t error)
+void blk_mq_free_plug_rqs(struct blk_plug *plug)
 {
-	u64 now = 0;
+	struct request *rq;
 
-	if (blk_mq_need_time_stamp(rq))
-		now = ktime_get_ns();
+	while ((rq = rq_list_pop(&plug->cached_rq)) != NULL) {
+		percpu_ref_get(&rq->q->q_usage_counter);
+		blk_mq_free_request(rq);
+	}
+}
 
+static inline void __blk_mq_end_request_acct(struct request *rq, u64 now)
+{
 	if (rq->rq_flags & RQF_STATS) {
 		blk_mq_poll_stats_start(rq->q);
 		blk_stat_add(rq, now);
 	}
 
 	blk_mq_sched_completed_request(rq, now);
-
 	blk_account_io_done(rq, now);
+}
+
+inline void __blk_mq_end_request(struct request *rq, blk_status_t error)
+{
+	if (blk_mq_need_time_stamp(rq))
+		__blk_mq_end_request_acct(rq, ktime_get_ns());
 
 	if (rq->end_io) {
 		rq_qos_done(rq->q, rq);
@@ -598,6 +639,57 @@ void blk_mq_end_request(struct request *rq, blk_status_t error)
 	__blk_mq_end_request(rq, error);
 }
 EXPORT_SYMBOL(blk_mq_end_request);
+
+#define TAG_COMP_BATCH		32
+
+static inline void blk_mq_flush_tag_batch(struct blk_mq_hw_ctx *hctx,
+					  int *tag_array, int nr_tags)
+{
+	struct request_queue *q = hctx->queue;
+
+	blk_mq_put_tags(hctx->tags, tag_array, nr_tags);
+	percpu_ref_put_many(&q->q_usage_counter, nr_tags);
+}
+
+void blk_mq_end_request_batch(struct io_comp_batch *iob)
+{
+	int tags[TAG_COMP_BATCH], nr_tags = 0;
+	struct blk_mq_hw_ctx *last_hctx = NULL;
+	struct request *rq;
+	u64 now = 0;
+
+	if (iob->need_ts)
+		now = ktime_get_ns();
+
+	while ((rq = rq_list_pop(&iob->req_list)) != NULL) {
+		prefetch(rq->bio);
+		prefetch(rq->rq_next);
+
+		blk_update_request(rq, BLK_STS_OK, blk_rq_bytes(rq));
+		if (iob->need_ts)
+			__blk_mq_end_request_acct(rq, now);
+
+		WRITE_ONCE(rq->state, MQ_RQ_IDLE);
+		if (!refcount_dec_and_test(&rq->ref))
+			continue;
+
+		blk_crypto_free_request(rq);
+		blk_pm_mark_last_busy(rq);
+		rq_qos_done(rq->q, rq);
+
+		if (nr_tags == TAG_COMP_BATCH ||
+		    (last_hctx && last_hctx != rq->mq_hctx)) {
+			blk_mq_flush_tag_batch(last_hctx, tags, nr_tags);
+			nr_tags = 0;
+		}
+		tags[nr_tags++] = rq->tag;
+		last_hctx = rq->mq_hctx;
+	}
+
+	if (nr_tags)
+		blk_mq_flush_tag_batch(last_hctx, tags, nr_tags);
+}
+EXPORT_SYMBOL_GPL(blk_mq_end_request_batch);
 
 /*
  * Softirq action handler - move entries to local list and loop over them
@@ -701,7 +793,7 @@ bool blk_mq_complete_request_remote(struct request *rq)
 	 * For a polled request, always complete locallly, it's pointless
 	 * to redirect the completion.
 	 */
-	if (rq->cmd_flags & REQ_HIPRI)
+	if (rq->cmd_flags & REQ_POLLED)
 		return false;
 
 	if (blk_mq_complete_need_ipi(rq)) {
@@ -781,6 +873,8 @@ void blk_mq_start_request(struct request *rq)
 	if (blk_integrity_rq(rq) && req_op(rq) == REQ_OP_WRITE)
 		q->integrity.profile->prepare_fn(rq);
 #endif
+	if (rq->bio && rq->bio->bi_opf & REQ_POLLED)
+	        WRITE_ONCE(rq->bio->bi_cookie, blk_rq_to_qc(rq));
 }
 EXPORT_SYMBOL(blk_mq_start_request);
 
@@ -1975,18 +2069,14 @@ static void blk_mq_bio_to_request(struct request *rq, struct bio *bio,
 }
 
 static blk_status_t __blk_mq_issue_directly(struct blk_mq_hw_ctx *hctx,
-					    struct request *rq,
-					    blk_qc_t *cookie, bool last)
+					    struct request *rq, bool last)
 {
 	struct request_queue *q = rq->q;
 	struct blk_mq_queue_data bd = {
 		.rq = rq,
 		.last = last,
 	};
-	blk_qc_t new_cookie;
 	blk_status_t ret;
-
-	new_cookie = request_to_qc_t(hctx, rq);
 
 	/*
 	 * For OK queue, we are done. For error, caller may kill it.
@@ -1997,7 +2087,6 @@ static blk_status_t __blk_mq_issue_directly(struct blk_mq_hw_ctx *hctx,
 	switch (ret) {
 	case BLK_STS_OK:
 		blk_mq_update_dispatch_busy(hctx, false);
-		*cookie = new_cookie;
 		break;
 	case BLK_STS_RESOURCE:
 	case BLK_STS_DEV_RESOURCE:
@@ -2006,7 +2095,6 @@ static blk_status_t __blk_mq_issue_directly(struct blk_mq_hw_ctx *hctx,
 		break;
 	default:
 		blk_mq_update_dispatch_busy(hctx, false);
-		*cookie = BLK_QC_T_NONE;
 		break;
 	}
 
@@ -2015,7 +2103,6 @@ static blk_status_t __blk_mq_issue_directly(struct blk_mq_hw_ctx *hctx,
 
 static blk_status_t __blk_mq_try_issue_directly(struct blk_mq_hw_ctx *hctx,
 						struct request *rq,
-						blk_qc_t *cookie,
 						bool bypass_insert, bool last)
 {
 	struct request_queue *q = rq->q;
@@ -2045,7 +2132,7 @@ static blk_status_t __blk_mq_try_issue_directly(struct blk_mq_hw_ctx *hctx,
 		goto insert;
 	}
 
-	return __blk_mq_issue_directly(hctx, rq, cookie, last);
+	return __blk_mq_issue_directly(hctx, rq, last);
 insert:
 	if (bypass_insert)
 		return BLK_STS_RESOURCE;
@@ -2059,7 +2146,6 @@ insert:
  * blk_mq_try_issue_directly - Try to send a request directly to device driver.
  * @hctx: Pointer of the associated hardware queue.
  * @rq: Pointer to request to be sent.
- * @cookie: Request queue cookie.
  *
  * If the device has enough resources to accept a new request now, send the
  * request directly to device driver. Else, insert at hctx->dispatch queue, so
@@ -2067,7 +2153,7 @@ insert:
  * queue have higher priority.
  */
 static void blk_mq_try_issue_directly(struct blk_mq_hw_ctx *hctx,
-		struct request *rq, blk_qc_t *cookie)
+		struct request *rq)
 {
 	blk_status_t ret;
 	int srcu_idx;
@@ -2076,7 +2162,7 @@ static void blk_mq_try_issue_directly(struct blk_mq_hw_ctx *hctx,
 
 	hctx_lock(hctx, &srcu_idx);
 
-	ret = __blk_mq_try_issue_directly(hctx, rq, cookie, false, true);
+	ret = __blk_mq_try_issue_directly(hctx, rq, false, true);
 	if (ret == BLK_STS_RESOURCE || ret == BLK_STS_DEV_RESOURCE)
 		blk_mq_request_bypass_insert(rq, false, true);
 	else if (ret != BLK_STS_OK)
@@ -2089,11 +2175,10 @@ blk_status_t blk_mq_request_issue_directly(struct request *rq, bool last)
 {
 	blk_status_t ret;
 	int srcu_idx;
-	blk_qc_t unused_cookie;
 	struct blk_mq_hw_ctx *hctx = rq->mq_hctx;
 
 	hctx_lock(hctx, &srcu_idx);
-	ret = __blk_mq_try_issue_directly(hctx, rq, &unused_cookie, true, last);
+	ret = __blk_mq_try_issue_directly(hctx, rq, true, last);
 	hctx_unlock(hctx, srcu_idx);
 
 	return ret;
@@ -2173,24 +2258,21 @@ static inline unsigned short blk_plug_max_rq_count(struct blk_plug *plug)
  *
  * It will not queue the request if there is an error with the bio, or at the
  * request creation.
- *
- * Returns: Request queue cookie.
  */
-blk_qc_t blk_mq_submit_bio(struct bio *bio)
+void blk_mq_submit_bio(struct bio *bio)
 {
 	struct request_queue *q = bio->bi_disk->queue;
 	const int is_sync = op_is_sync(bio->bi_opf);
 	const int is_flush_fua = op_is_flush(bio->bi_opf);
 	struct blk_mq_alloc_data data = {
 		.q		= q,
+		.nr_tags	= 1,
 	};
 	struct request *rq;
 	struct blk_plug *plug;
 	struct request *same_queue_rq = NULL;
 	unsigned int nr_segs;
-	blk_qc_t cookie;
 	blk_status_t ret;
-	bool hipri;
 
 	blk_queue_bounce(q, &bio);
 	__blk_queue_split(&bio, &nr_segs);
@@ -2207,22 +2289,30 @@ blk_qc_t blk_mq_submit_bio(struct bio *bio)
 
 	rq_qos_throttle(q, bio);
 
-	hipri = bio->bi_opf & REQ_HIPRI;
-
-	data.cmd_flags = bio->bi_opf;
-	rq = __blk_mq_alloc_request(&data);
-	if (unlikely(!rq)) {
-		rq_qos_cleanup(q, bio);
-		if (bio->bi_opf & REQ_NOWAIT)
-			bio_wouldblock_error(bio);
-		goto queue_exit;
+	plug = blk_mq_plug(q, bio);
+	if (plug && plug->cached_rq) {
+		rq = rq_list_pop(&plug->cached_rq);
+		INIT_LIST_HEAD(&rq->queuelist);
+		data.hctx = rq->mq_hctx;
+	} else {
+		data.cmd_flags = bio->bi_opf;
+		if (plug) {
+			data.nr_tags = plug->nr_ios;
+			plug->nr_ios = 1;
+			data.cached_rq = &plug->cached_rq;
+		}
+		rq = __blk_mq_alloc_request(&data);
+		if (unlikely(!rq)) {
+			rq_qos_cleanup(q, bio);
+			if (bio->bi_opf & REQ_NOWAIT)
+				bio_wouldblock_error(bio);
+			goto queue_exit;
+		}
 	}
 
 	trace_block_getrq(q, bio, bio->bi_opf);
 
 	rq_qos_track(q, rq, bio);
-
-	cookie = request_to_qc_t(data.hctx, rq);
 
 	blk_mq_bio_to_request(rq, bio, nr_segs);
 
@@ -2231,10 +2321,9 @@ blk_qc_t blk_mq_submit_bio(struct bio *bio)
 		bio->bi_status = ret;
 		bio_endio(bio);
 		blk_mq_free_request(rq);
-		return BLK_QC_T_NONE;
+		return;
 	}
 
-	plug = blk_mq_plug(q, bio);
 	if (unlikely(is_flush_fua)) {
 		/* Bypass scheduler for flush requests */
 		blk_insert_flush(rq);
@@ -2287,8 +2376,7 @@ blk_qc_t blk_mq_submit_bio(struct bio *bio)
 		if (same_queue_rq) {
 			data.hctx = same_queue_rq->mq_hctx;
 			trace_block_unplug(q, 1, true);
-			blk_mq_try_issue_directly(data.hctx, same_queue_rq,
-					&cookie);
+			blk_mq_try_issue_directly(data.hctx, same_queue_rq);
 		}
 	} else if ((q->nr_hw_queues > 1 && is_sync) ||
 			!data.hctx->dispatch_busy) {
@@ -2296,18 +2384,15 @@ blk_qc_t blk_mq_submit_bio(struct bio *bio)
 		 * There is no scheduler and we can try to send directly
 		 * to the hardware.
 		 */
-		blk_mq_try_issue_directly(data.hctx, rq, &cookie);
+		blk_mq_try_issue_directly(data.hctx, rq);
 	} else {
 		/* Default case. */
 		blk_mq_sched_insert_request(rq, false, true, true);
 	}
 
-	if (!hipri)
-		return BLK_QC_T_NONE;
-	return cookie;
+	return;
 queue_exit:
 	blk_queue_exit(q);
-	return BLK_QC_T_NONE;
 }
 
 static size_t order_to_size(unsigned int order)
@@ -3863,15 +3948,20 @@ static unsigned long blk_mq_poll_nsecs(struct request_queue *q,
 	return ret;
 }
 
-static bool blk_mq_poll_hybrid_sleep(struct request_queue *q,
-				     struct request *rq)
+static bool blk_mq_poll_hybrid(struct request_queue *q, blk_qc_t qc)
 {
+	struct blk_mq_hw_ctx *hctx = blk_qc_to_hctx(q, qc);
+	struct request *rq = blk_qc_to_rq(hctx, qc);
 	struct hrtimer_sleeper hs;
 	enum hrtimer_mode mode;
 	unsigned int nsecs;
 	ktime_t kt;
 
-	if (rq->rq_flags & RQF_MQ_POLL_SLEPT)
+	/*
+	 * If a request has completed on queue that uses an I/O scheduler, we
+	 * won't get back a request from blk_qc_to_rq.
+	 */
+	if (!rq || (rq->rq_flags & RQF_MQ_POLL_SLEPT))
 		return false;
 
 	/*
@@ -3913,79 +4003,30 @@ static bool blk_mq_poll_hybrid_sleep(struct request_queue *q,
 
 	__set_current_state(TASK_RUNNING);
 	destroy_hrtimer_on_stack(&hs.timer);
+
+	/*
+	 * If we sleep, have the caller restart the poll loop to reset the
+	 * state.  Like for the other success return cases, the caller is
+	 * responsible for checking if the IO completed.  If the IO isn't
+	 * complete, we'll get called again and will go straight to the busy
+	 * poll loop.
+	 */
 	return true;
 }
 
-static bool blk_mq_poll_hybrid(struct request_queue *q,
-			       struct blk_mq_hw_ctx *hctx, blk_qc_t cookie)
+static int blk_mq_poll_classic(struct request_queue *q, blk_qc_t cookie,
+			       struct io_comp_batch *iob, unsigned int flags)
 {
-	struct request *rq;
-
-	if (q->poll_nsec == BLK_MQ_POLL_CLASSIC)
-		return false;
-
-	if (!blk_qc_t_is_internal(cookie))
-		rq = blk_mq_tag_to_rq(hctx->tags, blk_qc_t_to_tag(cookie));
-	else {
-		rq = blk_mq_tag_to_rq(hctx->sched_tags, blk_qc_t_to_tag(cookie));
-		/*
-		 * With scheduling, if the request has completed, we'll
-		 * get a NULL return here, as we clear the sched tag when
-		 * that happens. The request still remains valid, like always,
-		 * so we should be safe with just the NULL check.
-		 */
-		if (!rq)
-			return false;
-	}
-
-	return blk_mq_poll_hybrid_sleep(q, rq);
-}
-
-/**
- * blk_poll - poll for IO completions
- * @q:  the queue
- * @cookie: cookie passed back at IO submission time
- * @spin: whether to spin for completions
- *
- * Description:
- *    Poll for completions on the passed in queue. Returns number of
- *    completed entries found. If @spin is true, then blk_poll will continue
- *    looping until at least one completion is found, unless the task is
- *    otherwise marked running (or we need to reschedule).
- */
-int blk_poll(struct request_queue *q, blk_qc_t cookie, bool spin)
-{
-	struct blk_mq_hw_ctx *hctx;
-	long state;
-
-	if (!blk_qc_t_valid(cookie) ||
-	    !test_bit(QUEUE_FLAG_POLL, &q->queue_flags))
-		return 0;
-
-	if (current->plug)
-		blk_flush_plug_list(current->plug, false);
-
-	hctx = q->queue_hw_ctx[blk_qc_t_to_queue_num(cookie)];
-
-	/*
-	 * If we sleep, have the caller restart the poll loop to reset
-	 * the state. Like for the other success return cases, the
-	 * caller is responsible for checking if the IO completed. If
-	 * the IO isn't complete, we'll get called again and will go
-	 * straight to the busy poll loop.
-	 */
-	if (blk_mq_poll_hybrid(q, hctx, cookie))
-		return 1;
+	struct blk_mq_hw_ctx *hctx = blk_qc_to_hctx(q, cookie);
+	long state = current->state;
+	int ret;
 
 	hctx->poll_considered++;
 
-	state = current->state;
 	do {
-		int ret;
-
 		hctx->poll_invoked++;
 
-		ret = q->mq_ops->poll(hctx);
+		ret = q->mq_ops->poll(hctx, iob);
 		if (ret > 0) {
 			hctx->poll_success++;
 			__set_current_state(TASK_RUNNING);
@@ -3994,10 +4035,10 @@ int blk_poll(struct request_queue *q, blk_qc_t cookie, bool spin)
 
 		if (signal_pending_state(state, current))
 			__set_current_state(TASK_RUNNING);
-
 		if (current->state == TASK_RUNNING)
 			return 1;
-		if (ret < 0 || !spin)
+
+		if (ret < 0 || (flags & BLK_POLL_ONESHOT))
 			break;
 		cpu_relax();
 	} while (!need_resched());
@@ -4005,7 +4046,17 @@ int blk_poll(struct request_queue *q, blk_qc_t cookie, bool spin)
 	__set_current_state(TASK_RUNNING);
 	return 0;
 }
-EXPORT_SYMBOL_GPL(blk_poll);
+
+int blk_mq_poll(struct request_queue *q, blk_qc_t cookie, struct io_comp_batch *iob,
+		unsigned int flags)
+{
+	if (!(flags & BLK_POLL_NOSLEEP) &&
+	    q->poll_nsec != BLK_MQ_POLL_CLASSIC) {
+		if (blk_mq_poll_hybrid(q, cookie))
+			return 1;
+	}
+	return blk_mq_poll_classic(q, cookie, iob, flags);
+}
 
 unsigned int blk_mq_rq_cpu(struct request *rq)
 {

@@ -463,7 +463,7 @@ static int nvme_uring_cmd_io(struct nvme_ctrl *ctrl, struct nvme_ns *ns,
 		blk_flags = BLK_MQ_REQ_NOWAIT;
 	}
 	if (issue_flags & IO_URING_F_IOPOLL)
-		rq_flags |= REQ_HIPRI;
+		rq_flags |= REQ_POLLED;
 
 retry:
 	req = nvme_alloc_user_request(q, &c, nvme_to_user_ptr(d.addr),
@@ -475,15 +475,15 @@ retry:
 		return PTR_ERR(req);
 	req->end_io_data = ioucmd;
 
-	if (issue_flags & IO_URING_F_IOPOLL && rq_flags & REQ_HIPRI) {
+	if (issue_flags & IO_URING_F_IOPOLL && rq_flags & REQ_POLLED) {
 		if (unlikely(!req->bio)) {
 			/* we can't poll this, so alloc regular req instead */
 			blk_mq_free_request(req);
-			rq_flags &= ~REQ_HIPRI;
+			rq_flags &= ~REQ_POLLED;
 			goto retry;
 		} else {
 			WRITE_ONCE(ioucmd->cookie, req);
-			req->bio->bi_opf |= REQ_HIPRI;
+			req->bio->bi_opf |= REQ_POLLED;
 		}
 	}
 	/* to free bio on completion, as req->bio will be null at that time */
@@ -633,7 +633,9 @@ int nvme_ns_chr_uring_cmd(struct io_uring_cmd *ioucmd, unsigned int issue_flags)
 	return nvme_ns_uring_cmd(ns, ioucmd, issue_flags);
 }
 
-int nvme_ns_chr_uring_cmd_iopoll(struct io_uring_cmd *ioucmd)
+int nvme_ns_chr_uring_cmd_iopoll(struct io_uring_cmd *ioucmd,
+				 struct io_comp_batch *iob,
+				 unsigned int poll_flags)
 {
 	struct request *req;
 	int ret = 0;
@@ -645,7 +647,7 @@ int nvme_ns_chr_uring_cmd_iopoll(struct io_uring_cmd *ioucmd)
 			struct nvme_ns, cdev);
 	q = ns->queue;
 	if (test_bit(QUEUE_FLAG_POLL, &q->queue_flags))
-		ret = blk_poll(q, request_to_qc_t(req->mq_hctx, req), true);
+		ret = bio_poll(req->bio, iob, 0);
 	return ret;
 }
 #ifdef CONFIG_NVME_MULTIPATH
@@ -731,7 +733,9 @@ int nvme_ns_head_chr_uring_cmd(struct io_uring_cmd *ioucmd,
 	return ret;
 }
 
-int nvme_ns_head_chr_uring_cmd_iopoll(struct io_uring_cmd *ioucmd)
+int nvme_ns_head_chr_uring_cmd_iopoll(struct io_uring_cmd *ioucmd,
+				      struct io_comp_batch *iob,
+				      unsigned int poll_flags)
 {
 	struct cdev *cdev = file_inode(ioucmd->file)->i_cdev;
 	struct nvme_ns_head *head = container_of(cdev, struct nvme_ns_head, cdev);
@@ -745,7 +749,7 @@ int nvme_ns_head_chr_uring_cmd_iopoll(struct io_uring_cmd *ioucmd)
 		req = READ_ONCE(ioucmd->cookie);
 		q = ns->queue;
 		if (test_bit(QUEUE_FLAG_POLL, &q->queue_flags))
-			ret = blk_poll(q, request_to_qc_t(req->mq_hctx, req), true);
+			ret = bio_poll(req->bio, iob, 0);
 	}
 	srcu_read_unlock(&head->srcu, srcu_idx);
 	return ret;
