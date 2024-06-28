@@ -2551,68 +2551,61 @@ static long fuse_dev_ioctl_passthrough_open(struct file *file,
 	return fuse_passthrough_open(fud, fd, write_only);
 }
 
-static long fuse_dev_ioctl_attach(struct file *file, void __user *argp)
+static int fuse_device_attach(struct file *file, void __user *argp,
+		struct fuse_ioctl_attach *attach, struct fuse_mount **fmp)
 {
-	struct fuse_dev *fud;
-	struct fuse_ioctl_attach attach_info;
 	struct fuse_conn *fc;
-	struct fuse_mount *fm, *tmp_fm;
+	struct fuse_mount *fm;
+	int res;
 
-	if (copy_from_user(&attach_info, argp, sizeof(attach_info)))
-		return -EFAULT;
-
-	if (attach_info.tag[0] == '\0')
-		return -EINVAL;
-
-	if (!file)
-		return -EBADF;
-
-	if (file->f_op != &fuse_dev_operations || file->private_data)
-		return -EBADF;
-
-	mutex_lock(&fuse_mutex);
 	list_for_each_entry(fc, &fuse_conn_list, entry) {
-		if (strncmp(fc->tag, attach_info.tag, FUSE_TAG_NAME_MAX - 1))
+		if (strncmp(fc->tag, attach->tag, FUSE_TAG_NAME_MAX - 1))
 			continue;
 
-		attach_info.dev = fc->dev;
-		if (copy_to_user(argp, &attach_info, sizeof(attach_info))) {
-			mutex_unlock(&fuse_mutex);
-			return -EFAULT;
-		}
-
-		fud = fuse_dev_alloc_install(fc);
-		if (!fud) {
-			mutex_unlock(&fuse_mutex);
-			return -ENOMEM;
-		}
-
+		/*
+		 * Get the main fuse_mount through super block to avoid
+		 * dependence on list fc->mounts sequence.
+		 */
 		down_read(&fc->killsb);
 		if (list_empty(&fc->mounts)) {
 			up_read(&fc->killsb);
-			fuse_dev_free(fud);
-			mutex_unlock(&fuse_mutex);
 			return -EINVAL;
 		}
-
-		file->private_data = fud;
-		atomic_inc(&fc->dev_count);
-		tmp_fm = list_first_entry(&fc->mounts,
-				struct fuse_mount,
-				fc_entry);
-		/* Get the main fuse_mount through super block to avoid
-		 * dependence on list fc->mounts sequence
-		 */
-		fm = get_fuse_mount_super(tmp_fm->sb);
+		fm = list_first_entry(&fc->mounts, struct fuse_mount, fc_entry);
+		*fmp = get_fuse_mount_super(fm->sb);
 		up_read(&fc->killsb);
 
-		fuse_reset_conn(fc);
-		mutex_unlock(&fuse_mutex);
-		fuse_resend_init(fm);
-		return 0;
+		/* return dev_t of matched connection */
+		attach->dev = fc->dev;
+		if (copy_to_user(argp, attach, sizeof(*attach)))
+			return -EFAULT;
+
+		res = fuse_device_clone(fc, file);
+		if (!res)
+			fuse_reset_conn(fc);
+		return res;
 	}
-	mutex_unlock(&fuse_mutex);
 	return -EINVAL;
+}
+
+static long fuse_dev_ioctl_attach(struct file *file, void __user *argp)
+{
+	struct fuse_ioctl_attach attach;
+	struct fuse_mount *fm;
+	int res;
+
+	if (copy_from_user(&attach, argp, sizeof(attach)))
+		return -EFAULT;
+
+	if (attach.tag[0] == '\0')
+		return -EINVAL;
+
+	mutex_lock(&fuse_mutex);
+	res = fuse_device_attach(file, argp, &attach, &fm);
+	mutex_unlock(&fuse_mutex);
+	if (!res)
+		fuse_resend_init(fm);
+	return res;
 }
 
 static long fuse_dev_ioctl(struct file *file, unsigned int cmd,
