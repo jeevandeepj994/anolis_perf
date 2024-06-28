@@ -488,9 +488,9 @@ struct address_space {
 	struct list_head	private_list;
 	void			*private_data;
 
-	/* CK_KABI_RESERVE(1) */
-	CK_KABI_USE(1, struct fast_reflink_work *fast_reflink_work);
+	struct fast_reflink_work *fast_reflink_work;
 
+	CK_KABI_RESERVE(1)
 	CK_KABI_RESERVE(2)
 	CK_KABI_RESERVE(3)
 	CK_KABI_RESERVE(4)
@@ -1915,7 +1915,6 @@ struct file_operations {
 	int (*fadvise)(struct file *, loff_t, loff_t, int);
 	int (*uring_cmd)(struct io_uring_cmd *ioucmd, unsigned int issue_flags);
 	int (*uring_cmd_iopoll)(struct io_uring_cmd *ioucmd);
-	CK_KABI_DEPRECATE(bool, may_pollfree)
 
 	CK_KABI_RESERVE(1)
 	CK_KABI_RESERVE(2)
