@@ -2502,9 +2502,43 @@ void fuse_reset_conn(struct fuse_conn *fc)
 }
 EXPORT_SYMBOL_GPL(fuse_reset_conn);
 
+static long fuse_dev_ioctl_clone(struct file *file, __u32 __user *argp)
+{
+	int res;
+	int oldfd;
+	struct fuse_dev *fud = NULL;
+	struct file *old;
+
+	if (get_user(oldfd, argp))
+		return -EFAULT;
+
+	old = fget(oldfd);
+	if (!old)
+		return -EINVAL;
+
+	/*
+	 * Check against file->f_op because CUSE
+	 * uses the same ioctl handler.
+	 */
+	if (old->f_op == file->f_op &&
+	    old->f_cred->user_ns == file->f_cred->user_ns)
+		fud = fuse_get_dev(old);
+
+	res = -EINVAL;
+	if (fud) {
+		mutex_lock(&fuse_mutex);
+		res = fuse_device_clone(fud->fc, file);
+		mutex_unlock(&fuse_mutex);
+	}
+
+	fput(old);
+	return res;
+}
+
 static long fuse_dev_ioctl(struct file *file, unsigned int cmd,
 			   unsigned long arg)
 {
+	void __user *argp = (void __user *)arg;
 	int res;
 	int fd;
 	struct fuse_dev *fud = NULL;
@@ -2515,29 +2549,8 @@ static long fuse_dev_ioctl(struct file *file, unsigned int cmd,
 
 	switch (cmd) {
 	case FUSE_DEV_IOC_CLONE:
-		res = -EFAULT;
-		if (!get_user(fd, (__u32 __user *)arg)) {
-			struct file *old = fget(fd);
+		return fuse_dev_ioctl_clone(file, argp);
 
-			res = -EINVAL;
-			if (old) {
-				/*
-				 * Check against file->f_op because CUSE
-				 * uses the same ioctl handler.
-				 */
-				if (old->f_op == file->f_op &&
-				    old->f_cred->user_ns == file->f_cred->user_ns)
-					fud = fuse_get_dev(old);
-
-				if (fud) {
-					mutex_lock(&fuse_mutex);
-					res = fuse_device_clone(fud->fc, file);
-					mutex_unlock(&fuse_mutex);
-				}
-				fput(old);
-			}
-		}
-		break;
 	case FUSE_DEV_IOC_PASSTHROUGH_WRITE_OPEN_V0:
 		passthrough_write_only = true;
 		/* fallthrough */
