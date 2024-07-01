@@ -103,7 +103,7 @@ static void get_rsv_buses_resource(struct plat_rsv_buses *buses)
 	 */
 }
 
-static int probe_devid_pool_one(void)
+static int build_devid_pools(void)
 {
 	struct rsv_devid_pool *devid_pool;
 
@@ -356,22 +356,6 @@ static int alloc_devid_from_rsv_pools(struct rsv_devid_pool **devid_pool,
 #define gic_data_rdist_cpu(cpu)		(per_cpu_ptr(gic_rdists->rdist, cpu))
 #define gic_data_rdist_rd_base()	(gic_data_rdist()->rd_base)
 #define gic_data_rdist_vlpi_base()	(gic_data_rdist_rd_base() + SZ_128K)
-
-#ifdef CONFIG_VIRT_PLAT_DEV
-/*
- * Currently we only build *one* devid pool.
- */
-static int build_devid_pools(void)
-{
-	struct its_node *its;
-
-	its = list_first_entry(&its_nodes, struct its_node, entry);
-	if (readl_relaxed(its->base + GITS_IIDR) != 0x00051736)
-		return -EINVAL;
-
-	return probe_devid_pool_one();
-}
-#endif
 
 /*
  * Skip ITSs that have no vLPIs mapped, unless we're on GICv4.1, as we
