@@ -10553,7 +10553,9 @@ static int cpu_sched_cfs_show(struct seq_file *sf, void *v)
 		exec_sum += schedstat_val(se->sum_exec_runtime);
 		wait_sum_other +=
 			schedstat_val(se->statistics.parent_wait_contrib);
+#ifdef CONFIG_SCHED_CORE
 		wait_sum_fi += schedstat_val(se->statistics.forceidled_sum);
+#endif
 		wait_sum += schedstat_val(se->statistics.wait_sum);
 		wait_max =
 			max(wait_max, schedstat_val(se->statistics.wait_max));
