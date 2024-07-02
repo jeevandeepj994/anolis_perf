@@ -2746,8 +2746,9 @@ static void update_curr_fair(struct rq *rq)
 static inline void
 update_stats_wait_start(struct cfs_rq *cfs_rq, struct sched_entity *se)
 {
-	u64 wait_start, prev_wait_start, parent_wait_sum, forceidled_sum, delta;
+	u64 wait_start, prev_wait_start, parent_wait_sum, delta;
 	struct sched_entity *pse = parent_entity(se);
+	u64 __maybe_unused forceidled_sum;
 	struct rq *rq = rq_of(cfs_rq);
 	u64 clock = rq_clock(rq);
 
@@ -2763,8 +2764,10 @@ update_stats_wait_start(struct cfs_rq *cfs_rq, struct sched_entity *se)
 
 	__schedstat_set(se->statistics.wait_start, wait_start);
 
+#ifdef CONFIG_SCHED_CORE
 	forceidled_sum = get_forceidled_sum(rq);
 	__schedstat_set(se->statistics.forceidled_sum_base, forceidled_sum);
+#endif
 
 	if (!pse)
 		return;
@@ -2780,8 +2783,9 @@ update_stats_wait_start(struct cfs_rq *cfs_rq, struct sched_entity *se)
 static inline void
 update_stats_wait_end(struct cfs_rq *cfs_rq, struct sched_entity *se)
 {
-	u64 parent_wait_sum, forceidled_sum, forceidled_delta, delta;
+	u64 parent_wait_sum, forceidled_delta = 0, delta;
 	struct sched_entity *pse = parent_entity(se);
+	u64 __maybe_unused forceidled_sum;
 	struct rq *rq = rq_of(cfs_rq);
 	u64 clock = rq_clock(rq);
 	struct task_struct *p;
@@ -2812,9 +2816,11 @@ update_stats_wait_end(struct cfs_rq *cfs_rq, struct sched_entity *se)
 	__schedstat_add(se->statistics.wait_sum, delta);
 	__schedstat_set(se->statistics.wait_start, 0);
 
+#ifdef CONFIG_SCHED_CORE
 	forceidled_sum = get_forceidled_sum(rq);
 	forceidled_delta = forceidled_sum - schedstat_val(se->statistics.forceidled_sum_base);
 	__schedstat_add(se->statistics.forceidled_sum, forceidled_delta);
+#endif
 
 	if (!pse)
 		return;
