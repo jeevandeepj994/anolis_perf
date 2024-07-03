@@ -423,9 +423,20 @@ EXPORT_SYMBOL_GPL(fpu_copy_uabi_to_guest_fpstate);
 
 void kernel_fpu_begin_mask(unsigned int kfpu_mask)
 {
-	preempt_disable();
+	if (likely(!(kfpu_mask & KFPU_USER))){
+		preempt_disable();
+	}
+	
 
-	WARN_ON_FPU(!irq_fpu_usable());
+#ifdef CONFIG_USING_FPU_IN_KERNEL_NONATOMIC
+        /*
+        * It means we call kernel_fpu_begin after kernel_fpu_begin_nonatomic
+        * func, but before kernel_fpu_end_nonatomic
+        */
+        WARN_ON_FPU(test_thread_flag(TIF_USING_FPU_NONATOMIC));
+#endif
+
+	WARN_ON_FPU(!irq_fpu_usable());	
 	WARN_ON_FPU(this_cpu_read(in_kernel_fpu));
 
 	this_cpu_write(in_kernel_fpu, true);
@@ -443,17 +454,83 @@ void kernel_fpu_begin_mask(unsigned int kfpu_mask)
 
 	if (unlikely(kfpu_mask & KFPU_387) && boot_cpu_has(X86_FEATURE_FPU))
 		asm volatile ("fninit");
+
+	if(unlikely(kfpu_mask & KFPU_USER)){
+		set_thread_flag(TIF_USING_FPU_NONATOMIC);
+		preempt_enable();
+	}
 }
 EXPORT_SYMBOL_GPL(kernel_fpu_begin_mask);
 
 void kernel_fpu_end(void)
 {
+#ifdef CONFIG_USING_FPU_IN_KERNEL_NONATOMIC
+        /*
+        * It means we call kernel_fpu_end after kernel_fpu_begin_nonatomic
+        * func, but before kernel_fpu_end_nonatomic
+        */
+        WARN_ON_FPU(test_thread_flag(TIF_USING_FPU_NONATOMIC));
+#endif
 	WARN_ON_FPU(!this_cpu_read(in_kernel_fpu));
 
 	this_cpu_write(in_kernel_fpu, false);
-	preempt_enable();
+
+	if (test_thread_flag(TIF_USING_FPU_NONATOMIC)){
+		clear_thread_flag(TIF_USING_FPU_NONATOMIC);
+	}else{
+		preempt_enable();
+	}
 }
 EXPORT_SYMBOL_GPL(kernel_fpu_end);
+
+#ifdef CONFIG_USING_FPU_IN_KERNEL_NONATOMIC
+/*
+ * We can call kernel_fpu_begin_nonatomic in non-atomic task context.
+ */
+int kernel_fpu_begin_nonatomic_mask(unsigned int kfpu_mask)
+{
+	preempt_disable();
+	/* we not support Nested call */
+	if (test_thread_flag(TIF_USING_FPU_NONATOMIC))
+	{
+		goto nested_err;
+	}
+
+	/*
+	* This means we call kernel_fpu_begin_nonatomic after kernel_fpu_begin,
+	* but before kernel_fpu_end.
+	*/
+	if (this_cpu_read(in_kernel_fpu)){
+		goto nested_err;
+	}	
+		
+	if (in_interrupt()){
+		goto irq_err;
+	}
+		
+	if (current->flags & PF_KTHREAD)
+	{
+		goto err;
+	}
+
+	kernel_fpu_begin_mask(kfpu_mask);
+
+	return 0;
+
+nested_err:
+irq_err:
+err:
+	preempt_enable();
+
+	return -1;
+}
+EXPORT_SYMBOL_GPL(kernel_fpu_begin_nonatomic_mask);
+
+void save_fpregs_to_fpkernelstate(struct fpu *kfpu)
+{
+	kernel_fpu_states_save(&kfpu->fpstate->kernel_state, NULL, sizeof(kfpu->fpstate->kernel_state));
+}
+#endif //CONFIG_USING_FPU_IN_KERNEL_NONATOMIC
 
 /*
  * Sync the FPU register state to current's memory register state when the

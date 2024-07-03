@@ -890,6 +890,35 @@ config INTEL_TDX_GUEST
 endif #HYPERVISOR_GUEST
 
 source "arch/x86/Kconfig.cpu"
+source "arch/x86/Kconfig.fpu"
+
+choice
+	prompt "For lagre memory copy"
+	default X86_Hygon_LMC_MODE_OFF
+	help
+	  Hygon's LMC (large memory copy) feature allows you to 
+	  optimize the performance of large data copies between the kernel and user space 
+	  by using vectorized instructions, thus significantly improving performance.
+
+config X86_Hygon_LMC_MODE_OFF
+	bool "No optimization for large memory copy"
+	help
+	  No optimization for large memory copy
+
+config X86_Hygon_LMC_SSE2_ON
+	bool "Using sse2 nt copy for large memory copy"
+	depends on USING_FPU_IN_KERNEL_NONATOMIC
+	help
+      When this feature is enabled, we will using copy_user_sse2_nt_string
+	  for lagre memory copy.
+
+config X86_Hygon_LMC_AVX2_ON
+	bool "Using avx2 nt copy for large memory copy"
+	depends on USING_FPU_IN_KERNEL_NONATOMIC
+	help
+	  When this feature is enabled, we will using copy_user_avx2_nt_string
+      for lagre memory copy.
+endchoice
 
 config HPET_TIMER
 	def_bool X86_64

@@ -55,6 +55,7 @@
 #include <asm/resctrl.h>
 #include <asm/unistd.h>
 #include <asm/fsgsbase.h>
+#include <asm/fpu/internal.h>
 #ifdef CONFIG_IA32_EMULATION
 /* Not included via unistd.h */
 #include <asm/unistd_32_ia32.h>
@@ -568,6 +569,11 @@ __switch_to(struct task_struct *prev_p, struct task_struct *next_p)
 	if (!test_thread_flag(TIF_NEED_FPU_LOAD))
 		switch_fpu_prepare(prev_fpu, cpu);
 
+#ifdef CONFIG_USING_FPU_IN_KERNEL_NONATOMIC
+	if (test_thread_flag(TIF_USING_FPU_NONATOMIC))
+		switch_kernel_fpu_prepare(prev_p, cpu);
+#endif
+	//printk("__switch_to now prev pid is %d\n",prev_p->pid);
 	/* We must save %fs and %gs before load_TLS() because
 	 * %fs and %gs may be cleared by load_TLS().
 	 *
@@ -622,6 +628,10 @@ __switch_to(struct task_struct *prev_p, struct task_struct *next_p)
 
 	switch_fpu_finish();
 
+#ifdef CONFIG_USING_FPU_IN_KERNEL_NONATOMIC
+    switch_kernel_fpu_finish(next_p);
+#endif
+	//printk("__switch_to now next pid is %d\n",next_p->pid);
 	/* Reload sp0. */
 	update_task_stack(next_p);
 
