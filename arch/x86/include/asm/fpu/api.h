@@ -25,6 +25,7 @@
 /* Kernel FPU states to initialize in kernel_fpu_begin_mask() */
 #define KFPU_387	_BITUL(0)	/* 387 state will be initialized */
 #define KFPU_MXCSR	_BITUL(1)	/* MXCSR will be initialized */
+#define KFPU_USER	_BITUL(2)	/* MXCSR will be initialized */
 
 extern void kernel_fpu_begin_mask(unsigned int kfpu_mask);
 extern void kernel_fpu_end(void);
@@ -32,10 +33,34 @@ extern bool irq_fpu_usable(void);
 extern void fpregs_mark_activate(void);
 
 /* Code that is unaware of kernel_fpu_begin_mask() can use this */
+/* 这里是开启387浮点的函数 */
 static inline void kernel_fpu_begin(void)
 {
 	kernel_fpu_begin_mask(KFPU_387 | KFPU_MXCSR);
 }
+
+#ifdef CONFIG_USING_FPU_IN_KERNEL_NONATOMIC
+extern int kernel_fpu_begin_nonatomic_mask(unsigned int kfpu_mask);
+//extern void kernel_fpu_end_nonatomic(void);
+
+/* Code that is unaware of kernel_fpu_begin_nonatomic_mask() can use this */
+static inline int kernel_fpu_begin_nonatomic(void)
+{
+#ifdef CONFIG_X86_64
+        /*
+ *          * Any 64-bit code that uses 387 instructions must explicitly request
+ *                   * KFPU_387.
+ *                            */
+        return kernel_fpu_begin_nonatomic_mask(KFPU_MXCSR | KFPU_USER);
+#else
+        /*
+ *          * 32-bit kernel code may use 387 operations as well as SSE2, etc,
+ *                   * as long as it checks that the CPU has the required capability.
+ *                            */
+        return kernel_fpu_begin_nonatomic_mask(KFPU_387 | KFPU_MXCSR | KFPU_USER);
+#endif
+}
+#endif //CONFIG_USING_FPU_IN_KERNEL_NONATOMIC
 
 /*
  * Use fpregs_lock() while editing CPU's FPU registers or fpu->fpstate.
