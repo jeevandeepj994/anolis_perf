@@ -1,0 +1,9 @@
+#SPDX - License - Identifier : GPL - 2.0
+
+config USING_FPU_IN_KERNEL_NONATOMIC
+  default n
+	bool "Support using fpu instructions in kernel non-atomic context"
+    depends on X86_64 && CPU_SUP_HYGON
+    help
+      When this feature is enabled, we can use fpu instructions in kernel
+	    non-atomic context.

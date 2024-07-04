@@ -381,6 +381,9 @@ struct fpstate {
 	/* @is_guest:		Indicator for guest state (KVM) */
 	unsigned int		is_guest	: 1;
 
+#ifdef CONFIG_USING_FPU_IN_KERNEL_NONATOMIC
+       union fpregs_state              kernel_state;
+#endif
 	/*
 	 * @is_confidential:	Indicator for KVM confidential mode.
 	 *			The FPU registers are restored by the
