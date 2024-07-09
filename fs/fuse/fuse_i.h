@@ -51,6 +51,7 @@
 /** Number of dentries for each connection in the control filesystem */
 #define FUSE_CTL_NUM_DENTRIES 11
 
+#define FUSE_QUOTA_PER_BGQUEUE	2
 #define FUSE_BG_HASH_BITS	7
 #define FUSE_BG_HASH_SIZE	(1 << FUSE_BG_HASH_BITS)
 #define FUSE_BG_HASH_MASK	(FUSE_BG_HASH_SIZE - 1)
@@ -383,6 +384,7 @@ enum fuse_req_flag {
 	FR_FINISHED,
 	FR_PRIVATE,
 	FR_ASYNC,
+	FR_RESERVED_QUOTA,
 };
 
 /**
@@ -432,6 +434,8 @@ struct fuse_req {
 
 	/** fuse_mount this request belongs to */
 	struct fuse_mount *fm;
+
+	unsigned int bg_queue_index;
 };
 
 struct fuse_iqueue;
@@ -589,10 +593,15 @@ struct fuse_stats {
 	atomic64_t req_cnts[FUSE_OP_MAX];
 };
 
+struct fuse_bg_queue {
+	struct list_head	queue;
+	unsigned int		active;
+};
+
 /* Separate background queue for background requests. */
 struct fuse_bg_table {
 	/* The list of background requests */
-	struct list_head bg_queue[FUSE_BG_HASH_SIZE];
+	struct fuse_bg_queue bg_queue[FUSE_BG_HASH_SIZE];
 
 	/* Number of background requests */
 	unsigned int active_background;
