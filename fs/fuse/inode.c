@@ -786,7 +786,7 @@ static void fuse_sbg_queue_init(struct fuse_conn *fc)
 		struct fuse_bg_table *table = &fc->bg_table[i];
 
 		for (j = 0; j < FUSE_BG_HASH_SIZE; j++)
-			INIT_LIST_HEAD(&table->bg_queue[j]);
+			INIT_LIST_HEAD(&table->bg_queue[j].queue);
 	}
 }
 
