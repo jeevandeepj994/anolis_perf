@@ -755,12 +755,13 @@ static void fuse_iqueue_init(struct fuse_iqueue *fiq,
 
 static void fuse_sbg_queue_init(struct fuse_conn *fc)
 {
-	unsigned int i;
+	unsigned int i, j;
 
 	for (i = 0; i < FUSE_BG_TYPES; i++) {
 		struct fuse_bg_table *table = &fc->bg_table[i];
 
-		INIT_LIST_HEAD(&table->bg_queue);
+		for (j = 0; j < FUSE_BG_HASH_SIZE; j++)
+			INIT_LIST_HEAD(&table->bg_queue[j]);
 	}
 }
 
