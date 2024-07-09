@@ -162,6 +162,9 @@ enum zone_stat_item {
 	NR_ZSPAGES,		/* allocated in zsmalloc */
 #endif
 	NR_FREE_CMA_PAGES,
+#ifdef CONFIG_UNACCEPTED_MEMORY
+	NR_UNACCEPTED,
+#endif
 #ifdef CONFIG_PAGE_PREZERO
 	NR_ZEROED_PAGES,	/* Pre-zeroed pages */
 #endif
@@ -804,6 +807,11 @@ struct zone {
 
 	/* free areas of different sizes */
 	struct free_area	free_area[MAX_ORDER];
+
+#ifdef CONFIG_UNACCEPTED_MEMORY
+	/* Pages to be accepted. All pages on the list are MAX_ORDER */
+	struct list_head	unaccepted_pages;
+#endif
 
 	/* zone flags, see below */
 	unsigned long		flags;
