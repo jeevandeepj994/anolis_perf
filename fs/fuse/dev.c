@@ -271,8 +271,10 @@ static void fuse_add_sbg_queue(struct fuse_conn *fc, struct fuse_req *req)
 {
 	unsigned int type = fuse_bgqueue_type(req);
 	unsigned int index = fuse_ihash(req->args->nodeid);
+	struct fuse_bg_queue *bg_queue = &fc->bg_table[type].bg_queue[index];
 
-	list_add_tail(&req->list, &fc->bg_table[type].bg_queue[index]);
+	req->bg_queue_index = index;
+	list_add_tail(&req->list, &bg_queue->queue);
 }
 
 static void fuse_add_bg_queue(struct fuse_conn *fc, struct fuse_req *req)
@@ -286,8 +288,12 @@ static void fuse_add_bg_queue(struct fuse_conn *fc, struct fuse_req *req)
 static void fuse_dec_active_sbg(struct fuse_conn *fc, struct fuse_req *req)
 {
 	unsigned int type = fuse_bgqueue_type(req);
+	struct fuse_bg_table *table = &fc->bg_table[type];
 
-	fc->bg_table[type].active_background--;
+	if (test_bit(FR_RESERVED_QUOTA, &req->flags))
+		table->bg_queue[req->bg_queue_index].active--;
+	else
+		table->active_background--;
 }
 
 static void fuse_dec_active_bg(struct fuse_conn *fc, struct fuse_req *req)
@@ -307,6 +313,27 @@ static void fuse_queue_request(struct fuse_conn *fc, struct fuse_req *req)
 	queue_request_and_unlock(fiq, req);
 }
 
+static void fuse_flush_sbg_queue_reserved(struct fuse_conn *fc, unsigned int type)
+{
+	struct fuse_bg_table *table = &fc->bg_table[type];
+	int i;
+
+	for (i = 0; i < FUSE_BG_HASH_SIZE; i++) {
+		struct fuse_bg_queue *bg_queue = &table->bg_queue[i];
+
+		while (bg_queue->active < FUSE_QUOTA_PER_BGQUEUE &&
+		       !list_empty(&bg_queue->queue)) {
+			struct fuse_req *req;
+
+			req = list_first_entry(&bg_queue->queue, struct fuse_req, list);
+			list_del(&req->list);
+			__set_bit(FR_RESERVED_QUOTA, &req->flags);
+			bg_queue->active++;
+			fuse_queue_request(fc, req);
+		}
+	}
+}
+
 /*
  * Iterate all bg_queues, with each queue consuming at maximum batch (i.e.
  * FUSE_DEFAULT_MAX_BACKGROUND) quotas.
@@ -324,11 +351,11 @@ static bool fuse_flush_sbg_queue_shared(struct fuse_conn *fc, unsigned int type)
 	do {
 		unsigned int count = 0;
 		unsigned int index = table->next_queue_index;
-		struct list_head *bg_queue = &table->bg_queue[index];
+		struct fuse_bg_queue *bg_queue = &table->bg_queue[index];
 
 		index = (index + 1) & FUSE_BG_HASH_MASK;
 
-		while (!list_empty(bg_queue)) {
+		while (!list_empty(&bg_queue->queue)) {
 			struct fuse_req *req;
 
 			/*
@@ -346,7 +373,7 @@ static bool fuse_flush_sbg_queue_shared(struct fuse_conn *fc, unsigned int type)
 				break;
 			}
 
-			req = list_first_entry(bg_queue, struct fuse_req, list);
+			req = list_first_entry(&bg_queue->queue, struct fuse_req, list);
 			list_del(&req->list);
 			table->active_background++;
 			count++;
@@ -363,6 +390,10 @@ static void fuse_do_flush_sbg_queue(struct fuse_conn *fc, unsigned int type)
 {
 	bool retry;
 
+	/* first try each bg_queue's reserved quota */
+	fuse_flush_sbg_queue_reserved(fc, type);
+
+	/* then compete for the shared quota */
 	do {
 		retry = fuse_flush_sbg_queue_shared(fc, type);
 	} while (retry);
