@@ -262,11 +262,17 @@ static unsigned int fuse_bgqueue_type(struct fuse_req *req)
 	return req->args->opcode == FUSE_WRITE ? FUSE_BG_WRITE : FUSE_BG_DEFAULT;
 }
 
+static unsigned int fuse_ihash(u64 nodeid)
+{
+	return hash_long(nodeid, FUSE_BG_HASH_BITS);
+}
+
 static void fuse_add_sbg_queue(struct fuse_conn *fc, struct fuse_req *req)
 {
 	unsigned int type = fuse_bgqueue_type(req);
+	unsigned int index = fuse_ihash(req->args->nodeid);
 
-	list_add_tail(&req->list, &fc->bg_table[type].bg_queue);
+	list_add_tail(&req->list, &fc->bg_table[type].bg_queue[index]);
 }
 
 static void fuse_add_bg_queue(struct fuse_conn *fc, struct fuse_req *req)
@@ -301,41 +307,71 @@ static void fuse_queue_request(struct fuse_conn *fc, struct fuse_req *req)
 	queue_request_and_unlock(fiq, req);
 }
 
-/* bg_queue needs to be further flushed when true returned */
-static bool do_flush_bg_queue(struct fuse_conn *fc, unsigned int index,
-			      unsigned int batch)
+/*
+ * Iterate all bg_queues, with each queue consuming at maximum batch (i.e.
+ * FUSE_DEFAULT_MAX_BACKGROUND) quotas.
+ *
+ * Return true if there's any pending request remained after one round, false
+ * otherwise.
+ */
+static bool fuse_flush_sbg_queue_shared(struct fuse_conn *fc, unsigned int type)
 {
-	struct fuse_bg_table *table = &fc->bg_table[index];
-	struct fuse_req *req;
-	unsigned int count = 0;
+	struct fuse_bg_table *table = &fc->bg_table[type];
+	unsigned int start_queue = table->next_queue_index;
+	unsigned int batch = FUSE_DEFAULT_MAX_BACKGROUND;
+	bool again = false;
 
-	while (table->active_background < fc->max_background &&
-	       !list_empty(&table->bg_queue)) {
-		if (count++ == batch)
-			return true;
-		req = list_first_entry(&table->bg_queue, struct fuse_req, list);
-		list_del(&req->list);
-		table->active_background++;
-		fuse_queue_request(fc, req);
-	}
-	return false;
+	do {
+		unsigned int count = 0;
+		unsigned int index = table->next_queue_index;
+		struct list_head *bg_queue = &table->bg_queue[index];
+
+		index = (index + 1) & FUSE_BG_HASH_MASK;
+
+		while (!list_empty(bg_queue)) {
+			struct fuse_req *req;
+
+			/*
+			 * Don't bump the next_queue_index if current bg_queue
+			 * has not comsumed any quota.  Otherwise bump the index
+			 * even when the whole batch has not been used up.
+			 */
+			if (table->active_background >= fc->max_background) {
+				if (count)
+					table->next_queue_index = index;
+				return false;
+			}
+			if (count == batch) {
+				again = true;
+				break;
+			}
+
+			req = list_first_entry(bg_queue, struct fuse_req, list);
+			list_del(&req->list);
+			table->active_background++;
+			count++;
+			fuse_queue_request(fc, req);
+		}
+
+		table->next_queue_index = index;
+	} while (table->next_queue_index != start_queue);
+
+	return again;
+}
+
+static void fuse_do_flush_sbg_queue(struct fuse_conn *fc, unsigned int type)
+{
+	bool retry;
+
+	do {
+		retry = fuse_flush_sbg_queue_shared(fc, type);
+	} while (retry);
 }
 
 static void fuse_flush_sbg_queue(struct fuse_conn *fc)
 {
-	bool proceed_default = true;
-	bool proceed_write = true;
-
-	do {
-		if (proceed_default)
-			proceed_default = do_flush_bg_queue(fc,
-					FUSE_BG_DEFAULT,
-					FUSE_DEFAULT_MAX_BACKGROUND);
-		if (proceed_write)
-			proceed_write = do_flush_bg_queue(fc,
-					FUSE_BG_WRITE,
-					FUSE_DEFAULT_MAX_BACKGROUND);
-	} while (proceed_default || proceed_write);
+	fuse_do_flush_sbg_queue(fc, FUSE_BG_DEFAULT);
+	fuse_do_flush_sbg_queue(fc, FUSE_BG_WRITE);
 }
 
 static void fuse_flush_bg_queue(struct fuse_conn *fc)

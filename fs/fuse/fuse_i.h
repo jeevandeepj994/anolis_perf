@@ -51,6 +51,10 @@
 /** Number of dentries for each connection in the control filesystem */
 #define FUSE_CTL_NUM_DENTRIES 11
 
+#define FUSE_BG_HASH_BITS	7
+#define FUSE_BG_HASH_SIZE	(1 << FUSE_BG_HASH_BITS)
+#define FUSE_BG_HASH_MASK	(FUSE_BG_HASH_SIZE - 1)
+
 enum fuse_bgqueue_type {
 	FUSE_BG_DEFAULT,	/* Opcodes other than FUSE_WRITE */
 	FUSE_BG_WRITE,
@@ -588,10 +592,13 @@ struct fuse_stats {
 /* Separate background queue for background requests. */
 struct fuse_bg_table {
 	/* The list of background requests */
-	struct list_head bg_queue;
+	struct list_head bg_queue[FUSE_BG_HASH_SIZE];
 
 	/* Number of background requests */
 	unsigned int active_background;
+
+	/* The next background queue to use the shared quota */
+	unsigned int next_queue_index;
 };
 
 /**
