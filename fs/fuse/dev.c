@@ -303,6 +303,17 @@ static unsigned int fuse_hash_index(struct fuse_conn *fc,
 static unsigned int fuse_bgqueue_index(struct fuse_conn *fc,
 		struct fuse_req *req, unsigned int type)
 {
+	struct fuse_inode *fi = req->args->fi;
+
+	/* fast path: reuse cached index if any */
+	if (fi) {
+		fi->bg_queue_active[type]++;
+		if (fi->bg_queue_index[type] == FUSE_BG_INDEX_NONE)
+			fi->bg_queue_index[type] = fuse_hash_index(fc, req, type);
+		return fi->bg_queue_index[type];
+	}
+
+	/* slow path: calculate index from hash */
 	return fuse_hash_index(fc, req, type);
 }
 
@@ -329,11 +340,15 @@ static void fuse_dec_active_sbg(struct fuse_conn *fc, struct fuse_req *req)
 {
 	unsigned int type = fuse_bgqueue_type(req);
 	struct fuse_bg_table *table = &fc->bg_table[type];
+	struct fuse_inode *fi = req->args->fi;
 
 	if (test_bit(FR_RESERVED_QUOTA, &req->flags))
 		table->bg_queue[req->bg_queue_index].active--;
 	else
 		table->active_background--;
+
+	if (fi && !--fi->bg_queue_active[type])
+		fi->bg_queue_index[type] = FUSE_BG_INDEX_NONE;
 }
 
 static void fuse_dec_active_bg(struct fuse_conn *fc, struct fuse_req *req)

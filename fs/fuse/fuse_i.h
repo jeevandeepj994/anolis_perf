@@ -194,6 +194,10 @@ struct fuse_inode {
 	 */
 	struct fuse_inode_dax *dax;
 #endif
+
+#define FUSE_BG_INDEX_NONE	(-1)
+	int bg_queue_index[FUSE_BG_TYPES];
+	unsigned int bg_queue_active[FUSE_BG_TYPES];
 };
 
 /** FUSE inode state bits */

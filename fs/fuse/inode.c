@@ -337,6 +337,14 @@ void fuse_change_attributes(struct inode *inode, struct fuse_attr *attr,
 		fuse_dax_dontcache(inode, attr->flags);
 }
 
+static void fuse_inode_common_init(struct inode *inode)
+{
+	struct fuse_inode *fi = get_fuse_inode(inode);
+
+	fi->bg_queue_index[FUSE_BG_DEFAULT] = FUSE_BG_INDEX_NONE;
+	fi->bg_queue_index[FUSE_BG_WRITE] = FUSE_BG_INDEX_NONE;
+}
+
 static void fuse_init_inode(struct inode *inode, struct fuse_attr *attr)
 {
 	inode->i_mode = attr->mode & S_IFMT;
@@ -345,6 +353,7 @@ static void fuse_init_inode(struct inode *inode, struct fuse_attr *attr)
 	inode->i_mtime.tv_nsec = attr->mtimensec;
 	inode->i_ctime.tv_sec  = attr->ctime;
 	inode->i_ctime.tv_nsec = attr->ctimensec;
+	fuse_inode_common_init(inode);
 	if (S_ISREG(inode->i_mode)) {
 		fuse_init_common(inode);
 		fuse_init_file_inode(inode, attr->flags);
