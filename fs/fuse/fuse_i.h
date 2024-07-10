@@ -596,6 +596,7 @@ struct fuse_stats {
 struct fuse_bg_queue {
 	struct list_head	queue;
 	unsigned int		active;
+	unsigned int		pending;
 };
 
 /* Separate background queue for background requests. */
