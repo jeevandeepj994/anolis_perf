@@ -765,6 +765,8 @@ static ssize_t fuse_async_req_send(struct fuse_mount *fm,
 {
 	ssize_t err;
 	struct fuse_io_priv *io = ia->io;
+	struct inode *inode = file_inode(io->iocb->ki_filp);
+	struct fuse_inode *fi = get_fuse_inode(inode);
 
 	spin_lock(&io->lock);
 	kref_get(&io->refcnt);
@@ -773,6 +775,7 @@ static ssize_t fuse_async_req_send(struct fuse_mount *fm,
 	spin_unlock(&io->lock);
 
 	ia->ap.args.end = fuse_aio_complete_req;
+	ia->ap.args.fi = fi;
 	ia->ap.args.may_block = io->should_dirty;
 	err = fuse_simple_background(fm, &ia->ap.args, GFP_KERNEL);
 	if (err)
@@ -941,6 +944,20 @@ static void fuse_readpages_end(struct fuse_mount *fm, struct fuse_args *args,
 	fuse_io_free(ia);
 }
 
+static struct fuse_inode *get_fuse_inode_ap(struct fuse_args_pages *ap)
+{
+	int i;
+	struct address_space *mapping = NULL;
+	struct fuse_inode *fi = NULL;
+
+	for (i = 0; mapping == NULL && i < ap->num_pages; i++)
+		mapping = ap->pages[i]->mapping;
+
+	if (mapping)
+		fi = get_fuse_inode(mapping->host);
+	return fi;
+}
+
 static void fuse_send_readpages(struct fuse_io_args *ia, struct file *file)
 {
 	struct fuse_file *ff = file->private_data;
@@ -967,6 +984,7 @@ static void fuse_send_readpages(struct fuse_io_args *ia, struct file *file)
 	if (fm->fc->async_read) {
 		ia->ff = fuse_file_get(ff);
 		ap->args.end = fuse_readpages_end;
+		ap->args.fi = get_fuse_inode_ap(ap);
 		/* force background request to avoid starvation from writeback */
 		if (fm->fc->separate_background) {
 			ap->args.force = true;
@@ -2243,6 +2261,7 @@ static int fuse_writepages_fill(struct page *page,
 		wpa->next = NULL;
 		ap->args.in_pages = true;
 		ap->args.end = fuse_writepage_end;
+		ap->args.fi = get_fuse_inode(inode);
 		ap->num_pages = 0;
 		wpa->inode = inode;
 	}
