@@ -267,14 +267,54 @@ static unsigned int fuse_ihash(u64 nodeid)
 	return hash_long(nodeid, FUSE_BG_HASH_BITS);
 }
 
+static unsigned int fuse_hash_index_conflict(struct fuse_conn *fc,
+		unsigned int type, unsigned int start)
+{
+	struct fuse_bg_table *table = &fc->bg_table[type];
+	unsigned int candidate = start;
+	unsigned int lowest_pending = table->bg_queue[start].pending;
+	unsigned int next = (start + 1) & FUSE_BG_HASH_MASK;
+
+	while (next != start) {
+		unsigned int pending = table->bg_queue[next].pending;
+
+		if (!pending)
+			return next;
+		if (pending < lowest_pending) {
+			candidate = next;
+			lowest_pending = pending;
+		}
+		next = (next + 1) & FUSE_BG_HASH_MASK;
+	}
+	return candidate;
+}
+
+static unsigned int fuse_hash_index(struct fuse_conn *fc,
+		struct fuse_req *req, unsigned int type)
+{
+	unsigned int index = fuse_ihash(req->args->nodeid);
+
+	/* find an empty slot (if any) if hash conflicts */
+	if (fc->bg_table[type].bg_queue[index].pending)
+		index = fuse_hash_index_conflict(fc, type, index);
+	return index;
+}
+
+static unsigned int fuse_bgqueue_index(struct fuse_conn *fc,
+		struct fuse_req *req, unsigned int type)
+{
+	return fuse_hash_index(fc, req, type);
+}
+
 static void fuse_add_sbg_queue(struct fuse_conn *fc, struct fuse_req *req)
 {
 	unsigned int type = fuse_bgqueue_type(req);
-	unsigned int index = fuse_ihash(req->args->nodeid);
+	unsigned int index = fuse_bgqueue_index(fc, req, type);
 	struct fuse_bg_queue *bg_queue = &fc->bg_table[type].bg_queue[index];
 
 	req->bg_queue_index = index;
 	list_add_tail(&req->list, &bg_queue->queue);
+	bg_queue->pending++;
 }
 
 static void fuse_add_bg_queue(struct fuse_conn *fc, struct fuse_req *req)
@@ -329,6 +369,7 @@ static void fuse_flush_sbg_queue_reserved(struct fuse_conn *fc, unsigned int typ
 			list_del(&req->list);
 			__set_bit(FR_RESERVED_QUOTA, &req->flags);
 			bg_queue->active++;
+			bg_queue->pending--;
 			fuse_queue_request(fc, req);
 		}
 	}
@@ -376,6 +417,7 @@ static bool fuse_flush_sbg_queue_shared(struct fuse_conn *fc, unsigned int type)
 			req = list_first_entry(&bg_queue->queue, struct fuse_req, list);
 			list_del(&req->list);
 			table->active_background++;
+			bg_queue->pending--;
 			count++;
 			fuse_queue_request(fc, req);
 		}
