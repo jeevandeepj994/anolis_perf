@@ -664,6 +664,9 @@ struct fuse_conn {
 	/** Maximum write size */
 	unsigned max_write;
 
+	/* Maxmum number of pages that write request should be aligned with */
+	unsigned int write_align_pages;
+
 	/** Maxmum number of pages that can be used in a single request */
 	unsigned int max_pages;
 
@@ -885,6 +888,9 @@ struct fuse_conn {
 
 	/* separate background queue for WRITE requests and the others */
 	unsigned int separate_background:1;
+
+	/* write request is aligned on max_write boundary */
+	unsigned int write_alignment:1;
 
 	/** The number of requests waiting for completion */
 	atomic_t num_waiting;
