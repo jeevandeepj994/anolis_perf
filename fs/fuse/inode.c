@@ -1267,6 +1267,8 @@ static void process_init_reply(struct fuse_mount *fm, struct fuse_args *args,
 					pr_info("server recovery enabled for tag %s\n", fc->tag);
 				}
 			}
+			if (flags & FUSE_WRITE_ALIGNMENT)
+				fc->write_alignment = 1;
 		} else {
 			ra_pages = fc->max_read / PAGE_SIZE;
 			fc->no_lock = 1;
@@ -1278,6 +1280,12 @@ static void process_init_reply(struct fuse_mount *fm, struct fuse_args *args,
 		fc->minor = arg->minor;
 		fc->max_write = arg->minor < 5 ? 4096 : arg->max_write;
 		fc->max_write = max_t(unsigned, 4096, fc->max_write);
+		if (fc->write_alignment) {
+			if (fc->max_write % PAGE_SIZE)
+				ok = false;
+			else
+				fc->write_align_pages = fc->max_write >> PAGE_SHIFT;
+		}
 		fc->conn_init = 1;
 	}
 	kfree(ia);
@@ -1313,7 +1321,8 @@ static void fuse_prepare_send_init(struct fuse_mount *fm,
 		FUSE_INVAL_CACHE_INFAIL | FUSE_CLOSE_TO_OPEN |
 		FUSE_INVALDIR_ALLENTRY | FUSE_DELETE_STALE |
 		FUSE_DIRECT_IO_ALLOW_MMAP | FUSE_NO_EXPORT_SUPPORT |
-		FUSE_HAS_RESEND | FUSE_SEPARATE_BACKGROUND | FUSE_HAS_RECOVERY;
+		FUSE_HAS_RESEND | FUSE_SEPARATE_BACKGROUND | FUSE_HAS_RECOVERY |
+		FUSE_WRITE_ALIGNMENT;
 #ifdef CONFIG_FUSE_DAX
 	if (fm->fc->dax)
 		flags |= FUSE_MAP_ALIGNMENT;
