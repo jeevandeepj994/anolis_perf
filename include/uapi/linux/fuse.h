@@ -340,6 +340,7 @@ struct fuse_file_lock {
  * FUSE_HAS_INODE_DAX:  use per inode DAX
  * FUSE_SEPARATE_BACKGROUND: separate background queue for WRITE requets and
  * 			     the others
+ * FUSE_WRITE_ALIGNMENT: write request is aligned on max_write boundary
  */
 #define FUSE_ASYNC_READ		(1 << 0)
 #define FUSE_POSIX_LOCKS	(1 << 1)
@@ -374,6 +375,7 @@ struct fuse_file_lock {
 #define FUSE_INIT_RESERVED	(1 << 31)
 /* bits 32..63 get shifted down 32 bits into the flags2 field */
 #define FUSE_HAS_INODE_DAX	(1ULL << 33)
+#define FUSE_WRITE_ALIGNMENT	(1ULL << 55)
 #define FUSE_SEPARATE_BACKGROUND (1ULL << 56)
 /* The 57th bit is left to FUSE_HAS_RECOVERY */
 #define FUSE_DELETE_STALE	(1ULL << 58)
