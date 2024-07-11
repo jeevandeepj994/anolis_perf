@@ -68,10 +68,10 @@ copy_user_block_data_generic(void *to, const void *from, unsigned len)
 		&& (system_state == SYSTEM_RUNNING)
                 && (!kernel_fpu_begin_nonatomic()))
         {
-		ret = copy_user_large_memory_generic_string(to, from, len);
-		kernel_fpu_end();
+			ret = copy_user_large_memory_generic_string(to, from, len);
+			kernel_fpu_end();
 
-		return ret;
+			return ret;
         }
 
 	/* If CPU has ERMS feature, use copy_user_enhanced_fast_string.
@@ -91,6 +91,15 @@ copy_user_block_data_generic(void *to, const void *from, unsigned len)
 }
 #endif
 
+// static inline bool test_kernel_ip(unsigned long ip)
+// {
+// #ifdef CONFIG_X86_32
+// 	return ip > PAGE_OFFSET;
+// #else
+// 	return (long)ip < 0;
+// #endif
+// }
+
 static __always_inline __must_check unsigned long
 copy_user_generic(void *to, const void *from, unsigned len)
 {
@@ -98,6 +107,12 @@ copy_user_generic(void *to, const void *from, unsigned len)
 
 #if defined (CONFIG_X86_Hygon_LMC_SSE2_ON) || defined (CONFIG_X86_Hygon_LMC_AVX2_ON)
 	unsigned int nt_blk_cpy_mini_len = get_nt_block_copy_mini_len();
+	// if(test_kernel_ip((unsigned long)from) && (strncmp((char*)from,"aaaaaaa",7) == 0)){
+	// 	printk("enter copy_user_generic Testing\n");
+	// 	// printk("nt_blk_cpy_mini_len is %d len is %d system_state is %d is ok %d\n",nt_blk_cpy_mini_len,len,system_state
+	// 	//  											,(!kernel_fpu_begin_nonatomic()));
+	// 	printk("nt_blk_cpy_mini_len is %d len is %d system_state is %d\n",nt_blk_cpy_mini_len,len,system_state);
+	// }
 	if (((nt_blk_cpy_mini_len) && (nt_blk_cpy_mini_len <= len)
 		&& (system_state == SYSTEM_RUNNING)
 				&& (!kernel_fpu_begin_nonatomic())))

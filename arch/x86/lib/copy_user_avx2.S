@@ -31,13 +31,7 @@
 #include <asm/export.h>
 #include <asm/trapnr.h>
 
-#define PREFETCH_DISTANCE 64
-//#define PREFETCH_DISTANCE 128
-//#define PREFETCH_DISTANCE 192
-//#define PREFETCH_DISTANCE 256
-
-#define X86_NON_TEMPORAL_THRESHOLD	4095
-//#define X86_NON_TEMPORAL_THRESHOLD	1000000
+#define PREFETCH_DISTANCE 256
 
 #define PREFETCH(addr)	prefetchnta addr
 

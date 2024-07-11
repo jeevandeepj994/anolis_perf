@@ -423,7 +423,7 @@ EXPORT_SYMBOL_GPL(fpu_copy_uabi_to_guest_fpstate);
 
 void kernel_fpu_begin_mask(unsigned int kfpu_mask)
 {
-	if (likely(!(kfpu_mask & KFPU_USER))){
+	if (likely(!(kfpu_mask & KFPU_NONATOMIC))){
 		preempt_disable();
 	}
 
@@ -454,7 +454,7 @@ void kernel_fpu_begin_mask(unsigned int kfpu_mask)
 	if (unlikely(kfpu_mask & KFPU_387) && boot_cpu_has(X86_FEATURE_FPU))
 		asm volatile ("fninit");
 
-	if(unlikely(kfpu_mask & KFPU_USER)){
+	if(unlikely(kfpu_mask & KFPU_NONATOMIC)){
 		set_thread_flag(TIF_USING_FPU_NONATOMIC);
 		preempt_enable();
 	}

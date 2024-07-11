@@ -32,7 +32,7 @@
 #include <asm/export.h>
 #include <asm/trapnr.h>
 
-#define PREFETCH_DISTANCE 256
+#define PREFETCH_DISTANCE 64
 
 .macro ALIGN_DESTINATION_16
     /* check for bad alignment of destination, there is 16Bytes, for we will use movdqa */

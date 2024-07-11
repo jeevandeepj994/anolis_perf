@@ -499,7 +499,7 @@ static struct hygon_c86_info hygon_c86_data = {
 
 void set_c86_features_para_invaild(void)
 {
-	memset((void *)&hygon_c86_data, 0, sizeof(struct hygon_c86_info));
+	//memset((void *)&hygon_c86_data, 0, sizeof(struct hygon_c86_info));
 }
 
 unsigned int get_nt_block_copy_mini_len(void)

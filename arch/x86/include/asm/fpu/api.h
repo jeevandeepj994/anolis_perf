@@ -25,7 +25,7 @@
 /* Kernel FPU states to initialize in kernel_fpu_begin_mask() */
 #define KFPU_387	_BITUL(0)	/* 387 state will be initialized */
 #define KFPU_MXCSR	_BITUL(1)	/* MXCSR will be initialized */
-#define KFPU_USER	_BITUL(2)	/* MXCSR will be initialized */
+#define KFPU_NONATOMIC	_BITUL(2)	/* NONATOMIC will be initialized */
 
 extern void kernel_fpu_begin_mask(unsigned int kfpu_mask);
 extern void kernel_fpu_end(void);
@@ -40,7 +40,6 @@ static inline void kernel_fpu_begin(void)
 
 #if defined (CONFIG_X86_Hygon_LMC_SSE2_ON) || defined (CONFIG_X86_Hygon_LMC_AVX2_ON)
 extern int kernel_fpu_begin_nonatomic_mask(unsigned int kfpu_mask);
-//extern void kernel_fpu_end_nonatomic(void);
 
 /* Code that is unaware of kernel_fpu_begin_nonatomic_mask() can use this */
 static inline int kernel_fpu_begin_nonatomic(void)
@@ -50,13 +49,13 @@ static inline int kernel_fpu_begin_nonatomic(void)
  *          * Any 64-bit code that uses 387 instructions must explicitly request
  *                   * KFPU_387.
  *                            */
-        return kernel_fpu_begin_nonatomic_mask(KFPU_MXCSR | KFPU_USER);
+        return kernel_fpu_begin_nonatomic_mask(KFPU_MXCSR | KFPU_NONATOMIC);
 #else
         /*
  *          * 32-bit kernel code may use 387 operations as well as SSE2, etc,
  *                   * as long as it checks that the CPU has the required capability.
  *                            */
-        return kernel_fpu_begin_nonatomic_mask(KFPU_387 | KFPU_MXCSR | KFPU_USER);
+        return kernel_fpu_begin_nonatomic_mask(KFPU_387 | KFPU_MXCSR | KFPU_NONATOMIC);
 #endif
 }
 #endif
