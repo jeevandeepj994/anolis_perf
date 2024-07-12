@@ -336,6 +336,13 @@ static void fuse_add_bg_queue(struct fuse_conn *fc, struct fuse_req *req)
 		fuse_add_sbg_queue(fc, req);
 }
 
+static unsigned int fuse_req_numpages(struct fuse_req *req)
+{
+	struct fuse_args_pages *ap = container_of(req->args, typeof(*ap), args);
+
+	return ap->num_pages;
+}
+
 static void fuse_dec_active_sbg(struct fuse_conn *fc, struct fuse_req *req)
 {
 	unsigned int type = fuse_bgqueue_type(req);
@@ -344,8 +351,11 @@ static void fuse_dec_active_sbg(struct fuse_conn *fc, struct fuse_req *req)
 
 	if (test_bit(FR_RESERVED_QUOTA, &req->flags))
 		table->bg_queue[req->bg_queue_index].active--;
-	else
+	else {
 		table->active_background--;
+		if (req->args->opcode == FUSE_WRITE)
+			table->active_background_pages -= fuse_req_numpages(req);
+	}
 
 	if (fi && !--fi->bg_queue_active[type])
 		fi->bg_queue_index[type] = FUSE_BG_INDEX_NONE;
@@ -430,6 +440,13 @@ static bool fuse_flush_sbg_queue_shared(struct fuse_conn *fc, unsigned int type)
 			}
 
 			req = list_first_entry(&bg_queue->queue, struct fuse_req, list);
+			if (type == FUSE_BG_WRITE) {
+				if (table->active_background_pages + fuse_req_numpages(req) >
+						table->max_background_pages)
+					return false;
+				table->active_background_pages += fuse_req_numpages(req);
+			}
+
 			list_del(&req->list);
 			table->active_background++;
 			bg_queue->pending--;
@@ -2518,6 +2535,8 @@ void fuse_abort_conn(struct fuse_conn *fc)
 		fc->max_background = UINT_MAX;
 		fc->bg_table[FUSE_BG_DEFAULT].max_background = UINT_MAX;
 		fc->bg_table[FUSE_BG_WRITE].max_background = UINT_MAX;
+		fc->bg_table[FUSE_BG_DEFAULT].max_background_pages = UINT_MAX;
+		fc->bg_table[FUSE_BG_WRITE].max_background_pages = UINT_MAX;
 		flush_bg_queue(fc);
 		spin_unlock(&fc->bg_lock);
 
