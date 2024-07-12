@@ -406,6 +406,51 @@ static ssize_t fuse_conn_max_reserved_background_write(struct file *file,
 	return ret;
 }
 
+static ssize_t fuse_conn_max_write_background_bytes_read(struct file *file,
+		char __user *buf, size_t len, loff_t *ppos)
+{
+	struct fuse_conn *fc;
+	u64 val;
+	char tmp[64];
+	size_t size;
+
+	fc = fuse_ctl_file_conn_get(file);
+	if (!fc)
+		return 0;
+
+	val = READ_ONCE(fc->bg_table[FUSE_BG_WRITE].max_background_pages);
+	val <<= PAGE_SHIFT;
+	fuse_conn_put(fc);
+
+	size = sprintf(tmp, "%llu\n", val);
+	return simple_read_from_buffer(buf, len, ppos, tmp, size);
+}
+
+static ssize_t fuse_conn_max_write_background_bytes_write(struct file *file,
+		const char __user *buf, size_t count, loff_t *ppos)
+{
+	struct fuse_conn *fc;
+	u64 val;
+	int err;
+
+	if (*ppos)
+		return -EINVAL;
+	err = kstrtou64_from_user(buf, count, 0, &val);
+	if (err)
+		return err;
+
+	fc = fuse_ctl_file_conn_get(file);
+	if (fc) {
+		spin_lock(&fc->bg_lock);
+		fc->bg_table[FUSE_BG_WRITE].max_background_pages =
+			val >> PAGE_SHIFT;
+		spin_unlock(&fc->bg_lock);
+		fuse_conn_put(fc);
+	}
+
+	return count;
+}
+
 static ssize_t fuse_conn_congestion_threshold_read(struct file *file,
 						   char __user *buf, size_t len,
 						   loff_t *ppos)
@@ -624,6 +669,12 @@ static const struct file_operations fuse_conn_max_reserved_background_ops = {
 	.llseek = no_llseek,
 };
 
+static const struct file_operations fuse_conn_max_write_background_bytes_ops = {
+	.open = nonseekable_open,
+	.read = fuse_conn_max_write_background_bytes_read,
+	.write = fuse_conn_max_write_background_bytes_write,
+	.llseek = no_llseek,
+};
 static const struct file_operations fuse_conn_stats_ops = {
 	.open = nonseekable_open,
 	.read = fuse_conn_stats_read,
@@ -723,6 +774,8 @@ int fuse_ctl_add_conn(struct fuse_conn *fc)
 				 1, NULL, &fuse_conn_max_write_background_ops) ||
 	    !fuse_ctl_add_dentry(parent, fc, "max_reserved_background", S_IFREG | 0600,
 				 1, NULL, &fuse_conn_max_reserved_background_ops) ||
+	    !fuse_ctl_add_dentry(parent, fc, "max_write_background_bytes", S_IFREG | 0600,
+				 1, NULL, &fuse_conn_max_write_background_bytes_ops) ||
 	    !fuse_ctl_add_dentry(parent, fc, "passthrough", S_IFREG | 0600,
 				 1, NULL, &fuse_conn_passthrough_ops) ||
 	    !fuse_ctl_add_dentry(parent, fc, "passthrough_metrics", S_IFREG | 0600,

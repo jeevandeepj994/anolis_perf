@@ -773,6 +773,7 @@ static void fuse_sbg_queue_init(struct fuse_conn *fc)
 			INIT_LIST_HEAD(&table->bg_queue[j].queue);
 
 		table->reserved_background = UINT_MAX;
+		table->max_background_pages = UINT_MAX;
 	}
 }
 
