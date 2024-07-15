@@ -376,7 +376,7 @@ static void fuse_flush_sbg_queue_reserved(struct fuse_conn *fc, unsigned int typ
 	for (i = 0; i < FUSE_BG_HASH_SIZE; i++) {
 		struct fuse_bg_queue *bg_queue = &table->bg_queue[i];
 
-		while (bg_queue->active < FUSE_QUOTA_PER_BGQUEUE &&
+		while (bg_queue->active < table->reserved_background &&
 		       !list_empty(&bg_queue->queue)) {
 			struct fuse_req *req;
 
@@ -419,7 +419,7 @@ static bool fuse_flush_sbg_queue_shared(struct fuse_conn *fc, unsigned int type)
 			 * has not comsumed any quota.  Otherwise bump the index
 			 * even when the whole batch has not been used up.
 			 */
-			if (table->active_background >= fc->max_background) {
+			if (table->active_background >= table->max_background) {
 				if (count)
 					table->next_queue_index = index;
 				return false;
@@ -2516,6 +2516,8 @@ void fuse_abort_conn(struct fuse_conn *fc)
 		spin_lock(&fc->bg_lock);
 		fc->blocked = 0;
 		fc->max_background = UINT_MAX;
+		fc->bg_table[FUSE_BG_DEFAULT].max_background = UINT_MAX;
+		fc->bg_table[FUSE_BG_WRITE].max_background = UINT_MAX;
 		flush_bg_queue(fc);
 		spin_unlock(&fc->bg_lock);
 
