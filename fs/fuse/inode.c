@@ -771,6 +771,8 @@ static void fuse_sbg_queue_init(struct fuse_conn *fc)
 
 		for (j = 0; j < FUSE_BG_HASH_SIZE; j++)
 			INIT_LIST_HEAD(&table->bg_queue[j].queue);
+
+		table->reserved_background = UINT_MAX;
 	}
 }
 
@@ -1063,6 +1065,23 @@ static int set_global_limit(const char *val, const struct kernel_param *kp)
 	return 0;
 }
 
+/* initialize sbg limits from max_background if not configured with fusectl yet */
+static void fuse_init_sbg_limits(struct fuse_conn *fc)
+{
+	int type;
+
+	for (type = 0; type < FUSE_BG_TYPES; type++) {
+		struct fuse_bg_table *table = &fc->bg_table[type];
+
+		if (!table->max_background)
+			table->max_background = fc->max_background;
+
+		if (table->reserved_background == UINT_MAX)
+			table->reserved_background =
+				fc->max_background / FUSE_BG_HASH_SIZE;
+	}
+}
+
 static void process_init_limits(struct fuse_conn *fc, struct fuse_init_out *arg)
 {
 	int cap_sys_admin = capable(CAP_SYS_ADMIN);
@@ -1087,6 +1106,7 @@ static void process_init_limits(struct fuse_conn *fc, struct fuse_init_out *arg)
 		    fc->congestion_threshold > max_user_congthresh)
 			fc->congestion_threshold = max_user_congthresh;
 	}
+	fuse_init_sbg_limits(fc);
 	spin_unlock(&fc->bg_lock);
 }
 

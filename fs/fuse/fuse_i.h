@@ -48,7 +48,7 @@
 #define FUSE_NAME_MAX 1024
 
 /** Number of dentries for each connection in the control filesystem */
-#define FUSE_CTL_NUM_DENTRIES 11
+#define FUSE_CTL_NUM_DENTRIES 13
 
 #define FUSE_QUOTA_PER_BGQUEUE	2
 #define FUSE_BG_HASH_BITS	7
@@ -613,6 +613,12 @@ struct fuse_bg_table {
 
 	/* The next background queue to use the shared quota */
 	unsigned int next_queue_index;
+
+	/* Maximum number of background requests */
+	unsigned int max_background;
+
+	/* Maximum number of reserved quota for each background queue */
+	unsigned int reserved_background;
 };
 
 /**
