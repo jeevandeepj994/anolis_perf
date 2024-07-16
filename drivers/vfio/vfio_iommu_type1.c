@@ -1370,7 +1370,7 @@ static int vfio_dma_do_unmap(struct vfio_iommu *iommu,
 	mutex_lock(&iommu->lock);
 
 	/* Cannot update vaddr if mdev is present. */
-	if (invalidate_vaddr && !list_empty(&iommu->external_domain->group_list)) {
+	if (invalidate_vaddr && iommu->external_domain) {
 		ret = -EBUSY;
 		goto unlock;
 	}
@@ -3017,7 +3017,7 @@ static bool vfio_iommu_has_emulated(struct vfio_iommu *iommu)
 	bool ret;
 
 	mutex_lock(&iommu->lock);
-	ret = !list_empty(&iommu->external_domain->group_list);
+	ret = !!iommu->external_domain;
 	mutex_unlock(&iommu->lock);
 	return ret;
 }
