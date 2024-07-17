@@ -2645,6 +2645,7 @@ static int fuse_device_recover(struct file *file, void __user *argp,
 		if (copy_to_user(argp, attach, sizeof(*attach)))
 			return -EFAULT;
 
+		atomic64_inc(&fc->fo_version);
 		return fuse_device_clone(fc, file);
 	}
 	return -ENODEV;
