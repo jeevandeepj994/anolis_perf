@@ -1779,7 +1779,7 @@ void __free_pages_core(struct page *page, unsigned int order)
 	atomic_long_add(nr_pages, &page_zone(page)->managed_pages);
 
 	if (page_contains_unaccepted(page, order)) {
-		if (order == MAX_ORDER && __free_unaccepted(page))
+		if (order == MAX_ORDER - 1 && __free_unaccepted(page))
 			return;
 
 		accept_page(page, order);
@@ -1930,10 +1930,11 @@ static void __init deferred_free_range(unsigned long pfn,
 	page = pfn_to_page(pfn);
 
 	/* Free a large naturally-aligned chunk if possible */
-	if (nr_pages == pageblock_nr_pages &&
-	    (pfn & (pageblock_nr_pages - 1)) == 0) {
-		set_pageblock_migratetype(page, MIGRATE_MOVABLE);
-		__free_pages_core(page, pageblock_order);
+	if (nr_pages == MAX_ORDER_NR_PAGES &&
+	    (pfn & (MAX_ORDER_NR_PAGES - 1)) == 0) {
+		for (i = 0; i < nr_pages; i += pageblock_nr_pages)
+			set_pageblock_migratetype(page + i, MIGRATE_MOVABLE);
+		__free_pages_core(page, MAX_ORDER - 1);
 		return;
 	}
 
@@ -1971,7 +1972,7 @@ static inline bool __init deferred_pfn_valid(unsigned long pfn)
 {
 	if (!pfn_valid_within(pfn))
 		return false;
-	if (!(pfn & (pageblock_nr_pages - 1)) && !pfn_valid(pfn))
+	if (!(pfn & (MAX_ORDER_NR_PAGES - 1)) && !pfn_valid(pfn))
 		return false;
 	return true;
 }
@@ -1983,7 +1984,7 @@ static inline bool __init deferred_pfn_valid(unsigned long pfn)
 static void __init deferred_free_pages(unsigned long pfn,
 				       unsigned long end_pfn)
 {
-	unsigned long nr_pgmask = pageblock_nr_pages - 1;
+	unsigned long nr_pgmask = MAX_ORDER_NR_PAGES - 1;
 	unsigned long nr_free = 0;
 
 	for (; pfn < end_pfn; pfn++) {
@@ -9634,9 +9635,9 @@ static bool try_to_accept_memory_one(struct zone *zone)
 	__mod_zone_page_state(zone, NR_UNACCEPTED, -MAX_ORDER_NR_PAGES);
 	spin_unlock_irqrestore(&zone->lock, flags);
 
-	accept_page(page, MAX_ORDER);
+	accept_page(page, MAX_ORDER - 1);
 
-	__free_pages_ok(page, MAX_ORDER, FPI_TO_TAIL);
+	__free_pages_ok(page, MAX_ORDER - 1, FPI_TO_TAIL);
 
 	if (last)
 		static_branch_dec(&zones_with_unaccepted_pages);
