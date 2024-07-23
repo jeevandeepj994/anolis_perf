@@ -1,0 +1,6 @@
+* Tue Jul 23 2024 Qinyun Tan <qinyuntan@linux.alibaba.com> [5.10.134-1.git.925f5a09b9bd%%DIST%%]
+- sched/core: Fix RQCF_ACT_SKIP leak (Hao Jia)
+- anolis: sched/fair: fix invalid ID_ABSOLUTE_EXPEL without CONFIG_SCHED_SMT (Cruz Zhao)
+- anolis: sched/fair: fix underclass unscheduled after ID_ABSOLUTE_EXPEL turned off (Cruz Zhao)
+- anolis: sched/fair: optimize ID_LOAD_BALANCE to rescue underclass (Cruz Zhao)
+
