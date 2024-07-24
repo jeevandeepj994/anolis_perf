@@ -29,8 +29,6 @@ MODULE_ALIAS("devname:fuse");
 #define FUSE_INT_REQ_BIT (1ULL << 0)
 #define FUSE_REQ_ID_STEP (1ULL << 1)
 
-#define DEFAULT_BG_QUEUE	READ
-
 static struct kmem_cache *fuse_req_cachep;
 
 static struct fuse_dev *fuse_get_dev(struct file *file)
@@ -259,72 +257,247 @@ void fuse_queue_forget(struct fuse_conn *fc, struct fuse_forget_link *forget,
 	}
 }
 
-static void fuse_add_bg_queue(struct fuse_conn *fc, struct fuse_req *req)
+static unsigned int fuse_bgqueue_type(struct fuse_req *req)
 {
-	if (fc->separate_background) {
-		if (req->args->opcode == FUSE_WRITE)
-			list_add_tail(&req->list, &fc->bg_queue[WRITE]);
-		else
-			list_add_tail(&req->list, &fc->bg_queue[READ]);
-	} else {
-		/* default to one single background queue */
-		list_add_tail(&req->list, &fc->bg_queue[DEFAULT_BG_QUEUE]);
+	return req->args->opcode == FUSE_WRITE ? FUSE_BG_WRITE : FUSE_BG_DEFAULT;
+}
+
+static unsigned int fuse_ihash(u64 nodeid)
+{
+	return hash_long(nodeid, FUSE_BG_HASH_BITS);
+}
+
+static unsigned int fuse_hash_index_conflict(struct fuse_conn *fc,
+		unsigned int type, unsigned int start)
+{
+	struct fuse_bg_table *table = &fc->bg_table[type];
+	unsigned int candidate = start;
+	unsigned int lowest_pending = table->bg_queue[start].pending;
+	unsigned int next = (start + 1) & FUSE_BG_HASH_MASK;
+
+	while (next != start) {
+		unsigned int pending = table->bg_queue[next].pending;
+
+		if (!pending)
+			return next;
+		if (pending < lowest_pending) {
+			candidate = next;
+			lowest_pending = pending;
+		}
+		next = (next + 1) & FUSE_BG_HASH_MASK;
+	}
+	return candidate;
+}
+
+static unsigned int fuse_hash_index(struct fuse_conn *fc,
+		struct fuse_req *req, unsigned int type)
+{
+	unsigned int index = fuse_ihash(req->args->nodeid);
+
+	/* find an empty slot (if any) if hash conflicts */
+	if (fc->bg_table[type].bg_queue[index].pending)
+		index = fuse_hash_index_conflict(fc, type, index);
+	return index;
+}
+
+static unsigned int fuse_bgqueue_index(struct fuse_conn *fc,
+		struct fuse_req *req, unsigned int type)
+{
+	struct fuse_inode *fi = req->args->fi;
+
+	/* fast path: reuse cached index if any */
+	if (fi) {
+		fi->bg_queue_active[type]++;
+		if (fi->bg_queue_index[type] == FUSE_BG_INDEX_NONE)
+			fi->bg_queue_index[type] = fuse_hash_index(fc, req, type);
+		return fi->bg_queue_index[type];
 	}
 
+	/* slow path: calculate index from hash */
+	return fuse_hash_index(fc, req, type);
+}
+
+static void fuse_add_sbg_queue(struct fuse_conn *fc, struct fuse_req *req)
+{
+	unsigned int type = fuse_bgqueue_type(req);
+	unsigned int index = fuse_bgqueue_index(fc, req, type);
+	struct fuse_bg_queue *bg_queue = &fc->bg_table[type].bg_queue[index];
+
+	req->bg_queue_index = index;
+	list_add_tail(&req->list, &bg_queue->queue);
+	bg_queue->pending++;
+}
+
+static void fuse_add_bg_queue(struct fuse_conn *fc, struct fuse_req *req)
+{
+	if (!fc->separate_background)
+		list_add_tail(&req->list, &fc->bg_queue);
+	else
+		fuse_add_sbg_queue(fc, req);
+}
+
+static unsigned int fuse_req_numpages(struct fuse_req *req)
+{
+	struct fuse_args_pages *ap = container_of(req->args, typeof(*ap), args);
+
+	return ap->num_pages;
+}
+
+static void fuse_dec_active_sbg(struct fuse_conn *fc, struct fuse_req *req)
+{
+	unsigned int type = fuse_bgqueue_type(req);
+	struct fuse_bg_table *table = &fc->bg_table[type];
+	struct fuse_inode *fi = req->args->fi;
+
+	if (test_bit(FR_RESERVED_QUOTA, &req->flags))
+		table->bg_queue[req->bg_queue_index].active--;
+	else {
+		table->active_background--;
+		if (req->args->opcode == FUSE_WRITE)
+			table->active_background_pages -= fuse_req_numpages(req);
+	}
+
+	if (fi && !--fi->bg_queue_active[type])
+		fi->bg_queue_index[type] = FUSE_BG_INDEX_NONE;
 }
 
 static void fuse_dec_active_bg(struct fuse_conn *fc, struct fuse_req *req)
 {
-	if (fc->separate_background) {
-		if (req->args->opcode == FUSE_WRITE)
-			fc->active_background[WRITE]--;
-		else
-			fc->active_background[READ]--;
-	} else {
-		/* default to one single count */
-		fc->active_background[DEFAULT_BG_QUEUE]--;
+	if (!fc->separate_background)
+		fc->active_background--;
+	else
+		fuse_dec_active_sbg(fc, req);
+}
+
+static void fuse_queue_request(struct fuse_conn *fc, struct fuse_req *req)
+{
+	struct fuse_iqueue *fiq = &fc->iq;
+
+	spin_lock(&fiq->lock);
+	req->in.h.unique = fuse_get_unique(fiq);
+	queue_request_and_unlock(fiq, req);
+}
+
+static void fuse_flush_sbg_queue_reserved(struct fuse_conn *fc, unsigned int type)
+{
+	struct fuse_bg_table *table = &fc->bg_table[type];
+	int i;
+
+	for (i = 0; i < FUSE_BG_HASH_SIZE; i++) {
+		struct fuse_bg_queue *bg_queue = &table->bg_queue[i];
+
+		while (bg_queue->active < table->reserved_background &&
+		       !list_empty(&bg_queue->queue)) {
+			struct fuse_req *req;
+
+			req = list_first_entry(&bg_queue->queue, struct fuse_req, list);
+			list_del(&req->list);
+			__set_bit(FR_RESERVED_QUOTA, &req->flags);
+			bg_queue->active++;
+			bg_queue->pending--;
+			fuse_queue_request(fc, req);
+		}
 	}
 }
 
-/* bg_queue needs to be further flushed when true returned */
-static bool do_flush_bg_queue(struct fuse_conn *fc, unsigned int index,
-			      unsigned int batch)
+/*
+ * Iterate all bg_queues, with each queue consuming at maximum batch (i.e.
+ * FUSE_DEFAULT_MAX_BACKGROUND) quotas.
+ *
+ * Return true if there's any pending request remained after one round, false
+ * otherwise.
+ */
+static bool fuse_flush_sbg_queue_shared(struct fuse_conn *fc, unsigned int type)
 {
-	struct fuse_iqueue *fiq = &fc->iq;
-	struct fuse_req *req;
-	unsigned int count = 0;
+	struct fuse_bg_table *table = &fc->bg_table[type];
+	unsigned int start_queue = table->next_queue_index;
+	unsigned int batch = FUSE_DEFAULT_MAX_BACKGROUND;
+	bool again = false;
 
-	while (fc->active_background[index] < fc->max_background &&
-	       !list_empty(&fc->bg_queue[index])) {
-		if (batch && count++ == batch)
-			return true;
-		req = list_first_entry(&fc->bg_queue[index],
-				struct fuse_req, list);
+	do {
+		unsigned int count = 0;
+		unsigned int index = table->next_queue_index;
+		struct fuse_bg_queue *bg_queue = &table->bg_queue[index];
+
+		index = (index + 1) & FUSE_BG_HASH_MASK;
+
+		while (!list_empty(&bg_queue->queue)) {
+			struct fuse_req *req;
+
+			/*
+			 * Don't bump the next_queue_index if current bg_queue
+			 * has not comsumed any quota.  Otherwise bump the index
+			 * even when the whole batch has not been used up.
+			 */
+			if (table->active_background >= table->max_background) {
+				if (count)
+					table->next_queue_index = index;
+				return false;
+			}
+			if (count == batch) {
+				again = true;
+				break;
+			}
+
+			req = list_first_entry(&bg_queue->queue, struct fuse_req, list);
+			if (type == FUSE_BG_WRITE) {
+				if (table->active_background_pages + fuse_req_numpages(req) >
+						table->max_background_pages)
+					return false;
+				table->active_background_pages += fuse_req_numpages(req);
+			}
+
+			list_del(&req->list);
+			table->active_background++;
+			bg_queue->pending--;
+			count++;
+			fuse_queue_request(fc, req);
+		}
+
+		table->next_queue_index = index;
+	} while (table->next_queue_index != start_queue);
+
+	return again;
+}
+
+static void fuse_do_flush_sbg_queue(struct fuse_conn *fc, unsigned int type)
+{
+	bool retry;
+
+	/* first try each bg_queue's reserved quota */
+	fuse_flush_sbg_queue_reserved(fc, type);
+
+	/* then compete for the shared quota */
+	do {
+		retry = fuse_flush_sbg_queue_shared(fc, type);
+	} while (retry);
+}
+
+static void fuse_flush_sbg_queue(struct fuse_conn *fc)
+{
+	fuse_do_flush_sbg_queue(fc, FUSE_BG_DEFAULT);
+	fuse_do_flush_sbg_queue(fc, FUSE_BG_WRITE);
+}
+
+static void fuse_flush_bg_queue(struct fuse_conn *fc)
+{
+	while (fc->active_background < fc->max_background &&
+	       !list_empty(&fc->bg_queue)) {
+		struct fuse_req *req;
+
+		req = list_first_entry(&fc->bg_queue, struct fuse_req, list);
 		list_del(&req->list);
-		fc->active_background[index]++;
-		spin_lock(&fiq->lock);
-		req->in.h.unique = fuse_get_unique(fiq);
-		queue_request_and_unlock(fiq, req);
+		fc->active_background++;
+		fuse_queue_request(fc, req);
 	}
-	return false;
 }
 
 static void flush_bg_queue(struct fuse_conn *fc)
 {
-	if (!fc->separate_background) {
-		do_flush_bg_queue(fc, DEFAULT_BG_QUEUE, 0);
-	} else {
-		bool proceed_write = true, proceed_other = true;
-
-		do {
-			if (proceed_other)
-				proceed_other = do_flush_bg_queue(fc, READ,
-					FUSE_DEFAULT_MAX_BACKGROUND);
-			if (proceed_write)
-				proceed_write = do_flush_bg_queue(fc, WRITE,
-					FUSE_DEFAULT_MAX_BACKGROUND);
-		} while (proceed_other || proceed_write);
-	}
+	if (!fc->separate_background)
+		fuse_flush_bg_queue(fc);
+	else
+		fuse_flush_sbg_queue(fc);
 }
 
 static void fuse_update_stats(struct fuse_conn *fc, struct fuse_req *req)
@@ -2360,6 +2533,10 @@ void fuse_abort_conn(struct fuse_conn *fc)
 		spin_lock(&fc->bg_lock);
 		fc->blocked = 0;
 		fc->max_background = UINT_MAX;
+		fc->bg_table[FUSE_BG_DEFAULT].max_background = UINT_MAX;
+		fc->bg_table[FUSE_BG_WRITE].max_background = UINT_MAX;
+		fc->bg_table[FUSE_BG_DEFAULT].max_background_pages = UINT_MAX;
+		fc->bg_table[FUSE_BG_WRITE].max_background_pages = UINT_MAX;
 		flush_bg_queue(fc);
 		spin_unlock(&fc->bg_lock);
 

@@ -350,6 +350,14 @@ void fuse_change_attributes(struct inode *inode, struct fuse_attr *attr,
 		fuse_dax_dontcache(inode, attr->flags);
 }
 
+static void fuse_inode_common_init(struct inode *inode)
+{
+	struct fuse_inode *fi = get_fuse_inode(inode);
+
+	fi->bg_queue_index[FUSE_BG_DEFAULT] = FUSE_BG_INDEX_NONE;
+	fi->bg_queue_index[FUSE_BG_WRITE] = FUSE_BG_INDEX_NONE;
+}
+
 static void fuse_init_inode(struct inode *inode, struct fuse_attr *attr)
 {
 	inode->i_mode = attr->mode & S_IFMT;
@@ -358,6 +366,7 @@ static void fuse_init_inode(struct inode *inode, struct fuse_attr *attr)
 	inode->i_mtime.tv_nsec = attr->mtimensec;
 	inode->i_ctime.tv_sec  = attr->ctime;
 	inode->i_ctime.tv_nsec = attr->ctimensec;
+	fuse_inode_common_init(inode);
 	if (S_ISREG(inode->i_mode)) {
 		fuse_init_common(inode);
 		fuse_init_file_inode(inode, attr->flags);
@@ -778,6 +787,21 @@ static void fuse_iqueue_init(struct fuse_iqueue *fiq,
 	fiq->priv = priv;
 }
 
+static void fuse_sbg_queue_init(struct fuse_conn *fc)
+{
+	unsigned int i, j;
+
+	for (i = 0; i < FUSE_BG_TYPES; i++) {
+		struct fuse_bg_table *table = &fc->bg_table[i];
+
+		for (j = 0; j < FUSE_BG_HASH_SIZE; j++)
+			INIT_LIST_HEAD(&table->bg_queue[j].queue);
+
+		table->reserved_background = UINT_MAX;
+		table->max_background_pages = UINT_MAX;
+	}
+}
+
 static void fuse_pqueue_init(struct fuse_pqueue *fpq)
 {
 	unsigned int i;
@@ -802,8 +826,8 @@ void fuse_conn_init(struct fuse_conn *fc, struct fuse_mount *fm,
 	atomic_set(&fc->dev_count, 1);
 	init_waitqueue_head(&fc->blocked_waitq);
 	fuse_iqueue_init(&fc->iq, fiq_ops, fiq_priv);
-	INIT_LIST_HEAD(&fc->bg_queue[READ]);
-	INIT_LIST_HEAD(&fc->bg_queue[WRITE]);
+	fuse_sbg_queue_init(fc);
+	INIT_LIST_HEAD(&fc->bg_queue);
 	INIT_LIST_HEAD(&fc->entry);
 	INIT_LIST_HEAD(&fc->devices);
 	idr_init(&fc->passthrough_req);
@@ -1072,6 +1096,23 @@ static int set_global_limit(const char *val, const struct kernel_param *kp)
 	return 0;
 }
 
+/* initialize sbg limits from max_background if not configured with fusectl yet */
+static void fuse_init_sbg_limits(struct fuse_conn *fc)
+{
+	int type;
+
+	for (type = 0; type < FUSE_BG_TYPES; type++) {
+		struct fuse_bg_table *table = &fc->bg_table[type];
+
+		if (!table->max_background)
+			table->max_background = fc->max_background;
+
+		if (table->reserved_background == UINT_MAX)
+			table->reserved_background =
+				fc->max_background / FUSE_BG_HASH_SIZE;
+	}
+}
+
 static void process_init_limits(struct fuse_conn *fc, struct fuse_init_out *arg)
 {
 	int cap_sys_admin = capable(CAP_SYS_ADMIN);
@@ -1096,6 +1137,7 @@ static void process_init_limits(struct fuse_conn *fc, struct fuse_init_out *arg)
 		    fc->congestion_threshold > max_user_congthresh)
 			fc->congestion_threshold = max_user_congthresh;
 	}
+	fuse_init_sbg_limits(fc);
 	spin_unlock(&fc->bg_lock);
 }
 

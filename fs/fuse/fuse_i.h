@@ -49,7 +49,18 @@
 #define FUSE_NAME_MAX 1024
 
 /** Number of dentries for each connection in the control filesystem */
-#define FUSE_CTL_NUM_DENTRIES 11
+#define FUSE_CTL_NUM_DENTRIES 14
+
+#define FUSE_QUOTA_PER_BGQUEUE	2
+#define FUSE_BG_HASH_BITS	7
+#define FUSE_BG_HASH_SIZE	(1 << FUSE_BG_HASH_BITS)
+#define FUSE_BG_HASH_MASK	(FUSE_BG_HASH_SIZE - 1)
+
+enum fuse_bgqueue_type {
+	FUSE_BG_DEFAULT,	/* Opcodes other than FUSE_WRITE */
+	FUSE_BG_WRITE,
+	FUSE_BG_TYPES
+};
 
 /** List of active connections */
 extern struct list_head fuse_conn_list;
@@ -184,6 +195,10 @@ struct fuse_inode {
 	 */
 	struct fuse_inode_dax *dax;
 #endif
+
+#define FUSE_BG_INDEX_NONE	(-1)
+	int bg_queue_index[FUSE_BG_TYPES];
+	unsigned int bg_queue_active[FUSE_BG_TYPES];
 };
 
 /** FUSE inode state bits */
@@ -309,6 +324,7 @@ struct fuse_args {
 	struct fuse_in_arg in_args[3];
 	struct fuse_arg out_args[2];
 	void (*end)(struct fuse_mount *fm, struct fuse_args *args, int error);
+	struct fuse_inode *fi;
 };
 
 struct fuse_args_pages {
@@ -373,6 +389,7 @@ enum fuse_req_flag {
 	FR_FINISHED,
 	FR_PRIVATE,
 	FR_ASYNC,
+	FR_RESERVED_QUOTA,
 };
 
 /**
@@ -422,6 +439,8 @@ struct fuse_req {
 
 	/** fuse_mount this request belongs to */
 	struct fuse_mount *fm;
+
+	unsigned int bg_queue_index;
 };
 
 struct fuse_iqueue;
@@ -581,6 +600,36 @@ struct fuse_stats {
 	atomic64_t req_cnts[FUSE_OP_MAX];
 };
 
+struct fuse_bg_queue {
+	struct list_head	queue;
+	unsigned int		active;
+	unsigned int		pending;
+};
+
+/* Separate background queue for background requests. */
+struct fuse_bg_table {
+	/* The list of background requests */
+	struct fuse_bg_queue bg_queue[FUSE_BG_HASH_SIZE];
+
+	/* Number of background requests */
+	unsigned int active_background;
+
+	/* The next background queue to use the shared quota */
+	unsigned int next_queue_index;
+
+	/* Maximum number of background requests */
+	unsigned int max_background;
+
+	/* Maximum number of reserved quota for each background queue */
+	unsigned int reserved_background;
+
+	/* Total size of inflight background requests in pages */
+	unsigned int active_background_pages;
+
+	/* Maximum total size of outstanding background requests in pages */
+	unsigned int max_background_pages;
+};
+
 /**
  * A Fuse connection.
  *
@@ -645,18 +694,14 @@ struct fuse_conn {
 	/** Number of requests currently in the background */
 	unsigned num_background;
 
-	/*
-	 * Number of background requests currently queued for userspace.
-	 * active_background[WRITE] for WRITE requests, and
-	 * active_background[READ] for others.
-	 */
-	unsigned active_background[2];
+	/** Number of background requests currently queued for userspace */
+	unsigned active_background;
 
-	/*
-	 * The list of background requests set aside for later queuing.
-	 * bg_queue[WRITE] for WRITE requests, bg_queue[READ] for others.
-	 */
-	struct list_head bg_queue[2];
+	/** The list of background requests set aside for later queuing */
+	struct list_head bg_queue;
+
+	/* The separate background queue when FUSE_SEPARATE_BACKGROUND enabled */
+	struct fuse_bg_table bg_table[FUSE_BG_TYPES];
 
 	/** Protects: max_background, congestion_threshold, num_background,
 	 * active_background, bg_queue, blocked */
