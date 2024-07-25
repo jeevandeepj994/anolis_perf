@@ -37,6 +37,21 @@ static unsigned long get_new_vpn_context(struct kvm_vcpu *vcpu, long cpu)
 	return next;
 }
 
+int kvm_arch_set_irq_inatomic(struct kvm_kernel_irq_routing_entry *e,
+		struct kvm *kvm, int irq_source_id,
+		int level, bool line_status)
+{
+	switch (e->type) {
+	case KVM_IRQ_ROUTING_MSI:
+		if (!kvm_set_msi(e, kvm, irq_source_id, level, line_status))
+			return 0;
+		break;
+	default:
+		break;
+	}
+	return -EWOULDBLOCK;
+}
+
 int vcpu_interrupt_line(struct kvm_vcpu *vcpu, int number, bool level)
 {
 	set_bit(number, (vcpu->arch.irqs_pending));
@@ -164,6 +179,12 @@ struct dfx_sw64_kvm_stats_debugfs_item dfx_sw64_debugfs_entries[] = {
 
 int kvm_arch_vcpu_runnable(struct kvm_vcpu *vcpu)
 {
+	if (vcpu->arch.restart)
+		return 1;
+
+	if (vcpu->arch.vcb.vcpu_irq_disabled)
+		return 0;
+
 	return ((!bitmap_empty(vcpu->arch.irqs_pending, SWVM_IRQS) || !vcpu->arch.halted)
 			&& !vcpu->arch.power_off);
 }

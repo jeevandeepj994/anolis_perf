@@ -2,6 +2,7 @@
 
 #include <linux/init.h>
 #include <linux/acpi.h>
+#include <linux/kvm_host.h>
 #include <linux/irqdomain.h>
 #include <linux/memblock.h>
 #include <linux/smp.h>
@@ -223,7 +224,7 @@ int acpi_unmap_cpu(int cpu)
 EXPORT_SYMBOL(acpi_unmap_cpu);
 #endif /* CONFIG_ACPI_HOTPLUG_CPU */
 
-static bool __init is_rcid_duplicate(int rcid)
+bool __init is_rcid_duplicate(int rcid)
 {
 	int i;
 
@@ -246,14 +247,14 @@ setup_rcid_and_core_mask(struct acpi_madt_sw_cintc *sw_cintc)
 	 * represents the maximum number of cores in the system.
 	 */
 	if (possible_cores >= nr_cpu_ids) {
-		pr_err(PREFIX "Max core num [%u] reached, core [0x%x] ignored\n",
-			nr_cpu_ids, rcid);
+		pr_err(PREFIX "Core [0x%x] exceeds max core num [%u]\n",
+			rcid, nr_cpu_ids);
 		return -ENODEV;
 	}
 
 	/* The rcid of each core is unique */
 	if (is_rcid_duplicate(rcid)) {
-		pr_err(PREFIX "Duplicate core [0x%x] in MADT\n", rcid);
+		pr_err(PREFIX "Duplicate core [0x%x]\n", rcid);
 		return -EINVAL;
 	}
 
@@ -327,6 +328,17 @@ static int __init acpi_process_madt_sw_cintc(void)
 	/* Clean core mask */
 	init_cpu_possible(cpu_none_mask);
 	init_cpu_present(cpu_none_mask);
+
+#ifdef CONFIG_SUBARCH_C4
+	/* Set cpu_offline mask */
+	if (is_guest_or_emul()) {
+		int vt_smp_cpu_num;
+
+		vt_smp_cpu_num = sw64_io_read(0, VT_ONLINE_CPU);
+		for (i = vt_smp_cpu_num; i < KVM_MAX_VCPUS; i++)
+			cpumask_set_cpu(i, &cpu_offline);
+	}
+#endif
 
 	/* Parse SW CINTC entries one by one */
 	ret = acpi_table_parse_madt(ACPI_MADT_TYPE_SW_CINTC,
