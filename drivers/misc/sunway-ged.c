@@ -2,6 +2,7 @@
 
 /* Generic Event Device for ACPI. */
 
+#include <linux/acpi.h>
 #include <linux/err.h>
 #include <linux/init.h>
 #include <linux/interrupt.h>
@@ -58,7 +59,7 @@ static int sunway_memory_enable_device(struct sunway_memory_device *mem_device)
 
 	lock_device_hotplug();
 	/* suppose node = 0, fix me! */
-	result = __add_memory(0, mem_device->start_addr, mem_device->length);
+	result = __add_memory(0, mem_device->start_addr, mem_device->length, MHP_NONE);
 	unlock_device_hotplug();
 	/*
 	 * If the memory block has been used by the kernel, add_memory()
@@ -236,10 +237,19 @@ static const struct of_device_id sunwayged_of_match[] = {
 };
 MODULE_DEVICE_TABLE(of, sunwayged_of_match);
 
+#ifdef CONFIG_ACPI
+static const struct acpi_device_id sunwayged_acpi_match[] = {
+	{ "SUNW1000", 0 },
+	{ }
+};
+MODULE_DEVICE_TABLE(acpi, sunwayged_acpi_match);
+#endif
+
 static struct platform_driver sunwayged_platform_driver = {
 	.driver = {
 		.name		= "sunway-ged",
 		.of_match_table	= sunwayged_of_match,
+		.acpi_match_table = ACPI_PTR(sunwayged_acpi_match),
 	},
 	.probe			= sunwayged_probe,
 	.remove			= sunwayged_remove,

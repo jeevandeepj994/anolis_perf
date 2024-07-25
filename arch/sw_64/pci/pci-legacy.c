@@ -84,7 +84,7 @@ void __init common_init_pci(void)
 			continue;
 		hose->busn_space->start = last_bus;
 		init_busnr = (0xff << 16) + ((last_bus + 1) << 8) + (last_bus);
-		write_rc_conf(hose->node, hose->index, RC_PRIMARY_BUS, init_busnr);
+		writel(init_busnr, (hose->rc_config_space_base + RC_PRIMARY_BUS));
 		offset = hose->mem_space->start - PCI_32BIT_MEMIO;
 		if (is_in_host())
 			hose->first_busno = last_bus + 1;
@@ -117,10 +117,10 @@ void __init common_init_pci(void)
 				last_bus++;
 
 		hose->last_busno = hose->busn_space->end = last_bus;
-		init_busnr = read_rc_conf(hose->node, hose->index, RC_PRIMARY_BUS);
+		init_busnr = readl(hose->rc_config_space_base + RC_PRIMARY_BUS);
 		init_busnr &= ~(0xff << 16);
 		init_busnr |= last_bus << 16;
-		write_rc_conf(hose->node, hose->index, RC_PRIMARY_BUS, init_busnr);
+		writel(init_busnr, (hose->rc_config_space_base + RC_PRIMARY_BUS));
 		pci_bus_update_busn_res_end(bus, last_bus);
 		last_bus++;
 	}
@@ -228,9 +228,9 @@ sw64_init_host(unsigned long node, unsigned long index)
 	sw64_chip_init->pci_init.hose_init(hose);
 
 	if (sw64_chip_init->pci_init.set_rc_piu)
-		sw64_chip_init->pci_init.set_rc_piu(node, index);
+		sw64_chip_init->pci_init.set_rc_piu(hose);
 
-	ret = sw64_chip_init->pci_init.check_pci_linkup(node, index);
+	ret = sw64_chip_init->pci_init.check_pci_linkup(hose);
 	if (ret == 0) {
 		/* Root Complex downstream port is link up */
 		pci_mark_rc_linkup(node, index); // 8-bit per node
@@ -303,47 +303,6 @@ void __init sw64_init_arch(void)
 }
 
 void __weak set_pcieport_service_irq(int node, int index) {}
-
-static void __init sw64_init_intx(struct pci_controller *hose)
-{
-	unsigned long int_conf, node, val_node;
-	unsigned long index, irq;
-	int rcid;
-
-	node = hose->node;
-	index = hose->index;
-
-	if (!node_online(node))
-		val_node = next_node_in(node, node_online_map);
-	else
-		val_node = node;
-	irq = irq_alloc_descs_from(NR_IRQS_LEGACY, 2, val_node);
-	WARN_ON(irq < 0);
-	irq_set_chip_and_handler(irq, &dummy_irq_chip, handle_level_irq);
-	irq_set_status_flags(irq, IRQ_LEVEL);
-	hose->int_irq = irq;
-	irq_set_chip_and_handler(irq + 1, &dummy_irq_chip, handle_level_irq);
-	hose->service_irq = irq + 1;
-	rcid = cpu_to_rcid(0);
-
-	printk_once(KERN_INFO "INTx are directed to node %d core %d.\n",
-			((rcid >> 6) & 0x3), (rcid & 0x1f));
-	int_conf = 1UL << 62 | rcid; /* rebase all intx on the first logical cpu */
-	if (sw64_chip_init->pci_init.set_intx)
-		sw64_chip_init->pci_init.set_intx(node, index, int_conf);
-
-	set_pcieport_service_irq(node, index);
-}
-
-void __init sw64_init_irq(void)
-{
-	struct pci_controller *hose;
-
-	/* Scan all of the recorded PCI controllers. */
-	hose = hose_head;
-	for (hose = hose_head; hose; hose = hose->next)
-		sw64_init_intx(hose);
-}
 
 void __init
 sw64_init_pci(void)

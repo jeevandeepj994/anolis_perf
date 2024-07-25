@@ -8,19 +8,19 @@
 
 #include <asm/early_ioremap.h>
 
-int acpi_disabled = 1;
+int acpi_disabled;
 EXPORT_SYMBOL(acpi_disabled);
 
-int acpi_noirq = 1;		/* skip ACPI IRQ initialization */
-int acpi_pci_disabled = 1;	/* skip ACPI PCI scan and IRQ initialization */
+int acpi_noirq;		/* skip ACPI IRQ initialization */
+int acpi_pci_disabled;	/* skip ACPI PCI scan and IRQ initialization */
 EXPORT_SYMBOL(acpi_pci_disabled);
 
 static bool param_acpi_on  __initdata;
 static bool param_acpi_off __initdata;
 
-static unsigned int possible_cores = 1; /* number of possible cores(at least boot core) */
-static unsigned int present_cores = 1;  /* number of present cores(at least boot core) */
-static unsigned int disabled_cores;     /* number of disabled cores */
+static unsigned int possible_cores; /* number of possible cores */
+static unsigned int present_cores;  /* number of present cores */
+static unsigned int disabled_cores; /* number of disabled cores */
 
 int acpi_strict;
 u64 arch_acpi_wakeup_start;
@@ -257,12 +257,6 @@ setup_rcid_and_core_mask(struct acpi_madt_sw_cintc *sw_cintc)
 		return -EINVAL;
 	}
 
-	/* We can never disable the boot core, whose rcid is 0 */
-	if ((rcid == 0) && !is_core_enabled(sw_cintc->flags)) {
-		pr_err(PREFIX "Boot core disabled in MADT\n");
-		return -EINVAL;
-	}
-
 	/* Online capable makes core possible */
 	if (!is_core_enabled(sw_cintc->flags) &&
 			!is_core_online_capable(sw_cintc->flags)) {
@@ -270,13 +264,9 @@ setup_rcid_and_core_mask(struct acpi_madt_sw_cintc *sw_cintc)
 		return 0;
 	}
 
-	rcid_information_init(sw_cintc->version);
+	logical_core_id = possible_cores++;
 
-	/* The logical core ID of the boot core must be 0 */
-	if (rcid == 0)
-		logical_core_id = 0;
-	else
-		logical_core_id = possible_cores++;
+	rcid_information_init(sw_cintc->version);
 
 	set_rcid_map(logical_core_id, rcid);
 	set_cpu_possible(logical_core_id, true);
@@ -291,8 +281,7 @@ setup_rcid_and_core_mask(struct acpi_madt_sw_cintc *sw_cintc)
 	if (is_core_enabled(sw_cintc->flags) &&
 			!cpumask_test_cpu(logical_core_id, &cpu_offline)) {
 		set_cpu_present(logical_core_id, true);
-		if (logical_core_id != 0)
-			present_cores++;
+		present_cores++;
 	}
 
 	return 0;
@@ -365,12 +354,18 @@ void __init acpi_boot_table_init(void)
 	}
 
 	/**
-	 * ACPI is disabled by default.
-	 * ACPI is only enabled when firmware passes ACPI table
-	 * and sets boot parameter "acpi=on".
+	 * ACPI is enabled by default.
+	 *
+	 * ACPI is disabled only when firmware explicitly passes
+	 * the boot cmdline "acpi=off".
+	 *
+	 * Note: If no valid ACPI table is found, it will eventually
+	 * be disabled.
 	 */
 	if (param_acpi_on)
 		enable_acpi();
+	else if (param_acpi_off)
+		disable_acpi();
 
 	/*
 	 * If acpi_disabled, bail out

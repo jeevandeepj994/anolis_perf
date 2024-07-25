@@ -52,23 +52,19 @@ bool find_free_cpu_vector(const struct cpumask *search_mask,
 
 	cpu = cpumask_first(search_mask);
 try_again:
-	if (is_guest_or_emul()) {
-		vector = IRQ_PENDING_MSI_VECTORS_SHIFT;
-		max_vector = SWVM_IRQS;
-	} else {
-		vector = 0;
-		max_vector = 256;
-	}
+	vector = 0;
+	max_vector = 256;
 	for (; vector < max_vector; vector++) {
 		while (per_cpu(vector_irq, cpu)[vector]) {
 			cpu = cpumask_next(cpu, search_mask);
 			if (cpu >= nr_cpu_ids) {
 				if (vector == 255) {
 					if (find_once_global) {
-						printk("No global free vector\n");
+						pr_info("No global free vector\n");
 						return false;
 					}
-					printk("No local free vector\n");
+					pr_info("No local free vector, search_mask:%*pbl\n",
+							cpumask_pr_args(search_mask));
 					search_mask = cpu_online_mask;
 					cpu = cpumask_first(search_mask);
 					find_once_global = true;
@@ -112,10 +108,11 @@ try_again:
 		goto try_again;
 	else {
 		if (find_once_global) {
-			printk("No global free vectors\n");
+			pr_info("No global free vectors\n");
 			return found;
 		}
-		printk("No local free vectors\n");
+		pr_info("No local free vectors, search_mask:%*pbl\n",
+				cpumask_pr_args(search_mask));
 		search_mask = cpu_online_mask;
 		cpu = cpumask_first(search_mask);
 		find_once_global = true;
@@ -147,6 +144,9 @@ static int sw64_set_affinity(struct irq_data *d, const struct cpumask *cpumask, 
 	if (!cdata)
 		return -ENOMEM;
 
+	if (cdata->move_in_progress)
+		return -EBUSY;
+
 	/*
 	 * If existing target cpu is already in the new mask and is online
 	 * then do nothing.
@@ -173,13 +173,20 @@ static int sw64_set_affinity(struct irq_data *d, const struct cpumask *cpumask, 
 	/* update new setting */
 	entry = irq_get_msi_desc(irqd->irq);
 	spin_lock(&cdata->cdata_lock);
+	if (cpu_online(cdata->dst_cpu)) {
+		cdata->move_in_progress = true;
+		cdata->prev_vector = cdata->vector;
+		cdata->prev_cpu = cdata->dst_cpu;
+	} else {
+		for (i = 0; i < cdata->multi_msi; i++)
+			per_cpu(vector_irq, cdata->dst_cpu)[cdata->vector] = 0;
+	}
+
+	cdata->vector = vector;
+	cdata->dst_cpu = cpu;
 	for (i = 0; i < cdata->multi_msi; i++)
 		per_cpu(vector_irq, cpu)[vector + i] = entry->irq + i;
-	cdata->prev_vector = cdata->vector;
-	cdata->prev_cpu = cdata->dst_cpu;
-	cdata->dst_cpu = cpu;
-	cdata->vector = vector;
-	cdata->move_in_progress = true;
+
 	irq_msi_compose_msg(d, &msg);
 	__pci_write_msi_msg(entry, &msg);
 	spin_unlock(&cdata->cdata_lock);
@@ -239,7 +246,7 @@ static int __assign_irq_vector(int virq, unsigned int nr_irqs,
 
 		cdata = alloc_sw_msi_chip_data(irq_data);
 		if (!cdata) {
-			printk("error alloc irq chip data\n");
+			pr_info("error alloc irq chip data\n");
 			return -ENOMEM;
 		}
 
@@ -275,7 +282,7 @@ static int __assign_irq_vector(int virq, unsigned int nr_irqs,
 
 			cdata = alloc_sw_msi_chip_data(irq_data);
 			if (!cdata) {
-				printk("error alloc irq chip data\n");
+				pr_info("error alloc irq chip data\n");
 				return -ENOMEM;
 			}
 
@@ -335,11 +342,6 @@ static void sw64_vector_free_irqs(struct irq_domain *domain,
 
 static void sw64_irq_free_descs(unsigned int virq, unsigned int nr_irqs)
 {
-	if (is_guest_or_emul()) {
-		vt_sw64_vector_free_irqs(virq, nr_irqs);
-		return irq_free_descs(virq, nr_irqs);
-	}
-
 	return irq_domain_free_irqs(virq, nr_irqs);
 }
 
@@ -437,7 +439,7 @@ void arch_init_msi_domain(struct irq_domain *parent)
 	struct irq_domain *sw64_irq_domain;
 
 	if (is_guest_or_emul())
-		return;
+		return sw64_init_vt_msi_domain(parent);
 
 	sw64_irq_domain = irq_domain_add_tree(NULL, &sw64_msi_domain_ops, NULL);
 	BUG_ON(sw64_irq_domain == NULL);
@@ -475,13 +477,6 @@ void handle_pci_msi_interrupt(unsigned long type, unsigned long vector, unsigned
 	struct irq_data *irq_data;
 	struct sw64_msi_chip_data *cdata;
 
-	if (is_guest_or_emul()) {
-		cpu = smp_processor_id();
-		irq = per_cpu(vector_irq, cpu)[vector];
-		handle_irq(irq);
-		return;
-	}
-
 	ptr = (unsigned long *)pci_msi1_addr;
 	int_pci_msi[0] = *ptr;
 	int_pci_msi[1] = *(ptr + 1);
@@ -492,8 +487,6 @@ void handle_pci_msi_interrupt(unsigned long type, unsigned long vector, unsigned
 	for (i = 0; i < 4; i++) {
 		vector_index = i * 64;
 		while (vector != 0) {
-			int irq = 0;
-
 			msi_index = find_next_bit(&vector, 64, msi_index);
 			if (msi_index == 64) {
 				msi_index = 0;
