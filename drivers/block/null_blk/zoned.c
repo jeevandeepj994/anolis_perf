@@ -4,7 +4,7 @@
 #include "null_blk.h"
 
 #define CREATE_TRACE_POINTS
-#include "null_blk_trace.h"
+#include "trace.h"
 
 #define MB_TO_SECTS(mb) (((sector_t)mb * SZ_1M) >> SECTOR_SHIFT)
 
@@ -81,7 +81,7 @@ int null_init_zoned_dev(struct nullb_device *dev, struct request_queue *q)
 	if (dev->zone_max_active && dev->zone_max_open > dev->zone_max_active) {
 		dev->zone_max_open = dev->zone_max_active;
 		pr_info("changed the maximum number of open zones to %u\n",
-			dev->nr_zones);
+			dev->zone_max_open);
 	} else if (dev->zone_max_open >= dev->nr_zones - dev->zone_nr_conv) {
 		dev->zone_max_open = 0;
 		pr_info("zone_max_open limit disabled, limit >= zone count\n");
