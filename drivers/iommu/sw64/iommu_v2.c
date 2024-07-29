@@ -196,7 +196,7 @@ void flush_ptlb_by_addr(struct sunway_iommu_domain *sdomain, unsigned long flush
 		if (sdev->alias != sdev->devid) {
 			alias = sdev->alias;
 			bus_number = PCI_BUS_NUM(alias);
-			devfn = PCI_SLOT(alias) | PCI_FUNC(alias);
+			devfn = alias & 0xff;
 
 			address = (bus_number << 8)
 				| devfn | (flush_addr << 16);
@@ -411,7 +411,7 @@ static int set_entry_by_devid(u16 devid,
 	int node;
 
 	bus_number = PCI_BUS_NUM(devid);
-	devfn = PCI_SLOT(devid) | PCI_FUNC(devid);
+	devfn = devid & 0xff;
 
 	dte_l1 = iommu->iommu_dtbr + bus_number;
 	dte_l1_val = *dte_l1;
@@ -1390,7 +1390,7 @@ sunway_iommu_iova_to_phys(struct iommu_domain *dom, dma_addr_t iova)
 	unsigned long paddr, grn;
 	unsigned long is_last;
 
-	if (iova > SW64_BAR_ADDRESS)
+	if (iova >= SW64_BAR_ADDRESS)
 		return iova;
 
 	paddr = fetch_pte(sdomain, iova, PTE_LEVEL1_VAL);
@@ -1483,7 +1483,7 @@ sunway_iommu_unmap(struct iommu_domain *dom, unsigned long iova,
 
 	/* IOMMU v2 supports 42 bit mapped address width*/
 	if (iova >= MAX_IOVA_WIDTH) {
-		pr_err("IOMMU cannot map provided address: %lx\n", iova);
+		pr_err("Trying to unmap illegal IOVA : %lx\n", iova);
 		return -EFAULT;
 	}
 

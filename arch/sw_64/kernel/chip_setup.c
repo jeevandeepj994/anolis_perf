@@ -92,7 +92,7 @@ static void pcie_save(void)
 		piu_save->piuconfig0 = readq(piu_ior0_base + PIUCONFIG0);
 		piu_save->piuconfig1 = readq(piu_ior1_base + PIUCONFIG1);
 		piu_save->epdmabar = readq(piu_ior0_base + EPDMABAR);
-		piu_save->msiaddr = readq(piu_ior1_base + MSIADDR);
+		piu_save->msiaddr = readq(piu_ior0_base + MSIADDR);
 
 		if (IS_ENABLED(CONFIG_UNCORE_XUELANG)) {
 			for (i = 0; i < 256; i++) {
@@ -191,6 +191,9 @@ static inline void intpu_restore(void)
 	switch (cpu_desc.model) {
 	case CPU_SW831:
 		__io_write_longtime(0, saved_long_time);
+		__io_write_longtime_start_en(0, 0x1);
+		break;
+	case CPU_SW8A:
 		__io_write_longtime_start_en(0, 0x1);
 		break;
 	default:

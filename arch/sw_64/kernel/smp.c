@@ -6,12 +6,13 @@
 #include <linux/smp.h>
 #include <linux/delay.h>
 #include <linux/irq.h>
+#include <linux/irq_work.h>
 #include <linux/cpu.h>
 #include <linux/acpi.h>
 #include <linux/of.h>
 #include <linux/numa.h>
-#include <linux/kvm_host.h>
 
+#include <asm/irq_impl.h>
 #include <asm/mmu_context.h>
 #include <asm/tlbflush.h>
 #include <asm/sw64_init.h>
@@ -49,6 +50,7 @@ enum ipi_message_type {
 	IPI_RESCHEDULE,
 	IPI_CALL_FUNC,
 	IPI_CPU_STOP,
+	IPI_IRQ_WORK,
 };
 
 int smp_num_cpus = 1;		/* Number that came online.  */
@@ -152,6 +154,9 @@ void smp_callin(void)
 	current->active_mm = &init_mm;
 	/* update csr:ptbr */
 	update_ptbr_sys(virt_to_phys(init_mm.pgd));
+#ifdef CONFIG_SUBARCH_C4
+	update_ptbr_usr(__pa_symbol(empty_zero_page));
+#endif
 
 	if (IS_ENABLED(CONFIG_SUBARCH_C4) && is_in_host()) {
 		nmi_stack_page = alloc_pages_node(
@@ -162,6 +167,7 @@ void smp_callin(void)
 			(unsigned long)page_address(nmi_stack_page) : 0;
 		sw64_write_csr_imb(nmi_stack + THREAD_SIZE, CSR_NMI_STACK);
 		wrent(entNMI, 6);
+		set_nmi(INT_PC);
 	}
 
 	/* inform the notifiers about the new cpu */
@@ -316,6 +322,8 @@ static int __init fdt_setup_smp(void)
 	struct device_node *dn = NULL;
 	u64 boot_flag_address;
 	u32 rcid, logical_core_id = 0;
+	u32 online_capable = 0;
+	bool available;
 	int ret, i, version, lnode, pnode;
 
 	/* Clean the map from logical core ID to physical core ID */
@@ -326,17 +334,12 @@ static int __init fdt_setup_smp(void)
 	init_cpu_possible(cpu_none_mask);
 	init_cpu_present(cpu_none_mask);
 
-#ifdef CONFIG_SUBARCH_C4
-	if (is_guest_or_emul()) {
-		int vt_smp_cpu_num;
-
-		vt_smp_cpu_num = sw64_io_read(0, VT_ONLINE_CPU);
-		for (i = vt_smp_cpu_num; i < KVM_MAX_VCPUS; i++)
-			cpumask_set_cpu(i, &cpu_offline);
-	}
-#endif
 	while ((dn = of_find_node_by_type(dn, "cpu"))) {
-		if (!of_device_is_available(dn)) {
+		of_property_read_u32(dn, "online-capable", &online_capable);
+
+		available = of_device_is_available(dn);
+
+		if (!available && !online_capable) {
 			pr_info("OF: Core is not available\n");
 			continue;
 		}
@@ -375,7 +378,8 @@ static int __init fdt_setup_smp(void)
 		set_cpu_possible(logical_core_id, true);
 		store_cpu_data(logical_core_id);
 
-		if (!cpumask_test_cpu(logical_core_id, &cpu_offline))
+		if (!cpumask_test_cpu(logical_core_id, &cpu_offline) &&
+				available)
 			set_cpu_present(logical_core_id, true);
 
 		rcid_information_init(version);
@@ -618,6 +622,13 @@ static void ipi_cpu_stop(int cpu)
 		wait_for_interrupt();
 }
 
+#ifdef CONFIG_IRQ_WORK
+void arch_irq_work_raise(void)
+{
+	send_ipi_message(cpumask_of(smp_processor_id()), IPI_IRQ_WORK);
+}
+#endif
+
 void handle_ipi(struct pt_regs *regs)
 {
 	int cpu = smp_processor_id();
@@ -645,6 +656,10 @@ void handle_ipi(struct pt_regs *regs)
 
 			case IPI_CPU_STOP:
 				ipi_cpu_stop(cpu);
+				break;
+
+			case IPI_IRQ_WORK:
+				irq_work_run();
 				break;
 
 			default:
