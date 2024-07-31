@@ -54,6 +54,7 @@ struct erdma_ucontext {
 struct erdma_pd {
 	struct ib_pd ibpd;
 	u32 pdn;
+	struct sw_pd *sw_pd;
 };
 
 /*
@@ -224,6 +225,7 @@ struct erdma_qp_attrs {
 
 struct erdma_qp {
 	struct ib_qp ibqp;
+	struct sw_qp *sw_qp;
 	struct kref ref;
 	struct completion safe_free;
 	struct erdma_dev *dev;
@@ -282,6 +284,8 @@ struct erdma_cq {
 	};
 
 	struct erdma_dim dim;
+	bool is_soft;
+	struct sw_cq *sw_cq;
 };
 
 #define QP_ID(qp) ((qp)->ibqp.qp_num)

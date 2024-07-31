@@ -37,6 +37,8 @@ int erdma_req_notify_cq(struct ib_cq *ibcq, enum ib_cq_notify_flags flags)
 	unsigned long irq_flags;
 	int ret = 0;
 
+	if (unlikely(cq->is_soft))
+		return erdma_mad_req_notify_cq(ibcq, flags);
 
 	spin_lock_irqsave(&cq->kern_cq.lock, irq_flags);
 
@@ -196,6 +198,8 @@ int erdma_poll_cq(struct ib_cq *ibcq, int num_entries, struct ib_wc *wc)
 	unsigned long flags;
 	int npolled, ret;
 
+	if (unlikely(cq->is_soft))
+		return erdma_mad_poll_cq(ibcq, num_entries, wc);
 
 	spin_lock_irqsave(&cq->kern_cq.lock, flags);
 

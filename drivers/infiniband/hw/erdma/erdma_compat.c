@@ -1,4 +1,8 @@
-// SPDX-License-Identifier: GPL-2.0
+// SPDX-License-Identifier: GPL-2.0 OR BSD-3-Clause
+
+/* Authors: Cheng Xu <chengyou@linux.alibaba.com> */
+/*          Kai Shen <kaishen@linux.alibaba.com> */
+/* Copyright (c) 2020-2022, Alibaba Group. */
 
 #include <linux/dma-mapping.h>
 #include <linux/module.h>
@@ -10,27 +14,188 @@
 
 #include "erdma_verbs.h"
 
+#include <linux/netdevice.h>
+#include <net/netns/generic.h>
+
+struct erdma_net {
+	struct list_head erdma_list;
+	struct socket *rsvd_sock[16];
+};
+
+static unsigned int erdma_net_id;
+
 bool compat_mode;
 module_param(compat_mode, bool, 0444);
 MODULE_PARM_DESC(compat_mode, "compat mode support");
+
+bool legacy_mode;
+module_param(legacy_mode, bool, 0444);
+MODULE_PARM_DESC(legacy_mode, "legacy mode support");
 
 u16 reserve_ports_base = 0x7790;
 module_param(reserve_ports_base, ushort, 0444);
 MODULE_PARM_DESC(reserve_ports_base, "ports reserved in RoCE mode");
 
+bool use_zeronet;
+module_param(use_zeronet, bool, 0444);
+MODULE_PARM_DESC(use_zeronet, "can use zeronet");
+
+#include "compat/sw.h"
+#include "compat/sw_loc.h"
+#include "compat/sw_queue.h"
+#include "compat/sw_hw_counters.h"
+
+int erdma_create_mad_qp(struct ib_qp *ibqp, struct ib_qp_init_attr *init,
+			struct ib_udata *udata)
+{
+	struct erdma_dev *dev = to_edev(ibqp->device);
+	struct erdma_cq *scq = to_ecq(init->send_cq);
+	struct erdma_cq *rcq = to_ecq(init->recv_cq);
+	struct erdma_qp *qp = to_eqp(ibqp);
+	struct sw_dev *sw = &dev->sw_dev;
+	struct sw_qp *sw_qp;
+	int err;
+
+	if (udata)
+		return -EINVAL;
+
+	err = sw_qp_chk_init(sw, init);
+	if (err)
+		goto err1;
+
+	sw_qp = kzalloc(sizeof(*sw_qp), GFP_KERNEL);
+	if (!qp) {
+		err = -ENOMEM;
+		goto err1;
+	}
+	kref_init(&sw_qp->pelem.ref_cnt);
+	memcpy(&sw_qp->ibqp, &qp->ibqp, sizeof(qp->ibqp));
+
+	scq->is_soft = true;
+	rcq->is_soft = true;
+	qp->sw_qp = sw_qp;
+	sw_qp->master = qp;
+	sw_qp->ibqp.device = &sw->ib_dev;
+
+	err = sw_qp_from_init(sw, sw_qp, init, NULL, qp->ibqp.pd, NULL);
+	if (err)
+		goto err2;
+
+	return 0;
+
+err2:
+	kfree(sw_qp);
+err1:
+	return err;
+}
+
+void erdma_destroy_mad_qp(struct ib_qp *ibqp)
+{
+	struct erdma_qp *qp = to_eqp(ibqp);
+
+	sw_qp_destroy(qp->sw_qp);
+	cleanup_sw_qp(qp->sw_qp);
+	kfree(qp->sw_qp);
+}
+
+int erdma_modify_mad_qp(struct ib_qp *ibqp, struct ib_qp_attr *attr,
+			int attr_mask, struct ib_udata *udata)
+{
+	struct erdma_qp *qp = to_eqp(ibqp);
+	int ret;
+
+	ret = sw_modify_qp(&qp->sw_qp->ibqp, attr, attr_mask, udata);
+	return ret;
+}
+
+int erdma_post_send_mad(struct ib_qp *ibqp, const struct ib_send_wr *send_wr,
+			const struct ib_send_wr **bad_send_wr)
+{
+	struct erdma_qp *qp = to_eqp(ibqp);
+
+	return sw_post_send(&qp->sw_qp->ibqp, send_wr, bad_send_wr);
+}
+
+int erdma_post_recv_mad(struct ib_qp *ibqp, const struct ib_recv_wr *recv_wr,
+			const struct ib_recv_wr **bad_recv_wr)
+{
+	struct erdma_qp *qp = to_eqp(ibqp);
+
+	return sw_post_recv(&qp->sw_qp->ibqp, recv_wr, bad_recv_wr);
+}
+
+int erdma_mad_poll_cq(struct ib_cq *ibcq, int num_entries, struct ib_wc *wc)
+{
+	struct erdma_cq *cq = to_ecq(ibcq);
+	unsigned long flags;
+	int ret;
+
+	spin_lock_irqsave(&cq->kern_cq.lock, flags);
+	ret = sw_poll_cq(&cq->sw_cq->ibcq, num_entries, wc);
+	spin_unlock_irqrestore(&cq->kern_cq.lock, flags);
+
+	return ret;
+}
+
+int erdma_mad_req_notify_cq(struct ib_cq *ibcq, enum ib_cq_notify_flags flags)
+{
+	struct erdma_cq *cq = to_ecq(ibcq);
+
+	return sw_req_notify_cq(&cq->sw_cq->ibcq, flags);
+}
+
+int attach_sw_dev(struct erdma_dev *dev)
+{
+	struct sw_dev *sw = &dev->sw_dev;
+	struct crypto_shash *tfm;
+	int err;
+
+	if (!compat_mode)
+		return 0;
+
+	dev->sw_dev.master = dev;
+	dev->sw_dev.ndev = dev->netdev;
+
+	err = sw_init(sw);
+	if (err)
+		return err;
+
+	sw_set_mtu(sw, dev->netdev->mtu);
+
+	tfm = crypto_alloc_shash("crc32", 0, 0);
+	if (IS_ERR(tfm)) {
+		sw_dealloc(sw);
+		pr_err("failed to allocate crc algorithm err:%ld\n",
+		       PTR_ERR(tfm));
+		return PTR_ERR(tfm);
+	}
+	sw->tfm = tfm;
+
+	return 0;
+}
+
+void detach_sw_dev(struct erdma_dev *dev)
+{
+	if (!compat_mode)
+		return;
+
+	sw_dealloc(&dev->sw_dev);
+}
 
 int erdma_create_ah(struct ib_ah *ibah,
 		    struct rdma_ah_init_attr *init_attr,
 		    struct ib_udata *udata)
 {
-	return -EOPNOTSUPP;
+	return sw_create_ah(ibah, init_attr->ah_attr, udata);
 }
-
 
 int erdma_destroy_ah(struct ib_ah *ibah, u32 flags)
 {
+	struct sw_ah *ah = to_rah(ibah);
 
-	return -EOPNOTSUPP;
+	sw_drop_ref(ah);
+
+	return 0;
 }
 
 int erdma_query_pkey(struct ib_device *ibdev, port_t port, u16 index, u16 *pkey)
@@ -140,15 +305,13 @@ int erdma_handle_compat_attr(struct erdma_qp *qp, struct ib_qp_attr *attr,
 	return 0;
 }
 
-struct socket *rsvd_sock[16];
-
-static int erdma_port_init(void)
+static int erdma_port_init(struct net *net, struct socket **rsvd_sock)
 {
 	struct sockaddr_in laddr;
 	int ret = 0, i, j;
 
 	for (i = 0; i < 16; i++) {
-		ret = __sock_create(current->nsproxy->net_ns, AF_INET,
+		ret = __sock_create(net, AF_INET,
 				    SOCK_STREAM, IPPROTO_TCP, &rsvd_sock[i], 1);
 		if (ret < 0)
 			goto err_out;
@@ -166,13 +329,15 @@ static int erdma_port_init(void)
 	return 0;
 
 err_out:
-	for (j = 0; j < i; j++)
+	for (j = 0; j < i; j++) {
 		sock_release(rsvd_sock[j]);
+		rsvd_sock[j] = NULL;
+	}
 
 	return ret;
 }
 
-static void erdma_port_release(void)
+static void erdma_port_release(struct socket **rsvd_sock)
 {
 	int i;
 
@@ -180,8 +345,37 @@ static void erdma_port_release(void)
 		return;
 
 	for (i = 0; i < 16; i++)
-		sock_release(rsvd_sock[i]);
+		if (rsvd_sock[i])
+			sock_release(rsvd_sock[i]);
 }
+
+static __net_init int erdma_init_net(struct net *net)
+{
+	struct erdma_net *node = net_generic(net, erdma_net_id);
+
+	return erdma_port_init(net, node->rsvd_sock);
+}
+
+static void __net_exit erdma_exit_batch_net(struct list_head *net_list)
+{
+	struct net *net;
+	LIST_HEAD(list);
+
+	rtnl_lock();
+	list_for_each_entry(net, net_list, exit_list) {
+		struct erdma_net *node = net_generic(net, erdma_net_id);
+
+		erdma_port_release(node->rsvd_sock);
+	}
+	rtnl_unlock();
+}
+
+static struct pernet_operations erdma_net_ops = {
+	.init = erdma_init_net,
+	.exit_batch = erdma_exit_batch_net,
+	.id   = &erdma_net_id,
+	.size = sizeof(struct erdma_net),
+};
 
 int erdma_compat_init(void)
 {
@@ -190,8 +384,13 @@ int erdma_compat_init(void)
 	if (!compat_mode)
 		return 0;
 
+	ret = sw_net_init();
+	if (ret)
+		return ret;
 
-	ret = erdma_port_init();
+	ret = register_pernet_subsys(&erdma_net_ops);
+	if (ret)
+		sw_net_exit();
 
 	return ret;
 }
@@ -201,6 +400,7 @@ void erdma_compat_exit(void)
 	if (!compat_mode)
 		return;
 
-	erdma_port_release();
+	unregister_pernet_subsys(&erdma_net_ops);
 
+	sw_net_exit();
 }
