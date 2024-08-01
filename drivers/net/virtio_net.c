@@ -3063,14 +3063,15 @@ static int virtnet_set_ringparam(struct net_device *dev,
 			 * through the VIRTIO_NET_CTRL_NOTF_COAL_TX_SET command, or, if the driver
 			 * did not set any TX coalescing parameters, to 0.
 			 */
-			err = virtnet_send_ctrl_coal_vq_cmd(vi, txq2vq(i),
-							    vi->intr_coal_tx.max_usecs,
-							    vi->intr_coal_tx.max_packets);
-			if (err)
-				return err;
+			err = virtnet_send_tx_ctrl_coal_vq_cmd(vi, i,
+							       vi->intr_coal_tx.max_usecs,
+							       vi->intr_coal_tx.max_packets);
 
-			vi->sq[i].intr_coal.max_usecs = vi->intr_coal_tx.max_usecs;
-			vi->sq[i].intr_coal.max_packets = vi->intr_coal_tx.max_packets;
+			/* Don't break the tx resize action if the vq coalescing is not
+			 * supported. The same is true for rx resize below.
+			 */
+			if (err && err != -EOPNOTSUPP)
+				return err;
 		}
 
 		if (ring->rx_pending != rx_pending) {
@@ -3082,7 +3083,7 @@ static int virtnet_set_ringparam(struct net_device *dev,
 			err = virtnet_send_rx_ctrl_coal_vq_cmd(vi, i,
 							       vi->intr_coal_rx.max_usecs,
 							       vi->intr_coal_rx.max_packets);
-			if (err)
+			if (err && err != -EOPNOTSUPP)
 				return err;
 		}
 	}
