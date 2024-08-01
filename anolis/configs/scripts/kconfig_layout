@@ -1,5 +1,5 @@
 # dist/config_file_name arch base layout(variant/arch)
-ANCK/x86-generic x86 null generic/default;generic/x86
-ANCK/x86-debug x86 null generic/default;generic/x86;debug/default;debug/x86
-ANCK/arm64-generic arm64 null generic/default;generic/arm64
-ANCK/arm64-debug arm64 null generic/default;generic/arm64;debug/default;debug/arm64
+ANCK/generic-x86 x86 null generic/default;generic/x86
+ANCK/debug-x86 x86 null generic/default;generic/x86;debug/default;debug/x86
+ANCK/generic-arm64 arm64 null generic/default;generic/arm64
+ANCK/debug-arm64 arm64 null generic/default;generic/arm64;debug/default;debug/arm64

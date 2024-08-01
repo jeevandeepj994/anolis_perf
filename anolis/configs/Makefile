@@ -5,10 +5,10 @@ ifeq ($(MAKELEVEL),0)
 endif
 
 dist-defconfig:
-	@sh scripts/generate_configs.sh ${DIST_ARCH}-generic
+	@sh scripts/generate_configs.sh generic-${DIST_ARCH}
 
 dist-debug-defconfig:
-	@sh scripts/generate_configs.sh ${DIST_ARCH}-debug
+	@sh scripts/generate_configs.sh debug-${DIST_ARCH}
 
 dist-configs:
 	@sh scripts/generate_configs.sh
