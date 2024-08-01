@@ -598,14 +598,14 @@ class GenerateTranslater():
                     files.append(file)
 
         # merge all partial configs
-        final_path = os.path.join(self.output_dir, f"kernel-{dist}-{variant}-{arch}.config")
+        final_path = os.path.join(self.output_dir, f"kernel-{e.dist}-{e.name}.config")
         cmd += self.__cmd("merge")
         cmd += " ".join(files)
         cmd += f" > {final_path} \n"
 
         # refresh configs
         cmd += f"echo \"* generated file: {final_path}\"\n"
-        cmd += f"KCONFIG_CONFIG={final_path} ARCH={arch} CROSS_COMPILE=scripts/dummy-tools/ "
+        cmd += f"KCONFIG_CONFIG={final_path} ARCH={e.arch} CROSS_COMPILE=scripts/dummy-tools/ "
         cmd += f"make -C {self.src_root} olddefconfig > /dev/null\n"
         cmd += f"rm -f {final_path}.old \n"
         cmd += f"echo \"* processed file: {final_path}\"\n"
