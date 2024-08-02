@@ -4210,6 +4210,25 @@ out:
 	return ret;
 }
 
+int dmar_rmrr_add_acpi_dev(u8 device_number, struct acpi_device *adev)
+{
+	int ret;
+	struct dmar_rmrr_unit *rmrru;
+	struct acpi_dmar_reserved_memory *rmrr;
+
+	list_for_each_entry(rmrru, &dmar_rmrr_units, list) {
+		rmrr = container_of(rmrru->hdr,
+				struct acpi_dmar_reserved_memory,
+				header);
+		ret = dmar_acpi_insert_dev_scope(device_number, adev, (void *)(rmrr + 1),
+						((void *)rmrr) + rmrr->header.length,
+						rmrru->devices, rmrru->devices_cnt);
+		if (ret)
+			break;
+	}
+	return 0;
+}
+
 int dmar_iommu_notify_scope_dev(struct dmar_pci_notify_info *info)
 {
 	int ret;
@@ -4473,6 +4492,22 @@ static int __init platform_optin_force_iommu(void)
 	return 1;
 }
 
+static int acpi_device_create_direct_mappings(struct device *pn_dev, struct device *acpi_device)
+{
+	struct iommu_group *group;
+
+	acpi_device->bus->iommu_ops = &intel_iommu_ops;
+	group = iommu_group_get(pn_dev);
+	if (!group) {
+		pr_warn("ACPI name space devices create direct mappings wrong!\n");
+		return -EINVAL;
+	}
+	pr_info("pn_dev:%s enter to %s\n", dev_name(pn_dev), __func__);
+	__acpi_device_create_direct_mappings(group, acpi_device);
+
+	return 0;
+}
+
 static int __init probe_acpi_namespace_devices(void)
 {
 	struct dmar_drhd_unit *drhd;
@@ -4480,14 +4515,17 @@ static int __init probe_acpi_namespace_devices(void)
 	struct intel_iommu *iommu __maybe_unused;
 	struct device *dev;
 	int i, ret = 0;
+	u8 bus, devfn;
 
 	for_each_active_iommu(iommu, drhd) {
 		for_each_active_dev_scope(drhd->devices,
 					  drhd->devices_cnt, i, dev) {
 			struct acpi_device_physical_node *pn;
-			struct iommu_group *group;
 			struct acpi_device *adev;
 
+			struct device *pn_dev = NULL;
+			struct device_domain_info *info = NULL;
+			struct pci_dev *pci_device = NULL;
 			if (dev->bus != &acpi_bus_type)
 				continue;
 
@@ -4495,21 +4533,61 @@ static int __init probe_acpi_namespace_devices(void)
 			mutex_lock(&adev->physical_node_lock);
 			list_for_each_entry(pn,
 					    &adev->physical_node_list, node) {
-				group = iommu_group_get(pn->dev);
-				if (group) {
-					iommu_group_put(group);
-					continue;
+				iommu = device_to_iommu(dev, &bus, &devfn);
+				if (!iommu) {
+					ret = -ENODEV;
+					goto unlock;
+				}
+				pci_device = pci_get_domain_bus_and_slot(iommu->segment,
+						bus, devfn);
+
+				if (!pci_device) {
+					pr_info("cannot get the corresponding pci_device\n");
+					ret = -ENODEV;
+					goto unlock;
 				}
 
-				pn->dev->bus->iommu_ops = &intel_iommu_ops;
-				ret = iommu_probe_device(pn->dev);
-				if (ret)
-					break;
+				info = dmar_search_domain_by_dev_info(iommu->segment, bus, devfn);
+				if (!info) {
+					pn->dev->bus->iommu_ops = &intel_iommu_ops;
+					ret = iommu_probe_device(pn->dev);
+					if (ret) {
+						pr_err("pn->dev:%s probe fail! ret:%d\n",
+							dev_name(pn->dev), ret);
+						goto unlock;
+					}
+				}
+				pn_dev = pn->dev;
 			}
+			if (!pn_dev) {
+				iommu = device_to_iommu(dev, &bus, &devfn);
+				if (!iommu) {
+					ret = -ENODEV;
+					goto unlock;
+				}
+				info = dmar_search_domain_by_dev_info(iommu->segment, bus, devfn);
+				if (!info) {
+					dev->bus->iommu_ops = &intel_iommu_ops;
+					ret = iommu_probe_device(dev);
+					if (ret) {
+						pr_err("dev:%s probe fail! ret:%d\n",
+							dev_name(dev), ret);
+						goto unlock;
+					}
+					goto unlock;
+				}
+			}
+			if (!info)
+				ret = acpi_device_create_direct_mappings(&pci_device->dev, dev);
+			else
+				ret = acpi_device_create_direct_mappings(info->dev, dev);
+unlock:
 			mutex_unlock(&adev->physical_node_lock);
 
-			if (ret)
+			if (ret) {
+				pr_err("%s fail! ret:%d\n", __func__, ret);
 				return ret;
+			}
 		}
 	}
 

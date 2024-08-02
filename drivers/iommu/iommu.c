@@ -833,6 +833,7 @@ map_end:
 			}
 		}
 
+		iova_reserve_domain_addr(domain, start, end);
 	}
 
 	iommu_flush_iotlb_all(domain);
@@ -851,6 +852,12 @@ static bool iommu_is_attach_deferred(struct iommu_domain *domain,
 
 	return false;
 }
+
+void  __acpi_device_create_direct_mappings(struct iommu_group *group, struct device *acpi_device)
+{
+	iommu_create_device_direct_mappings(group, acpi_device);
+}
+EXPORT_SYMBOL_GPL(__acpi_device_create_direct_mappings);
 
 /**
  * iommu_group_add_device - add a device to an iommu group

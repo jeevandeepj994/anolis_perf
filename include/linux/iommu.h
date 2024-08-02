@@ -641,6 +641,11 @@ extern int iommu_domain_window_enable(struct iommu_domain *domain, u32 wnd_nr,
 extern int report_iommu_fault(struct iommu_domain *domain, struct device *dev,
 			      unsigned long iova, int flags);
 
+extern int iova_reserve_domain_addr(struct iommu_domain *domain, dma_addr_t start, dma_addr_t end);
+
+extern void __acpi_device_create_direct_mappings(struct iommu_group *group,
+						 struct device *acpi_device);
+
 static inline void iommu_flush_iotlb_all(struct iommu_domain *domain)
 {
 	if (domain->ops->flush_iotlb_all)
