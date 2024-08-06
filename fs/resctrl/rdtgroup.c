@@ -1020,7 +1020,7 @@ static int rdt_num_rmids_show(struct kernfs_open_file *of,
 {
 	struct rdt_resource *r = of->kn->parent->priv;
 
-	seq_printf(seq, "%d\n", r->num_rmid);
+	seq_printf(seq, "%d\n", r->mon.num_rmid);
 
 	return 0;
 }
@@ -1031,7 +1031,7 @@ static int rdt_mon_features_show(struct kernfs_open_file *of,
 	struct rdt_resource *r = of->kn->parent->priv;
 	struct mon_evt *mevt;
 
-	list_for_each_entry(mevt, &r->evt_list, list) {
+	list_for_each_entry(mevt, &r->mon.evt_list, list) {
 		if (resctrl_arch_event_is_free_running(mevt->evtid))
 			seq_printf(seq, "%s\n", mevt->name);
 		if (mevt->configurable)
@@ -2855,14 +2855,14 @@ static int mkdir_mondata_subdir(struct kernfs_node *parent_kn,
 	if (ret)
 		goto out_destroy;
 
-	if (WARN_ON(list_empty(&r->evt_list))) {
+	if (WARN_ON(list_empty(&r->mon.evt_list))) {
 		ret = -EPERM;
 		goto out_destroy;
 	}
 
 	priv.u.rid = r->rid;
 	priv.u.domid = d->id;
-	list_for_each_entry(mevt, &r->evt_list, list) {
+	list_for_each_entry(mevt, &r->mon.evt_list, list) {
 		if (!resctrl_arch_event_is_free_running(mevt->evtid))
 			continue;
 
