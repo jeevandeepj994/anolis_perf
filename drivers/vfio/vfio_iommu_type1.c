@@ -1370,7 +1370,7 @@ static int vfio_dma_do_unmap(struct vfio_iommu *iommu,
 	mutex_lock(&iommu->lock);
 
 	/* Cannot update vaddr if mdev is present. */
-	if (invalidate_vaddr && !list_empty(&iommu->external_domain->group_list)) {
+	if (invalidate_vaddr && iommu->external_domain) {
 		ret = -EBUSY;
 		goto unlock;
 	}
@@ -1448,12 +1448,6 @@ again:
 			break;
 
 		if (!iommu->v2 && iova > dma->iova)
-			break;
-		/*
-		 * Task with same address space who mapped this iova range is
-		 * allowed to unmap the iova range.
-		 */
-		if (dma->task->mm != current->mm)
 			break;
 
 		if (invalidate_vaddr) {
@@ -3023,7 +3017,7 @@ static bool vfio_iommu_has_emulated(struct vfio_iommu *iommu)
 	bool ret;
 
 	mutex_lock(&iommu->lock);
-	ret = !list_empty(&iommu->external_domain->group_list);
+	ret = !!iommu->external_domain;
 	mutex_unlock(&iommu->lock);
 	return ret;
 }
