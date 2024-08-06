@@ -287,4 +287,6 @@ void mbm_cntr_free(u32 cntr_id);
 unsigned int mon_event_config_index_get(u32 evtid);
 int rdtgroup_assign_cntr(struct rdtgroup *rdtgrp, enum resctrl_event_id evtid);
 int rdtgroup_alloc_cntr(struct rdtgroup *rdtgrp, int index);
+int rdtgroup_unassign_cntr(struct rdtgroup *rdtgrp, enum resctrl_event_id evtid);
+void rdtgroup_free_cntr(struct rdt_resource *r, struct rdtgroup *rdtgrp, int index);
 #endif /* _FS_RESCTRL_INTERNAL_H */
