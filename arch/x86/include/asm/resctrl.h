@@ -231,6 +231,7 @@ bool resctrl_arch_get_abmc_enabled(void);
 
 int resctrl_arch_mbm_cntr_assign_enable(void);
 void resctrl_arch_mbm_cntr_assign_disable(void);
+bool resctrl_arch_get_mbm_cntr_assign_enable(void);
 
 void resctrl_arch_event_config_set(void *info);
 u32 resctrl_arch_event_config_get(void *dom,

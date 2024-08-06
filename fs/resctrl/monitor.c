@@ -748,8 +748,10 @@ static void l3_mon_evt_init(struct rdt_resource *r)
 					 RF_MON_INFO | RFTYPE_RES_CACHE);
 	}
 
-	if (resctrl_arch_get_abmc_enabled())
+	if (resctrl_arch_get_abmc_enabled()) {
 		resctrl_file_fflags_init("num_mbm_cntrs", RF_MON_INFO);
+		resctrl_file_fflags_init("mbm_control", RF_MON_INFO);
+	}
 
 	if (resctrl_arch_is_llc_occupancy_enabled())
 		list_add_tail(&llc_occupancy_event.list, &r->mon.evt_list);
