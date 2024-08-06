@@ -4042,11 +4042,6 @@ static void update_acpu(struct rq *rq, struct task_struct *prev, struct task_str
 		goto out;
 #endif
 
-	/* Update idle sum and busy sum for current rq. */
-	delta = now - rq->last_acpu_update_time;
-	if (prev == rq->idle)
-		rq->acpu_idle_sum += delta;
-
 	/*
 	 * Be carefule, smt_mask maybe NULL.
 	 * We only consider the case where there are two SMT at this stage.
@@ -4059,6 +4054,7 @@ static void update_acpu(struct rq *rq, struct task_struct *prev, struct task_str
 			struct rq *rq_i = cpu_rq(i);
 			struct task_struct *curr_i = rq_i->curr;
 
+			/* If last >= 0, this cpu is the latest one, else the sibling is. */
 			last = (s64)(rq->last_acpu_update_time -
 				     rq_i->last_acpu_update_time);
 			last_update_time = last >= 0 ? rq->last_acpu_update_time :
@@ -4077,13 +4073,23 @@ static void update_acpu(struct rq *rq, struct task_struct *prev, struct task_str
 			delta_task = now_task - last_update_time_task;
 			delta_task = delta_task > 0 ? delta_task : 0;
 
+			if (prev == rq->idle && rq_i->curr != rq_i->idle) {
+				rq->acpu_idle_sum = last >= 0 ? rq->acpu_idle_sum + delta :
+								rq_i->sibidle_sum + delta;
+				rq->acpu_idle_task_sum = last >= 0 ?
+							 rq->acpu_idle_task_sum + delta_task :
+							 rq_i->sibidle_task_sum + delta_task;
+			}
+
 			/* Add the delta to improve accuracy. */
 			sibidle_sum = last >= 0 ? rq->sibidle_sum : rq_i->acpu_idle_sum;
 			sibidle_task_sum = last_task >= 0 ? rq->sibidle_task_sum :
-							    rq_i->acpu_idle_sum;
-			if (curr_i == rq_i->idle) {
+							    rq_i->acpu_idle_task_sum;
+			if (prev != rq->idle && curr_i == rq_i->idle) {
 				sibidle_sum += delta;
 				sibidle_task_sum += delta_task;
+				rq_i->acpu_idle_sum = sibidle_sum;
+				rq_i->acpu_idle_task_sum = sibidle_task_sum;
 			}
 		}
 	}
@@ -4102,6 +4108,28 @@ out:
 	rq->last_acpu_update_time = now;
 	rq->last_acpu_update_time_task = now_task;
 }
+
+static int acpu_proc_show(struct seq_file *m, void *v)
+{
+	int cpu;
+	struct rq *rq;
+
+	if (!static_branch_likely(&acpu_enabled) || !schedstat_enabled())
+		return 0;
+
+	for_each_online_cpu(cpu) {
+		rq = cpu_rq(cpu);
+		seq_printf(m, "cpu%d %llu\n", cpu, rq->sibidle_sum);
+	}
+	return 0;
+}
+
+static int __init proc_acpu_init(void)
+{
+	proc_create_single("acpu", 0, NULL, acpu_proc_show);
+	return 0;
+}
+fs_initcall(proc_acpu_init);
 #else
 static inline void update_acpu(struct rq *rq, struct task_struct *prev, struct task_struct *next)
 {
@@ -8569,7 +8597,9 @@ void __init sched_init(void)
 
 #ifdef CONFIG_SCHED_ACPU
 		rq->acpu_idle_sum = 0;
+		rq->acpu_idle_task_sum = 0;
 		rq->sibidle_sum = 0;
+		rq->sibidle_task_sum = 0;
 		rq->last_acpu_update_time = rq->clock;
 #endif
 		hrtick_rq_init(rq);

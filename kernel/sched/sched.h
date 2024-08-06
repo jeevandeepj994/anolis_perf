@@ -1337,10 +1337,26 @@ struct rq {
 #endif
 
 #ifdef CONFIG_SCHED_ACPU
+	/* acpu_idle_sum is the snapshot of sibling's sibidle_sum. */
 	u64			acpu_idle_sum;
+	/* sibidle_sum is the time that this rq is busy while its sibling is idle. */
 	u64			sibidle_sum;
+	/*
+	 * last_acpu_update_time is the timestamp of rq_clock() that update_acpu() is called
+	 * last time.
+	 */
 	u64			last_acpu_update_time;
+	/* acpu_idle_task_sum is the snapshot of sibling's sibidle_task_sum. */
+	u64			acpu_idle_task_sum;
+	/*
+	 * sibidle_task_sum is the time that this rq is busy while its sibiling is busy,
+	 * excluding irq time.
+	 */
 	u64			sibidle_task_sum;
+	/*
+	 * last_acpu_update_time_task is the timestamp of rq_clock_task() that update_acpu()
+	 * is called last time.
+	 */
 	u64			last_acpu_update_time_task;
 #endif
 
