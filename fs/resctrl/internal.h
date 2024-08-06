@@ -275,4 +275,6 @@ void __check_limbo(struct rdt_domain *d, bool force_free);
 void resctrl_file_fflags_init(const char *config,
 			      unsigned long fflags);
 
+int mbm_cntr_alloc(struct rdt_resource *r);
+void mbm_cntr_free(u32 cntr_id);
 #endif /* _FS_RESCTRL_INTERNAL_H */
