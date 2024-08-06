@@ -3241,6 +3241,10 @@ static int mkdir_rdt_prepare_rmid(struct rdtgroup *rdtgrp, u32 rmid)
 	int ret;
 
 	rdtgrp->mon.rmid = rmid;
+
+	rdtgrp->mon.cntr_id[0] = MON_CNTR_UNSET;
+	rdtgrp->mon.cntr_id[1] = MON_CNTR_UNSET;
+
 	ret = mkdir_mondata_all(rdtgrp->kn, rdtgrp, &rdtgrp->mon.mon_data_kn);
 	if (ret) {
 		rdt_last_cmd_puts("kernfs subdir error\n");
@@ -3670,6 +3674,9 @@ static int rdtgroup_setup_root(void)
 	rdtgroup_default.closid = 0;
 	rdtgroup_default.mon.rmid = 0;
 	rdtgroup_default.type = RDTCTRL_GROUP;
+	rdtgroup_default.mon.cntr_id[0] = MON_CNTR_UNSET;
+	rdtgroup_default.mon.cntr_id[1] = MON_CNTR_UNSET;
+
 	INIT_LIST_HEAD(&rdtgroup_default.mon.crdtgrp_list);
 
 	list_add(&rdtgroup_default.rdtgroup_list, &rdt_all_groups);
