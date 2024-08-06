@@ -232,7 +232,6 @@ bool resctrl_arch_get_abmc_enabled(void);
 int resctrl_arch_mbm_cntr_assign_enable(void);
 void resctrl_arch_mbm_cntr_assign_disable(void);
 
-
 u64 resctrl_arch_get_prefetch_disable_bits(void);
 int resctrl_arch_pseudo_lock_fn(void *_plr);
 int resctrl_arch_measure_cycles_lat_fn(void *_plr);
