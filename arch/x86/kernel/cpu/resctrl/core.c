@@ -511,6 +511,7 @@ static void domain_add_cpu(int cpu, struct rdt_resource *r)
 		cpumask_set_cpu(cpu, &d->cpu_mask);
 		if (r->cache.arch_has_per_cpu_cfg)
 			rdt_domain_reconfigure_cdp(r);
+		resctrl_arch_mbm_cntr_assign_configure();
 		return;
 	}
 
@@ -530,6 +531,7 @@ static void domain_add_cpu(int cpu, struct rdt_resource *r)
 	}
 
 	resctrl_mbm_evt_config_init(hw_dom);
+	resctrl_arch_mbm_cntr_assign_configure();
 
 	if (r->mon_capable && arch_domain_mbm_alloc(r->mon.num_rmid, hw_dom)) {
 		domain_free(hw_dom);

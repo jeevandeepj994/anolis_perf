@@ -139,6 +139,8 @@ static inline int resctrl_arch_assign_cntr(void *dom, enum resctrl_event_id evti
 	return -EINVAL;
 }
 
+static inline void resctrl_arch_mbm_cntr_assign_configure(void) { }
+
 /* reset cached configurations, then all devices */
 void resctrl_arch_reset_resources(void);
 

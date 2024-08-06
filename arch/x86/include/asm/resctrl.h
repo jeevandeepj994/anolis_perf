@@ -239,6 +239,8 @@ u32 resctrl_arch_event_config_get(void *dom,
 int resctrl_arch_assign_cntr(void *dom, enum resctrl_event_id evtid,
 			     u32 rmid, u32 cntr_id, u32 closid, bool assign);
 
+void resctrl_arch_mbm_cntr_assign_configure(void);
+
 u64 resctrl_arch_get_prefetch_disable_bits(void);
 int resctrl_arch_pseudo_lock_fn(void *_plr);
 int resctrl_arch_measure_cycles_lat_fn(void *_plr);
