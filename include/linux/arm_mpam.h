@@ -133,6 +133,12 @@ static inline u32 resctrl_arch_event_config_get(void *dom,
 	return INVALID_CONFIG_VALUE;
 }
 
+static inline int resctrl_arch_assign_cntr(void *dom, enum resctrl_event_id evtid,
+			     u32 rmid, u32 cntr_id, u32 closid, bool assign)
+{
+	return -EINVAL;
+}
+
 /* reset cached configurations, then all devices */
 void resctrl_arch_reset_resources(void);
 

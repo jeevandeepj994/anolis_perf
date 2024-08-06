@@ -285,4 +285,6 @@ void resctrl_file_fflags_init(const char *config,
 int mbm_cntr_alloc(struct rdt_resource *r);
 void mbm_cntr_free(u32 cntr_id);
 unsigned int mon_event_config_index_get(u32 evtid);
+int rdtgroup_assign_cntr(struct rdtgroup *rdtgrp, enum resctrl_event_id evtid);
+int rdtgroup_alloc_cntr(struct rdtgroup *rdtgrp, int index);
 #endif /* _FS_RESCTRL_INTERNAL_H */
