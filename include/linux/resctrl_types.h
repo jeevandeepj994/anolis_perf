@@ -73,4 +73,5 @@ enum resctrl_event_id {
 
 #define RESCTRL_MAX_EVENT_NUM		4
 
+#define INVALID_CONFIG_VALUE		U32_MAX
 #endif /* __LINUX_RESCTRL_TYPES_H */
