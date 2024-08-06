@@ -1532,9 +1532,9 @@ out:
 
 static int mbm_config_show(struct seq_file *s, struct rdt_resource *r, u32 evtid)
 {
-	struct mon_config_info mon_info = {0};
 	struct rdt_domain *dom;
 	bool sep = false;
+	u32 val;
 
 	mutex_lock(&rdtgroup_mutex);
 
@@ -1542,11 +1542,11 @@ static int mbm_config_show(struct seq_file *s, struct rdt_resource *r, u32 evtid
 		if (sep)
 			seq_puts(s, ";");
 
-		memset(&mon_info, 0, sizeof(struct mon_config_info));
-		mon_info.evtid = evtid;
-		resctrl_arch_mondata_config_read(dom, &mon_info);
+		val = resctrl_arch_event_config_get(dom, evtid);
+		if (val == INVALID_CONFIG_VALUE)
+			break;
 
-		seq_printf(s, "%d=0x%02x", dom->id, mon_info.mon_config);
+		seq_printf(s, "%d=0x%02x", dom->id, val);
 		sep = true;
 	}
 	seq_puts(s, "\n");

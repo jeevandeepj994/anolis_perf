@@ -275,42 +275,52 @@ int resctrl_arch_set_hwdrc_enabled(enum resctrl_res_level l, bool hwdrc_mb)
 	return 0;
 }
 
-static void mon_event_config_read(void *info)
-{
-	struct mon_config_info *mon_info = info;
-	unsigned int index;
-	u32 h;
-
-	index = mon_event_config_index_get(mon_info->evtid);
-	if (index == INVALID_CONFIG_INDEX) {
-		pr_warn_once("Invalid event id %d\n", mon_info->evtid);
-		return;
-	}
-	rdmsr(MSR_IA32_EVT_CFG_BASE + index, mon_info->mon_config, h);
-
-	/* Report only the valid event configuration bits */
-	mon_info->mon_config &= MAX_EVT_CONFIG_BITS;
-}
-
-void resctrl_arch_mondata_config_read(void *dom, void *info)
+u32 resctrl_arch_event_config_get(void *dom,
+				  enum resctrl_event_id eventid)
 {
 	struct rdt_domain *d = dom;
-	struct mon_config_info *mon_info = info;
+	struct rdt_hw_domain *hw_dom = resctrl_to_arch_dom(d);
 
-	smp_call_function_any(&d->cpu_mask, mon_event_config_read, mon_info, 1);
+	switch (eventid) {
+	case QOS_L3_OCCUP_EVENT_ID:
+	case QOS_MC_MBM_BPS_EVENT_ID:
+		break;
+	case QOS_L3_MBM_TOTAL_EVENT_ID:
+		return hw_dom->mbm_total_cfg;
+	case QOS_L3_MBM_LOCAL_EVENT_ID:
+		return hw_dom->mbm_local_cfg;
+	}
+
+	/* Never expect to get here */
+	WARN_ON_ONCE(1);
+
+	return INVALID_CONFIG_VALUE;
 }
 
-static void mon_event_config_write(void *info)
+void resctrl_arch_event_config_set(void *info)
 {
 	struct mon_config_info *mon_info = info;
+	struct rdt_hw_domain *hw_dom;
 	unsigned int index;
 
 	index = mon_event_config_index_get(mon_info->evtid);
-	if (index == INVALID_CONFIG_INDEX) {
-		pr_warn_once("Invalid event id %d\n", mon_info->evtid);
+	if (index == INVALID_CONFIG_INDEX)
 		return;
-	}
+
 	wrmsr(MSR_IA32_EVT_CFG_BASE + index, mon_info->mon_config, 0);
+
+	hw_dom = resctrl_to_arch_dom(mon_info->d);
+
+	switch (mon_info->evtid) {
+	case QOS_L3_OCCUP_EVENT_ID:
+		break;
+	case QOS_L3_MBM_TOTAL_EVENT_ID:
+		hw_dom->mbm_total_cfg = mon_info->mon_config;
+		break;
+	case QOS_L3_MBM_LOCAL_EVENT_ID:
+		hw_dom->mbm_local_cfg =  mon_info->mon_config;
+		break;
+	}
 }
 
 int resctrl_arch_mbm_config_write_domain(void *rdt_resource, void *dom, u32 evtid, u32 val)
@@ -318,6 +328,7 @@ int resctrl_arch_mbm_config_write_domain(void *rdt_resource, void *dom, u32 evti
 	struct rdt_resource *r = rdt_resource;
 	struct rdt_domain *d = dom;
 	struct mon_config_info mon_info = {0};
+	u32 config_val;
 	int ret = 0;
 
 	/* mon_config cannot be more than the supported set of events */
@@ -325,14 +336,15 @@ int resctrl_arch_mbm_config_write_domain(void *rdt_resource, void *dom, u32 evti
 		return -EINVAL;
 
 	/*
-	 * Read the current config value first. If both are the same then
+	 * Check the current config value first. If both are the same then
 	 * no need to write it again.
 	 */
-	mon_info.evtid = evtid;
-	resctrl_arch_mondata_config_read(d, &mon_info);
-	if (mon_info.mon_config == val)
+	config_val = resctrl_arch_event_config_get(d, evtid);
+	if (config_val == INVALID_CONFIG_VALUE || config_val == val)
 		goto out;
 
+	mon_info.d = d;
+	mon_info.evtid = evtid;
 	mon_info.mon_config = val;
 
 	/*
@@ -341,7 +353,8 @@ int resctrl_arch_mbm_config_write_domain(void *rdt_resource, void *dom, u32 evti
 	 * are scoped at the domain level. Writing any of these MSRs
 	 * on one CPU is observed by all the CPUs in the domain.
 	 */
-	smp_call_function_any(&d->cpu_mask, mon_event_config_write,
+	smp_call_function_any(&d->cpu_mask,
+			      resctrl_arch_event_config_set,
 			      &mon_info, 1);
 
 	/*

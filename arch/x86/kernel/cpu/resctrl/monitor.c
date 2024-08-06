@@ -106,6 +106,7 @@ static struct arch_mbm_state *get_arch_mbm_state(struct rdt_hw_domain *hw_dom,
 {
 	switch (eventid) {
 	case QOS_L3_OCCUP_EVENT_ID:
+	case QOS_MC_MBM_BPS_EVENT_ID:
 		return NULL;
 	case QOS_L3_MBM_TOTAL_EVENT_ID:
 		return &hw_dom->arch_mbm_total[rmid];

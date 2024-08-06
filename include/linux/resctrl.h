@@ -22,6 +22,7 @@ int proc_resctrl_show(struct seq_file *m,
 #endif
 
 struct mon_config_info {
+	struct rdt_domain *d;
 	u32 evtid;
 	u32 mon_config;
 };
