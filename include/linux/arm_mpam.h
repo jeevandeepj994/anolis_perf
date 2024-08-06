@@ -126,6 +126,11 @@ static inline int resctrl_arch_mbm_cntr_assign_enable(void)
 
 static inline void resctrl_arch_mbm_cntr_assign_disable(void) { }
 
+static inline bool resctrl_arch_get_mbm_cntr_assign_enable(void)
+{
+	return false;
+}
+
 static inline void resctrl_arch_event_config_set(void *info) { }
 static inline u32 resctrl_arch_event_config_get(void *dom,
 						enum resctrl_event_id eventid)
