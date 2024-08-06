@@ -53,7 +53,7 @@ static inline bool is_hwdrc_enabled(struct rdt_resource *r)
  * @evtid:		event id
  * @name:		name of the event
  * @configurable:	true if the event is configurable
- * @list:		entry in &rdt_resource->evt_list
+ * @list:		entry in &rdt_resource->mon.evt_list
  */
 struct mon_evt {
 	enum resctrl_event_id	evtid;
