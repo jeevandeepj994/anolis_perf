@@ -48,6 +48,24 @@ function do_prep() {
     ${DIST_RPMBUILDDIR_OUTPUT}/SOURCES/kernel-${DIST_KERNELVERSION}-loongarch64.config
     cp ${DIST_SRCROOT}/arch/loongarch/configs/anolis-debug_defconfig \
     ${DIST_RPMBUILDDIR_OUTPUT}/SOURCES/kernel-${DIST_KERNELVERSION}-loongarch64-debug.config
+
+    if [ "$DIST_BUILD_MODE" == "gcov" ]; then
+        # for gcov packages, override the generic config files with the gcov version
+        cp -f ${DIST_OUTPUT}/kernel-ANCK-gcov-x86.config \
+        ${DIST_RPMBUILDDIR_OUTPUT}/SOURCES/kernel-${DIST_KERNELVERSION}-x86_64.config
+        cp -f ${DIST_OUTPUT}/kernel-ANCK-gcov-arm64.config \
+        ${DIST_RPMBUILDDIR_OUTPUT}/SOURCES/kernel-${DIST_KERNELVERSION}-aarch64.config
+
+        # sw_64 and loongarch do not support gcov, so we won't touch them
+    fi
+
+    if [ "$DIST_SPECIAL_VERSION_NAME" == "64k" ]; then
+        # for arm64 64k packages, override the generic config files with the 64k version
+        cp -f ${DIST_OUTPUT}/kernel-ANCK-arm64-64k.config \
+        ${DIST_RPMBUILDDIR_OUTPUT}/SOURCES/kernel-${DIST_KERNELVERSION}-aarch64.config
+        # FIXME: set ExclusiveArch to aarch64 only in kernel.spec,
+        #        because 64k is only supported on arm64
+    fi
 }
 
 do_prep
