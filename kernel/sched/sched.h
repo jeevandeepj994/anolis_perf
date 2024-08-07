@@ -2513,3 +2513,29 @@ long tg_get_cfs_period(struct task_group *tg);
 extern void wake_up_idle_ht(struct rq *rq);
 extern bool need_ht_stable(void);
 #endif
+
+#if defined(CONFIG_X86) && defined(CONFIG_SMP)
+static inline void zx_adjust_sched_domains_child_flags(struct sched_domain *sd)
+{
+	struct sched_group *sg;
+	int prio;
+
+	if (!(sd->flags & SD_NUMA) && sd->parent && (sd->parent->flags & SD_NUMA)) {
+		sd = sd->parent;
+		sg = sd->groups;
+		prio = arch_asym_cpu_priority(sg->asym_prefer_cpu);
+		sg = sg->next;
+
+		while (sg != sd->groups) {
+			if (arch_asym_cpu_priority(sg->asym_prefer_cpu) != prio)
+				break;
+			sg = sg->next;
+		}
+
+		if (sg != sd->groups)
+			sd->child->flags &= ~(SD_PREFER_SIBLING);
+	}
+}
+#else
+static inline void zx_adjust_sched_domains_child_flags(struct sched_domain *sd) { }
+#endif /* CONFIG_X86 */
