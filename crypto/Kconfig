@@ -2053,6 +2053,17 @@ config CRYPTO_USER_API_AKCIPHER
 	  is supported by enabling the user space interface of
 	  asymmetric key cryptography algorithm.
 
+config CRYPTO_SM2_ZHAOXIN_GMI
+	tristate "SM2 Cipher algorithm (Zhaoxin GMI Instruction)"
+	depends on X86 && (CPU_SUP_CENTAUR || CPU_SUP_ZHAOXIN)
+	default m
+	select CRYPTO_AKCIPHER
+	help
+	  SM2 (ShangMi 2) public key algorithm by Zhaoxin GMI Instruction
+
+	  Published by State Encryption Management Bureau, China,
+	  as specified by OSCCA GM/T 0003.1-2012 -- 0003.5-2012.
+
 config CRYPTO_HASH_INFO
 	bool
 
