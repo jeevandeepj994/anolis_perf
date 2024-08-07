@@ -1995,13 +1995,13 @@ void evlist__check_mem_load_aux(struct evlist *evlist)
 	 * any valid memory load information.
 	 */
 	evlist__for_each_entry(evlist, evsel) {
-		leader = evsel->leader;
+		leader = evsel__leader(evsel);
 		if (leader == evsel)
 			continue;
 
 		if (leader->name && strstr(leader->name, "mem-loads-aux")) {
 			for_each_group_evsel(pos, leader) {
-				pos->leader = pos;
+				evsel__set_leader(pos, pos);
 				pos->core.nr_members = 0;
 			}
 		}
