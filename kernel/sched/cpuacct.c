@@ -1015,6 +1015,7 @@ static int cpuacct_sched_cfs_show(struct seq_file *sf, void *v)
 	int cpu;
 	u64 wait_max = 0, wait_sum = 0, wait_sum_other = 0, wait_sum_fi = 0, exec_sum = 0;
 	u64 expel_sum = 0, steal_high = 0;
+	u64 wait_sum_self = 0;
 
 	if (!schedstat_enabled())
 		goto out_show;
@@ -1043,6 +1044,7 @@ static int cpuacct_sched_cfs_show(struct seq_file *sf, void *v)
 			max(wait_max, schedstat_val(se->statistics.wait_max));
 		expel_sum += get_cpu_expel_sum(se, cpu);
 		steal_high += per_cpu_ptr(ca->alistats, cpu)->steal_high;
+		wait_sum_self += schedstat_val(se->statistics.wait_self);
 	}
 rcu_unlock_show:
 	rcu_read_unlock();
@@ -1050,10 +1052,12 @@ out_show:
 	/*
 	 * [Serve time] [On CPU time] [Queue other time]
 	 * [Queue sibling time] [Queue max time] [Force idled time]
+	 * [Queue self time]
 	 */
-	seq_printf(sf, "%lld %lld %lld %lld %lld %lld\n",
+	seq_printf(sf, "%lld %lld %lld %lld %lld %lld %lld\n",
 			exec_sum + wait_sum, exec_sum, wait_sum_other,
-			wait_sum - wait_sum_other - wait_sum_fi, wait_max, wait_sum_fi);
+			wait_sum - wait_sum_other - wait_sum_fi, wait_max, wait_sum_fi,
+			wait_sum_self);
 	seq_printf(sf, "%lld %lld %lld %lld\n",
 		steal_high, 0llu, expel_sum, 0llu);
 
