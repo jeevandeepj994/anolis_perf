@@ -2784,6 +2784,7 @@ static inline void
 update_stats_wait_end(struct cfs_rq *cfs_rq, struct sched_entity *se)
 {
 	u64 parent_wait_sum, forceidled_delta = 0, delta;
+	u64 wait_sum_delta, wait_sibling_delta;
 	struct sched_entity *pse = parent_entity(se);
 	u64 __maybe_unused forceidled_sum;
 	struct rq *rq = rq_of(cfs_rq);
@@ -2803,6 +2804,7 @@ update_stats_wait_end(struct cfs_rq *cfs_rq, struct sched_entity *se)
 		return;
 
 	delta = clock - schedstat_val(se->statistics.wait_start);
+	wait_sum_delta = delta;
 
 	if (entity_is_task(se)) {
 		p = task_of(se);
@@ -2839,6 +2841,8 @@ update_stats_wait_end(struct cfs_rq *cfs_rq, struct sched_entity *se)
 		delta = clock - schedstat_val(pse->statistics.wait_start);
 	else
 		delta = 0;
+	wait_sibling_delta = wait_sum_delta - delta;
+	__schedstat_add(pse->statistics.wait_self, wait_sibling_delta);
 	parent_wait_sum = schedstat_val(pse->statistics.wait_sum) + delta;
 	delta = parent_wait_sum - forceidled_delta -
 		schedstat_val(se->statistics.parent_wait_sum_base);

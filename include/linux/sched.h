@@ -467,6 +467,7 @@ struct sched_statistics {
 	u64				parent_wait_contrib;
 	u64				iowait_count;
 	u64				iowait_sum;
+	u64				wait_self;
 
 	u64				sleep_start;
 	u64				sleep_max;
