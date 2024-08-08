@@ -65,6 +65,9 @@ void __init pci_swiotlb_init(void)
 	if (swiotlb) {
 		swiotlb_init(0);
 		dma_ops = &swiotlb_dma_ops;
+
+		if (is_zhaoxin_kh40000())
+			kh40000_set_swiotlb_dma_ops();
 	}
 }
 
