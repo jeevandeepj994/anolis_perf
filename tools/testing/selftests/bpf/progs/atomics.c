@@ -18,8 +18,8 @@ __u64 add_stack_value_copy = 0;
 __u64 add_stack_result = 0;
 __u64 add_noreturn_value = 1;
 
-SEC("fentry/bpf_fentry_test1")
-int BPF_PROG(add, int a)
+SEC("raw_tp/sys_enter")
+int add(const void *ctx)
 {
 #ifdef ENABLE_ATOMICS_TESTS
 	__u64 add_stack_value = 1;
@@ -42,8 +42,8 @@ __s64 sub_stack_value_copy = 0;
 __s64 sub_stack_result = 0;
 __s64 sub_noreturn_value = 1;
 
-SEC("fentry/bpf_fentry_test1")
-int BPF_PROG(sub, int a)
+SEC("raw_tp/sys_enter")
+int sub(const void *ctx)
 {
 #ifdef ENABLE_ATOMICS_TESTS
 	__u64 sub_stack_value = 1;
@@ -64,8 +64,8 @@ __u32 and32_value = 0x110;
 __u32 and32_result = 0;
 __u64 and_noreturn_value = (0x110ull << 32);
 
-SEC("fentry/bpf_fentry_test1")
-int BPF_PROG(and, int a)
+SEC("raw_tp/sys_enter")
+int and(const void *ctx)
 {
 #ifdef ENABLE_ATOMICS_TESTS
 
@@ -83,8 +83,8 @@ __u32 or32_value = 0x110;
 __u32 or32_result = 0;
 __u64 or_noreturn_value = (0x110ull << 32);
 
-SEC("fentry/bpf_fentry_test1")
-int BPF_PROG(or, int a)
+SEC("raw_tp/sys_enter")
+int or(const void *ctx)
 {
 #ifdef ENABLE_ATOMICS_TESTS
 	or64_result = __sync_fetch_and_or(&or64_value, 0x011ull << 32);
@@ -101,8 +101,8 @@ __u32 xor32_value = 0x110;
 __u32 xor32_result = 0;
 __u64 xor_noreturn_value = (0x110ull << 32);
 
-SEC("fentry/bpf_fentry_test1")
-int BPF_PROG(xor, int a)
+SEC("raw_tp/sys_enter")
+int xor(const void *ctx)
 {
 #ifdef ENABLE_ATOMICS_TESTS
 	xor64_result = __sync_fetch_and_xor(&xor64_value, 0x011ull << 32);
@@ -120,8 +120,8 @@ __u32 cmpxchg32_value = 1;
 __u32 cmpxchg32_result_fail = 0;
 __u32 cmpxchg32_result_succeed = 0;
 
-SEC("fentry/bpf_fentry_test1")
-int BPF_PROG(cmpxchg, int a)
+SEC("raw_tp/sys_enter")
+int cmpxchg(const void *ctx)
 {
 #ifdef ENABLE_ATOMICS_TESTS
 	cmpxchg64_result_fail = __sync_val_compare_and_swap(&cmpxchg64_value, 0, 3);
@@ -139,8 +139,8 @@ __u64 xchg64_result = 0;
 __u32 xchg32_value = 1;
 __u32 xchg32_result = 0;
 
-SEC("fentry/bpf_fentry_test1")
-int BPF_PROG(xchg, int a)
+SEC("raw_tp/sys_enter")
+int xchg(const void *ctx)
 {
 #ifdef ENABLE_ATOMICS_TESTS
 	__u64 val64 = 2;
