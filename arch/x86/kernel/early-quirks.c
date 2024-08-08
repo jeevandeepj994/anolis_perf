@@ -678,6 +678,7 @@ static void __init zhaoxin_platform_check(int num, int slot, int func)
 {
 	if (read_pci_config_byte(num, slot, func, PCI_REVISION_ID) == 0x10) {
 		zhaoxin_kh40000 = true;
+		kh40000_set_direct_dma_ops();
 		pr_info("KH-40000 platform detected!\n");
 	}
 }
