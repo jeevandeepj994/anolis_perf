@@ -39,8 +39,13 @@ void kh40000_sync_single_dma_for_cpu(struct device *dev, dma_addr_t paddr,
 void *kh40000_dma_direct_alloc(struct device *dev, size_t size, dma_addr_t *dma_handle,
 			       gfp_t gfp, unsigned long attrs);
 void kh40000_set_direct_dma_ops(void);
+void kh40000_set_swiotlb_dma_ops(void);
 #else
 static inline void kh40000_set_direct_dma_ops(void)
+{
+
+}
+static inline void kh40000_set_swiotlb_dma_ops(void)
 {
 
 }
