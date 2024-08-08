@@ -126,6 +126,8 @@ clean-files += tests/.cache
 
 # Help text used by make help
 help:
+	@echo  '  anolis_defconfig       - Generate anolis config for production environment'
+	@echo  '  anolis-debug_defconfig - Generate anolis config for testing environment'
 	@echo  '  config	  - Update current config utilising a line-oriented program'
 	@echo  '  nconfig         - Update current config utilising a ncurses menu based program'
 	@echo  '  menuconfig	  - Update current config utilising a menu based program'
