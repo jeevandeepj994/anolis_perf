@@ -361,28 +361,40 @@ class Collapser():
             configs[conf.name][full_arch] = conf
 
     @staticmethod
-    def __collapse_one_config(arch_confs: Dict[str, Config], arch_num: int, top_dir: str):
-        values = [x.value for x in arch_confs.values()]
-        value, count = Counter(values).most_common(1)[0]
-        if count != arch_num:
+    def __collapse_one_config(arch_confs: Dict[str, Config], archs: set, top_dir: str):
+        # the default value is only depends on arch x86 and arm64.
+        # For example:
+        # 1. the configs "x86 y, arm64 y, sw_64 m/n" will be collpased to "default y, sw_64 m/n"
+        # 2. the configs "x86 y, arm64 y, sw_64 y" will be collpased to "default y"
+        # 3. the configs "x86 y, arm64 m, sw_64 y" will not be collpased
+        if "x86" not in arch_confs or "arm64" not in arch_confs:
             return
-        first_conf = next(iter(arch_confs.values()))
-        common_conf = copy.deepcopy(first_conf)
+        if arch_confs["x86"].value != arch_confs["arm64"].value:
+            return
+        common_conf = copy.deepcopy(arch_confs["x86"])
         common_conf.arch = "default"
         common_conf.subarch = None
-        common_conf.value = value
-        for conf in arch_confs.values():
-            os.remove(conf.as_path(top_dir))
+
+        for arch in archs:
+            if arch in arch_confs:
+                conf = arch_confs[arch]
+                if conf.value == common_conf.value:
+                    os.remove(conf.as_path(top_dir))
+            else:
+                miss_conf = copy.deepcopy(common_conf)
+                miss_conf.arch = arch
+                miss_conf.subarch = None
+                miss_conf.value = "n"
+                miss_conf.as_file(top_dir)
         common_conf.as_file(top_dir)
 
     @staticmethod
     def do_collapse(args):
         c = Collapser()
         PathManager.for_each(args.top_dir, c, Collapser.__do_collect_info, dists=[args.dist])
-        arch_num = len(c.archs)
 
         for arch_confs in c.configs.values():
-            Collapser.__collapse_one_config(arch_confs, arch_num, args.top_dir)
+            Collapser.__collapse_one_config(arch_confs, c.archs, args.top_dir)
 
 class Striper():
     configs: Dict[str, List[str]]
