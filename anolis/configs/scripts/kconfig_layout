@@ -6,3 +6,5 @@ ANCK/generic-arm64 arm64 null generic/default;generic/arm64
 ANCK/debug-arm64 arm64 null generic/default;generic/arm64;debug/default;debug/arm64
 ANCK/gcov-arm64 arm64 null generic/default;generic/arm64;debug/default;debug/arm64;gcov/default
 ANCK/arm64-64k arm64 null generic/default;generic/arm64;debug/default;debug/arm64;64k/arm64
+ANCK/generic-sw_64-6b sw_64 null generic/default;generic/sw_64-6b
+ANCK/generic-sw_64-8a sw_64 null generic/default;generic/sw_64-8a
