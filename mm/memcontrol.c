@@ -6733,23 +6733,23 @@ static int memcg_pgtable_misplaced_write(struct cgroup_subsys_state *css,
 #endif /* CONFIG_PGTABLE_BIND */
 
 #ifdef CONFIG_PRE_OOM
-static u64 memcg_oom_offline_read(struct cgroup_subsys_state *css,
+static u64 memcg_pre_oom_read(struct cgroup_subsys_state *css,
 				   struct cftype *cft)
 {
 	struct mem_cgroup *memcg = mem_cgroup_from_css(css);
 
-	return READ_ONCE(memcg->oom_offline);
+	return READ_ONCE(memcg->pre_oom);
 }
 
-static int memcg_oom_offline_write(struct cgroup_subsys_state *css,
+static int memcg_pre_oom_write(struct cgroup_subsys_state *css,
 				    struct cftype *cft, u64 val)
 {
 	struct mem_cgroup *memcg = mem_cgroup_from_css(css);
 
 	if (val)
-		memcg->oom_offline = true;
+		memcg->pre_oom = true;
 	else
-		memcg->oom_offline = false;
+		memcg->pre_oom = false;
 
 	return 0;
 }
@@ -7435,9 +7435,9 @@ static struct cftype mem_cgroup_legacy_files[] = {
 #endif
 #ifdef CONFIG_PRE_OOM
 	{
-		.name = "oom_offline",
-		.write_u64 = memcg_oom_offline_write,
-		.read_u64 = memcg_oom_offline_read,
+		.name = "pre_oom",
+		.write_u64 = memcg_pre_oom_write,
+		.read_u64 = memcg_pre_oom_read,
 	},
 #endif
 	{ },	/* terminate */

@@ -5094,7 +5094,7 @@ __alloc_pages_slowpath(gfp_t gfp_mask, unsigned int order,
 		struct mem_cgroup *memcg;
 
 		memcg = get_mem_cgroup_from_mm(current->mm);
-		if (memcg && !memcg->oom_offline) {
+		if (memcg && memcg->pre_oom) {
 			gfp_mask &= ~__GFP_DIRECT_RECLAIM;
 			css_put(&memcg->css);
 		}

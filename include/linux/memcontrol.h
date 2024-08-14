@@ -526,7 +526,7 @@ struct mem_cgroup {
 #endif
 
 #ifdef CONFIG_PRE_OOM
-	bool oom_offline;
+	bool pre_oom;
 #endif
 
 #ifdef CONFIG_LRU_GEN
