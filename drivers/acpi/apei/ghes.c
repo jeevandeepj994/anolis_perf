@@ -770,10 +770,6 @@ static bool ghes_do_proc(struct ghes *ghes,
 		}
 		else if (guid_equal(sec_type, &CPER_SEC_PROC_ARM)) {
 			queued = ghes_handle_arm_hw_error(gdata, sev);
-		} else if (guid_equal(sec_type, &CPER_SEC_PROC_GENERIC)) {
-			struct cper_sec_proc_generic *zdi_err = acpi_hest_get_payload(gdata);
-
-			arch_apei_report_zdi_error(sec_sev, zdi_err);
 		} else {
 			void *err = acpi_hest_get_payload(gdata);
 
