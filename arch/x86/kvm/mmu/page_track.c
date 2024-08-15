@@ -23,7 +23,7 @@ void kvm_page_track_free_memslot(struct kvm_memory_slot *slot)
 	int i;
 
 	for (i = 0; i < KVM_PAGE_TRACK_MAX; i++) {
-		kvfree(slot->arch.gfn_track[i]);
+		vfree(slot->arch.gfn_track[i]);
 		slot->arch.gfn_track[i] = NULL;
 	}
 }
