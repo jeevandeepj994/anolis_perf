@@ -551,9 +551,13 @@ struct task_group {
 	unsigned int		ht_ratio;
 #endif
 #ifdef CONFIG_GROUP_BALANCER
+	const cpumask_t		*soft_cpus_allowed_ptr;
 	cpumask_t		soft_cpus_allowed;
 	int			soft_cpus_version;
 	int			specs_ratio;
+	struct rb_node		gb_node;
+	struct group_balancer_sched_domain *gb_sd;
+	struct group_balancer_sched_domain *prev_gb_sd;
 	bool			group_balancer;
 #endif
 	long			priority;
@@ -3452,7 +3456,7 @@ static inline const struct cpumask *task_allowed_cpu(struct task_struct *p)
 
 		if (unlikely(p->soft_cpus_version != tg->soft_cpus_version)) {
 			cpumask_and(&p->cpus_allowed_alt, p->cpus_ptr,
-				    &tg->soft_cpus_allowed);
+				    tg->soft_cpus_allowed_ptr);
 			p->soft_cpus_version = tg->soft_cpus_version;
 		}
 		if (!cpumask_empty(&p->cpus_allowed_alt))
@@ -3461,9 +3465,18 @@ static inline const struct cpumask *task_allowed_cpu(struct task_struct *p)
 	return p->cpus_ptr;
 }
 
+static inline void tg_inc_soft_cpus_version(struct task_group *tg)
+{
+	tg->soft_cpus_version++;
+	if (unlikely(tg->soft_cpus_version < 0))
+		tg->soft_cpus_version = 0;
+}
+
 extern void sched_init_group_balancer_sched_domains(void);
 extern void sched_clear_group_balancer_sched_domains(void);
 extern void tg_set_specs_ratio(struct task_group *tg);
+extern int attach_tg_to_group_balancer_sched_domain(struct task_group *tg);
+extern void detach_tg_from_group_balancer_sched_domain(struct task_group *tg);
 #else
 static inline const struct cpumask *task_allowed_cpu(struct task_struct *p)
 {

@@ -8393,7 +8393,9 @@ void __init sched_init_smp(void)
 
 #ifdef CONFIG_GROUP_BALANCER
 	cpumask_copy(&root_task_group.soft_cpus_allowed, cpu_online_mask);
+	root_task_group.soft_cpus_allowed_ptr = &root_task_group.soft_cpus_allowed;
 #endif
+
 	/* Move init over to a non-isolated CPU */
 	if (set_cpus_allowed_ptr(current, housekeeping_cpumask(HK_FLAG_DOMAIN)) < 0)
 		BUG();
@@ -8496,6 +8498,8 @@ void __init sched_init(void)
 	root_task_group.specs_ratio = -1;
 	root_task_group.group_balancer = 0;
 	root_task_group.soft_cpus_version = 0;
+	root_task_group.gb_sd = NULL;
+	root_task_group.prev_gb_sd = NULL;
 #endif
 #ifdef CONFIG_CPUMASK_OFFSTACK
 	for_each_possible_cpu(i) {
@@ -8913,8 +8917,21 @@ struct task_group *sched_create_group(struct task_group *parent)
 #endif
 #ifdef CONFIG_GROUP_BALANCER
 	cpumask_copy(&tg->soft_cpus_allowed, &parent->soft_cpus_allowed);
+	if (group_balancer_enabled()) {
+		read_lock(&group_balancer_lock);
+		if (parent->soft_cpus_allowed_ptr != &parent->soft_cpus_allowed ||
+		    parent->group_balancer)
+			tg->soft_cpus_allowed_ptr = parent->soft_cpus_allowed_ptr;
+		else
+			tg->soft_cpus_allowed_ptr = &tg->soft_cpus_allowed;
+		read_unlock(&group_balancer_lock);
+	} else {
+		tg->soft_cpus_allowed_ptr = &tg->soft_cpus_allowed;
+	}
 	tg->group_balancer = 0;
 	tg->soft_cpus_version = 0;
+	tg->gb_sd = NULL;
+	tg->prev_gb_sd = NULL;
 #endif
 	return tg;
 
@@ -9905,7 +9922,7 @@ static int cpu_soft_cpus_show(struct seq_file *sf, void *v)
 {
 	struct task_group *tg = css_tg(seq_css(sf));
 
-	seq_printf(sf, "%*pbl\n", cpumask_pr_args(&tg->soft_cpus_allowed));
+	seq_printf(sf, "%*pbl\n", cpumask_pr_args(tg->soft_cpus_allowed_ptr));
 
 	return 0;
 }
@@ -9919,6 +9936,13 @@ static ssize_t cpu_soft_cpus_write(struct kernfs_open_file *of,
 	int retval;
 
 	if (tg == &root_task_group)
+		return -EACCES;
+
+	/*
+	 * If any ancestor of tg(or itself) has already enabled group_balancer,
+	 * it's not allowed to edit its soft_cpus_allowed.
+	 */
+	if (tg->soft_cpus_allowed_ptr != &tg->soft_cpus_allowed || tg->group_balancer)
 		return -EACCES;
 
 	if (!*buf) {
@@ -9938,9 +9962,7 @@ static ssize_t cpu_soft_cpus_write(struct kernfs_open_file *of,
 	tg_soft_cpus_allowed = &tg->soft_cpus_allowed;
 	if (!cpumask_equal(tg_soft_cpus_allowed, &tmp_soft_cpus_allowed)) {
 		cpumask_copy(tg_soft_cpus_allowed, &tmp_soft_cpus_allowed);
-		tg->soft_cpus_version++;
-		if (unlikely(tg->soft_cpus_version < 0))
-			tg->soft_cpus_version = 0;
+		tg_inc_soft_cpus_version(tg);
 	}
 
 	return nbytes;
@@ -10012,6 +10034,16 @@ static int cpu_group_balancer_write_u64(struct cgroup_subsys_state *css,
 		retval = validate_group_balancer(tg);
 		if (retval)
 			goto out;
+		retval = attach_tg_to_group_balancer_sched_domain(tg);
+		if (retval)
+			goto out;
+	} else {
+		/*
+		 * As gb_sd may be freed by user, set tg->prev_gb_sd NULL to prevent
+		 * use after free.
+		 */
+		tg->prev_gb_sd = NULL;
+		detach_tg_from_group_balancer_sched_domain(tg);
 	}
 	tg->group_balancer = new;
 out:
