@@ -4,6 +4,8 @@
 #include <linux/efi.h>
 #include <asm/tdx.h>
 
+extern struct efi_unaccepted_memory *unaccepted_direct;
+
 static inline void arch_accept_memory(phys_addr_t start, phys_addr_t end)
 {
 	/* Platform-specific memory-acceptance call goes here */
@@ -18,7 +20,8 @@ static inline void arch_accept_memory(phys_addr_t start, phys_addr_t end)
 static inline struct efi_unaccepted_memory *efi_get_unaccepted_table(void)
 {
 	if (efi.unaccepted == EFI_INVALID_TABLE_ADDR)
-		return NULL;
+		return unaccepted_direct;
+
 	return __va(efi.unaccepted);
 }
 #endif

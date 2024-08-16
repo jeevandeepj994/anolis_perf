@@ -15,6 +15,7 @@ struct accept_range {
 };
 
 static LIST_HEAD(accepting_list);
+struct efi_unaccepted_memory *unaccepted_direct;
 
 /*
  * accept_memory() -- Consult bitmap and accept the memory if needed.
