@@ -138,11 +138,11 @@ void resctrl_arch_rmid_idx_decode(u32 idx, u32 *closid, u32 *rmid)
 	*rmid = idx & pmg_mask;
 }
 
-void resctrl_sched_in(void)
+void resctrl_sched_in(struct task_struct *tsk)
 {
 	lockdep_assert_preemption_disabled();
 
-	mpam_thread_switch(current);
+	mpam_thread_switch(tsk);
 }
 
 void resctrl_arch_set_cpu_default_closid_rmid(int cpu, u32 closid, u32 pmg)
@@ -175,7 +175,7 @@ void resctrl_arch_sync_cpu_defaults(void *info)
 							 r->closid, r->rmid);
 	}
 
-	resctrl_sched_in();
+	resctrl_sched_in(current);
 }
 
 void resctrl_arch_set_closid_rmid(struct task_struct *tsk, u32 closid, u32 rmid)
