@@ -7,11 +7,11 @@
 struct efi_unaccepted_memory *unaccepted_table;
 
 extern
-unsigned long find_next_bit(const unsigned long *addr, unsigned long size,
-			    unsigned long offset);
-extern
-unsigned long find_next_zero_bit(const unsigned long *addr, unsigned long size,
+unsigned long find_next_bit_stub(const unsigned long *addr, unsigned long size,
 				 unsigned long offset);
+extern
+unsigned long find_next_zero_bit_stub(const unsigned long *addr, unsigned long size,
+				      unsigned long offset);
 #ifndef for_each_set_bitrange_from
 /**
  * for_each_set_bitrange_from - iterate over all set bit ranges [b; e)
@@ -20,11 +20,11 @@ unsigned long find_next_zero_bit(const unsigned long *addr, unsigned long size,
  * @addr: bitmap address to base the search on
  * @size: bitmap size in number of bits
  */
-#define for_each_set_bitrange_from(b, e, addr, size)            \
-	for (;                                                  \
-	     (b) = find_next_bit((addr), (size), (b)),          \
-	     (e) = find_next_zero_bit((addr), (size), (b) + 1), \
-	     (b) < (size);                                      \
+#define for_each_set_bitrange_from(b, e, addr, size)                 \
+	for (;                                                       \
+	     (b) = find_next_bit_stub((addr), (size), (b)),          \
+	     (e) = find_next_zero_bit_stub((addr), (size), (b) + 1), \
+	     (b) < (size);                                           \
 	     (b) = (e) + 1)
 #endif
 
