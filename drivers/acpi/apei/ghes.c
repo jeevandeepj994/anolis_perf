@@ -775,6 +775,7 @@ static bool ghes_do_proc(struct ghes *ghes,
 
 			if (!arch_apei_report_zdi_error(sec_type,
 							(struct cper_sec_proc_generic *)err)) {
+				ghes_defer_non_standard_event(gdata, sev);
 				log_non_standard_event(sec_type, fru_id, fru_text,
 						       sec_sev, err,
 						       gdata->error_data_length);
