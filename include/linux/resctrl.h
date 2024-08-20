@@ -22,6 +22,7 @@ int proc_resctrl_show(struct seq_file *m,
 #endif
 
 struct mon_config_info {
+	struct rdt_domain *d;
 	u32 evtid;
 	u32 mon_config;
 };
@@ -140,6 +141,7 @@ struct resctrl_staged_config {
  * @cqm_limbo:		worker to periodically read CQM h/w counters
  * @mbm_work_cpu:	worker CPU for MBM h/w counters
  * @cqm_work_cpu:	worker CPU for CQM h/w counters
+ * @mbm_cntr_map:	bitmap to track domain counter assignment
  * @plr:		pseudo-locked region (if any) associated with domain
  * @staged_config:	parsed configuration to be applied
  * @mbps_val:		When mba_sc is enabled, this holds the array of user
@@ -157,6 +159,7 @@ struct rdt_domain {
 	struct delayed_work		cqm_limbo;
 	int				mbm_work_cpu;
 	int				cqm_work_cpu;
+	unsigned long			*mbm_cntr_map;
 	struct pseudo_lock_region	*plr;
 	struct resctrl_staged_config	staged_config[CDP_NUM_TYPES];
 	u32				*mbps_val;
@@ -220,11 +223,24 @@ struct resctrl_membw {
 };
 
 /**
+ * struct resctrl_mon - Monitoring related data
+ * @num_rmid:		Number of RMIDs available
+ * @num_mbm_cntrs:	Number of monitoring counters
+ * @mbm_cntr_assignable:Is system capable of supporting monitor assignment?
+ * @evt_list:		List of monitoring events
+ */
+struct resctrl_mon {
+	int			num_rmid;
+	int			num_mbm_cntrs;
+	bool			mbm_cntr_assignable;
+	struct list_head	evt_list;
+};
+
+/**
  * struct rdt_resource - attributes of a resctrl resource
  * @rid:		The index of the resource
  * @alloc_capable:	Is allocation available on this machine
  * @mon_capable:	Is monitor feature available on this machine
- * @num_rmid:		Number of RMIDs available
  * @cache_level:	Which cache level defines scope of this resource
  * @cache:		Cache allocation related data
  * @membw:		If the component has bandwidth controls, their properties.
@@ -233,7 +249,6 @@ struct resctrl_membw {
  * @data_width:		Character width of data when displaying
  * @default_ctrl:	Specifies default cache cbm or memory B/W percent.
  * @format_str:		Per resource format string to show domain value
- * @evt_list:		List of monitoring events
  * @fflags:		flags to choose base and info files
  * @cdp_capable:	Is the CDP feature available on this resource
  */
@@ -241,16 +256,15 @@ struct rdt_resource {
 	int			rid;
 	bool			alloc_capable;
 	bool			mon_capable;
-	int			num_rmid;
 	int			cache_level;
 	struct resctrl_cache	cache;
 	struct resctrl_membw	membw;
+	struct resctrl_mon	mon;
 	struct list_head	domains;
 	char			*name;
 	int			data_width;
 	u32			default_ctrl;
 	const char		*format_str;
-	struct list_head	evt_list;
 	unsigned long		fflags;
 	bool			cdp_capable;
 };

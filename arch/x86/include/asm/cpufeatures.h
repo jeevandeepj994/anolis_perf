@@ -477,6 +477,8 @@
  */
 #define X86_FEATURE_AMD_LBR_PMC_FREEZE	(21*32+ 0) /* AMD LBR and PMC Freeze */
 
+#define X86_FEATURE_ABMC		(21*32+ 6) /* "" Assignable Bandwidth Monitoring Counters */
+
 /*
  * BUG word(s)
  */

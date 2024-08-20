@@ -73,4 +73,12 @@ enum resctrl_event_id {
 
 #define RESCTRL_MAX_EVENT_NUM		4
 
+#define INVALID_CONFIG_VALUE		U32_MAX
+/*
+ * Assignment flags for ABMC feature
+ */
+#define ASSIGN_NONE			0
+#define ASSIGN_TOTAL			BIT(QOS_L3_MBM_TOTAL_EVENT_ID)
+#define ASSIGN_LOCAL			BIT(QOS_L3_MBM_LOCAL_EVENT_ID)
+
 #endif /* __LINUX_RESCTRL_TYPES_H */
