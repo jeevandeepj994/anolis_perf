@@ -169,6 +169,7 @@ const char *cper_zdi_zpi_err_type_str(unsigned int etype)
 }
 EXPORT_SYMBOL_GPL(cper_zdi_zpi_err_type_str);
 
+#ifdef CONFIG_X86
 static void cper_print_proc_generic_zdi_zpi(const char *pfx,
 					    const struct cper_sec_proc_generic *zdi_zpi)
 {
@@ -187,6 +188,7 @@ static void cper_print_proc_generic_zdi_zpi(const char *pfx,
 	pr_info("%s apic id %lld error_type: %s\n", pfx, zdi_zpi->proc_id,
 		cper_zdi_zpi_err_type_str(etype));
 }
+#endif
 
 static void cper_print_proc_generic(const char *pfx,
 				    const struct cper_sec_proc_generic *proc)
