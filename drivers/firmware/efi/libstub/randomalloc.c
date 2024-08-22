@@ -56,7 +56,6 @@ efi_status_t efi_random_alloc(unsigned long size,
 			      unsigned long random_seed)
 {
 	unsigned long total_slots = 0, target_slot;
-	unsigned long total_mirrored_slots = 0;
 	struct efi_boot_memmap *map;
 	efi_status_t status;
 	int map_offset;
