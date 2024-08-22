@@ -2776,7 +2776,7 @@ static int vfio_dev_unbind_gpasid_fn(struct device *dev, void *data)
 	}
 	return 0;
 }
-
+#if IS_ENABLED(CONFIG_IOASID_USER)
 static void vfio_group_unbind_gpasid_fn(ioasid_t pasid, void *data)
 {
 	struct domain_capsule *dc = (struct domain_capsule *)data;
@@ -2799,6 +2799,7 @@ static void vfio_group_unbind_default_gpasid(ioasid_t pasid, void *data)
 	iommu_group_for_each_dev(dc->group->iommu_group,
 				 dc, vfio_dev_unbind_gpasid_fn);
 }
+#endif
 
 static void vfio_iommu_type1_detach_group(void *iommu_data,
 					  struct iommu_group *iommu_group)

@@ -2570,7 +2570,6 @@ static struct rftype *rdtgroup_get_rftype_by_name(const char *name)
 static void thread_throttle_mode_init(void)
 {
 	struct rdt_resource *r = resctrl_arch_get_resource(RDT_RESOURCE_MBA);
-	struct rftype *rft;
 
 	if (!r->alloc_capable ||
 	    r->membw.throttle_mode == THREAD_THROTTLE_UNDEFINED)
