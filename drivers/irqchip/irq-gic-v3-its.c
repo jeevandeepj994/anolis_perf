@@ -3624,6 +3624,10 @@ static int its_msi_prepare(struct irq_domain *domain, struct device *dev,
 	struct msi_domain_info *msi_info;
 	u32 dev_id;
 	int err = 0;
+#ifdef CONFIG_VIRT_PLAT_DEV
+	int use_devid_pool = false;
+	struct rsv_devid_pool *pool = NULL;
+#endif
 
 	/*
 	 * We ignore "dev" entirely, and rely on the dev_id that has
@@ -3634,9 +3638,6 @@ static int its_msi_prepare(struct irq_domain *domain, struct device *dev,
 	dev_id = info->scratchpad[0].ul;
 
 #ifdef CONFIG_VIRT_PLAT_DEV
-	int use_devid_pool = false;
-	struct rsv_devid_pool *pool = NULL;
-
 	if (rsv_devid_pool_cap && !dev->of_node && !dev->fwnode &&
 	    info->scratchpad[0].ul == -1)
 		use_devid_pool = true;
