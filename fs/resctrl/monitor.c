@@ -720,11 +720,12 @@ static struct mon_evt mbm_local_event = {
 	.name		= "mbm_local_bytes",
 	.evtid		= QOS_L3_MBM_LOCAL_EVENT_ID,
 };
-
+#ifdef CONFIG_ARM64
 static struct mon_evt mbm_bps_event = {
 	.name		= "mbm_local_bytes",
 	.evtid		= QOS_MC_MBM_BPS_EVENT_ID,
 };
+#endif
 
 /*
  * Initialize the event list for the resource.
