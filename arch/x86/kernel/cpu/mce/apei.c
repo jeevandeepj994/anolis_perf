@@ -128,7 +128,7 @@ void zx_apei_mce_report_pcie_error(int severity, struct cper_sec_pcie *pcie_err)
 	mce_setup(&m);
 	m.addr = 0;
 	m.misc = 0;
-	m.misc |= pcie_err->device_id.segment << 32;
+	m.misc |= (u64) pcie_err->device_id.segment << 32;
 	m.misc |= pcie_err->device_id.bus << 24;
 	m.misc |= pcie_err->device_id.device << 19;
 	m.misc |= pcie_err->device_id.function << 16;
