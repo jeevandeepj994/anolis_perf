@@ -479,7 +479,7 @@ static void memory_failure_cb(struct callback_head *twork)
 		container_of(twork, struct mce_task_work, twork);
 	unsigned long pfn = twcb->pfn;
 
-	rc = memory_failure(twcb->pfn, twcb->flags);
+	rc = memory_failure(pfn, twcb->flags);
 	kfree(twcb);
 
 	if (!rc)
