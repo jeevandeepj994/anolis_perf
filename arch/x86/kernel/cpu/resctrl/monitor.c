@@ -331,7 +331,7 @@ void resctrl_mbm_evt_config_init(struct rdt_hw_domain *hw_dom)
 	 * Read the configuration registers QOS_EVT_CFG_n, where <n> is
 	 * the BMEC event number (EvtID).
 	 */
-	if (resctrl_arch_is_mbm_total_enabled()) {
+	if (resctrl_arch_is_mbm_total_configurable()) {
 		index = mon_event_config_index_get(QOS_L3_MBM_TOTAL_EVENT_ID);
 		rdmsrl(MSR_IA32_EVT_CFG_BASE + index, msrval);
 		hw_dom->mbm_total_cfg = msrval & MAX_EVT_CONFIG_BITS;
@@ -339,7 +339,7 @@ void resctrl_mbm_evt_config_init(struct rdt_hw_domain *hw_dom)
 		hw_dom->mbm_total_cfg = INVALID_CONFIG_VALUE;
 	}
 
-	if (resctrl_arch_is_mbm_local_enabled()) {
+	if (resctrl_arch_is_mbm_local_configurable()) {
 		index = mon_event_config_index_get(QOS_L3_MBM_LOCAL_EVENT_ID);
 		rdmsrl(MSR_IA32_EVT_CFG_BASE + index, msrval);
 		hw_dom->mbm_local_cfg = msrval & MAX_EVT_CONFIG_BITS;
