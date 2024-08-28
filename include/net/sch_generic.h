@@ -126,6 +126,16 @@ struct Qdisc {
 
 	struct rcu_head		rcu;
 	netdevice_tracker	dev_tracker;
+
+	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
+	CK_KABI_RESERVE(3)
+	CK_KABI_RESERVE(4)
+	CK_KABI_RESERVE(5)
+	CK_KABI_RESERVE(6)
+	CK_KABI_RESERVE(7)
+	CK_KABI_RESERVE(8)
+
 	/* private data */
 	long privdata[] ____cacheline_aligned;
 };
@@ -277,6 +287,8 @@ struct Qdisc_class_ops {
 					struct sk_buff *skb, struct tcmsg*);
 	int			(*dump_stats)(struct Qdisc *, unsigned long,
 					struct gnet_dump *);
+
+	CK_KABI_RESERVE(1)
 };
 
 /* Qdisc_class_ops flag values */
@@ -322,6 +334,8 @@ struct Qdisc_ops {
 	u32			(*egress_block_get)(struct Qdisc *sch);
 
 	struct module		*owner;
+
+	CK_KABI_RESERVE(1)
 };
 
 
@@ -397,6 +411,8 @@ struct tcf_proto_ops {
 
 	struct module		*owner;
 	int			flags;
+
+	CK_KABI_RESERVE(1)
 };
 
 /* Classifiers setting TCF_PROTO_OPS_DOIT_UNLOCKED in tcf_proto_ops->flags

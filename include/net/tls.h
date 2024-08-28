@@ -190,6 +190,11 @@ enum tls_context_flags {
 struct cipher_context {
 	char *iv;
 	char *rec_seq;
+
+	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
+	CK_KABI_RESERVE(3)
+	CK_KABI_RESERVE(4)
 };
 
 union tls_crypto_context {
@@ -260,6 +265,11 @@ struct tls_context {
 	struct list_head list;
 	refcount_t refcount;
 	struct rcu_head rcu;
+
+	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
+	CK_KABI_RESERVE(3)
+	CK_KABI_RESERVE(4)
 };
 
 enum tls_offload_ctx_dir {
@@ -278,6 +288,13 @@ struct tlsdev_ops {
 	int (*tls_dev_resync)(struct net_device *netdev,
 			      struct sock *sk, u32 seq, u8 *rcd_sn,
 			      enum tls_offload_ctx_dir direction);
+
+	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
+	CK_KABI_RESERVE(3)
+	CK_KABI_RESERVE(4)
+	CK_KABI_RESERVE(5)
+	CK_KABI_RESERVE(6)
 };
 
 enum tls_offload_sync_type {
