@@ -9,6 +9,8 @@
  * Blame Andrew Morton for all this.
  */
 
+#include <linux/ck_kabi.h>
+
 struct task_io_accounting {
 #ifdef CONFIG_TASK_XACCT
 	/* bytes read */
@@ -43,4 +45,12 @@ struct task_io_accounting {
 	 */
 	u64 cancelled_write_bytes;
 #endif /* CONFIG_TASK_IO_ACCOUNTING */
+	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
+	CK_KABI_RESERVE(3)
+	CK_KABI_RESERVE(4)
+	CK_KABI_RESERVE(5)
+	CK_KABI_RESERVE(6)
+	CK_KABI_RESERVE(7)
+	CK_KABI_RESERVE(8)
 };

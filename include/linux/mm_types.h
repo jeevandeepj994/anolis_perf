@@ -3,7 +3,7 @@
 #define _LINUX_MM_TYPES_H
 
 #include <linux/mm_types_task.h>
-
+#include <linux/ck_kabi.h>
 #include <linux/auxvec.h>
 #include <linux/kref.h>
 #include <linux/list.h>
@@ -660,6 +660,8 @@ struct vm_area_struct {
 	struct vma_numab_state *numab_state;	/* NUMA Balancing state */
 #endif
 	struct vm_userfaultfd_ctx vm_userfaultfd_ctx;
+
+	CK_KABI_RESERVE(1)
 } __randomize_layout;
 
 #ifdef CONFIG_SCHED_MM_CID
@@ -919,6 +921,8 @@ struct mm_struct {
 #endif /* CONFIG_LRU_GEN */
 	} __randomize_layout;
 
+	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
 	/*
 	 * The mm_cpumask needs to be at the end of mm_struct, because it
 	 * is dynamically sized based on nr_cpu_ids.

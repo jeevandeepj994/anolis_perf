@@ -28,6 +28,7 @@
 #include <linux/xattr.h>
 #include <linux/random.h>
 #include <linux/sysfs.h>
+#include <linux/ck_kabi.h>
 #include <linux/completion.h>
 #include <crypto/hash_info.h>
 #include <crypto/hash.h>
@@ -428,6 +429,9 @@ struct ubifs_inode {
 	pgoff_t read_in_a_row;
 	int data_len;
 	void *data;
+
+	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
 };
 
 /**
@@ -1522,6 +1526,15 @@ struct ubifs_info {
 
 	struct ubifs_debug_info *dbg;
 	struct ubifs_stats_info *stats;
+
+	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
+	CK_KABI_RESERVE(3)
+	CK_KABI_RESERVE(4)
+	CK_KABI_RESERVE(5)
+	CK_KABI_RESERVE(6)
+	CK_KABI_RESERVE(7)
+	CK_KABI_RESERVE(8)
 };
 
 extern struct list_head ubifs_infos;

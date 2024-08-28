@@ -10,6 +10,8 @@
 
 #ifndef _LINUX_MEMCONTROL_H
 #define _LINUX_MEMCONTROL_H
+
+#include <linux/ck_kabi.h>
 #include <linux/cgroup.h>
 #include <linux/vm_event_item.h>
 #include <linux/hardirq.h>
@@ -333,6 +335,10 @@ struct mem_cgroup {
 	struct lru_gen_mm_list mm_list;
 #endif
 
+	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
+	CK_KABI_RESERVE(3)
+	CK_KABI_RESERVE(4)
 	struct mem_cgroup_per_node *nodeinfo[];
 };
 

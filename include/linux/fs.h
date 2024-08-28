@@ -43,6 +43,7 @@
 #include <linux/cred.h>
 #include <linux/mnt_idmapping.h>
 #include <linux/slab.h>
+#include <linux/ck_kabi.h>
 
 #include <asm/byteorder.h>
 #include <uapi/linux/fs.h>
@@ -489,6 +490,8 @@ struct address_space {
 	struct list_head	private_list;
 	struct rw_semaphore	i_mmap_rwsem;
 	void			*private_data;
+
+	CK_KABI_RESERVE(1)
 } __attribute__((aligned(sizeof(long)))) __randomize_layout;
 	/*
 	 * On most architectures that alignment is already the case; but

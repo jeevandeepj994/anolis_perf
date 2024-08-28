@@ -40,6 +40,7 @@
 #include <linux/oom.h>
 #include <linux/numa.h>
 #include <linux/pagewalk.h>
+#include <linux/ck_kabi.h>
 
 #include <asm/tlbflush.h>
 #include "internal.h"
@@ -140,6 +141,9 @@ struct ksm_scan {
 	unsigned long address;
 	struct ksm_rmap_item **rmap_list;
 	unsigned long seqnr;
+
+	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
 };
 
 /**

@@ -9,6 +9,7 @@
 #ifndef __LINUX_PCI_EPC_H
 #define __LINUX_PCI_EPC_H
 
+#include <linux/ck_kabi.h>
 #include <linux/pci-epf.h>
 
 struct pci_epc;
@@ -89,6 +90,8 @@ struct pci_epc_ops {
 	const struct pci_epc_features* (*get_features)(struct pci_epc *epc,
 						       u8 func_no, u8 vfunc_no);
 	struct module *owner;
+
+	CK_KABI_RESERVE(1)
 };
 
 /**
@@ -150,6 +153,8 @@ struct pci_epc {
 	/* mutex to protect against concurrent access of EP controller */
 	struct mutex			lock;
 	unsigned long			function_num_map;
+
+	CK_KABI_RESERVE(1)
 };
 
 /**

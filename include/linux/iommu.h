@@ -7,6 +7,7 @@
 #ifndef __LINUX_IOMMU_H
 #define __LINUX_IOMMU_H
 
+#include <linux/ck_kabi.h>
 #include <linux/scatterlist.h>
 #include <linux/device.h>
 #include <linux/types.h>
@@ -115,6 +116,8 @@ struct iommu_domain {
 			int users;
 		};
 	};
+
+	CK_KABI_RESERVE(1)
 };
 
 static inline bool iommu_is_dma_domain(struct iommu_domain *domain)

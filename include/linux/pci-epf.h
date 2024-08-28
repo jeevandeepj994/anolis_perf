@@ -9,6 +9,7 @@
 #ifndef __LINUX_PCI_EPF_H
 #define __LINUX_PCI_EPF_H
 
+#include <linux/ck_kabi.h>
 #include <linux/configfs.h>
 #include <linux/device.h>
 #include <linux/mod_devicetable.h>
@@ -51,6 +52,8 @@ struct pci_epf_header {
 	u16	subsys_vendor_id;
 	u16	subsys_id;
 	enum pci_interrupt_pin interrupt_pin;
+
+	CK_KABI_RESERVE(1)
 };
 
 /**
@@ -121,6 +124,8 @@ struct pci_epf_bar {
 	size_t		size;
 	enum pci_barno	barno;
 	int		flags;
+
+	CK_KABI_RESERVE(1)
 };
 
 /**
@@ -180,6 +185,8 @@ struct pci_epf {
 	unsigned long		vfunction_num_map;
 	struct list_head	pci_vepf;
 	const struct pci_epc_event_ops *event_ops;
+
+	CK_KABI_RESERVE(1)
 };
 
 /**

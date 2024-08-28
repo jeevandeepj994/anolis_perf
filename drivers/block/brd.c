@@ -24,6 +24,7 @@
 #include <linux/slab.h>
 #include <linux/backing-dev.h>
 #include <linux/debugfs.h>
+#include <linux/ck_kabi.h>
 
 #include <linux/uaccess.h>
 
@@ -44,6 +45,9 @@ struct brd_device {
 	 */
 	struct xarray	        brd_pages;
 	u64			brd_nr_pages;
+
+	CK_KABI_RESERVE(1)
+	CK_KABI_RESERVE(2)
 };
 
 /*

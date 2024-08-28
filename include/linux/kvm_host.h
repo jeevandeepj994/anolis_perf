@@ -2,7 +2,7 @@
 #ifndef __KVM_HOST_H
 #define __KVM_HOST_H
 
-
+#include <linux/ck_kabi.h>
 #include <linux/types.h>
 #include <linux/hardirq.h>
 #include <linux/list.h>
@@ -393,6 +393,8 @@ struct kvm_vcpu {
 	 */
 	struct kvm_memory_slot *last_used_slot;
 	u64 last_used_slot_gen;
+
+	CK_KABI_RESERVE(1)
 };
 
 /*
@@ -589,6 +591,8 @@ struct kvm_memory_slot {
 	u32 flags;
 	short id;
 	u16 as_id;
+
+	CK_KABI_RESERVE(1)
 };
 
 static inline bool kvm_slot_dirty_track_enabled(const struct kvm_memory_slot *slot)

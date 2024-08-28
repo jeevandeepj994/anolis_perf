@@ -11,6 +11,7 @@
 #ifndef _PCIE_DESIGNWARE_H
 #define _PCIE_DESIGNWARE_H
 
+#include <linux/ck_kabi.h>
 #include <linux/bitfield.h>
 #include <linux/bitops.h>
 #include <linux/clk.h>
@@ -341,6 +342,8 @@ struct dw_pcie_ep_ops {
 	 * driver.
 	 */
 	unsigned int (*func_conf_select)(struct dw_pcie_ep *ep, u8 func_no);
+
+	CK_KABI_RESERVE(1)
 };
 
 struct dw_pcie_ep_func {
@@ -364,6 +367,8 @@ struct dw_pcie_ep {
 	void __iomem		*msi_mem;
 	phys_addr_t		msi_mem_phys;
 	struct pci_epf_bar	*epf_bar[PCI_STD_NUM_BARS];
+
+	CK_KABI_RESERVE(1)
 };
 
 struct dw_pcie_ops {
@@ -406,6 +411,8 @@ struct dw_pcie {
 	struct reset_control_bulk_data	core_rsts[DW_PCIE_NUM_CORE_RSTS];
 	struct gpio_desc		*pe_rst;
 	bool			suspended;
+
+	CK_KABI_RESERVE(1)
 };
 
 #define to_dw_pcie_from_pp(port) container_of((port), struct dw_pcie, pp)
