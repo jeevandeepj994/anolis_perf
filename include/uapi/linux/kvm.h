@@ -1100,6 +1100,8 @@ struct kvm_ppc_resize_hpt {
 
 #define KVM_CAP_SEV_ES_GHCB 500
 
+#define KVM_CAP_ARM_CPU_FEATURE 555
+
 #define KVM_CAP_LOONGARCH_FPU 800
 #define KVM_CAP_LOONGARCH_LSX 801
 #define KVM_CAP_LOONGARCH_VZ 802
@@ -1344,6 +1346,17 @@ struct kvm_vfio_spapr_tce {
 struct kvm_master_dev_info {
 	__u32 nvectors;
 	struct kvm_msi msi[];
+};
+
+#define ID_REG_MAX_NUMS 64
+struct id_reg_info {
+	__u64 sys_id;
+	__u64 sys_val;
+};
+
+struct id_registers {
+	struct id_reg_info regs[ID_REG_MAX_NUMS];
+	__u64 num;
 };
 
 /*
