@@ -180,7 +180,6 @@ static inline void mpam_thread_switch(struct task_struct *tsk)
 
 	/* Synchronising this write is left until the ERET to EL0 */
 	write_sysreg_s(mpam_sysreg_offset + regval, SYS_MPAM0_EL1);
-	write_sysreg_s(mpam_sysreg_offset + regval, SYS_MPAM1_EL1);
 	WRITE_ONCE(per_cpu(arm64_mpam_current, cpu), regval);
 }
 #endif /* __ASM__MPAM_H */
