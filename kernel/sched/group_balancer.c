@@ -1191,11 +1191,16 @@ cleanup_root:
 	return ret;
 }
 
+void update_group_balancer_root_cpumask(void)
+{
+	cpumask_copy(&root_cpumask, housekeeping_cpumask(HK_FLAG_DOMAIN));
+}
+
 static int __init group_balancer_init(void)
 {
 	int ret;
 
-	cpumask_copy(&root_cpumask, cpu_online_mask);
+	update_group_balancer_root_cpumask();
 	sched_init_group_balancer_levels();
 	validate_topology_levels();
 	ret = sched_init_group_balancer_kernfs();
