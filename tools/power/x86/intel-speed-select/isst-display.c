@@ -169,21 +169,30 @@ static void format_and_print(FILE *outf, int level, char *header, char *value)
 static int print_package_info(struct isst_id *id, FILE *outf)
 {
 	char header[256];
+	int level = 1;
 
 	if (out_format_is_json()) {
-		snprintf(header, sizeof(header), "package-%d:die-%d:cpu-%d",
-			 id->pkg, id->die, id->cpu);
-		format_and_print(outf, 1, header, NULL);
+		if (api_version() > 1)
+			snprintf(header, sizeof(header), "package-%d:die-%d:powerdomain-%d:cpu-%d",
+				 id->pkg, id->die, id->punit, id->cpu);
+		else
+			snprintf(header, sizeof(header), "package-%d:die-%d:cpu-%d",
+				 id->pkg, id->die, id->cpu);
+		format_and_print(outf, level, header, NULL);
 		return 1;
 	}
 	snprintf(header, sizeof(header), "package-%d", id->pkg);
-	format_and_print(outf, 1, header, NULL);
+	format_and_print(outf, level++, header, NULL);
 	snprintf(header, sizeof(header), "die-%d", id->die);
-	format_and_print(outf, 2, header, NULL);
+	format_and_print(outf, level++, header, NULL);
+	if (api_version() > 1) {
+		snprintf(header, sizeof(header), "powerdomain-%d", id->punit);
+		format_and_print(outf, level++, header, NULL);
+	}
 	snprintf(header, sizeof(header), "cpu-%d", id->cpu);
-	format_and_print(outf, 3, header, NULL);
+	format_and_print(outf, level, header, NULL);
 
-	return 3;
+	return level;
 }
 
 static void _isst_pbf_display_information(struct isst_id *id, FILE *outf, int level,
@@ -244,7 +253,8 @@ static void _isst_fact_display_information(struct isst_id *id, FILE *outf, int l
 		if (fact_bucket != 0xff && fact_bucket != j)
 			continue;
 
-		if (!bucket_info[j].hp_cores)
+		/* core count must be valid for CPU power domain */
+		if (!bucket_info[j].hp_cores && id->cpu >= 0)
 			break;
 
 		print = 1;
@@ -273,9 +283,9 @@ static void _isst_fact_display_information(struct isst_id *id, FILE *outf, int l
 			 bucket_info[j].hp_cores);
 		format_and_print(outf, base_level + 2, header, value);
 		for (i = 0; i < trl_max_levels; i++) {
-			if (fact_avx != 0xFF && !(fact_avx & (1 << i)))
+			if (!bucket_info[j].hp_ratios[i] || (fact_avx != 0xFF && !(fact_avx & (1 << i))))
 				continue;
-			if (i == 0)
+			if (i == 0 && api_version() == 1 && !is_emr_platform())
 				snprintf(header, sizeof(header),
 					"high-priority-max-frequency(MHz)");
 			else
@@ -291,8 +301,11 @@ static void _isst_fact_display_information(struct isst_id *id, FILE *outf, int l
 	format_and_print(outf, base_level + 1, header, NULL);
 
 	for (j = 0; j < trl_max_levels; j++) {
+		if (!fact_info->lp_ratios[j])
+			continue;
+
 		/* No AVX level name for SSE to be consistent with previous formatting */
-		if (j == 0)
+		if (j == 0 && api_version() == 1 && !is_emr_platform())
 			snprintf(header, sizeof(header), "low-priority-max-frequency(MHz)");
 		else
 			snprintf(header, sizeof(header), "low-priority-max-%s-frequency(MHz)",
@@ -306,22 +319,10 @@ static void _isst_fact_display_information(struct isst_id *id, FILE *outf, int l
 void isst_ctdp_display_core_info(struct isst_id *id, FILE *outf, char *prefix,
 				 unsigned int val, char *str0, char *str1)
 {
-	char header[256];
 	char value[256];
-	int level = 1;
+	int level = print_package_info(id, outf);
 
-	if (out_format_is_json()) {
-		snprintf(header, sizeof(header), "package-%d:die-%d:cpu-%d",
-			 id->pkg, id->die, id->cpu);
-		format_and_print(outf, level++, header, NULL);
-	} else {
-		snprintf(header, sizeof(header), "package-%d", id->pkg);
-		format_and_print(outf, level++, header, NULL);
-		snprintf(header, sizeof(header), "die-%d", id->die);
-		format_and_print(outf, level++, header, NULL);
-		snprintf(header, sizeof(header), "cpu-%d", id->cpu);
-		format_and_print(outf, level++, header, NULL);
-	}
+	level++;
 
 	if (str0 && !val)
 		snprintf(value, sizeof(value), "%s", str0);
@@ -358,31 +359,33 @@ void isst_ctdp_display_information(struct isst_id *id, FILE *outf, int tdp_level
 			 ctdp_level->level);
 		format_and_print(outf, level + 1, header, NULL);
 
-		snprintf(header, sizeof(header), "cpu-count");
-		j = get_cpu_count(id);
-		snprintf(value, sizeof(value), "%d", j);
-		format_and_print(outf, level + 2, header, value);
-
-		j = CPU_COUNT_S(ctdp_level->core_cpumask_size,
-				ctdp_level->core_cpumask);
-		if (j) {
-			snprintf(header, sizeof(header), "enable-cpu-count");
+		if (id->cpu >= 0) {
+			snprintf(header, sizeof(header), "cpu-count");
+			j = get_cpu_count(id);
 			snprintf(value, sizeof(value), "%d", j);
 			format_and_print(outf, level + 2, header, value);
-		}
 
-		if (ctdp_level->core_cpumask_size) {
-			snprintf(header, sizeof(header), "enable-cpu-mask");
-			printcpumask(sizeof(value), value,
-				     ctdp_level->core_cpumask_size,
-				     ctdp_level->core_cpumask);
-			format_and_print(outf, level + 2, header, value);
+			j = CPU_COUNT_S(ctdp_level->core_cpumask_size,
+					ctdp_level->core_cpumask);
+			if (j) {
+				snprintf(header, sizeof(header), "enable-cpu-count");
+				snprintf(value, sizeof(value), "%d", j);
+				format_and_print(outf, level + 2, header, value);
+			}
 
-			snprintf(header, sizeof(header), "enable-cpu-list");
-			printcpulist(sizeof(value), value,
-				     ctdp_level->core_cpumask_size,
-				     ctdp_level->core_cpumask);
-			format_and_print(outf, level + 2, header, value);
+			if (ctdp_level->core_cpumask_size) {
+				snprintf(header, sizeof(header), "enable-cpu-mask");
+				printcpumask(sizeof(value), value,
+					     ctdp_level->core_cpumask_size,
+					     ctdp_level->core_cpumask);
+				format_and_print(outf, level + 2, header, value);
+
+				snprintf(header, sizeof(header), "enable-cpu-list");
+				printcpulist(sizeof(value), value,
+					     ctdp_level->core_cpumask_size,
+					     ctdp_level->core_cpumask);
+				format_and_print(outf, level + 2, header, value);
+			}
 		}
 
 		snprintf(header, sizeof(header), "thermal-design-power-ratio");
@@ -424,6 +427,13 @@ void isst_ctdp_display_information(struct isst_id *id, FILE *outf, int tdp_level
 			format_and_print(outf, level + 2, header, value);
 		}
 
+		if (ctdp_level->amx_p1) {
+			snprintf(header, sizeof(header), "base-frequency-amx(MHz)");
+			snprintf(value, sizeof(value), "%d",
+			ctdp_level->amx_p1 * isst_get_disp_freq_multiplier());
+			format_and_print(outf, level + 2, header, value);
+		}
+
 		if (ctdp_level->uncore_p1) {
 			snprintf(header, sizeof(header), "uncore-frequency-base(MHz)");
 			snprintf(value, sizeof(value), "%d",
@@ -435,6 +445,13 @@ void isst_ctdp_display_information(struct isst_id *id, FILE *outf, int tdp_level
 			snprintf(header, sizeof(header), "mem-frequency(MHz)");
 			snprintf(value, sizeof(value), "%d",
 				 ctdp_level->mem_freq);
+			format_and_print(outf, level + 2, header, value);
+		}
+
+		if (api_version() > 1) {
+			snprintf(header, sizeof(header), "cooling_type");
+			snprintf(value, sizeof(value), "%d",
+				ctdp_level->cooling_type);
 			format_and_print(outf, level + 2, header, value);
 		}
 
@@ -493,6 +510,9 @@ void isst_ctdp_display_information(struct isst_id *id, FILE *outf, int tdp_level
 		}
 
 		for (k = 0; k < trl_max_levels; k++) {
+			if (!ctdp_level->trl_ratios[k][0])
+				continue;
+
 			snprintf(header, sizeof(header), "turbo-ratio-limits-%s", isst_get_trl_level_name(k));
 			format_and_print(outf, level + 2, header, NULL);
 
@@ -589,7 +609,7 @@ void isst_clos_display_information(struct isst_id *id, FILE *outf, int clos,
 	format_and_print(outf, level + 2, header, value);
 
 	snprintf(header, sizeof(header), "clos-max");
-	if (clos_config->clos_max == 0xff)
+	if ((clos_config->clos_max * isst_get_disp_freq_multiplier()) == 25500)
 		snprintf(value, sizeof(value), "Max Turbo frequency");
 	else
 		snprintf(value, sizeof(value), "%d MHz", clos_config->clos_max * isst_get_disp_freq_multiplier());
@@ -671,8 +691,7 @@ void isst_display_result(struct isst_id *id, FILE *outf, char *feature, char *cm
 	char value[256];
 	int level = 3;
 
-	if (id->cpu >= 0)
-		level = print_package_info(id, outf);
+	level = print_package_info(id, outf);
 
 	snprintf(header, sizeof(header), "%s", feature);
 	format_and_print(outf, level + 1, header, NULL);

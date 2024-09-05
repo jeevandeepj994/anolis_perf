@@ -92,10 +92,10 @@ struct isst_id {
 };
 
 struct isst_clos_config {
+	unsigned int clos_min;
+	unsigned int clos_max;
 	unsigned char epp;
 	unsigned char clos_prop_prio;
-	unsigned char clos_min;
-	unsigned char clos_max;
 	unsigned char clos_desired;
 };
 
@@ -143,12 +143,14 @@ struct isst_pkg_ctdp_level_info {
 	int pkg_max_power;
 	int fact;
 	int t_proc_hot;
+	int cooling_type;
 	int uncore_p0;
 	int uncore_p1;
 	int uncore_pm;
 	int sse_p1;
 	int avx2_p1;
 	int avx512_p1;
+	int amx_p1;
 	int mem_freq;
 	size_t core_cpumask_size;
 	cpu_set_t *core_cpumask;
@@ -185,6 +187,7 @@ struct isst_platform_ops {
 	int (*get_disp_freq_multiplier)(void);
 	int (*get_trl_max_levels)(void);
 	char *(*get_trl_level_name)(int level);
+	void (*update_platform_param)(enum isst_platform_param param, int value);
 	int (*is_punit_valid)(struct isst_id *id);
 	int (*read_pm_config)(struct isst_id *id, int *cp_state, int *cp_cap);
 	int (*get_config_levels)(struct isst_id *id, struct isst_pkg_ctdp *pkg_ctdp);
@@ -212,9 +215,11 @@ extern int is_cpu_in_power_domain(int cpu, struct isst_id *id);
 extern int get_topo_max_cpus(void);
 extern int get_cpu_count(struct isst_id *id);
 extern int get_max_punit_core_id(struct isst_id *id);
+extern int api_version(void);
 
 /* Common interfaces */
 FILE *get_output_file(void);
+extern int is_debug_enabled(void);
 extern void debug_printf(const char *format, ...);
 extern int out_format_is_json(void);
 extern void set_isst_id(struct isst_id *id, int cpu);
@@ -226,15 +231,10 @@ extern void set_cpu_mask_from_punit_coremask(struct isst_id *id,
 					     size_t core_cpumask_size,
 					     cpu_set_t *core_cpumask,
 					     int *cpu_cnt);
-extern int isst_send_mbox_command(unsigned int cpu, unsigned char command,
-				  unsigned char sub_command,
-				  unsigned int write,
-				  unsigned int req_data, unsigned int *resp);
-
 extern int isst_send_msr_command(unsigned int cpu, unsigned int command,
 				 int write, unsigned long long *req_resp);
 
-extern int isst_set_platform_ops(void);
+extern int isst_set_platform_ops(int api_version);
 extern void isst_update_platform_param(enum isst_platform_param, int vale);
 extern int isst_get_disp_freq_multiplier(void);
 extern int isst_get_trl_max_levels(void);
@@ -298,6 +298,7 @@ extern int isst_read_pm_config(struct isst_id *id, int *cp_state, int *cp_cap);
 extern void isst_display_error_info_message(int error, char *msg, int arg_valid, int arg);
 extern int is_skx_based_platform(void);
 extern int is_spr_platform(void);
+extern int is_emr_platform(void);
 extern int is_icx_platform(void);
 extern void isst_trl_display_information(struct isst_id *id, FILE *outf, unsigned long long trl);
 
@@ -313,5 +314,11 @@ extern void hfi_exit(void);
 
 /* Interface specific callbacks */
 extern struct isst_platform_ops *mbox_get_platform_ops(void);
+extern struct isst_platform_ops *tpmi_get_platform_ops(void);
+
+/* Cgroup related interface */
+extern int enable_cpuset_controller(void);
+extern int isolate_cpus(struct isst_id *id, int mask_size, cpu_set_t *cpu_mask, int level);
+extern int use_cgroupv2(void);
 
 #endif
